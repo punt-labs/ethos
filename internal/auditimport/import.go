@@ -42,7 +42,7 @@ func MigrateWithPolicy(p layout.Policy, globalSessionsDir string, dryRun bool, o
 			fmt.Fprintf(out, "skip %s: no repo-tree session\n", id)
 			continue
 		}
-		r, err := migrateAuditSession(p, checkout, id, file, dryRun, false)
+		r, err := migrateAuditSession(context.Background(), p, checkout, id, file, dryRun, false)
 		if err != nil {
 			return fmt.Errorf("migrating session %s (legacy source retained): %w", id, err)
 		}
@@ -78,6 +78,9 @@ type AuditImport struct {
 type AuditImportFailure struct {
 	Session string
 	Reason  string
+	// Err is the cause when one is available; a context error here means the
+	// file's own import outlived the budget and the global copy stays.
+	Err error
 }
 
 // AuditImportResult is what ImportGlobalAudit did. Unowned lists sessions
@@ -122,6 +125,7 @@ func ImportGlobalAudit(ctx context.Context, p layout.Policy, globalSessionsDir s
 		return res, err
 	}
 	checkout := filepath.Dir(filepath.Dir(p.CheckoutRecordRoot()))
+	attempted := 0
 	for i, file := range files {
 		if ctx.Err() != nil {
 			res.Remaining = len(files) - i
@@ -133,9 +137,27 @@ func ImportGlobalAudit(ctx context.Context, p layout.Policy, globalSessionsDir s
 			res.Unowned = append(res.Unowned, id)
 			continue
 		}
-		r, err := migrateAuditSession(p, checkout, id, file, false, true)
+		attempted++
+		r, err := migrateAuditSession(ctx, p, checkout, id, file, false, true)
 		if err != nil {
-			res.Failed = append(res.Failed, AuditImportFailure{Session: id, Reason: err.Error()})
+			if ctx.Err() != nil {
+				if attempted > 1 {
+					// Earlier files used the budget; this one gets a fresh
+					// budget next run, as do the files after it.
+					res.Remaining = len(files) - i
+					break
+				}
+				// A whole budget was not enough for this file, and the
+				// files after it are at least as large (smallest first):
+				// none would finish. Each is reported once; its global copy
+				// stays.
+				for _, rest := range files[i:] {
+					rid := strings.TrimSuffix(filepath.Base(rest), ".audit.jsonl")
+					res.Failed = append(res.Failed, AuditImportFailure{Session: rid, Reason: err.Error(), Err: err})
+				}
+				break
+			}
+			res.Failed = append(res.Failed, AuditImportFailure{Session: id, Reason: err.Error(), Err: err})
 			continue
 		}
 		imp := AuditImport{Session: id, Lines: r.added, Noop: r.noop, NoSignal: !named && !streams[id]}
@@ -203,6 +225,14 @@ func removeGlobalAudit(file string) error {
 // sessionGuard builds the guard migrateAuditSession applies; a test replaces it.
 var sessionGuard = lineguard.SessionLineGuardFor
 
+// SetSessionGuard replaces the per-session guard for a test in another package
+// and returns the function that restores it.
+func SetSessionGuard(g func(checkout string) lineguard.LineGuard) (restore func()) {
+	prev := sessionGuard
+	sessionGuard = g
+	return func() { sessionGuard = prev }
+}
+
 type auditSessionResult struct {
 	added int  // entries newly written to the archive
 	noop  bool // the archive already held exactly this content
@@ -211,7 +241,7 @@ type auditSessionResult struct {
 // migrateAuditSession merges one global session file into the session's local
 // archive under the stream lock. quiet suppresses the stderr notice. A write
 // is read back and compared before it returns.
-func migrateAuditSession(p layout.Policy, checkout, id, file string, dryRun, quiet bool) (auditSessionResult, error) {
+func migrateAuditSession(ctx context.Context, p layout.Policy, checkout, id, file string, dryRun, quiet bool) (auditSessionResult, error) {
 	var res auditSessionResult
 	s := audit.Stream{Namespace: audit.SessionNS, Session: id}
 	err := audit.WithStreamLock(p, s, func() error {
@@ -225,7 +255,7 @@ func migrateAuditSession(p layout.Policy, checkout, id, file string, dryRun, qui
 			}
 			input = append(input, lines...)
 		}
-		lines, err := RedactLegacyLines(input, checkout)
+		lines, err := RedactLegacyLines(ctx, input, checkout)
 		if err != nil {
 			return err
 		}
@@ -242,6 +272,9 @@ func migrateAuditSession(p layout.Policy, checkout, id, file string, dryRun, qui
 		payloads := map[string]string{}
 		guard := sessionGuard(checkout)
 		for _, l := range data.Legacy {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			// Existing frozen identities cannot be rewritten to make them safe.
 			clean, _, _ := guard(l.Raw)
 			before, err := audit.CanonicalPayload(l.Raw)
@@ -268,6 +301,9 @@ func migrateAuditSession(p layout.Policy, checkout, id, file string, dryRun, qui
 		added := 0
 		var notes []*Note
 		for _, l := range lines {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			// Final byte guard covers all added payload fields, including fields
 			// the older structured migration pass did not recognize.
 			l.Raw, _, _ = guard(l.Raw)

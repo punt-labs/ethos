@@ -2,8 +2,10 @@ package autorepair
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/auditimport"
 )
@@ -27,6 +29,11 @@ func init() {
 // residual. Nothing is deleted on a weak signal and no owner is guessed. A
 // session that cannot be imported is a residual and its file stays. The
 // step prints nothing: every action goes to env.Log.
+// importHeadroom is how far ahead of the step's deadline the import stops, so
+// the step's outcome reaches the engine before it abandons the step. The
+// guard costs milliseconds a line; one line is well inside this.
+const importHeadroom = 500 * time.Millisecond
+
 func runGlobalAudit(ctx context.Context, env Env) (Outcome, error) {
 	var out Outcome
 	if !env.InRepository() {
@@ -45,7 +52,17 @@ func runGlobalAudit(ctx context.Context, env Env) (Outcome, error) {
 		return out, fmt.Errorf("importing global session audit: %w", err)
 	}
 	dir := filepath.Join(env.Global, "sessions")
-	res, err := auditimport.ImportGlobalAudit(ctx, env.Policy, dir, checkout, store)
+	// The importer stops at its context; the step must return its outcome
+	// before the engine's deadline or the residual and the deferral are lost
+	// with the abandoned goroutine. The import gets the budget less the
+	// headroom one line of the guard needs.
+	ictx := ctx
+	if deadline, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		ictx, cancel = context.WithDeadline(ctx, deadline.Add(-importHeadroom))
+		defer cancel()
+	}
+	res, err := auditimport.ImportGlobalAudit(ictx, env.Policy, dir, checkout, store)
 	if err != nil {
 		return out, fmt.Errorf("importing global session audit: %w", err)
 	}
@@ -65,8 +82,16 @@ func runGlobalAudit(ctx context.Context, env Env) (Outcome, error) {
 		env.Log.Logf(stepGlobalAudit, "other-checkout", []string{file(id)}, nil)
 	}
 	for _, f := range res.Failed {
-		env.Log.Logf(stepGlobalAudit, "import-failed", []string{file(f.Session)}, fmt.Errorf("%s", f.Reason))
-		out.Residuals = append(out.Residuals, Residual{Step: stepGlobalAudit, ID: f.Session, Reason: f.Reason})
+		reason := f.Reason
+		if errors.Is(f.Err, context.DeadlineExceeded) || errors.Is(f.Err, context.Canceled) {
+			// The file's own import outlived the step budget. It is not
+			// retried on every command: the pre-redaction global copy stays
+			// where it is, and the stamp records it (operator ruling: a
+			// logged loss never blocks a command).
+			reason = "import outlived the step budget; global copy kept"
+		}
+		env.Log.Logf(stepGlobalAudit, "import-failed", []string{file(f.Session)}, fmt.Errorf("%s", reason))
+		out.Residuals = append(out.Residuals, Residual{Step: stepGlobalAudit, ID: f.Session, Reason: reason})
 	}
 	if res.Remaining > 0 {
 		// The budget ran out; the files not attempted are the next run's.

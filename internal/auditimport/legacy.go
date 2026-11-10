@@ -8,6 +8,8 @@ package auditimport
 import (
 	"bufio"
 	"bytes"
+	"cmp"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -57,6 +59,18 @@ func EnumerateLegacyFiles(globalSessionsDir string) ([]string, error) {
 		}
 		out = append(out, path)
 	}
+	// Smallest first: a run with a budget converts the most sessions before
+	// it meets one it cannot finish.
+	size := func(path string) int64 {
+		var n int64
+		for _, p := range []string{path, path + StagedSuffix} {
+			if info, err := os.Stat(p); err == nil {
+				n += info.Size()
+			}
+		}
+		return n
+	}
+	slices.SortStableFunc(out, func(a, b string) int { return cmp.Compare(size(a), size(b)) })
 	return out, nil
 }
 
@@ -133,13 +147,16 @@ func DecodeLine(raw []byte) (lineguard.Entry, error) {
 // recomputes each dedupe key. Every line is written in its canonical form, the
 // decoded line re-marshalled by the line guard, never its original bytes;
 // unknown fields and sentinels survive as decoded values.
-func RedactLegacyLines(lines []Line, repoRoot string) ([]Line, error) {
+func RedactLegacyLines(ctx context.Context, lines []Line, repoRoot string) ([]Line, error) {
 	r, err := mission.NewPathRedactor(repoRoot)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]Line, len(lines))
 	for i, l := range lines {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		// Invalid text and a duplicate key are looked for in the original
 		// bytes: once the line is decoded the surrogate is U+FFFD and the
 		// first value is gone. why collects what was done, for the one

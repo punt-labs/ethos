@@ -2,10 +2,13 @@ package autorepair
 
 import (
 	"context"
+	"github.com/punt-labs/ethos/v4/internal/auditimport"
+	"github.com/punt-labs/ethos/v4/internal/lineguard"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -208,4 +211,34 @@ func TestGlobalAuditDefersWhenContextDone(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, out.Deferred)
 	assert.FileExists(t, globalAuditFile(env), "nothing was attempted")
+}
+
+// TestGlobalAuditReturnsItsOutcomeInsideTheBudget: a file whose import cannot
+// finish in the step budget is reported by the step before the engine's
+// deadline, so the residual and the deferral are recorded instead of thrown
+// away with an abandoned goroutine.
+func TestGlobalAuditReturnsItsOutcomeInsideTheBudget(t *testing.T) {
+	env, _ := corpusEnvLogged(t, "v3.11.0")
+	rosterCheckout(t, env, corpusSession, env.Roots.Checkout)
+	slow := func(string) lineguard.LineGuard {
+		return func(line []byte) ([]byte, string, bool) {
+			time.Sleep(400 * time.Millisecond)
+			return lineguard.GuardAuditLineFull(line)
+		}
+	}
+	restore := auditimport.SetSessionGuard(slow)
+	t.Cleanup(restore)
+
+	budget := 600 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+	start := time.Now()
+	out, err := runGlobalAudit(ctx, env)
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+	assert.Less(t, elapsed, budget, "the step returns before the engine's deadline")
+	require.Len(t, out.Residuals, 1, "the file that cannot finish is a residual")
+	assert.Contains(t, out.Residuals[0].Reason, "outlived the step budget")
+	_, statErr := os.Stat(globalAuditFile(env))
+	assert.NoError(t, statErr, "the global copy stays")
 }

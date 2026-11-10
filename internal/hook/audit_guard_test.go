@@ -2,6 +2,7 @@ package hook
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -91,7 +92,7 @@ func TestRedactLegacyLines_UnknownFields(t *testing.T) {
 		{Raw: []byte(`{"ts":"2026-05-22T10:00:00Z","session":"s","tool":"Bash","tool_input":{"command":"ls"},"cwd":"/home/alice/w","audit_error":"open -I/home/alice/x"}`)},
 		{Raw: []byte(`{"ts":"2026-05-22T10:00:01Z","session":"s","tool":"Read","tool_input":{"file_path":"x"}}`)},
 	}
-	out, err := redactLegacyLines(lines, repo)
+	out, err := redactLegacyLines(context.Background(), lines, repo)
 	require.NoError(t, err)
 	assert.NotContains(t, string(out[0].Raw), "alice")
 	var m1 map[string]any
@@ -217,7 +218,7 @@ func TestGuardAuditLine_KeepsCaseVariantKeysInsideToolInput(t *testing.T) {
 	assert.Contains(t, string(out), `"Content-Type":"a"`)
 	assert.Contains(t, string(out), `"content-type":"b"`)
 
-	lines, err := redactLegacyLines([]rawAuditLine{{Raw: in}}, t.TempDir())
+	lines, err := redactLegacyLines(context.Background(), []rawAuditLine{{Raw: in}}, t.TempDir())
 	require.NoError(t, err)
 	assert.Contains(t, string(lines[0].Raw), `"Content-Type":"a"`)
 	assert.Contains(t, string(lines[0].Raw), `"content-type":"b"`)
@@ -446,7 +447,7 @@ func TestRedactLegacyLines_DuplicateKeyInTheOriginalBytes(t *testing.T) {
 	var out []rawAuditLine
 	notice := testhelpers.CaptureStderr(t, func() {
 		var err error
-		out, err = redactLegacyLines([]rawAuditLine{{Raw: raw}}, t.TempDir())
+		out, err = redactLegacyLines(context.Background(), []rawAuditLine{{Raw: raw}}, t.TempDir())
 		require.NoError(t, err)
 		sayMigrateNotes(out)
 	})
@@ -515,7 +516,7 @@ func TestRedactLegacyLines_DuplicateKeyKeepsOwnHomeAsTilde(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	raw := []byte(`{"ts":"2026-05-22T10:00:00Z","session":"a","session":"b","tool":"Read","tool_input":{"file_path":"` + home + `/x"}}`)
-	out, err := redactLegacyLines([]rawAuditLine{{Raw: raw}}, t.TempDir())
+	out, err := redactLegacyLines(context.Background(), []rawAuditLine{{Raw: raw}}, t.TempDir())
 	require.NoError(t, err)
 	assert.Contains(t, string(out[0].Raw), `"file_path":"~/x"`)
 	assert.NotContains(t, string(out[0].Raw), home)
@@ -537,7 +538,7 @@ func TestRedactLegacyLines_InvalidTextInTheOriginalBytes(t *testing.T) {
 			var out []rawAuditLine
 			notice := testhelpers.CaptureStderr(t, func() {
 				var err error
-				out, err = redactLegacyLines([]rawAuditLine{{Raw: raw}}, t.TempDir())
+				out, err = redactLegacyLines(context.Background(), []rawAuditLine{{Raw: raw}}, t.TempDir())
 				require.NoError(t, err)
 				sayMigrateNotes(out)
 			})
@@ -609,7 +610,7 @@ func TestRedactLegacyLines_OneNoticePerChangedLine(t *testing.T) {
 		{Raw: []byte(`{"ts":"` + ts + `","session":"a","tool":"Read","tool_input":{"file_path":"x"}}`)},
 	}
 	notice := testhelpers.CaptureStderr(t, func() {
-		out, err := redactLegacyLines(lines, t.TempDir())
+		out, err := redactLegacyLines(context.Background(), lines, t.TempDir())
 		require.NoError(t, err)
 		sayMigrateNotes(out)
 	})

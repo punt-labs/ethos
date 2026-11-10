@@ -2,6 +2,7 @@ package hook
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -136,7 +137,7 @@ func FuzzWritersAudit(f *testing.F) {
 			// A line that became a loss marker is judged by (a) and (d) only.
 			var lines []rawAuditLine
 			var err error
-			lines, err = redactLegacyLines([]rawAuditLine{{Raw: line}}, t.TempDir())
+			lines, err = redactLegacyLines(context.Background(), []rawAuditLine{{Raw: line}}, t.TempDir())
 			notice := ""
 			if err == nil && len(lines) == 1 && lines[0].Note != nil {
 				notice = "noted"
@@ -161,7 +162,7 @@ func FuzzWritersAudit(f *testing.F) {
 						t.Fatalf("migrate: (b) value %q lost with nothing in its place: in %q out %q", leaf, line, out)
 					}
 				}
-				again, err := redactLegacyLines([]rawAuditLine{{Raw: out}}, t.TempDir())
+				again, err := redactLegacyLines(context.Background(), []rawAuditLine{{Raw: out}}, t.TempDir())
 				if err != nil || len(again) != 1 || !bytes.Equal(again[0].Raw, out) {
 					t.Fatalf("migrate: (d) not a fixed point: in %q out %q again %v %v", line, out, again, err)
 				}

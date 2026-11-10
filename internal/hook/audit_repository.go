@@ -365,7 +365,7 @@ func QueryAuditByDelegationWithPolicy(p layout.Policy, globalSessionsDir, delega
 			if err != nil && !os.IsNotExist(err) {
 				return nil, err
 			}
-			lines, err = redactLegacyLines(lines, checkout)
+			lines, err = redactLegacyLines(context.Background(), lines, checkout)
 			if err != nil {
 				return nil, err
 			}
