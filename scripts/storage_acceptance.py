@@ -403,6 +403,9 @@ def audit_recovery(f: Fixture) -> None:
     corrupt = b"{intentionally corrupt acceptance chunk\n"
     write(chunk, corrupt)
     index = f.repo / ".git/index"
+    before = index.read_bytes()
+    f.cli("audit", "seal", ok=False)
+    require(index.read_bytes() == before, "failed manual seal changed index")
     # Archival failure is advisory ONLY in default-blame commit context.
     write(f.repo / "source.txt", "source-despite-old-trace-corruption\n")
     f.git("add", "source.txt")
@@ -410,14 +413,18 @@ def audit_recovery(f: Fixture) -> None:
     require(f.git("show", "HEAD:source.txt") == b"source-despite-old-trace-corruption\n",
             "historical trace corruption blocked unrelated source commit")
     before = index.read_bytes()
-    # Recovery is automatic: the user runs nothing. The next entry points (a
-    # session start, then another real commit through the installed hook) must
-    # repair the corrupt chunk without touching the index.
+    # Recovery is automatic: the user runs nothing. Two session starts must
+    # leave the index byte-identical; the corrupt bytes must then be preserved
+    # in the quarantine directory (not the live trace path); a further commit
+    # through the installed hook must succeed.
     f.wrapper("session-start.sh", {"session_id": "acceptance-recovery"})
     f.wrapper("session-start.sh", {"session_id": "acceptance-recovery"})
     require(index.read_bytes() == before, "automatic recovery changed index")
-    require(any(p.read_bytes() == corrupt for p in (f.repo / LOCAL).rglob("*") if p.is_file()),
-            "automatic recovery discarded original corrupt bytes")
+    quarantine = f.repo / LOCAL / "quarantine"
+    require(quarantine.is_dir() and any(p.read_bytes() == corrupt for p in quarantine.rglob("*") if p.is_file()),
+            f"automatic recovery did not preserve the corrupt bytes under {quarantine}")
+    require(not chunk.exists() or chunk.read_bytes() != corrupt,
+            f"corrupt bytes still sit at the live trace path {chunk}")
     write(f.repo / "source.txt", "source-after-automatic-recovery\n")
     f.git("add", "source.txt")
     f.git("commit", "-m", "commit after automatic recovery")
@@ -426,7 +433,7 @@ def audit_recovery(f: Fixture) -> None:
     query = f.cli("audit", "show", "--delegation", "acceptance-audit").decode()
     diagnostic = (f.root / f"{f.run.sequence:04d}.stderr").read_text()
     require("recoverable-audit-marker" in query or "gap" in diagnostic.lower(),
-            "quarantine produced neither recovery nor explicit gap evidence")
+            "automatic recovery produced neither recovered content nor explicit gap evidence")
     require(original != corrupt, "invalid corruption fixture")
     check_boundary(f.repo)
     f.snapshot("audit-recovery")
@@ -826,9 +833,18 @@ TOKEN = re.compile(rb"gh[pousr]_[A-Za-z0-9]{36,}")
 USER_PATH = re.compile(rb"/(?:Users|home)/[A-Za-z][A-Za-z0-9._-]*")
 
 
+# The only lines a quiet `git commit` prints: "[main <sha>] msg", the
+# "N file(s) changed" stat line, and create/delete/rename mode lines.
+GIT_SUMMARY = re.compile(r"^(\[[^\]]+\] .*|\s*\d+ files? changed.*|\s*(create|delete) mode \d+ .*|\s*rename .*)$")
+
+
 def restore_corpus_repo(f: Fixture, snapshot: Path, repo: Path, env: dict[str, str]) -> None:
     """Rebuild a corpus snapshot's repository: files, commit, index and the old release's hooks."""
     shutil.copytree(snapshot / "repo", repo, symlinks=True)
+    # Fetch from a copy inside scratch: git records the bundle's absolute path in
+    # .git/FETCH_HEAD, and that path must not be a machine path outside scratch.
+    bundle = repo.parent / "repo.bundle"
+    shutil.copy2(snapshot / "git/repo.bundle", bundle)
     run = lambda *args: f.run.run(["git", *args], repo, env)  # noqa: E731
     run("init", "-b", "main")
     run("config", "user.name", "Storage Fixture")
@@ -837,7 +853,7 @@ def restore_corpus_repo(f: Fixture, snapshot: Path, repo: Path, env: dict[str, s
     run("config", "core.hooksPath", str(repo / ".git/hooks"))
     # The bundle is the snapshot's whole history; fetch it, point main at it and
     # load its tree into the index so the working files are tracked as shipped.
-    run("fetch", str(snapshot / "git/repo.bundle"), "refs/heads/main")
+    run("fetch", str(bundle), "refs/heads/main")
     run("update-ref", "refs/heads/main", "FETCH_HEAD")
     run("read-tree", "HEAD")
     for hook in sorted((snapshot / "git/hooks").glob("*")):
@@ -846,9 +862,22 @@ def restore_corpus_repo(f: Fixture, snapshot: Path, repo: Path, env: dict[str, s
         target.chmod(0o755)
 
 
+def f_git_history(repo: Path) -> bytes:
+    """Every patch on every ref of the scratch repository, decompressed."""
+    return subprocess.run(["git", "log", "-p", "--all"], cwd=repo, check=True, capture_output=True,
+                          env={"PATH": os.environ.get("PATH", os.defpath), "GIT_CONFIG_NOSYSTEM": "1",
+                               "HOME": str(repo.parent)}).stdout
+
+
 def scan_for_leaks(scratch: Path, home: Path, repo: Path) -> None:
     """No credential-shaped token and no machine path other than the scratch tree itself."""
     scratch_bytes = str(scratch).encode()
+    # .git objects are zlib-compressed, so the raw-bytes scan below cannot see
+    # committed history; git log -p decompresses it and is scanned separately.
+    history = f_git_history(repo)
+    require(not TOKEN.search(history), "credential-shaped token in committed history after upgrade")
+    leaked = USER_PATH.search(history.replace(scratch_bytes, b""))
+    require(not leaked, f"machine path {leaked.group(0).decode() if leaked else ''} in committed history")
     for root in (repo, home):
         for path in sorted(p for p in root.rglob("*") if p.is_file() and not p.is_symlink()):
             data = path.read_bytes()
@@ -887,8 +916,8 @@ def upgrade(f: Fixture) -> None:
         write(repo / "upgrade-new-file.txt", "second change\n")
         entry("git", "add", "upgrade-new-file.txt")
         again = entry("git", "commit", "-m", "second work after upgrade")
-        chatter = [line for line in again.splitlines() if "ethos" in line.lower()]
-        require(not chatter, f"{label}: second commit printed ethos output: {chatter}")
+        chatter = [line for line in again.splitlines() if line.strip() and not GIT_SUMMARY.match(line)]
+        require(not chatter, f"{label}: second commit printed output other than git's own summary: {chatter}")
         local = entry("git", "ls-files", ".punt-labs/local")
         require(not local.strip(), f"{label}: tracked machine-local files after upgrade: {local!r}")
         # doctor refuses to run with the test-harness override set, so it gets the
