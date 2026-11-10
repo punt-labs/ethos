@@ -390,7 +390,7 @@ func atomicTempForwardingError(name, src string) error {
 	}
 	if name == "scrub.go" {
 		clear(expected)
-		expected["scrubWrite"] = edge{"writeAtomicFileWithWarning", []string{"dir", "pattern", "dest", "data", "nil", `"mission scrub: " + dest + ": rewrite installed"`}}
+		expected["scrubWrite"] = edge{"writeAtomicFileWithWarning", []string{"dir", "pattern", "dest", "data", "nil", `"mission records: " + dest + ": rewrite installed"`}}
 	}
 	for _, decl := range f.Decls {
 		fn := declName(decl)
