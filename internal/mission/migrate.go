@@ -233,12 +233,21 @@ func enumerateMigrateCandidates(legacyDir, missionID string) ([]string, error) {
 // checkoutRoot/auditRoot fields exist to fix it — for the DES-058
 // live-audit-zone split; and now this, twice, in the same function).
 func repoMissionIDs(repoRoot, checkoutRoot string) (map[string]struct{}, error) {
+	return repoMissionIDsWarn(repoRoot, checkoutRoot, func(msg string) {
+		fmt.Fprintln(os.Stderr, "ethos: mission: "+msg)
+	})
+}
+
+// repoMissionIDsWarn is repoMissionIDs with the scan's non-fatal warnings
+// (a malformed audit line, an unreadable chunk directory) delivered to warn
+// instead of stderr, so the automatic import can log them.
+func repoMissionIDsWarn(repoRoot, checkoutRoot string, warn func(string)) (map[string]struct{}, error) {
 	out := make(map[string]struct{})
 
-	if err := collectSealedContractIDs(repoRoot, out); err != nil {
+	if err := collectSealedContractIDs(repoRoot, out, warn); err != nil {
 		return nil, err
 	}
-	if err := collectLiveContractIDs(repoRoot, out); err != nil {
+	if err := collectLiveContractIDs(repoRoot, out, warn); err != nil {
 		return nil, err
 	}
 	if checkoutRoot != "" && checkoutRoot != repoRoot {
@@ -254,10 +263,10 @@ func repoMissionIDs(repoRoot, checkoutRoot string) (map[string]struct{}, error) 
 		// (it sealed) and never reached root's sealed tree (unmerged)
 		// — reopening the exact F4 false-negative class this function
 		// exists to close.
-		if err := collectSealedContractIDs(checkoutRoot, out); err != nil {
+		if err := collectSealedContractIDs(checkoutRoot, out, warn); err != nil {
 			return nil, err
 		}
-		if err := collectLiveContractIDs(checkoutRoot, out); err != nil {
+		if err := collectLiveContractIDs(checkoutRoot, out, warn); err != nil {
 			return nil, err
 		}
 	}
@@ -271,7 +280,7 @@ func repoMissionIDs(repoRoot, checkoutRoot string) (map[string]struct{}, error) 
 // for contract_id references, adding them to dst. A missing sessions
 // tree is not an error — a fresh repo (or a checkout that has sealed
 // nothing of its own) has no sealed history yet.
-func collectSealedContractIDs(root string, dst map[string]struct{}) error {
+func collectSealedContractIDs(root string, dst map[string]struct{}, warn func(string)) error {
 	sessionsBase := RepoStatePath(root, "sessions")
 	dirs, err := os.ReadDir(sessionsBase)
 	switch {
@@ -289,19 +298,18 @@ func collectSealedContractIDs(root string, dst map[string]struct{}) error {
 
 		sc, scErr := audit.ScanSealedDir(sealedDir, audit.SessionNS, "")
 		if scErr != nil {
-			fmt.Fprintf(os.Stderr,
-				"ethos: mission: scanning sealed audit chunks in %s: %v\n", sealedDir, scErr)
+			warn(fmt.Sprintf("scanning sealed audit chunks in %s: %v", sealedDir, scErr))
 		} else {
 			for _, c := range sc.Chunks {
 				chunkPath := filepath.Join(sealedDir, c.ChunkFile())
-				if cErr := collectContractIDs(chunkPath, dst); cErr != nil {
-					fmt.Fprintf(os.Stderr, "ethos: mission: %s: %v\n", chunkPath, cErr)
+				if cErr := collectContractIDs(chunkPath, dst, warn); cErr != nil {
+					warn(fmt.Sprintf("%s: %v", chunkPath, cErr))
 				}
 			}
 		}
 
 		legacyPath := filepath.Join(sealedDir, "audit.jsonl")
-		if err := collectContractIDs(legacyPath, dst); err != nil {
+		if err := collectContractIDs(legacyPath, dst, warn); err != nil {
 			return fmt.Errorf("scanning %s: %w", legacyPath, err)
 		}
 	}
@@ -312,7 +320,7 @@ func collectSealedContractIDs(root string, dst map[string]struct{}) error {
 // audit files for contract_id references, adding them to dst. A
 // missing live-sessions directory is not an error — every session in
 // scope has either sealed or never started.
-func collectLiveContractIDs(root string, dst map[string]struct{}) error {
+func collectLiveContractIDs(root string, dst map[string]struct{}, warn func(string)) error {
 	liveDirs, err := os.ReadDir(audit.LiveSessionsDir(root))
 	switch {
 	case err == nil:
@@ -330,7 +338,7 @@ func collectLiveContractIDs(root string, dst map[string]struct{}) error {
 			continue
 		}
 		livePath := audit.LiveAuditPath(root, id)
-		if err := collectContractIDs(livePath, dst); err != nil {
+		if err := collectContractIDs(livePath, dst, warn); err != nil {
 			return fmt.Errorf("scanning %s: %w", livePath, err)
 		}
 	}
@@ -339,7 +347,7 @@ func collectLiveContractIDs(root string, dst map[string]struct{}) error {
 
 // collectContractIDs adds every distinct contract_id from a JSONL
 // audit file to dst. Missing file is a no-op. A malformed line is
-// skipped with a stderr warning — the audit log reader contract is
+// skipped and reported through warn — the audit log reader contract is
 // permissive so a single bad line does not poison the whole scan.
 //
 // Uses bufio.Scanner per-line because json.NewDecoder.Decode does NOT
@@ -356,7 +364,7 @@ func collectLiveContractIDs(root string, dst map[string]struct{}) error {
 // the same class of misdirection as a stale comment describing a code
 // path the function no longer takes, just aimed at an operator instead
 // of a reader.
-func collectContractIDs(path string, dst map[string]struct{}) error {
+func collectContractIDs(path string, dst map[string]struct{}, warn func(string)) error {
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -379,9 +387,7 @@ func collectContractIDs(path string, dst map[string]struct{}) error {
 			ContractID string `json:"contract_id"`
 		}
 		if err := json.Unmarshal(line, &rec); err != nil {
-			fmt.Fprintf(os.Stderr,
-				"ethos: mission: %s: line %d: skipping malformed line: %v\n",
-				path, lineNo, err)
+			warn(fmt.Sprintf("%s: line %d: skipping malformed line: %v", path, lineNo, err))
 			continue
 		}
 		if rec.ContractID != "" {
@@ -550,30 +556,57 @@ func migrateOneMissionLockedQ(legacyDir, repoDir, repoRoot, id string, repoMissi
 		return "", ioErr("renaming the staging dir to", repoMissionDir, err)
 	}
 	committed = true
+	// The rename is the commit point only once the directory entry is on
+	// disk; fsync the parent so a crash cannot leave the global files
+	// deleted and the repository copy missing.
+	if err := syncDir(repoDir); err != nil {
+		return "", err
+	}
+
+	if quiet {
+		// The automatic import verifies the repository copy before it
+		// deletes anything; see ImportGlobalMissions.
+		return fmt.Sprintf("migrate %s -> %s", id, relRepoPath(repoMissionDir)), nil
+	}
 
 	// Remove the legacy files now that the repo-tree copy is the
 	// authoritative version. A removal failure is non-fatal: the
 	// migration has committed; a leftover legacy file is benign
-	// because resolveLayer reads repo-first. Log the failure to
-	// stderr so the operator can clean up manually if desired,
-	// but continue past it — the migration as a whole succeeded
-	// (Bugbot MED on PR #328: previously returned a hard error
-	// here, contradicting the "non-fatal" intent).
-	for _, a := range missionArtifacts {
-		legacy := filepath.Join(legacyDir, id+a.legacySuffix)
-		if err := os.Remove(legacy); err != nil && !errors.Is(err, fs.ErrNotExist) && !quiet {
-			fmt.Fprintf(os.Stderr,
-				"ethos: mission migrate: %v (leftover is benign; repo-tree copy is authoritative)\n",
-				ioErr("removing legacy", legacy, err))
-		}
+	// because resolveLayer reads repo-first, and the next migrate run
+	// removes it. Say so on stderr and continue (Bugbot MED on PR #328:
+	// previously returned a hard error here, contradicting the
+	// "non-fatal" intent). The contract is deleted last: it is what
+	// enumerates a candidate, so a crash mid-way leaves the mission
+	// visible to the next run.
+	if err := removeLegacyMission(legacyDir, id, nil); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: mission migrate: %v (leftover is benign; repo-tree copy is authoritative)\n", err)
 	}
 
 	return fmt.Sprintf("migrate %s -> %s", id, relRepoPath(repoMissionDir)), nil
 }
 
+// removeLegacyMission deletes the global files of mission id, the contract
+// last: candidates are enumerated by the contract, so a crash between
+// deletes leaves a mission the next run still sees and finishes. before, when
+// set, is called with each path about to be removed.
+func removeLegacyMission(legacyDir, id string, before func(path string)) error {
+	for i := len(missionArtifacts) - 1; i >= 0; i-- {
+		legacy := filepath.Join(legacyDir, id+missionArtifacts[i].legacySuffix)
+		if before != nil {
+			before(legacy)
+		}
+		if err := os.Remove(legacy); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return ioErr("removing legacy", legacy, err)
+		}
+	}
+	return nil
+}
+
 // removeStaging deletes a migrate staging directory and says on w when it
-// cannot: a leftover staging directory is one the user must remove by hand.
-// The path is reported repo-relative, so a home directory does not leak.
+// cannot: a leftover staging directory is one the next migrate run removes
+// (step 15 of the automatic repair). The path is reported repo-relative, so
+// a home directory does not leak.
 func removeStaging(w io.Writer, staging string) {
 	err := os.RemoveAll(staging)
 	if err == nil {
@@ -1308,79 +1341,4 @@ func stagingSink(quiet bool) io.Writer {
 		return io.Discard
 	}
 	return os.Stderr
-}
-
-// ImportFailure names a global mission ImportGlobalMissions could not move.
-// Reason names the file and the cause, never a value from the file.
-type ImportFailure struct {
-	ID     string
-	Reason string
-}
-
-// ImportResult is what ImportGlobalMissions did. Imported lists missions
-// copied into the repository store; Cleaned lists missions already there
-// whose stale global files were removed; Failed lists missions left in place.
-type ImportResult struct {
-	Imported []string
-	Cleaned  []string
-	Failed   []ImportFailure
-}
-
-// ImportGlobalMissions moves every global mission this repository owns (see
-// repoMissionIDs) into the repository store through the redactor and removes
-// the global copies. Missions the repository does not own stay global. It is
-// MigrateMission without its output: it prints nothing, it keeps going past a
-// mission it cannot move, and it reports each such mission in Failed. A run
-// with nothing left to import returns an empty result.
-func ImportGlobalMissions(globalRoot, repoRoot, checkoutRoot string) (ImportResult, error) {
-	var res ImportResult
-	if repoRoot == "" || globalRoot == "" {
-		return res, fmt.Errorf("import global missions: roots must be set")
-	}
-	legacyDir := filepath.Join(globalRoot, "missions")
-	repoDir := RepoStatePath(repoRoot, "missions")
-	ids, err := enumerateMigrateCandidates(legacyDir, "")
-	if err != nil {
-		return res, fmt.Errorf("enumerating global missions in %s: %w", legacyDir, err)
-	}
-	if len(ids) == 0 {
-		return res, nil
-	}
-	owned, err := repoMissionIDs(repoRoot, checkoutRoot)
-	if err != nil {
-		return res, fmt.Errorf("scanning repo sessions for mission references: %w", err)
-	}
-	for _, id := range ids {
-		if _, ok := owned[id]; !ok {
-			continue
-		}
-		decision, err := migrateOneMissionQ(legacyDir, repoDir, repoRoot, id, owned, false, true)
-		switch {
-		case err != nil:
-			res.Failed = append(res.Failed, ImportFailure{ID: id, Reason: err.Error()})
-		case strings.HasPrefix(decision, "migrate "):
-			res.Imported = append(res.Imported, id)
-		case strings.HasPrefix(decision, "noop "):
-			// The repository copy is authoritative; the global files are stale.
-			if err := removeLegacyMission(legacyDir, id); err != nil {
-				res.Failed = append(res.Failed, ImportFailure{ID: id, Reason: err.Error()})
-				continue
-			}
-			res.Cleaned = append(res.Cleaned, id)
-		case strings.HasPrefix(decision, "skip "):
-			res.Failed = append(res.Failed, ImportFailure{ID: id, Reason: strings.TrimPrefix(decision, "skip "+id+": ")})
-		}
-	}
-	return res, nil
-}
-
-// removeLegacyMission deletes the global files of mission id.
-func removeLegacyMission(legacyDir, id string) error {
-	for _, a := range missionArtifacts {
-		legacy := filepath.Join(legacyDir, id+a.legacySuffix)
-		if err := os.Remove(legacy); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return ioErr("removing legacy", legacy, err)
-		}
-	}
-	return nil
 }
