@@ -3,6 +3,7 @@ package autorepair
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -27,7 +28,7 @@ func TestHookSectionsRefreshed(t *testing.T) {
 		{"corpus/v4.20.4", 2, false},
 		{"corpus/v4.21.0", 2, false},
 		{"corpus/v4.22.1", 0, false},
-		{"damage/stale-hook-section", 2, true},
+		{"damage/stale-hook-section", 2, false},
 	}
 	for _, c := range cases {
 		t.Run(c.dir, func(t *testing.T) {
@@ -56,6 +57,53 @@ func TestHookSectionsRefreshed(t *testing.T) {
 			assert.Equal(t, 0, again.Items, "second run changes nothing")
 		})
 	}
+}
+
+// buildEthos builds the binary under test into a scratch directory and returns
+// that directory, for a test that must run git hooks against a real ethos.
+func buildEthos(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	cmd := exec.Command("go", "build", "-o", filepath.Join(dir, "ethos"), "../../cmd/ethos")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "building ethos: %s", out)
+	return dir
+}
+
+// A refreshed section must work, not merely read right: a real git commit runs
+// through the shim the refresh wrote, against the built binary, and lands with
+// its trailer. The fixture's old section calls the retired hook commit-trailers.
+func TestHookSectionsRefreshedSectionCommits(t *testing.T) {
+	// Build first: fixtureEnv points HOME at a scratch directory, and a build
+	// under it would write the module cache there.
+	bin := buildEthos(t)
+	env := fixtureEnv(t, "damage/stale-hook-section")
+	repo := env.Roots.Checkout
+
+	out, err := runHookSections(context.Background(), env)
+	require.NoError(t, err)
+	require.Equal(t, 2, out.Items)
+	hook := readFixture(t, filepath.Join(repo, ".git", "hooks", "commit-msg"))
+	require.NotContains(t, hook, "hook commit-trailers", "the retired subcommand is gone")
+
+	gitEnv := append(os.Environ(),
+		"PATH="+bin+":"+os.Getenv("PATH"),
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@x", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@x",
+		"MISSION_ID=m-2026-11-04-043", "DELEGATION_ID=d-2026-11-04-043")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0o644))
+	for _, args := range [][]string{{"add", "f.txt"}, {"-c", "commit.gpgsign=false", "commit", "-q", "-m", "refreshed"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir, cmd.Env = repo, gitEnv
+		b, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, b)
+	}
+	cmd := exec.Command("git", "log", "-1", "--format=%B")
+	cmd.Dir, cmd.Env = repo, gitEnv
+	b, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(b))
+	assert.Contains(t, string(b), "Mission: m-2026-11-04-043")
+	assert.Contains(t, string(b), "Delegation: d-2026-11-04-043")
 }
 
 func TestHookSectionsSharedHooksPathIsResidual(t *testing.T) {
