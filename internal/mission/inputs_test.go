@@ -3,6 +3,7 @@ package mission
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
@@ -386,4 +387,42 @@ files:
 	assert.Equal(t, "email", in.Trigger.Type)
 	assert.Equal(t, "wash@serenity.ship", in.Trigger.From)
 	assert.Equal(t, []string{"b.go"}, in.Files)
+}
+
+// TestRenameBeadAlias pins the DES-084 step 14 rewrite: a block-style key is
+// renamed with every other byte untouched, a flow mapping survives through the
+// node tree with its value, and both keys at once is refused.
+func TestRenameBeadAlias(t *testing.T) {
+	block := "mission_id: m-2026-01-01-001\n# keep this comment\ninputs:\n    bead: ethos-1\n    files:\n        - a.go\nwrite_set:\n    - src/\n"
+	tests := []struct {
+		name    string
+		in      string
+		want    string
+		changed bool
+		wantErr bool
+	}{
+		{"block key only renamed", block, strings.Replace(block, "bead:", "ticket:", 1), true, false},
+		{"already ticket", "inputs:\n    ticket: ethos-1\n", "inputs:\n    ticket: ethos-1\n", false, false},
+		{"no inputs", "mission_id: m-2026-01-01-001\n", "mission_id: m-2026-01-01-001\n", false, false},
+		{"both keys refused", "inputs:\n    ticket: a\n    bead: a\n", "", false, true},
+		{"unparseable is not a bead contract", "inputs: [\n", "inputs: [\n", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, changed, err := RenameBeadAlias([]byte(tt.in))
+			if tt.wantErr {
+				assert.ErrorIs(t, err, ErrBothBeadKeys)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.changed, changed)
+			assert.Equal(t, tt.want, string(got))
+		})
+	}
+
+	got, changed, err := RenameBeadAlias([]byte("inputs: {bead: ethos-9}\nmission_id: m-2026-01-01-001\n"))
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Empty(t, BeadAlias(got))
+	assert.Contains(t, string(got), "ticket: ethos-9")
 }

@@ -58,7 +58,7 @@ func (s *Store) reconcileCorrection(id string) error {
 			return s.removeCorrectionIntent(id)
 		}
 	}
-	return fmt.Errorf("mission %q has pending correction preparation; retry the exact correction before another mutation", id)
+	return fmt.Errorf("mission %q has a pending correction preparation that is not yet in shared authority; no other mutation is accepted until it is resolved", id)
 }
 
 // An installed correction is already accepted. Recovery only confirms its
@@ -302,6 +302,14 @@ func (s *Store) persistCorrectionIntent(in correctionIntent) error {
 }
 
 func (s *Store) applySharedCorrection(c *Contract, correction Correction) error {
+	if c.RoundDecisions == nil {
+		// A mission whose crossed-round history cannot be imported is fenced:
+		// no lifecycle write may add authority beside history that is unknown.
+		probe := *c
+		if err := s.importLegacyDecisions(&probe); err != nil {
+			return fmt.Errorf("mission %q is fenced from lifecycle writes: %w", c.MissionID, err)
+		}
+	}
 	a, err := s.readCorrections(c)
 	if err != nil {
 		return err

@@ -347,3 +347,25 @@ func TestPublicationSummaryGuardPreservesBytesAndRefusesMalformedInput(t *testin
 		})
 	}
 }
+
+// A mission without shared round decisions is refused with the condition, not
+// with a claim about why its history is missing.
+func TestPublicationSnapshotMissingDecisionsMessage(t *testing.T) {
+	s, dir := publicationStore(t)
+	data, err := os.ReadFile(filepath.Join(dir, "contract.yaml"))
+	require.NoError(t, err)
+	publicationWrite(t, filepath.Join(dir, "contract.yaml"), []byte(strings.Split(string(data), "round_decisions:")[0]))
+	_, err = s.SnapshotSelection(context.Background(), []string{publicationID}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "shared round decisions unavailable for this mission; it is fenced from publication")
+	assert.NotContains(t, err.Error(), "incomplete")
+}
+
+func TestPublicationSnapshotMissingCorrectionsMessage(t *testing.T) {
+	s, dir := publicationStore(t)
+	require.NoError(t, os.Remove(filepath.Join(dir, "corrections.yaml")))
+	_, err := s.SnapshotSelection(context.Background(), []string{publicationID}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "shared corrections unavailable for this mission; it is fenced from publication")
+	assert.NotContains(t, err.Error(), "incomplete")
+}

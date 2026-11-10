@@ -36,6 +36,7 @@ var guardedSinks = map[string]string{
 	"internal/mission.Store.appendTraceLine":                   "guardWrite",
 	"internal/mission.Store.prepareTraceSummary":               "guardWrite",
 	"internal/hook.sealPolicyStream":                           "guard",
+	"internal/mission.ReplaceRecordFile":                       "guardWrite",
 	"internal/auditimport.migrateAuditSession":                 "guard",
 	"internal/audit.QuarantineLocal":                           "guard",
 	"internal/audit.Quarantine":                                "guardLine",

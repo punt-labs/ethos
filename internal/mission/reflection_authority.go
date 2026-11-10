@@ -228,7 +228,7 @@ func (s *Store) reconcileReflectionsExceptWithWarnings(id string, retryRound int
 		}
 		d := c.decision(round)
 		if d == nil {
-			return fmt.Errorf("mission %q has pending reflection preparation for round %d; retry the exact reflection before another mutation", id, round)
+			return fmt.Errorf("mission %q has pending reflection preparation for round %d that is not yet in shared authority; no other mutation is accepted until it is resolved", id, round)
 		}
 		if *d != in.Decision {
 			return fmt.Errorf("reflection receipt conflicts with shared decision; evidence retained")
@@ -319,7 +319,7 @@ func (s *Store) ApplyReflection(id string, r *Reflection) (OperationResult, erro
 			return err
 		}
 		if layer != layerRepo {
-			return fmt.Errorf("reflection authority requires a repository-owned mission; migrate the legacy global mission first")
+			return fmt.Errorf("reflection authority requires a repository-owned mission; this mission is still in the global store and is fenced from lifecycle writes")
 		}
 		if staged.Mission != id {
 			return fmt.Errorf("reflection mission %q does not match target mission %q", staged.Mission, id)
@@ -369,6 +369,9 @@ func (s *Store) ApplyReflection(id string, r *Reflection) (OperationResult, erro
 			return fmt.Errorf("round %d already decided; full reflection detail unavailable here, cannot certify equality or accept replacement", staged.Round)
 		}
 		if c.RoundDecisions == nil {
+			if err := s.requireImportableAuthority(c); err != nil {
+				return err
+			}
 			if err := s.importLegacyDecisions(c); err != nil {
 				return err
 			}
@@ -612,6 +615,11 @@ func (s *Store) finishReflection(in reflectionIntent) error {
 
 // Legacy import is strict and complete for the lifecycle prefix. Absence of
 // crossed-round detail is unknown history, not permission to initialize empty.
+//
+// A decision ID is LegacyDecisionID of the reflection as it stood when the
+// decision was imported. It is stored in the contract. The scrub-records step
+// leaves reflections.yaml alone once decisions exist, so the file still hashes
+// to the stored IDs.
 func (s *Store) importLegacyDecisions(c *Contract) error {
 	rs, _, err := s.loadReflectionsBytes(c.MissionID)
 	if err != nil {
@@ -621,7 +629,7 @@ func (s *Store) importLegacyDecisions(c *Contract) error {
 	for _, r := range rs {
 		id := LegacyDecisionID(r)
 		if id == "" {
-			return fmt.Errorf("encoding legacy reflection for round %d", r.Round)
+			return fmt.Errorf("deriving decision id for reflection round %d", r.Round)
 		}
 		d.Entries = append(d.Entries, RoundDecision{id, r.Round, r.CreatedAt, r.Author, r.Recommendation})
 	}

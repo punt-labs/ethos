@@ -1,0 +1,253 @@
+package mission
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
+)
+
+// ErrLockBusy is returned by WithRecordLockTry when another process holds the
+// lock. The caller retries later; it is not a failure.
+var ErrLockBusy = errors.New("mission lock is busy")
+
+// LegacyFence is the class of condition that leaves a legacy mission fenced.
+type LegacyFence int
+
+const (
+	// LegacyIncomplete: the crossed-round reflection or event history is
+	// incomplete or inconsistent.
+	LegacyIncomplete LegacyFence = iota + 1
+	// LegacyRedactionRefused: redaction or the write guard refused the evidence.
+	LegacyRedactionRefused
+	// LegacyCorruptCorrections: the existing corrections authority is unreadable
+	// or invalid.
+	LegacyCorruptCorrections
+	// LegacyUnloadable: the contract cannot be read or decoded.
+	LegacyUnloadable
+)
+
+// String is a reason a caller can record, derived from the class alone.
+func (f LegacyFence) String() string {
+	switch f {
+	case LegacyIncomplete:
+		return "incomplete legacy history"
+	case LegacyRedactionRefused:
+		return "legacy evidence refused by redaction"
+	case LegacyCorruptCorrections:
+		return "corrections authority is corrupt"
+	case LegacyUnloadable:
+		return "contract cannot be loaded"
+	}
+	return "legacy history cannot be imported"
+}
+
+// LegacyHistoryError reports a mission whose legacy round or correction
+// history cannot be imported as complete shared authority. Kind says why. The
+// mission stays as it is, fenced from lifecycle writes.
+type LegacyHistoryError struct {
+	Kind LegacyFence
+	Err  error
+}
+
+func (e *LegacyHistoryError) Error() string { return e.Err.Error() }
+func (e *LegacyHistoryError) Unwrap() error { return e.Err }
+
+func legacyFence(kind LegacyFence, err error) *LegacyHistoryError {
+	return &LegacyHistoryError{Kind: kind, Err: err}
+}
+
+// WithRecordLockTry runs fn holding the per-mission state lock that every
+// mission writer takes, or returns ErrLockBusy at once when another holder has
+// it. The lock path is the one Store.withMissionLock uses, so repair
+// serializes with live writers.
+func WithRecordLockTry(p layout.Policy, id string, fn func() error) error {
+	if !missionIDPattern.MatchString(id) {
+		return fmt.Errorf("invalid mission id %q", id)
+	}
+	path, err := p.LockPath("mission-state", id)
+	if err != nil {
+		return err
+	}
+	if err := layout.EnsureLocalDir(p, filepath.Dir(path)); err != nil {
+		return err
+	}
+	return withFileLockTry(path, lockExclusive, fn)
+}
+
+// withFileLockTry runs fn holding the flock on path in mode, or returns
+// ErrLockBusy at once when another holder has it. The caller has created the
+// lock's directory.
+func withFileLockTry(path string, mode int, fn func() error) error {
+	if err := rejectSymlink(path); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("opening lock file: %w", err)
+	}
+	defer f.Close()
+	busy, err := flockTry(f, mode)
+	if err != nil {
+		return fmt.Errorf("acquiring lock: %w", err)
+	}
+	if busy {
+		return ErrLockBusy
+	}
+	defer func() { _ = funlock(f) }()
+	return fn()
+}
+
+// withPolicyLockTry is withFileLockTry on the policy's lock for domain and key.
+func withPolicyLockTry(p layout.Policy, domain, key string, mode int, fn func() error) error {
+	path, err := p.LockPath(domain, key)
+	if err != nil {
+		return err
+	}
+	if err := layout.EnsureLocalDir(p, filepath.Dir(path)); err != nil {
+		return err
+	}
+	return withFileLockTry(path, mode, fn)
+}
+
+// UpgradeLegacyAuthority gives a repository mission that predates DES-079
+// shared round decisions and corrections authority, computed eagerly from its
+// retained legacy evidence by the same strict importers the lifecycle writers
+// use. It reports whether it wrote anything. A mission that is not
+// repository-owned, or already has decisions, is left alone.
+//
+// Nothing is fabricated: when the crossed-round reflection history or the
+// event history is incomplete, or redaction refuses the evidence, the mission
+// is untouched and the error is a *LegacyHistoryError. Corrections are written
+// before the contract, so a failure between the two leaves corrections without
+// round decisions, which the next call resumes: it validates the corrections,
+// imports the decisions and writes the contract. The caller holds the mission
+// lock.
+//
+// It prints nothing: a post-install durability failure is a warning in the
+// returned outcome, and the mission counts as upgraded.
+func (s *Store) UpgradeLegacyAuthority(id string) (bool, MutationOutcome, error) {
+	var out MutationOutcome
+	upgraded, err := s.upgradeLegacyAuthority(id, &out)
+	return upgraded, out, err
+}
+
+func (s *Store) upgradeLegacyAuthority(id string, out *MutationOutcome) (bool, error) {
+	if !s.twoTreeStorage {
+		return false, fmt.Errorf("UpgradeLegacyAuthority requires repository storage")
+	}
+	layer, err := s.resolveLayer(id)
+	if err != nil {
+		return false, err
+	}
+	if layer != layerRepo {
+		return false, nil
+	}
+	c, _, err := s.loadLocked(id)
+	if err != nil {
+		return false, legacyFence(LegacyUnloadable, err)
+	}
+	if c.RoundDecisions != nil {
+		a, err := s.readCorrections(c)
+		if err != nil {
+			return false, legacyFence(LegacyCorruptCorrections, fmt.Errorf("corrections authority unreadable: %w", err))
+		}
+		if a == nil {
+			return false, legacyFence(LegacyIncomplete, fmt.Errorf("round decisions exist but corrections authority is missing; not inferring empty history"))
+		}
+		return false, nil
+	}
+	existing, err := s.readCorrections(c)
+	if err != nil {
+		return false, legacyFence(LegacyCorruptCorrections, fmt.Errorf("corrections authority unreadable: %w", err))
+	}
+	upgraded := *c
+	if err := s.importLegacyDecisions(&upgraded); err != nil {
+		return false, legacyFence(LegacyIncomplete, err)
+	}
+	// Corrections without decisions are the state Correct leaves on a legacy
+	// closed mission, and the state a crash between the two renames below
+	// leaves. The corrections are valid authority already: only the decisions
+	// are missing, and the corrections are kept as they are.
+	var cb []byte
+	if existing == nil {
+		corrections, err := s.importLegacyCorrections(&upgraded)
+		if err != nil {
+			return false, legacyFence(LegacyIncomplete, err)
+		}
+		cb, _, err = RedactedYAMLNotify(s.repoRoot, *corrections)
+		if err != nil {
+			return false, legacyFence(LegacyRedactionRefused, err)
+		}
+		cb, err = guardWrite(s.correctionsPath(id), cb)
+		if err != nil {
+			return false, legacyFence(LegacyRedactionRefused, err)
+		}
+	}
+	contractBytes, _, err := RedactedYAMLNotify(s.repoRoot, upgraded, func(red Contract) error {
+		if !reflect.DeepEqual(red.RoundDecisions, upgraded.RoundDecisions) || red.Budget != upgraded.Budget || red.Evaluator != upgraded.Evaluator {
+			return fmt.Errorf("redaction changed frozen authority")
+		}
+		return s.validateContract(&red)
+	})
+	if err != nil {
+		return false, legacyFence(LegacyRedactionRefused, err)
+	}
+	path, err := s.contractPath(id)
+	if err != nil {
+		return false, err
+	}
+	if cb != nil {
+		if err := s.writeBytesWithOutcome(s.correctionsPath(id), cb, false, out); err != nil {
+			return false, err
+		}
+	}
+	if err := s.writeBytesWithOutcome(path, contractBytes, true, out); err != nil {
+		return false, fmt.Errorf("installing upgraded contract: %w", err)
+	}
+	return true, nil
+}
+
+// IsMissionID reports whether name is a well-formed mission ID, so a caller
+// walking the record tree can skip directories that are not missions.
+func IsMissionID(name string) bool { return missionIDPattern.MatchString(name) }
+
+// ReplaceRecordFile atomically replaces dest, a file in the canonical store or
+// checkout of p, with data, staging in the policy's local temp directory. The
+// bytes pass guardWrite like every other record writer: they are canonicalized,
+// and refused when they still leak a path or credential.
+//
+// The error is non-nil only when dest was not replaced. A failure to confirm the
+// directory entry after the rename is returned apart, as durability: dest holds
+// the new bytes, so the caller counts it rewritten and logs the durability error.
+func ReplaceRecordFile(p layout.Policy, dest string, data []byte) (durability, err error) {
+	data, err = guardWrite(dest, data)
+	if err != nil {
+		return nil, err
+	}
+	w, err := localReplace(p, dest, data)
+	if err != nil {
+		return nil, err
+	}
+	return w.DurabilityError, nil
+}
+
+// requireImportableAuthority fences a mission that has no round decisions and
+// whose legacy history cannot be imported as complete: no lifecycle write may
+// add a result, a status, or an edit beside history that is unknown. It
+// imports into a copy, so it changes nothing; reads never call it and keep
+// showing the authority as unavailable. Missions that already hold decisions
+// and single-tree stores are not fenced.
+func (s *Store) requireImportableAuthority(c *Contract) error {
+	if !s.twoTreeStorage || c.RoundDecisions != nil {
+		return nil
+	}
+	probe := *c
+	if err := s.importLegacyDecisions(&probe); err != nil {
+		return fmt.Errorf("mission %q is fenced from lifecycle writes: %w", c.MissionID, err)
+	}
+	return nil
+}
