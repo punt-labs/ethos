@@ -144,7 +144,7 @@ func TestLiveTailsRedactsPreRedactionLine(t *testing.T) {
 	assert.False(t, out.Deferred)
 	assert.Empty(t, out.Residuals)
 	assert.Empty(t, walkContains(t, env.Roots.Store, home, fakeToken), "no file keeps the home path or the token")
-	assert.Contains(t, log.text(), "live-tails redact-live lines=1")
+	assert.Contains(t, log.text(), "live-tails:redact-live lines=1")
 	assert.NotContains(t, log.text(), fakeToken, "the log names paths and counts, never content")
 
 	live, err := os.ReadFile(s.LivePath(env.Policy))
@@ -294,7 +294,7 @@ func TestCorruptChunksCorruptSealedChunk(t *testing.T) {
 	assert.Len(t, data.Gaps, 1, "the loss is recorded as a gap")
 	assert.Empty(t, chunkFiles(t, env), "the damaged bytes are deleted")
 	assert.Empty(t, corruptFiles(t, env.Roots.Store), "no .corrupt copy is kept")
-	assert.Contains(t, log.text(), "corrupt-chunks replace-chunk salvaged=0 gap=true")
+	assert.Contains(t, log.text(), "corrupt-chunks:replace-chunk salvaged=0 gap=true")
 	assertSecondRunChangesNothing(t, runCorruptChunks, env)
 }
 
@@ -450,49 +450,23 @@ func TestAuditStepsOverCorpusAreIdempotent(t *testing.T) {
 	}
 }
 
-// A corpus live tail whose lines the record tree already holds unredacted
-// (v4.8.0 through v4.17.0 archived into the tracked tree) is left alone by
-// step 6, because rewriting it would contradict the archived copy; once step 5
-// has replaced those tracked chunks with redacted local copies, step 6 brings
-// the stale live duplicates to the archived form, and the token survives
-// nowhere under local/.
+// A v4.17.0 corpus live tail holds pre-redaction lines whose redacted form the
+// local archive already carries (the restored corpus keeps the local trace a
+// real upgrade has). Step 6 brings each stale live line to the archived form
+// rather than dropping it as a conflict, and the token survives nowhere under
+// local/.
 func TestLiveTailsAfterRecordTreeRedactionDropsStaleCorpusLines(t *testing.T) {
 	const v = "v4.17.0"
 	env, log := corpusAuditEnv(t, v)
 	s := audit.Stream{Namespace: audit.SessionNS, Session: "sess-corpus-0001"}
 	live := s.LivePath(env.Policy)
 	require.NotEmpty(t, walkContains(t, live, fakeToken), "fixture: the live tail holds the token")
-	assert.Equal(t, 0, runStepT(t, runLiveTails, env).Items, "an identically archived line is not rewritten")
 
-	// Stand in for step 5: move the tracked chunk into the local archive in its
-	// redacted form, then delete it from the record tree.
-	tracked, err := filepath.Glob(filepath.Join(env.Policy.RecordRoot(), "sessions", "*", "audit-*.jsonl"))
-	require.NoError(t, err)
-	require.Len(t, tracked, 1)
-	cn, kind := audit.Classify(filepath.Base(tracked[0]), audit.SessionNS)
-	require.Equal(t, audit.KindValid, kind)
-	lines, err := audit.ReadChunkVerified(tracked[0], cn.Last)
-	require.NoError(t, err)
-	guard := liveLineGuard(env.Policy, audit.SessionNS)
-	var body []byte
-	for _, l := range lines {
-		out, _, _ := guard(l.Raw)
-		body = append(append(body, out...), '\n')
-	}
-	dir, err := audit.ArchiveDir(env.Policy, s, "2026-11-09")
-	require.NoError(t, err)
-	require.NoError(t, audit.WriteLocalAtomic(env.Policy, filepath.Join(dir, cn.ChunkFile()), body))
-	require.NoError(t, os.Remove(tracked[0]))
-	_, err = audit.ReadStream(env.Policy, s)
-	require.ErrorContains(t, err, "identity conflict", "fixture: the stale live lines now contradict the redacted archive")
-
-	// Each stale live line redacts to exactly what the archive now holds, so
-	// it is brought to that form rather than dropped as a conflict.
 	out := runStepT(t, runLiveTails, env)
 	assert.Equal(t, 3, out.Items, "every stale live line is rewritten")
 	assert.Contains(t, log.text(), "redact-live lines=3")
 	assert.NotContains(t, log.text(), "drop-live-line")
-	_, err = audit.ReadStream(env.Policy, s)
+	_, err := audit.ReadStream(env.Policy, s)
 	require.NoError(t, err)
 	assert.Empty(t, walkContains(t, env.Policy.LocalRoot(), fakeToken), "the token survives nowhere under local/")
 	assertSecondRunChangesNothing(t, runLiveTails, env)
