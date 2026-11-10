@@ -13,6 +13,10 @@ scripts/legacy-corpus.sh
 scripts/legacy-corpus.sh --versions "v4.22.1"
 ```
 
+The root `.gitignore` drops `.ethos/`, `*.create.lock` and `.punt-labs/local/`, so after regenerating, run
+`git add -f internal/autorepair/testdata/corpus` (the generator's own `git add -f` runs inside the scratch
+repository, a different step). `make test-legacy-corpus` fails when a snapshot's `git ls-files` differs from its file set.
+
 `make test-legacy-corpus` (`scripts/legacy_corpus_test.sh`) rebuilds one tag into a temporary directory
 and checks it against the committed copy. Neither target is part of `make check`: they build nine
 binaries from tags and need full history (`git fetch --tags`).

@@ -820,6 +820,10 @@ write_readme() {
     echo 'scripts/legacy-corpus.sh --versions "v4.22.1"'
     echo '```'
     echo
+    echo "The root \`.gitignore\` drops \`.ethos/\`, \`*.create.lock\` and \`.punt-labs/local/\`, so after regenerating, run"
+    echo "\`git add -f internal/autorepair/testdata/corpus\` (the generator's own \`git add -f\` runs inside the scratch"
+    echo "repository, a different step). \`make test-legacy-corpus\` fails when a snapshot's \`git ls-files\` differs from its file set."
+    echo
     echo "\`make test-legacy-corpus\` (\`scripts/legacy_corpus_test.sh\`) rebuilds one tag into a temporary directory"
     echo "and checks it against the committed copy. Neither target is part of \`make check\`: they build nine"
     echo "binaries from tags and need full history (\`git fetch --tags\`)."
