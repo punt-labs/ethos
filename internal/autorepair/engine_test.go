@@ -135,10 +135,16 @@ func TestEnsureWritesStampsAndIsIdempotent(t *testing.T) {
 
 // With no step registered nothing has been converted, so nothing may be
 // stamped current: a stamp written now would make Ensure take the fast path
-// forever once the real steps land. Two runs write no stamp and print nothing.
+// forever once the real steps land. Nothing has run either, so there is
+// nothing to log or lock: two runs leave both stores byte-identical and print
+// nothing. (A test that hashes a fake HOME around a read-only command relies
+// on this.)
 func TestEnsureZeroStepsWritesNoStamp(t *testing.T) {
 	r := newRig(t, true)
 	r.opts.order = []string{"a", "b"}
+	require.NoError(t, os.MkdirAll(r.global, 0o700))
+	before := treeOf(t, r.global)
+	repoBefore := treeOf(t, r.store)
 	for range 2 {
 		res := r.ensure()
 		assert.Equal(t, "", res.Line())
@@ -148,15 +154,36 @@ func TestEnsureZeroStepsWritesNoStamp(t *testing.T) {
 		_, err = r.repoStamp()
 		assert.ErrorIs(t, err, os.ErrNotExist, "repository stamp")
 	}
+	assert.Equal(t, before, treeOf(t, r.global), "the global store is untouched: no log, no lock")
+	assert.Equal(t, repoBefore, treeOf(t, r.store), "the repository is untouched")
+}
+
+// treeOf lists every path under root, relative, for before/after checks.
+func treeOf(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	require.NoError(t, filepath.WalkDir(root, func(p string, _ os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		out = append(out, rel)
+		return nil
+	}))
+	return out
 }
 
 // A StepOrder name with no registration is a step that has not run: it
 // blocks the stamps it would serve. The engine cannot know its scope, so it
-// blocks both. Registered steps still run.
+// blocks both. Registered steps still run, and the missing set is logged
+// once per Ensure, not once per name.
 func TestEnsureUnregisteredOrderNameBlocksStamps(t *testing.T) {
 	r := newRig(t, true)
 	r.step("present", ScopeBoth, Outcome{Items: 1}, nil)
-	r.opts.order = append(r.opts.order, "absent")
+	r.opts.order = append(r.opts.order, "absent", "also-absent")
 	res := r.ensure()
 	assert.Equal(t, []string{"present"}, r.ran)
 	assert.Equal(t, 1, res.Items)
@@ -164,10 +191,16 @@ func TestEnsureUnregisteredOrderNameBlocksStamps(t *testing.T) {
 	assert.ErrorIs(t, err, os.ErrNotExist)
 	_, err = r.repoStamp()
 	assert.ErrorIs(t, err, os.ErrNotExist)
-	raw, err := os.ReadFile(LogPath(r.global))
-	require.NoError(t, err)
-	assert.Contains(t, string(raw), `"step":"absent"`)
-	assert.Contains(t, string(raw), `"action":"defer"`)
+	var deferred []map[string]any
+	for _, l := range readLog(t, LogPath(r.global)) {
+		if l["action"] == "defer" {
+			deferred = append(deferred, l)
+		}
+	}
+	require.Len(t, deferred, 1, "one line for the missing set")
+	assert.Equal(t, "engine", deferred[0]["step"])
+	assert.Contains(t, deferred[0]["error"], "absent, also-absent")
+	assert.Contains(t, deferred[0]["error"], "not registered")
 }
 
 // A git repository that never used ethos has no .punt-labs directory. Ensure

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/layout"
@@ -151,6 +152,13 @@ func ensure(ctx context.Context, roots resolve.Located, global string, o options
 	if !g.needed && (r == nil || !r.needed) {
 		return Result{}, nil
 	}
+	missing := unregistered(o)
+	if len(missing) > 0 && !anyRegisteredServes(o, g, r) {
+		// Nothing this binary carries would run, and the stamps stay unwritten
+		// until a binary that carries every step runs: there is nothing to
+		// lock or log. The stores are left byte-identical.
+		return Result{}, nil
+	}
 
 	release, lerr := acquire(o.globalLockPath(global), o.lockWait)
 	if lerr != nil {
@@ -179,6 +187,12 @@ func ensure(ctx context.Context, roots resolve.Located, global string, o options
 		return Result{}, nil
 	}
 
+	if len(missing) > 0 {
+		// Unknown scope, so every needed stamp is withheld; one line names
+		// the set so the log does not grow by one line per name per command.
+		log.Logf("engine", "defer", nil, fmt.Errorf("%w: %s", errUnregistered, strings.Join(missing, ", ")))
+		block(serves(ScopeBoth, g, r))
+	}
 	env := Env{Roots: stepRoots(roots, r), Policy: policy, Global: global, Now: o.now(), Log: log}
 	res = runSteps(ctx, env, o, log, g, r, nil)
 	for _, t := range targets {
@@ -260,17 +274,40 @@ func stepRoots(roots resolve.Located, r *target) resolve.Located {
 // deferred, not failed, and the next entry resumes it.
 var errBudget = errors.New("budget exceeded")
 
-// errUnregistered marks a StepOrder name no unit has registered in this
-// binary: its conversion has not run, so the stamps it would serve stay
-// unwritten until a binary that carries it runs.
-var errUnregistered = errors.New("step not registered in this binary")
+// errUnregistered marks StepOrder names no unit has registered in this
+// binary: their conversions have not run, so the stamps stay unwritten until
+// a binary that carries them runs.
+var errUnregistered = errors.New("steps not registered in this binary")
 
-// runSteps runs the steps in o.order, each against the targets its scope
-// names. With only non-nil, just the named steps run and an unregistered name
-// is skipped (a cheap pass is best effort); otherwise an unregistered name is
-// a deferred step whose scope is unknown, so it blocks every needed stamp. A
-// step that errors, defers, runs out of time or is abandoned blocks the stamps
-// it serves and contributes nothing to the result; later steps still run.
+// unregistered is the StepOrder names with no registered step, in order.
+func unregistered(o options) []string {
+	var out []string
+	for _, name := range o.order {
+		if !slices.ContainsFunc(o.steps, func(s Step) bool { return s.Name == name }) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// anyRegisteredServes reports whether a registered step in o.order would run
+// against a needed target.
+func anyRegisteredServes(o options, g, r *target) bool {
+	for _, name := range o.order {
+		i := slices.IndexFunc(o.steps, func(s Step) bool { return s.Name == name })
+		if i >= 0 && len(serves(o.steps[i].Scope, g, r)) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// runSteps runs the registered steps in o.order, each against the targets
+// its scope names. With only non-nil, just the named steps run (a cheap
+// pass). A name with no registered step is skipped here; ensure has already
+// withheld the stamps for it. A step that errors, defers, runs out of time or
+// is abandoned blocks the stamps it serves and contributes nothing to the
+// result; later steps still run.
 func runSteps(ctx context.Context, env Env, o options, log *FileLog, g, r *target, only map[string]bool) (res Result) {
 	ctx, cancel := context.WithTimeout(ctx, o.ensureBudget)
 	defer cancel()
@@ -280,14 +317,6 @@ func runSteps(ctx context.Context, env Env, o options, log *FileLog, g, r *targe
 		}
 		i := slices.IndexFunc(o.steps, func(s Step) bool { return s.Name == name })
 		if i < 0 {
-			if only != nil {
-				continue
-			}
-			served := serves(ScopeBoth, g, r)
-			if len(served) > 0 {
-				log.Logf(name, "defer", nil, errUnregistered)
-				block(served)
-			}
 			continue
 		}
 		s := o.steps[i]
