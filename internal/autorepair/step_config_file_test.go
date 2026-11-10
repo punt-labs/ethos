@@ -122,3 +122,64 @@ func TestConfigFileStepLeavesNonRegularNew(t *testing.T) {
 	require.Len(t, out.Residuals, 1)
 	assert.Equal(t, "config-file", out.Residuals[0].Step)
 }
+
+// A symlinked .punt-labs/ethos must not let the step delete or move files
+// outside the repository.
+func TestConfigFileStepRefusesSymlinkedAncestor(t *testing.T) {
+	for _, newExists := range []bool{true, false} {
+		name := "new absent"
+		if newExists {
+			name = "new present"
+		}
+		t.Run(name, func(t *testing.T) {
+			tr := s81113Copy(t, "damage/both-config-files")
+			ethosDir := filepath.Join(tr.Repo, ".punt-labs", "ethos")
+			outside := filepath.Join(filepath.Dir(tr.Repo), "outside")
+			require.NoError(t, os.MkdirAll(outside, 0o755))
+			s81113Write(t, filepath.Join(outside, "config.yaml"), "agent: outside\n")
+			s81113Write(t, filepath.Join(outside, "enabled"), "")
+			require.NoError(t, os.RemoveAll(ethosDir))
+			require.NoError(t, os.Symlink(outside, ethosDir))
+			newPath := filepath.Join(tr.Repo, ".punt-labs", "ethos.yaml")
+			if !newExists {
+				require.NoError(t, os.Remove(newPath))
+			}
+
+			out := s81113Run(t, "config-file", tr.Env(t))
+			assert.Equal(t, 0, out.Items)
+			require.Len(t, out.Residuals, 1)
+			assert.Equal(t, "config-file", out.Residuals[0].Step)
+			assert.True(t, s81113Exists(filepath.Join(outside, "config.yaml")), "the outside file is untouched")
+			assert.Equal(t, newExists, s81113Exists(newPath))
+		})
+	}
+}
+
+// The legacy config is the only readable copy until ethos.yaml loads.
+func TestConfigFileStepKeepsLegacyWhenNewDoesNotParse(t *testing.T) {
+	tr := s81113Copy(t, "damage/both-config-files")
+	oldP := filepath.Join(tr.Repo, ".punt-labs", "ethos", "config.yaml")
+	newP := filepath.Join(tr.Repo, ".punt-labs", "ethos.yaml")
+	s81113Write(t, newP, "agent: [unclosed\n")
+
+	out := s81113Run(t, "config-file", tr.Env(t))
+	assert.Equal(t, 0, out.Items)
+	assert.True(t, s81113Exists(oldP), "legacy config kept")
+	assert.Equal(t, "agent: [unclosed\n", string(s81113Read(t, newP)))
+	require.Len(t, out.Residuals, 1)
+	assert.Equal(t, ".punt-labs/ethos.yaml", out.Residuals[0].ID)
+}
+
+// Residuals land in the layout stamp, so they carry store-relative paths only.
+func TestConfigFileStepResidualsAreStoreRelative(t *testing.T) {
+	tr := s81113Copy(t, "damage/both-config-files")
+	newPath := filepath.Join(tr.Repo, ".punt-labs", "ethos.yaml")
+	require.NoError(t, os.Remove(newPath))
+	require.NoError(t, os.Symlink("does-not-exist", newPath))
+
+	out := s81113Run(t, "config-file", tr.Env(t))
+	require.Len(t, out.Residuals, 1)
+	assert.Equal(t, ".punt-labs/ethos.yaml", out.Residuals[0].ID)
+	assert.NotContains(t, out.Residuals[0].ID+out.Residuals[0].Reason, tr.Repo)
+	assert.NotContains(t, out.Residuals[0].ID+out.Residuals[0].Reason, os.Getenv("HOME"))
+}
