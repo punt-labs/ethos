@@ -71,7 +71,7 @@ func TestAuditEmptyIndexActualCLI(t *testing.T) {
 				}
 				t.Logf("attempt %d: error=%v; output=%s", attempt, err, out)
 				assert.Contains(t, string(out), "full audit publication incomplete; local archive retained")
-				assert.Contains(t, string(out), "empty/corrupt")
+				assert.Contains(t, string(out), "is empty or corrupt")
 				assert.Contains(t, string(out), index)
 				assert.NotContains(t, string(out), "staged 1 chunk(s)", "no staging success after failure")
 				assert.NotContains(t, string(out), "allowing the source commit")
