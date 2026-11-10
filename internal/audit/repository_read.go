@@ -56,10 +56,10 @@ func ReadStream(p layout.Policy, s Stream) (StreamData, error) {
 			}
 			marker, err := ReadMarker(filepath.Join(dir, e.Name()))
 			if err != nil {
-				return StreamData{}, fmt.Errorf("reading audit quarantine marker %s: %w", filepath.Join(dir, e.Name()), err)
+				return StreamData{}, fmt.Errorf("reading audit marker %s: %w", filepath.Join(dir, e.Name()), err)
 			}
 			if marker.Chunk != cn.Stem() {
-				return StreamData{}, fmt.Errorf("audit quarantine marker %s covers a different chunk", filepath.Join(dir, e.Name()))
+				return StreamData{}, fmt.Errorf("audit marker %s covers a different chunk", filepath.Join(dir, e.Name()))
 			}
 			if marker.VerifiedLast > data.Floor {
 				data.Floor = marker.VerifiedLast
@@ -201,8 +201,21 @@ func readCompleteLive(path, session string) ([]Line, error) {
 var auditMissionDirName = regexp.MustCompile(`^m-\d{4}-\d{2}-\d{2}-\d{3}$`)
 
 // ListStreams discovers both live and historical streams. A missing tree is
-// empty; an unreadable one is an error, never empty success.
+// empty; an unreadable one is an error, never empty success. Every recognized
+// artifact in a stream directory must be a readable regular file.
 func ListStreams(p layout.Policy) ([]Stream, error) {
+	return listStreams(p, true)
+}
+
+// ListStreamsByName discovers streams from directory and file names alone. It
+// does not validate the artifacts inside a stream directory, so a caller that
+// classifies them itself (the repair steps, through ScanSealedDir) is not
+// stopped by one it is about to classify.
+func ListStreamsByName(p layout.Policy) ([]Stream, error) {
+	return listStreams(p, false)
+}
+
+func listStreams(p layout.Policy, validate bool) ([]Stream, error) {
 	if _, err := p.LockPath("audit-stream", "validate"); err != nil {
 		return nil, err
 	}
@@ -230,8 +243,10 @@ func ListStreams(p layout.Policy) ([]Stream, error) {
 				if !present {
 					continue
 				}
-				if _, err := readAuditArtifactDir(filepath.Join(root, "sessions", e.Name()), SessionNS, ""); err != nil {
-					return nil, err
+				if validate {
+					if _, err := readAuditArtifactDir(filepath.Join(root, "sessions", e.Name()), SessionNS, ""); err != nil {
+						return nil, err
+					}
 				}
 				if err := add(Stream{Namespace: SessionNS, Session: e.Name()[prefix:]}); err != nil {
 					return nil, err
@@ -246,7 +261,13 @@ func ListStreams(p layout.Policy) ([]Stream, error) {
 			if !m.IsDir() && !auditMissionDirName.MatchString(m.Name()) {
 				continue
 			}
-			entries, err := readAuditArtifactDir(filepath.Join(root, "missions", m.Name()), MissionNS, "")
+			var entries []os.DirEntry
+			var err error
+			if validate {
+				entries, err = readAuditArtifactDir(filepath.Join(root, "missions", m.Name()), MissionNS, "")
+			} else {
+				entries, err = readDirIfPresent(filepath.Join(root, "missions", m.Name()))
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -258,7 +279,7 @@ func ListStreams(p layout.Policy) ([]Stream, error) {
 				}
 				cn, kind := Classify(e.Name(), MissionNS)
 				if kind == KindNearMiss {
-					return nil, fmt.Errorf("malformed chunk name %q in mission %s", e.Name(), m.Name())
+					return nil, &MalformedChunkNameError{Name: e.Name(), Dir: filepath.Join("missions", m.Name())}
 				}
 				if cn.Session != "" {
 					if err := add(Stream{Namespace: MissionNS, Mission: m.Name(), Session: cn.Session}); err != nil {
@@ -405,7 +426,7 @@ func readAuditArtifactDir(dir string, ns Namespace, session string) ([]os.DirEnt
 	for _, e := range entries {
 		cn, kind := Classify(e.Name(), ns)
 		if e.Name() != legacy {
-			if kind != KindValid && kind != KindQuarantine && kind != KindCorrupt {
+			if kind != KindValid && kind != KindQuarantine && kind != KindCorrupt && kind != KindHeldLoss {
 				continue
 			}
 			if ns == MissionNS && session != "" && cn.Session != session {
@@ -421,6 +442,14 @@ func readAuditArtifactDir(dir string, ns Namespace, session string) ([]os.DirEnt
 		}
 	}
 	return entries, nil
+}
+
+// NotRegularFileError is a symlink, directory or special file where an audit
+// artifact belongs. It is a property of the tree, not a passing condition.
+type NotRegularFileError struct{ Path string }
+
+func (e *NotRegularFileError) Error() string {
+	return fmt.Sprintf("audit read file %s is not a physical regular file", e.Path)
 }
 
 // auditReadFilePresent accepts only a readable physical regular file. Lstat
@@ -441,7 +470,7 @@ func auditReadFilePresent(path string) (bool, error) {
 		return false, fmt.Errorf("examining audit read file %s: %w", path, err)
 	}
 	if !info.Mode().IsRegular() {
-		return false, fmt.Errorf("audit read file %s is not a physical regular file", path)
+		return false, &NotRegularFileError{Path: path}
 	}
 	f, err := os.Open(path)
 	if err != nil {

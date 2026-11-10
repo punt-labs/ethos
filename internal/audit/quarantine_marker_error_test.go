@@ -138,6 +138,8 @@ func TestRepositoryQuarantineUnreadablePriorMarkerRefusesBeforeWrites(t *testing
 	}
 }
 
+// A missing prior marker resumes; an undecodable one may have recorded a loss
+// of unknown range, so the retirement refuses and leaves its bytes alone.
 func TestRepositoryQuarantineMissingOrMalformedPriorMarkerResumes(t *testing.T) {
 	for _, location := range []string{"local", "published"} {
 		for _, content := range []struct {
@@ -178,6 +180,14 @@ func TestRepositoryQuarantineMissingOrMalformedPriorMarkerResumes(t *testing.T) 
 					body, err := MarshalMarker(local)
 					require.NoError(t, err)
 					require.NoError(t, ReplaceLocalFile(p, localPath, body))
+				}
+				if content.name != "missing" {
+					_, err = QuarantineLocal(p, s, source, dir, cn, "fixture", guard)
+					require.ErrorIs(t, err, ErrTornMarker)
+					got, rerr := os.ReadFile(markerPath)
+					require.NoError(t, rerr)
+					assert.Equal(t, content.body, string(got), "the undecodable marker is left byte-identical")
+					return
 				}
 				m, err := QuarantineLocal(p, s, source, dir, cn, "fixture", guard)
 				require.NoError(t, err)

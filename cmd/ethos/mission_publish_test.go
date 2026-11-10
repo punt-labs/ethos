@@ -53,6 +53,10 @@ func publicationFixtureCLI(t *testing.T) (*cliSubprocessEnv, string, string) {
 	data, err = yaml.Marshal(d)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "delegations", "d-one", "record.yaml"), data, 0o600))
+	// Stamp the store root once the mission tree exists: the publication
+	// commands under test see the planted records, not what the storage
+	// upgrade made of them.
+	stampFixture(t, se.home, root)
 	checkout := filepath.Join(t.TempDir(), "linked")
 	publicationGitCLI(t, se, "worktree", "add", "-b", "feature", checkout)
 	se.repo = checkout

@@ -1,0 +1,36 @@
+mission_id: m-2026-11-10-008
+status: closed
+type: implement
+created_at: "2026-11-10T20:37:27Z"
+updated_at: "2026-11-10T21:05:16Z"
+closed_at: "2026-11-10T21:05:16Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-11-10T20:37:27Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-ftey
+write_set:
+    - internal/autorepair/
+    - internal/auditimport/
+    - internal/audit/live_redact.go
+    - internal/audit/live_redact_test.go
+    - internal/lineguard/
+    - coverage-baseline.txt
+success_criteria:
+    - 'Test first, each failing on 945cacb and passing after; paste both outputs in the result. (1) internal/auditimport: ImportGlobalAudit takes a context.Context and returns after the file in progress when ctx is done, reporting the remaining files as not attempted (a new field on AuditImportResult, e.g. Remaining int), and the step records Deferred=true when Remaining>0; a test with a guard stub that sleeps and a ctx that expires after the first file proves it stops after one file. (2) internal/audit.RedactLive takes a context.Context and checks it per line; when ctx is done mid-stream it writes nothing and returns ctx.Err(); a test proves that. (3) runLiveTails makes progress across runs: a stream that cannot be finished in one budget is not retried from scratch. Choose one of: process one stream per step run and record Deferred so the next Ensure continues with the next unfinished stream (streams already clean are skipped by the existing archive comparison), or chunk the live file (RedactLive takes a line limit and rewrites the prefix it finished, atomically, so the next run starts past it). Either way a test with a 3-stream fixture and a guard that is slow proves the step completes all three streams across N runs and then returns Deferred=false, and the engine test proves the stamp is written after those runs.'
+    - 'The engine must not wait unboundedly for an abandoned step inside the user''s command. Change liveSteps.wait so that after the Ensure budget (EnsureBudget, 30 s) it stops waiting: log ''abandoned step still running'' and return; the step goroutine keeps its step lock until it finishes (the lock is what protects the next run) and the process exit ends it. A test with a step that blocks on a channel proves Ensure returns within EnsureBudget+1s and the step lock is still held while the goroutine lives. Update the engine.go comment that says ''After the Ensure budget is spent the wait is unbounded by design'' and the ADR citation is the leader''s job, not yours.'
+    - 'Make the guard cheaper where it is free: in lineguard, compile-once and reuse anything built per call (check SessionLineGuardFor, GuardAuditLineFull, valueRuleIn, RedactLegacyLine for per-call regexp.MustCompile, strings.NewReplacer or PathRedactor construction) and add a benchmark BenchmarkSessionLineGuard over a 200-line fixture (copy representative shapes from internal/autorepair/testdata/corpus, no real paths) with the before/after ns/op in the result. Do not change what the guard redacts: internal/lineguard and internal/redact tests must pass unchanged. If no per-call allocation exists, say so with the profile and skip this item.'
+    - 'Run on the demo copy and paste the output: DEMO=/private/tmp/ethos-demo and DEMO_HOME = the directory named home directly under DEMO; cd DEMO/punt-kit and run: env -u CLAUDE_SESSION_ID -u CLAUDECODE HOME=DEMO_HOME PATH=DEMO/bin:(existing PATH) GIT_CONFIG_GLOBAL=/dev/null time ethos whoami, with DEMO/bin/ethos re-pointed at a binary built from your branch (go build -o DEMO/bin/ethos ./cmd/ethos; it is a symlink today, replace it). Acceptance: no single command exceeds 35 s; both stamps (DEMO_HOME/.punt-labs/ethos/layout.yaml and DEMO/punt-kit/.punt-labs/local/ethos/layout.yaml) exist after at most 12 commands; a 13th command prints nothing and returns in under 1 s. Paste the per-command timings and the final two stamp files. Never run the branch binary against your real home directory; only under HOME=DEMO_HOME.'
+    - GOTOOLCHAIN=go1.26.5 go test -race -count=1 ./internal/autorepair/ ./internal/auditimport/ ./internal/audit/ ./internal/lineguard/ ./internal/hook/ ./cmd/ethos/ passes; go vet clean; gofmt clean; GOTOOLCHAIN=go1.26.5 go test -count=1 ./internal/resolve/ (the retired-path scanner) passes; make check-storage passes (paste its PASS lines). Set internal/autorepair in coverage-baseline.txt to the figure `go test -cover ./internal/autorepair/` prints on this host minus 0.1, never below 81.0; mention the figure.
+    - 'Micro-commits: one per criterion group (importer ctx; RedactLive ctx + live-tails progress; engine wait bound; guard benchmark/compile-once; baseline). Each passes the suites above for its packages. First commit within 30 minutes.'
+budget:
+    rounds: 1
+    reflection_after_each: true
+current_round: 1
+round_decisions:
+    version: 1
+    entries: []
+context: 'Release blocker found by the upgrade demo of epic ethos-ftey (DES-084). Worktree <repo>/.claude/worktrees/sr-perf (repo = the ethos checkout this mission was created in), branch fix/self-repair-budget, based on fix/self-repair-integration at 945cacb. Measured on a copy of a real repo (115 global audit files, 67,794 lines; 7 live audit files, 5,246 lines, one stream of 2,246 lines) under an isolated HOME with the branch binary: the first command took 85 s, then 40 further commands took 8-9 s each and no stamp was ever written. Repair log: every run ends ''live-tails defer step live-tails: 5s abandoned: budget exceeded'' then ''stop pass stopped after abandoned step live-tails'' then ''wait waiting for abandoned step live-tails''. Cause, measured with a CPU profile: lineguard.SessionLineGuardFor costs ~3.5 ms per audit line (redact.leakRule via mission.PathRedactor.AuditLeakRule is 55%, redact.SecretsString/SweepSecrets 20%, all regexp backtracking), so (a) auditimport.ImportGlobalAudit (internal/auditimport/import.go:106) never checks ctx between its 115 files and runs 85 s past its 5 s budget while the engine waits for it (engine.go liveSteps.wait), and (b) runLiveTails (internal/autorepair/step_live_tails.go) hands a 2,246-line stream to audit.RedactLive, which cannot finish inside 5 s, is abandoned, and the stream is retried from scratch on every later command forever. Operator bar (2026-11-10): no crash, no hang, no blocked command; losses logged, never fatal. Commit on your branch; do not push, do not touch PRs or merge; no attribution lines; git add only files you changed.'

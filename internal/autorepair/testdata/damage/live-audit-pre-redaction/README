@@ -1,0 +1,1 @@
+A live session audit file whose first line was written before redaction (v4.20.0): it holds a home path and the fake token unredacted; every commit warns and quarantine, repair and scrub refuse it.

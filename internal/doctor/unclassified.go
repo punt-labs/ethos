@@ -180,7 +180,7 @@ func (s *scan) walkZone(table []layout.Entry, root, zone string) (bool, error) {
 			if err != nil {
 				return err
 			}
-			if misplacedLocal(filepath.ToSlash(rel)) {
+			if layout.MisplacedLocal(filepath.ToSlash(rel)) {
 				s.misplaced[filepath.ToSlash(rel)] = true
 			}
 			tree, err := resolve.IsWorkingTree(p)
@@ -212,7 +212,7 @@ func (s *scan) walkZone(table []layout.Entry, root, zone string) (bool, error) {
 		if _, _, ok := layout.ClassifyIn(table, rel); !ok {
 			s.files[rel] = true
 		}
-		if misplacedLocal(rel) {
+		if layout.MisplacedLocal(rel) {
 			s.misplaced[rel] = true
 		}
 		return nil

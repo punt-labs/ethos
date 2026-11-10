@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // Gap records a sub-range of a quarantined chunk that the live file no longer
@@ -37,6 +38,11 @@ func GapMarkers(dir string, ns Namespace, session string) ([]Gap, error) {
 		if mk.HasGap() {
 			gaps = append(gaps, Gap{Chunk: mk.Chunk, First: mk.UnrecoveredFirst, Last: mk.UnrecoveredLast})
 		}
+	}
+	for _, name := range sc.HeldLosses {
+		// The file's existence is the record; a torn body does not erase it.
+		g := Gap{Chunk: strings.TrimSuffix(name, heldLossSuffix), First: HeldLossTS, Last: HeldLossTS}
+		gaps = append(gaps, g)
 	}
 	return gaps, nil
 }
@@ -95,8 +101,7 @@ func (e *ChunkReadError) Unwrap() error { return e.Err }
 
 // ReadChunkVerified reads a sealed chunk and verifies its content matches its
 // name: it must parse whole and its last line's ts must equal the <last> in
-// its filename. Corruption is surfaced as an error (exit 2), the escape being
-// ethos audit quarantine.
+// its filename. Corruption is surfaced as an error (exit 2).
 func ReadChunkVerified(path string, expectedLast int64) ([]Line, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -234,28 +239,6 @@ func ResidueLinesFiltered(path string, sessionSealedLast map[string]int64) ([]Li
 		out = append(out, Line{TS: ts, Raw: cp})
 	}
 	return out, nil
-}
-
-// DedupByIdentity collapses lines sharing an identity to the first seen.
-// Post-discipline lines (chunks + live tail) dedup on (session, ts) —
-// loss-free, since equal identity means a byte-identical line from the same
-// append-only live file. Input order is preserved for survivors.
-func DedupByIdentity(in []Line) []Line {
-	type key struct {
-		s  string
-		ts int64
-	}
-	seen := make(map[key]struct{}, len(in))
-	out := in[:0:0]
-	for _, l := range in {
-		k := key{l.Session, l.TS}
-		if _, ok := seen[k]; ok {
-			continue
-		}
-		seen[k] = struct{}{}
-		out = append(out, l)
-	}
-	return out
 }
 
 // SortChunks returns chunks ordered by First so a concatenated read is in

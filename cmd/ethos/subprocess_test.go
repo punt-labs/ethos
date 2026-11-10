@@ -87,6 +87,8 @@ func setupCLISubprocessEnv(t *testing.T) *cliSubprocessEnv {
 		"PATH=" + os.Getenv("PATH"),
 	}
 
+	stampFixture(t, home, repo)
+
 	return &cliSubprocessEnv{home: home, repo: repo, env: env}
 }
 
@@ -208,7 +210,7 @@ func TestCLI_List(t *testing.T) {
 	}
 
 	se := setupCLISubprocessEnv(t)
-	stdout, stderr, exitCode := runCLI(t, se, "list")
+	stdout, stderr, exitCode := runCLI(t, se, "identity", "list")
 	t.Logf("stdout: %s", stdout)
 	t.Logf("stderr: %s", stderr)
 
@@ -222,7 +224,7 @@ func TestCLI_Show(t *testing.T) {
 	}
 
 	se := setupCLISubprocessEnv(t)
-	stdout, stderr, exitCode := runCLI(t, se, "show", "test-agent")
+	stdout, stderr, exitCode := runCLI(t, se, "identity", "show", "test-agent")
 	t.Logf("stdout: %s", stdout)
 	t.Logf("stderr: %s", stderr)
 
@@ -236,7 +238,7 @@ func TestCLI_ShowJSON(t *testing.T) {
 	}
 
 	se := setupCLISubprocessEnv(t)
-	stdout, stderr, exitCode := runCLI(t, se, "show", "test-agent", "--json")
+	stdout, stderr, exitCode := runCLI(t, se, "identity", "show", "test-agent", "--json")
 	t.Logf("stdout: %s", stdout)
 	t.Logf("stderr: %s", stderr)
 
@@ -245,20 +247,6 @@ func TestCLI_ShowJSON(t *testing.T) {
 	var result map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &result), "stdout should be valid JSON")
 	assert.Equal(t, "test-agent", result["handle"])
-}
-
-func TestCLI_ResolveAgent(t *testing.T) {
-	if ethosBinary == "" {
-		t.Skip("ethos binary not built")
-	}
-
-	se := setupCLISubprocessEnv(t)
-	stdout, stderr, exitCode := runCLI(t, se, "resolve-agent")
-	t.Logf("stdout: %s", stdout)
-	t.Logf("stderr: %s", stderr)
-
-	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "test-agent")
 }
 
 // TestCLI_MissingActiveBundle verifies that a repo configured with an
@@ -282,7 +270,7 @@ func TestCLI_MissingActiveBundle(t *testing.T) {
 	cfgPath := filepath.Join(se.repo, ".punt-labs", "ethos.yaml")
 	require.NoError(t, os.WriteFile(cfgPath, cfgData, 0o644))
 
-	_, stderr, exitCode := runCLI(t, se, "list")
+	_, stderr, exitCode := runCLI(t, se, "identity", "list")
 	assert.NotEqual(t, 0, exitCode, "CLI must fail when active_bundle is missing")
 	assert.Contains(t, stderr, "bundle or policy configuration is unusable")
 	assert.Contains(t, stderr, "does-not-exist")

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/layout"
 )
@@ -82,7 +83,7 @@ func (s *Store) withMutationLock(fn func() error) error {
 // withLock serializes allocation, creation, copy-on-write and read/modify/write
 // across processes and linked checkouts. The lock inode is stable: never unlink
 // it. Repository locks are independent of mode and checkout.
-func (s *Store) withLock(fn func() error) error {
+func (s *Store) withLock(fn func() error) (err error) {
 	path := filepath.Join(s.dir, ".adr.lock")
 	if s.repository {
 		var err error
@@ -106,9 +107,11 @@ func (s *Store) withLock(fn func() error) error {
 		return fmt.Errorf("opening ADR lock: %w", err)
 	}
 	// Closing also releases the platform lock, including on callback failure.
+	// A close failure is returned, joined to the callback's own error: the
+	// caller decides where it is reported, never this package's stderr.
 	defer func() {
-		if err := f.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: closing ADR lock: %v\n", err)
+		if cerr := f.Close(); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("closing ADR lock: %w", cerr))
 		}
 	}()
 	if err := lockFile(f); err != nil {
@@ -120,9 +123,8 @@ func (s *Store) withLock(fn func() error) error {
 // publish never falls back to a source-tree temporary on EXDEV. The destination
 // is changed only after complete bytes have been synced and closed. Creation
 // uses a hard link rather than a check-then-rename that could clobber a file.
-func (s *Store) publish(dest string, data []byte, create bool) error {
+func (s *Store) publish(dest string, data []byte, create bool) (err error) {
 	var f *os.File
-	var err error
 	if s.repository {
 		f, err = layout.CreateLocalTemp(s.policy, "adr", ".yaml")
 	} else {
@@ -133,12 +135,21 @@ func (s *Store) publish(dest string, data []byte, create bool) error {
 	if err != nil {
 		return fmt.Errorf("creating ADR staging file: %w", err)
 	}
+	committed := false
 	defer func() {
-		if err := os.Remove(f.Name()); err != nil && !errors.Is(err, os.ErrNotExist) {
-			// Publication is the commit point. Make cleanup failure visible,
-			// but never report a committed ADR as an ordinary failed write.
-			fmt.Fprintf(os.Stderr, "ethos: cleaning ADR staging file: %v\n", err)
+		rerr := os.Remove(f.Name())
+		if rerr == nil || errors.Is(rerr, os.ErrNotExist) {
+			return
 		}
+		rerr = fmt.Errorf("cleaning ADR staging file: %w", rerr)
+		// Publication is the commit point. A cleanup failure after it is
+		// reported as a durability problem on an installed record, never as
+		// an ordinary failed write; before it, it joins the write's error.
+		if committed && err == nil {
+			err = &DurabilityError{ID: strings.TrimSuffix(filepath.Base(dest), ".yaml"), Err: rerr}
+			return
+		}
+		err = errors.Join(err, rerr)
 	}()
 	n, err := f.Write(data)
 	if err == nil && n != len(data) {
@@ -166,6 +177,7 @@ func (s *Store) publish(dest string, data []byte, create bool) error {
 	if err := commit(f.Name(), dest); err != nil {
 		return fmt.Errorf("publishing ADR file: %w", err)
 	}
+	committed = true
 	// Link/rename is the commit point: a later sync failure must not remove or
 	// restore the destination, or masquerade as an ordinary failed mutation.
 	return s.confirmDurability(dest)

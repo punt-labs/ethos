@@ -70,7 +70,7 @@ func TestCLI_SessionStart_ThenIam(t *testing.T) {
 	se := setupCLISubprocessEnv(t)
 	id := startedSessionID(t, se)
 
-	_, stderr, code := runCLI(t, withEnv(se, "ETHOS_SESSION="+id), "iam", "test-agent")
+	_, stderr, code := runCLI(t, withEnv(se, "ETHOS_SESSION="+id), "session", "iam", "test-agent")
 	assert.Equal(t, 0, code, "iam under ETHOS_SESSION should exit 0; stderr=%s", stderr)
 }
 
@@ -82,7 +82,7 @@ func TestCLI_Iam_NoSession_Errors(t *testing.T) {
 	}
 	se := setupCLISubprocessEnv(t)
 
-	_, stderr, code := runCLI(t, se, "iam", "test-agent")
+	_, stderr, code := runCLI(t, se, "session", "iam", "test-agent")
 	require.NotEqual(t, 0, code, "iam with no session must exit non-zero; stderr=%s", stderr)
 	assert.Contains(t, stderr, "ethos session start", "error must name the remedy; stderr=%s", stderr)
 	assert.NotContains(t, stderr, "process tree", "must not surface the old walker error; stderr=%s", stderr)
@@ -616,7 +616,7 @@ func TestCLI_SessionEnd_NoSessionContextIsNoOp(t *testing.T) {
 	assert.Contains(t, stderr, "nothing to end")
 
 	// The state-writer contract is unchanged: iam still hard-fails.
-	_, stderr, code = runCLI(t, se, "iam", "test-agent")
+	_, stderr, code = runCLI(t, se, "session", "iam", "test-agent")
 	require.NotEqual(t, 0, code, "iam with no session must still error")
 	assert.Contains(t, stderr, "ethos session start")
 }
@@ -637,7 +637,7 @@ func TestCLI_Whoami_ReflectsPersona(t *testing.T) {
 	// USER=nobody has no identity, so a successful whoami can only come
 	// from the session persona, not the $USER fallback.
 	env := withEnv(se, "ETHOS_SESSION="+id, "ETHOS_AGENT_ID=agent-key", "USER=nobody")
-	_, stderr, code := runCLI(t, env, "iam", "test-agent")
+	_, stderr, code := runCLI(t, env, "session", "iam", "test-agent")
 	require.Equal(t, 0, code, "iam should exit 0; stderr=%s", stderr)
 
 	stdout, stderr, code := runCLI(t, env, "whoami")

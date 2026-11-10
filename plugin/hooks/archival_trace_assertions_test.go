@@ -470,7 +470,11 @@ func archivalDestinations(c archivalCall, cwd string) ([]archivalDestination, er
 
 type archivalTracePolicy struct {
 	checkout, local, archive, published, index, objects string
-	full                                                bool
+	// global is the global store root (~/.punt-labs/ethos). The repair log
+	// the hook appends to lives under it (DES-084), outside the repository's
+	// local zone; empty when a policy has no global store.
+	global string
+	full   bool
 }
 
 func archivalWithin(root, path string) bool {
@@ -484,6 +488,9 @@ var archivalObjectDirectory = regexp.MustCompile(`^[0-9a-f]{2}$`)
 func (p archivalTracePolicy) allows(d archivalDestination) bool {
 	if archivalWithin(p.local, d.path) {
 		return true
+	}
+	if p.global != "" && archivalWithin(filepath.Join(p.global, "logs"), d.path) {
+		return true // the repair log and its rotation, under the global store
 	}
 	if d.directory {
 		// Only the exact publication's ancestors may be created outside local.

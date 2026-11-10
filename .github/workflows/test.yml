@@ -14,7 +14,10 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The race suite's wall time on one runner is over 30 minutes now that
+    # cmd/ethos and internal/mission each run past 10; the per-package
+    # -timeout below is 30m, so the job ceiling sits above the sum.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
@@ -84,7 +87,22 @@ jobs:
           strace --version
 
       - name: Test
-        run: go test -race -count=1 -coverprofile=coverage.out ./...
+        # -timeout matches the Makefile's: cmd/ethos under -race runs past
+        # go test's 10-minute per-package default on a loaded runner.
+        run: go test -race -count=1 -timeout 30m -coverprofile=coverage.out ./...
+
+      - name: Upload coverage profile (source for make coverage-baseline-from-ci)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-out
+          path: coverage.out
+          retention-days: 7
+
+      - name: Coverage gate (per-package baseline)
+        # coverage-check fails when the baseline's "# os:" differs from this
+        # runner's GOOS (linux), so the committed baseline must be linux.
+        run: make coverage-check
 
       - name: Validate content
         run: go run ./cmd/validate-content

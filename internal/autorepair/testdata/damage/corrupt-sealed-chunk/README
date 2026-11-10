@@ -1,0 +1,1 @@
+A sealed audit chunk whose bytes are not decodable JSON lines; no surviving chunk covers it (the audit-quarantine case).

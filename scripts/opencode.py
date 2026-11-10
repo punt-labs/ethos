@@ -153,7 +153,7 @@ def role_permissions(name):
                "python3 -B scripts/opencode_evidence.py tool gcc",
                "go test *", "go vet *", "make check-opencode", "make fuzz-check",
                "make build", "make test", "make check", "make lint", "./ethos version", "./ethos --help",
-               "./ethos whoami *", "./ethos show *", "./ethos list *", "./ethos identity schema *",
+               "./ethos whoami *", "./ethos identity show *", "./ethos identity list *", "./ethos identity schema *",
                "./ethos role schema *", "./ethos team schema *", "./ethos mission show *",
                "./ethos mission list *", "./ethos mission lint *", "./ethos audit show *", "./ethos adr list *",
                "python3 -B -m unittest discover -s scripts -p opencode_test.py"),

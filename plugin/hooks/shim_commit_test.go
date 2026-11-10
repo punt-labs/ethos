@@ -136,10 +136,17 @@ func newShimRepo(t *testing.T, enable bool) *shimRepo {
 		"PATH=/usr/bin:/bin")
 	runGit(t, r.dir, "init", "-q", "-b", "main")
 	if enable {
-		cmd := exec.Command(filepath.Join(ethosBinDir(t), "ethos"), "enable")
-		cmd.Dir, cmd.Env = r.dir, r.env
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "enable: %s", out)
+		// enable, then one command that reads storage: the storage upgrade
+		// stamps the fresh repository current, so the commit under test runs
+		// no repair and prints no upgrade line (what an upgraded repo sees).
+		for _, args := range [][]string{{"enable"}, {"doctor"}} {
+			cmd := exec.Command(filepath.Join(ethosBinDir(t), "ethos"), args...)
+			cmd.Dir, cmd.Env = r.dir, r.env
+			out, err := cmd.CombinedOutput()
+			if args[0] == "enable" {
+				require.NoError(t, err, "enable: %s", out)
+			}
+		}
 	} else {
 		for _, h := range []string{"pre-commit", "commit-msg"} {
 			body, err := os.ReadFile(h + ".sh")
@@ -375,4 +382,207 @@ func stripShebang(s string) string {
 		rest += "\n"
 	}
 	return rest
+}
+
+// containsPath reports the files under root whose bytes contain needle.
+func containsPath(t *testing.T, root, needle string) []string {
+	t.Helper()
+	var hits []string
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if bytes.Contains(b, []byte(needle)) {
+			hits = append(hits, path)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	return hits
+}
+
+// A live audit line written before redaction existed is redacted in place and
+// archived by the first commit: no retained-data warning, no unredacted bytes
+// anywhere under the local tree, and a second commit prints nothing.
+func TestShimEnabledUnredactedLiveLineIsMigratedByCommit(t *testing.T) {
+	r := newShimRepo(t, true)
+	p, err := layout.NewRepository(r.dir, r.dir, layout.RecordBlame)
+	require.NoError(t, err)
+	live := audit.Stream{Namespace: audit.SessionNS, Session: "s-old"}
+	line := `{"ts":"` + audit.FormatLineTS(1000) + `","session":"s-old","tool":"Bash","tool_input":{"command":"cat /Users/alice/notes.txt"},"tool_input_hash":"0000","record":"blame"}` + "\n"
+	require.NoError(t, audit.WriteLocalAtomic(p, live.LivePath(p), []byte(line)))
+	require.NotEmpty(t, containsPath(t, r.dir, "/Users/alice"), "fixture holds the unredacted path")
+
+	env := r.withPath(ethosBinDir(t))
+	out, err := r.commit(t, env, "first")
+	require.NoError(t, err, out)
+	assert.NotContains(t, out, "retained-data warning")
+	assert.Empty(t, containsPath(t, filepath.Join(r.dir, ".punt-labs", "local"), "/Users/alice"), "no file keeps the unredacted path")
+
+	out, err = r.commit(t, env, "second")
+	require.NoError(t, err, out)
+	assert.NotContains(t, out, "audit seal", "the second commit has nothing to warn about")
+}
+
+// A path under .punt-labs/local/ that was force-added, or that HEAD already
+// tracks, is unstaged by the pre-commit hook: the commit lands without it, the
+// file stays on disk, and a tracked one is deleted from the new tree.
+func TestShimEnabledUnstagesLocalPaths(t *testing.T) {
+	r := newShimRepo(t, true)
+	env := r.withPath(ethosBinDir(t))
+	localDir := filepath.Join(r.dir, ".punt-labs", "local", "ethos")
+	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	forced := filepath.Join(localDir, "forced.txt")
+	require.NoError(t, os.WriteFile(forced, []byte("forced\n"), 0o644))
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := testhelpers.GitCommand(append([]string{"-C", r.dir}, args...)...)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+		return string(out)
+	}
+	tree := func() string { return git("ls-tree", "-r", "--name-only", "HEAD") }
+
+	git("add", "-f", ".punt-labs/local/ethos/forced.txt")
+	out, err := r.commit(t, env, "forced add")
+	require.NoError(t, err, out)
+	assert.Contains(t, out, "unstaged 1 path(s) under .punt-labs/local/")
+	assert.NotContains(t, tree(), ".punt-labs/local/", "the commit holds no local path")
+	assert.FileExists(t, forced, "the file stays on disk")
+
+	// A path HEAD already tracks under local/ is staged for removal. Plant one
+	// in HEAD with the hook bypassed, as a repository from before the hook has.
+	tracked := filepath.Join(localDir, "tracked.txt")
+	require.NoError(t, os.WriteFile(tracked, []byte("tracked\n"), 0o644))
+	git("add", "-f", ".punt-labs/local/ethos/tracked.txt")
+	git("-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m", "plant")
+	require.Contains(t, tree(), ".punt-labs/local/ethos/tracked.txt")
+
+	out, err = r.commit(t, env, "remove tracked")
+	require.NoError(t, err, out)
+	assert.Contains(t, out, "unstaged 1 path(s) under .punt-labs/local/")
+	assert.NotContains(t, tree(), ".punt-labs/local/", "the tracked local path is deleted from the tree")
+	assert.FileExists(t, tracked, "the file stays on disk")
+
+	out, err = r.commit(t, env, "nothing to unstage")
+	require.NoError(t, err, out)
+	assert.NotContains(t, out, "unstaged", "a commit with no local path prints nothing")
+}
+
+// A trace chunk HEAD tracks under the record tree (a v3.12-v4.20 layout) is
+// not touched by the commit-time pass: record-tree untracking belongs to the
+// full repair pass, never to a user's commit.
+func TestShimEnabledLeavesRecordTreeTraceToTheFullPass(t *testing.T) {
+	r := newShimRepo(t, true)
+	env := r.withPath(ethosBinDir(t))
+	chunk := filepath.Join(r.dir, ".punt-labs", "ethos", "sessions", "2026-11-09-sid", "audit-0000000000000000001-0000000000000000002.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(chunk), 0o755))
+	require.NoError(t, os.WriteFile(chunk, []byte(`{"record":"blame"}`+"\n"), 0o644))
+	rel := ".punt-labs/ethos/sessions/2026-11-09-sid/audit-0000000000000000001-0000000000000000002.jsonl"
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := testhelpers.GitCommand(append([]string{"-C", r.dir}, args...)...)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+		return string(out)
+	}
+	git("add", "-f", rel)
+	git("-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m", "plant")
+	require.Contains(t, git("ls-tree", "-r", "--name-only", "HEAD"), rel)
+
+	out, err := r.commit(t, env, "next")
+	require.NoError(t, err, out)
+	assert.Contains(t, git("ls-tree", "-r", "--name-only", "HEAD"), rel, "the commit does not stage a record-tree deletion")
+	assert.FileExists(t, chunk, "the file stays on disk")
+	assert.NotContains(t, out, "unstaged", "record-tree trace prints no line")
+}
+
+// A partly staged local file (staged, then edited) must not make the commit
+// fail with git's "use -f" instruction; a published quarantine marker and a
+// real chunk stay tracked beside a literally named audit-*.jsonl; the commit
+// pass only unstages the local file, record-tree paths are the full pass's.
+func TestShimEnabledUnstageIsLiteralAndKeepsDiagnostics(t *testing.T) {
+	r := newShimRepo(t, true)
+	env := r.withPath(ethosBinDir(t))
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := testhelpers.GitCommand(append([]string{"-C", r.dir}, args...)...)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+		return string(out)
+	}
+	put := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(r.dir, filepath.FromSlash(rel))
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
+	}
+	const sess = ".punt-labs/ethos/sessions/2026-11-09-sid/"
+	const chunk = sess + "audit-0000000000000000001-0000000000000000002.jsonl"
+	const star = ".punt-labs/ethos/missions/m-1/*.lock"
+	const guarded = ".punt-labs/ethos/missions/m-1/artifacts/out.lock"
+	const marker = sess + "audit-0000000000000000003-0000000000000000004.quarantine"
+	const part = ".punt-labs/local/ethos/part.txt"
+	put(chunk, `{"record":"full"}`+"\n")
+	put(star, "x\n")
+	put(guarded, "y\n")
+	put(marker, "{}\n")
+	put(part, "staged\n")
+	git("add", "-f", "--", chunk, star, guarded, marker, part)
+	git("-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m", "plant")
+	put(part, "staged\n")
+	git("add", "-f", "--", part)
+	put(part, "edited after staging\n")
+
+	out, err := r.commit(t, env, "next")
+	require.NoError(t, err, out)
+	assert.NotContains(t, out, "-f", "git's instruction never reaches the user")
+	tree := git("ls-tree", "-r", "--name-only", "HEAD")
+	assert.Contains(t, tree, chunk)
+	assert.Contains(t, tree, marker)
+	assert.Contains(t, tree, guarded, "a glob in a path name does not reach its siblings")
+	assert.Contains(t, tree, star, "record-tree untracking is not part of the commit pass")
+	assert.NotContains(t, tree, part)
+	assert.FileExists(t, filepath.Join(r.dir, filepath.FromSlash(star)))
+}
+
+// A live line whose ts is already archived with a different payload (the
+// worker-reported gap behind the stuck warning) is dropped by the first
+// commit: the archive wins, the commit prints no warning, the live file keeps
+// its other lines, and a second commit prints nothing.
+func TestShimEnabledArchivedTSConflictIsDroppedByCommit(t *testing.T) {
+	r := newShimRepo(t, true)
+	p, err := layout.NewRepository(r.dir, r.dir, layout.RecordBlame)
+	require.NoError(t, err)
+	s := audit.Stream{Namespace: audit.SessionNS, Session: "s-conflict"}
+	dir, err := audit.ArchiveDir(p, s, "2026-07-15")
+	require.NoError(t, err)
+	archived := `{"ts":"` + audit.FormatLineTS(100) + `","session":"s-conflict","tool":"Read","record":"blame"}` + "\n"
+	require.NoError(t, audit.WriteLocalAtomic(p, filepath.Join(dir, audit.SessionChunkFile(100, 100)), []byte(archived)))
+	conflicting := `{"ts":"` + audit.FormatLineTS(100) + `","session":"s-conflict","tool":"Bash","record":"blame"}` + "\n"
+	fresh := `{"ts":"` + audit.FormatLineTS(200) + `","session":"s-conflict","tool":"Read","record":"blame"}` + "\n"
+	require.NoError(t, audit.WriteLocalAtomic(p, s.LivePath(p), []byte(conflicting+fresh)))
+	_, err = audit.ReadStream(p, s)
+	require.ErrorContains(t, err, "identity conflict", "fixture: the unrepaired stream is refused")
+
+	env := r.withPath(ethosBinDir(t))
+	out, err := r.commit(t, env, "first")
+	require.NoError(t, err, out)
+	assert.NotContains(t, out, "retained-data warning")
+	assert.NotContains(t, out, "identity conflict")
+	assert.Empty(t, containsPath(t, filepath.Join(r.dir, ".punt-labs", "local"), `"tool":"Bash"`), "the conflicting live line is gone")
+	data, err := audit.ReadStream(p, s)
+	require.NoError(t, err)
+	require.Len(t, data.Lines, 2, "the archived line and the fresh line")
+
+	out, err = r.commit(t, env, "second")
+	require.NoError(t, err, out)
+	assert.NotContains(t, out, "audit seal", "the second commit has nothing to warn about")
 }

@@ -102,3 +102,38 @@ func TestCorrectionAuthorityInterruptedRetryPreservesConsent(t *testing.T) {
 	assert.NoFileExists(t, retry.correctionIntentPath(c.MissionID))
 	assert.NoDirExists(t, filepath.Join(p.CheckoutRecordRoot(), "missions", c.MissionID))
 }
+
+// A refusal states the condition and never tells the reader to act: the text
+// can reach a residual reason that doctor shows.
+func TestPendingPreparationMessagesStateTheCondition(t *testing.T) {
+	s, c := authorityStore(t, 2)
+	require.NoError(t, s.AppendResult(c.MissionID, resultFor(c, VerdictPass)))
+	_, err := s.Close(c.MissionID, StatusClosed)
+	require.NoError(t, err)
+	s.persistenceCheck = func(phase string) error {
+		if phase == "event_prepared" {
+			return errors.New("interrupt before required append")
+		}
+		return nil
+	}
+	require.Error(t, s.Correct(c.MissionID, Correction{Mission: c.MissionID, Author: "claude", Kind: CorrectionDecision, Corrected: "new decision"}))
+	s.persistenceCheck = nil
+	err = s.reconcileCorrection(c.MissionID)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "retry")
+
+	s, c = authorityStore(t, 3)
+	s.persistenceCheck = func(phase string) error {
+		if phase == "event_prepared" {
+			return errors.New("interrupt before required append")
+		}
+		return nil
+	}
+	_, err = s.ApplyReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationContinue))
+	require.Error(t, err)
+	s.persistenceCheck = nil
+	err = s.reconcileReflection(c.MissionID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pending reflection preparation for round 1")
+	assert.NotContains(t, err.Error(), "retry")
+}

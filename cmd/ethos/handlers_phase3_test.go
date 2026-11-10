@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -36,12 +35,6 @@ func addOriginRemote(t *testing.T, repo, id string) {
 // commands so tests do not leak state.
 func resetPhase3Flags(t *testing.T) {
 	t.Helper()
-	sessionCreateSession = ""
-	sessionCreateRootID = ""
-	sessionCreateRootPersona = ""
-	sessionCreatePrimaryID = ""
-	sessionCreatePrimaryPersona = ""
-	sessionDeleteSession = ""
 	sessionJoinAgentID = ""
 	sessionJoinPersona = ""
 	sessionJoinParent = ""
@@ -49,17 +42,8 @@ func resetPhase3Flags(t *testing.T) {
 	sessionJoinSession = ""
 	sessionLeaveAgentID = ""
 	sessionLeaveSession = ""
-	sessionWriteCurrentPID = ""
-	sessionWriteCurrentSession = ""
-	sessionDeleteCurrentPID = ""
 	sessionIamSession = ""
 	t.Cleanup(func() {
-		sessionCreateSession = ""
-		sessionCreateRootID = ""
-		sessionCreateRootPersona = ""
-		sessionCreatePrimaryID = ""
-		sessionCreatePrimaryPersona = ""
-		sessionDeleteSession = ""
 		sessionJoinAgentID = ""
 		sessionJoinPersona = ""
 		sessionJoinParent = ""
@@ -67,9 +51,6 @@ func resetPhase3Flags(t *testing.T) {
 		sessionJoinSession = ""
 		sessionLeaveAgentID = ""
 		sessionLeaveSession = ""
-		sessionWriteCurrentPID = ""
-		sessionWriteCurrentSession = ""
-		sessionDeleteCurrentPID = ""
 		sessionIamSession = ""
 	})
 }
@@ -255,25 +236,11 @@ func TestRunPersonalityCreate_File(t *testing.T) {
 // Session tests
 // ---------------------------------------------------------------
 
-func TestRunSessionCreate(t *testing.T) {
-	setupPhase3Env(t)
-	resetPhase3Flags(t)
-
-	_, _, err := execHandler(t, "session", "create",
-		"--session", "sess-001",
-		"--root-id", "root-agent",
-		"--primary-id", "primary-agent")
-	require.NoError(t, err)
-}
-
 func TestRunSessionList(t *testing.T) {
 	setupPhase3Env(t)
 	resetPhase3Flags(t)
 
-	_, _, err := execHandler(t, "session", "create",
-		"--session", "sess-002",
-		"--root-id", "r", "--primary-id", "p")
-	require.NoError(t, err)
+	createRoster(t, "sess-002", "r", "p")
 
 	stdout, _, err := execHandler(t, "session", "list")
 	require.NoError(t, err)
@@ -284,10 +251,7 @@ func TestRunSessionList_JSON(t *testing.T) {
 	setupPhase3Env(t)
 	resetPhase3Flags(t)
 
-	_, _, err := execHandler(t, "session", "create",
-		"--session", "sess-003",
-		"--root-id", "r", "--primary-id", "p")
-	require.NoError(t, err)
+	createRoster(t, "sess-003", "r", "p")
 
 	stdout, _, err := execHandler(t, "session", "list", "--json")
 	require.NoError(t, err)
@@ -309,10 +273,7 @@ func TestRunSessionShowByID(t *testing.T) {
 	setupPhase3Env(t)
 	resetPhase3Flags(t)
 
-	_, _, err := execHandler(t, "session", "create",
-		"--session", "sess-show-001",
-		"--root-id", "root", "--primary-id", "primary")
-	require.NoError(t, err)
+	createRoster(t, "sess-show-001", "root", "primary")
 
 	stdout, _, err := execHandler(t, "session", "show", "sess-show-001")
 	require.NoError(t, err)
@@ -324,10 +285,7 @@ func TestRunSessionShowByID_JSON(t *testing.T) {
 	setupPhase3Env(t)
 	resetPhase3Flags(t)
 
-	_, _, err := execHandler(t, "session", "create",
-		"--session", "sess-json-001",
-		"--root-id", "root", "--primary-id", "primary")
-	require.NoError(t, err)
+	createRoster(t, "sess-json-001", "root", "primary")
 
 	stdout, _, err := execHandler(t, "session", "show", "sess-json-001", "--json")
 	require.NoError(t, err)
@@ -350,12 +308,9 @@ func TestRunSessionJoin(t *testing.T) {
 	setupPhase3Env(t)
 	resetPhase3Flags(t)
 
-	_, _, err := execHandler(t, "session", "create",
-		"--session", "sess-join-001",
-		"--root-id", "root", "--primary-id", "primary")
-	require.NoError(t, err)
+	createRoster(t, "sess-join-001", "root", "primary")
 
-	_, _, err = execHandler(t, "session", "join",
+	_, _, err := execHandler(t, "session", "join",
 		"--session", "sess-join-001",
 		"--agent-id", "worker-1",
 		"--parent", "root")
@@ -371,12 +326,9 @@ func TestRunSessionLeave(t *testing.T) {
 	setupPhase3Env(t)
 	resetPhase3Flags(t)
 
-	_, _, err := execHandler(t, "session", "create",
-		"--session", "sess-leave-001",
-		"--root-id", "root", "--primary-id", "primary")
-	require.NoError(t, err)
+	createRoster(t, "sess-leave-001", "root", "primary")
 
-	_, _, err = execHandler(t, "session", "join",
+	_, _, err := execHandler(t, "session", "join",
 		"--session", "sess-leave-001",
 		"--agent-id", "worker-2",
 		"--parent", "root")
@@ -386,32 +338,6 @@ func TestRunSessionLeave(t *testing.T) {
 		"--session", "sess-leave-001",
 		"--agent-id", "worker-2")
 	require.NoError(t, err)
-}
-
-func TestRunSessionDelete(t *testing.T) {
-	setupPhase3Env(t)
-	resetPhase3Flags(t)
-
-	_, _, err := execHandler(t, "session", "create",
-		"--session", "sess-del-001",
-		"--root-id", "root", "--primary-id", "primary")
-	require.NoError(t, err)
-
-	_, _, err = execHandler(t, "session", "delete", "--session", "sess-del-001")
-	require.NoError(t, err)
-
-	// Show after delete should fail.
-	_, _, err = execHandler(t, "session", "show", "sess-del-001")
-	require.Error(t, err)
-}
-
-func TestRunSessionPurge(t *testing.T) {
-	setupPhase3Env(t)
-	resetPhase3Flags(t)
-
-	stdout, _, err := execHandler(t, "session", "purge")
-	require.NoError(t, err)
-	assert.Contains(t, stdout, "No stale sessions found")
 }
 
 // TestRunAuditSeal_VacuumRunsAfterSealing pins SFH S3: the vacuum cross-check
@@ -440,169 +366,10 @@ func TestRunAuditSeal_VacuumRunsAfterSealing(t *testing.T) {
 	_, stderr, err := execHandler(t, "audit", "seal")
 	require.NoError(t, err)
 	assert.Contains(t, stderr, "sess-lost", "vacuum warning must appear even when a chunk sealed")
-	assert.Contains(t, stderr, "has no shared live file")
-}
-
-// setupRefusedSession creates a stale, repo-bound session with an unsealed
-// live audit line so `session purge` (no --force) refuses it.
-func setupRefusedSession(t *testing.T, se *cliSubprocessEnv, id string) {
-	t.Helper()
-	st := session.NewStore(filepath.Join(se.home, ".punt-labs", "ethos"))
-	root := session.Participant{AgentID: "user1"}
-	primary := session.Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
-	require.NoError(t, st.Create(id, root, primary, phase3RepoID, ""))
-	live := audit.LiveAuditPath(se.repo, id)
-	require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
-	line := `{"ts":"` + audit.FormatLineTS(100) + `","session":"` + id + `","tool":"Read"}` + "\n"
-	require.NoError(t, os.WriteFile(live, []byte(line), 0o600))
-}
-
-func TestRunSessionPurge_JSONRefused(t *testing.T) {
-	se := setupPhase3Env(t)
-	resetPhase3Flags(t)
-	sessionPurgeForce = false
-	t.Cleanup(func() { sessionPurgeForce = false })
-	addOriginRemote(t, se.repo, phase3RepoID)
-	setupRefusedSession(t, se, "sess-refused")
-
-	stdout, _, err := execHandler(t, "session", "purge", "--json")
-	require.NoError(t, err)
-
-	// stdout must be valid JSON — no stray prose corrupting the payload.
-	assert.NotContains(t, stdout, "Refused to purge")
-	var got struct {
-		Refused  []string `json:"refused"`
-		Sessions []string `json:"sessions"`
-		Skipped  []any    `json:"skipped"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(stdout), &got), "purge --json stdout must parse: %q", stdout)
-	assert.Equal(t, []string{"sess-refused"}, got.Refused)
-	assert.Empty(t, got.Sessions)
-	assert.Empty(t, got.Skipped)
-}
-
-// createUnresolvedSession writes a roster whose repository identity was never
-// resolved, with a live primary (this process): not stale.
-func createUnresolvedSession(t *testing.T, se *cliSubprocessEnv, id string) {
-	t.Helper()
-	st := session.NewStore(filepath.Join(se.home, ".punt-labs", "ethos"))
-	root := session.Participant{AgentID: "unknown"}
-	primary := session.Participant{AgentID: strconv.Itoa(os.Getpid()), Parent: "unknown"}
-	require.NoError(t, st.CreateUnresolved(id, root, primary, "git did not answer", "", "h"))
-}
-
-// purge --json lists an unresolved roster as skipped, with the reason; --force
-// removes it though its session is alive, and still runs when the checkout
-// cannot be located.
-func TestRunSessionPurge_UnresolvedSkippedThenForced(t *testing.T) {
-	se := setupPhase3Env(t)
-	resetPhase3Flags(t)
-	sessionPurgeForce = false
-	t.Cleanup(func() { sessionPurgeForce = false })
-	createUnresolvedSession(t, se, "sess-unresolved")
-
-	stdout, _, err := execHandler(t, "session", "purge", "--json")
-	require.NoError(t, err)
-	var got struct {
-		Sessions []string `json:"sessions"`
-		Skipped  []struct {
-			Session string `json:"session"`
-			Reason  string `json:"reason"`
-		} `json:"skipped"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(stdout), &got), stdout)
-	assert.Empty(t, got.Sessions)
-	require.Len(t, got.Skipped, 1)
-	assert.Equal(t, "sess-unresolved", got.Skipped[0].Session)
-	assert.Equal(t, "git did not answer", got.Skipped[0].Reason)
-
-	// The checkout cannot be located; without --force the purge stops.
-	t.Setenv("ETHOS_REPO_ROOT", filepath.Join(t.TempDir(), "absent"))
-	_, _, err = execHandler(t, "session", "purge")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "locating the checkout")
-
-	// With --force it removes the roster anyway, and says what it did.
-	sessionPurgeForce = true
-	stdout, stderr, err := execHandler(t, "session", "purge", "--force", "--json")
-	require.NoError(t, err)
-	assert.Contains(t, stderr, "purging as if outside any repository")
-	require.NoError(t, json.Unmarshal([]byte(stdout), &got), stdout)
-	assert.Equal(t, []string{"sess-unresolved"}, got.Sessions)
-	var forced struct {
-		Forced []struct {
-			Session string `json:"session"`
-			Reason  string `json:"reason"`
-			Warning string `json:"warning"`
-		} `json:"forced_unresolved"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(stdout), &forced), stdout)
-	require.Len(t, forced.Forced, 1, "the force-purged unresolved roster is marked")
-	assert.Equal(t, "sess-unresolved", forced.Forced[0].Session)
-	assert.Equal(t, "git did not answer", forced.Forced[0].Reason)
-	assert.Contains(t, forced.Forced[0].Warning, "not verified")
-}
-
-// TestRunSessionPurge_TextRefused is Bugbot R6-2: when the unsealed-lines
-// guard refuses every candidate and nothing is purged, the text path must
-// report the refusals, not print the contradictory "No stale sessions found."
-func TestRunSessionPurge_TextRefused(t *testing.T) {
-	se := setupPhase3Env(t)
-	resetPhase3Flags(t)
-	sessionPurgeForce = false
-	t.Cleanup(func() { sessionPurgeForce = false })
-	addOriginRemote(t, se.repo, phase3RepoID)
-	setupRefusedSession(t, se, "sess-refused")
-
-	stdout, _, err := execHandler(t, "session", "purge")
-	require.NoError(t, err)
-
-	assert.Contains(t, stdout, "Refused to purge sess-refused")
-	assert.Contains(t, stdout, "Nothing purged; 1 session(s) refused")
-	assert.NotContains(t, stdout, "No stale sessions found")
-}
-
-func TestRunSessionPurge_JSONAck(t *testing.T) {
-	se := setupPhase3Env(t)
-	resetPhase3Flags(t)
-	sessionPurgeAck = ""
-	t.Cleanup(func() { sessionPurgeAck = "" })
-
-	// A flagged tombstone to acknowledge.
-	sessionsDir := filepath.Join(se.home, ".punt-labs", "ethos", "sessions")
-	require.NoError(t, audit.WriteTombstone(sessionsDir, audit.Tombstone{
-		Session: "sess-ack", Repo: se.repo, UnsealedLines: true,
-	}))
-
-	stdout, _, err := execHandler(t, "session", "purge", "--ack", "sess-ack", "--json")
-	require.NoError(t, err)
-
-	assert.NotContains(t, stdout, "Acknowledged tombstone")
-	var got map[string]string
-	require.NoError(t, json.Unmarshal([]byte(stdout), &got), "purge --ack --json stdout must parse: %q", stdout)
-	assert.Equal(t, "sess-ack", got["acked"])
-	assert.NotEmpty(t, got["retired"])
-}
-
-func TestRunSessionWriteDeleteCurrent(t *testing.T) {
-	setupPhase3Env(t)
-	resetPhase3Flags(t)
-
-	// Create a session first so the mapping is valid.
-	_, _, err := execHandler(t, "session", "create",
-		"--session", "sess-cur-001",
-		"--root-id", "root", "--primary-id", "primary")
-	require.NoError(t, err)
-
-	// Write PID mapping.
-	_, _, err = execHandler(t, "session", "write-current",
-		"--pid", "99999",
-		"--session", "sess-cur-001")
-	require.NoError(t, err)
-
-	// Delete PID mapping.
-	_, _, err = execHandler(t, "session", "delete-current", "--pid", "99999")
-	require.NoError(t, err)
+	// A stream that never held a line has no tail to have lost, so the
+	// no-live-file warning is not printed for it: every commit outside a
+	// Claude Code session would otherwise carry that line.
+	assert.NotContains(t, stderr, "has no shared live file")
 }
 
 // ---------------------------------------------------------------
@@ -619,8 +386,8 @@ func seedAttr(t *testing.T, se *cliSubprocessEnv, kind, slug, content string) {
 
 // A roster whose repository identity was unresolved is shown as such: `list`
 // says "unresolved" where a no-origin checkout says "-", and `show` prints the
-// reason. `purge --force` removes it.
-func TestUnresolvedRosterListShowPurge(t *testing.T) {
+// reason.
+func TestUnresolvedRosterListShow(t *testing.T) {
 	se := setupPhase3Env(t)
 	resetPhase3Flags(t)
 	ss := sessionStore()
@@ -644,12 +411,13 @@ func TestUnresolvedRosterListShowPurge(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, show, "unresolved")
 	assert.Contains(t, show, "git did not answer")
+}
 
-	sessionPurgeForce = false
-	t.Cleanup(func() { sessionPurgeForce = false })
-	_, _, err = execHandler(t, "session", "purge", "--force")
-	require.NoError(t, err)
-	ids, err := ss.List()
-	require.NoError(t, err)
-	assert.NotContains(t, ids, "sess-unres-1", "purge --force removes an unresolved roster")
+// createRoster writes a session roster straight to the store: the session
+// create command is gone, so rosters come from the store the hooks use.
+func createRoster(t *testing.T, id, root, primary string) {
+	t.Helper()
+	require.NoError(t, sessionStore().Create(id,
+		session.Participant{AgentID: root},
+		session.Participant{AgentID: primary, Parent: root}, "", ""))
 }

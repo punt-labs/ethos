@@ -606,8 +606,8 @@ func TestEnableRequiresVerifiedHooksDir(t *testing.T) {
 	if err == nil {
 		t.Fatal("Enable with an unverified hooks directory succeeded")
 	}
-	if !strings.Contains(err.Error(), "cannot install hooks") || !strings.Contains(err.Error(), "install git") {
-		t.Errorf("error = %q, want it to say hooks cannot be installed and to install git", err)
+	if !strings.Contains(err.Error(), "cannot install hooks") || !strings.Contains(err.Error(), "git not found on PATH") || strings.Contains(err.Error(), "install git") {
+		t.Errorf("error = %q, want it to say hooks cannot be installed and why, with no instruction", err)
 	}
 	if exists(filepath.Join(dir, ".git", "hooks", "pre-commit")) {
 		t.Error("Enable wrote a hook into .git/hooks")
@@ -643,8 +643,8 @@ func checkMismatchAdvice(t *testing.T, err error) {
 	if strings.Contains(err.Error(), "install git") {
 		t.Errorf("error = %q, git is installed", err)
 	}
-	if !strings.Contains(err.Error(), "ETHOS_REPO_ROOT") || !strings.Contains(err.Error(), "top level") {
-		t.Errorf("error = %q, want the top-level advice", err)
+	if !strings.Contains(err.Error(), "not the repository root") || strings.Contains(err.Error(), "ETHOS_REPO_ROOT") || strings.Contains(err.Error(), "subdirectory of another") {
+		t.Errorf("error = %q, want the work-tree finding, no advice", err)
 	}
 }
 
@@ -665,7 +665,7 @@ func TestDisableRefusesDegradedLookup(t *testing.T) {
 	if err == nil {
 		t.Fatal("Disable with an unverified hooks directory succeeded")
 	}
-	for _, want := range []string{"not verified", "install git", "--force"} {
+	for _, want := range []string{"not verified", "git not found on PATH", "--force"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error = %q, want it to contain %q", err, want)
 		}

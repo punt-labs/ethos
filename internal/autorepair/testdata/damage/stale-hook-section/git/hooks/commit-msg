@@ -1,0 +1,8 @@
+#!/bin/sh
+# --- BEGIN ETHOS DES-054 TRAILER ---
+# hooks/commit-msg.sh — Append Mission:/Delegation: git trailers when env is set.
+# Copied by an older ethos enable: calls the retired trailer subcommand.
+ethos_bin=$(command -v ethos) || exit 0
+trailers=$("$ethos_bin" hook commit-trailers) || exit 0
+[ -n "$trailers" ] && printf '\n%s\n' "$trailers" >>"$1"
+# --- END ETHOS DES-054 TRAILER ---

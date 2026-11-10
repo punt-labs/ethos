@@ -238,6 +238,20 @@ func TestTeamBundleDiagnosticPhysicalPlacement(t *testing.T) {
 					allowed = allowed || strings.HasPrefix(p, module+string(filepath.Separator))
 					local := filepath.Join(store, ".punt-labs", "local", "ethos")
 					allowed = allowed || p == filepath.Dir(local) || p == local || p == filepath.Join(local, "tmp")
+					// The storage upgrade every command runs first owns the
+					// local zone's lock and trace directories and the global
+					// store's locks and log under HOME (DES-084); none is
+					// add-bundle's placement.
+					for _, owned := range []string{"locks", "trace"} {
+						dir := filepath.Join(local, owned)
+						allowed = allowed || p == dir || strings.HasPrefix(p, dir+string(filepath.Separator))
+					}
+					global := filepath.Join(base, ".punt-labs", "ethos")
+					allowed = allowed || p == filepath.Dir(global) || p == global
+					for _, owned := range []string{"locks", "logs"} {
+						dir := filepath.Join(global, owned)
+						allowed = allowed || p == dir || strings.HasPrefix(p, dir+string(filepath.Separator))
+					}
 					neutral := filepath.Dir(p) == filepath.Join(local, "tmp") && strings.HasPrefix(filepath.Base(p), "ethos-git-") && strings.HasSuffix(p, ".ethos-tmp")
 					if neutral {
 						neutralCount++
@@ -653,8 +667,10 @@ func TestTeamBundleDiagnosticSeparatorFailure(t *testing.T) {
 				assert.Contains(t, string(out), "does not exist")
 				assert.NotContains(t, string(out), "ssh-add")
 				assert.NotContains(t, string(out), "added bundle")
-				local := filepath.Join(store, ".punt-labs", "local")
-				assert.NoDirExists(t, local)
+				// The storage upgrade every command runs first owns the
+				// store's local zone; add-bundle itself leaves no bundle
+				// directory and nothing in the record tree.
+				assert.NoDirExists(t, filepath.Join(store, ".punt-labs", "ethos-bundles", "missing"))
 				entries, err := os.ReadDir(record)
 				require.NoError(t, err)
 				assert.Empty(t, entries)
@@ -665,8 +681,10 @@ func TestTeamBundleDiagnosticSeparatorFailure(t *testing.T) {
 					assert.NotContains(t, string(calls), `"ls-remote"`, "decline before diagnostic execution, not just before SSH")
 					paths, err := bundleDiagnosticMkdirPaths(string(calls))
 					require.NoError(t, err)
+					// The local zone's mkdirs are the storage upgrade's (locks,
+					// log); the refused add-bundle creates nothing in the
+					// record tree.
 					for _, path := range paths {
-						assert.False(t, path == local || strings.HasPrefix(path, local+string(filepath.Separator)), path)
 						assert.False(t, path == record || strings.HasPrefix(path, record+string(filepath.Separator)), path)
 					}
 				}

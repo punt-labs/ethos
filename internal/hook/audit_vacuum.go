@@ -70,8 +70,8 @@ func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []ActiveSessio
 		if !audit.SessionLiveFileExists(liveRoot, t.Session) {
 			fmt.Fprintf(w,
 				"warning: session %s was purged with unsealed audit lines and its live file is gone; "+
-					"those lines are lost. Acknowledge with `ethos session purge --ack %s`\n",
-				t.Session, t.Session)
+					"those lines are lost\n",
+				t.Session)
 		} else {
 			n, cErr := audit.SessionUnsealedCountAcross(repoRoot, liveRoot, t.Session)
 			if cErr != nil {
@@ -79,9 +79,8 @@ func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []ActiveSessio
 			}
 			if n > 0 {
 				fmt.Fprintf(w,
-					"warning: session %s was purged with %d unsealed audit line(s) still on disk; "+
-						"commit to seal them. Acknowledge with `ethos session purge --ack %s`\n",
-					t.Session, n, t.Session)
+					"warning: session %s was purged and %d unsealed audit line(s) remain on disk\n",
+					t.Session, n)
 			}
 		}
 		// A purged session's mission-log lines are guarded the same way.
@@ -120,7 +119,7 @@ func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []ActiveSessio
 	if unrecorded > 0 {
 		fmt.Fprintf(w,
 			"note: %d active session(s) predate the roster checkout field, so their live files "+
-				"cannot be located and are not checked; `ethos session purge` clears dead ones\n",
+				"cannot be located and are not checked\n",
 			unrecorded)
 	}
 	return nil

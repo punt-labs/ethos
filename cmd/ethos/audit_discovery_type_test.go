@@ -12,8 +12,17 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/autorepair"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 )
+
+// stampCurrent marks the repository behind p as already at the current
+// layout, so the storage upgrade every command runs first converts nothing:
+// the planted state below is what the command under test sees.
+func stampCurrent(t *testing.T, p layout.Policy) {
+	t.Helper()
+	require.NoError(t, autorepair.WriteStamp(autorepair.RepositoryStampPath(p), autorepair.Stamp{Version: autorepair.LayoutVersion}, func(dir string) error { return os.MkdirAll(dir, 0o700) }))
+}
 
 func TestRepositoryDiscoveryTypeActualCLI(t *testing.T) {
 	require.NotEmpty(t, ethosBinary, "the actual CLI must build; no skip")
@@ -35,6 +44,11 @@ func TestRepositoryDiscoveryTypeActualCLI(t *testing.T) {
 					}
 					p, err := layout.NewRepository(root, checkout, layout.RecordBlame)
 					require.NoError(t, err)
+					if !(layer == "local-live" && position == "root") {
+						// The local root itself is the planted object here, so
+						// there is no local zone to hold a stamp.
+						stampCurrent(t, p)
+					}
 					base := map[string]string{"archive": audit.ArchiveRoot(p), "shared-record": p.RecordRoot(), "checkout-record": p.CheckoutRecordRoot(), "local-live": p.LocalRoot()}[layer]
 					path := base
 					switch position {

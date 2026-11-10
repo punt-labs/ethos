@@ -68,6 +68,14 @@ func checkSetupSync(repoRoot string) result {
 	if !bytes.Equal(onDisk, enable.Setup) {
 		return fail(label, "docs/ETHOS-SETUP.md and internal/enable/setup/ETHOS-SETUP.md have drifted — run `make sync-embed`")
 	}
+	depositedPath := filepath.Join(repoRoot, ".punt-labs", "ethos", "ETHOS-SETUP.md")
+	deposited, err := os.ReadFile(depositedPath)
+	if err != nil {
+		return fail(label, fmt.Sprintf("reading %s: %v", depositedPath, err))
+	}
+	if !bytes.Equal(deposited, enable.Setup) {
+		return fail(label, ".punt-labs/ethos/ETHOS-SETUP.md and internal/enable/setup/ETHOS-SETUP.md have drifted — the deposited copy must equal the embed")
+	}
 	return pass(label)
 }
 
@@ -85,7 +93,7 @@ func checkGuideSync(repoRoot string) result {
 		return fail(label, fmt.Sprintf("reading %s: %v", path, err))
 	}
 	if !bytes.Equal(onDisk, enable.Guide) {
-		return fail(label, ".punt-labs/ethos/CLAUDE.md and internal/enable/guide/CLAUDE.md have drifted — run `ethos enable` to redeposit the guide")
+		return fail(label, ".punt-labs/ethos/CLAUDE.md and internal/enable/guide/CLAUDE.md have drifted — the two files must be identical")
 	}
 	return pass(label)
 }

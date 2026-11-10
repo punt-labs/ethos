@@ -846,18 +846,18 @@ the verdict cannot depend on which release wrote the shim.
 ShimVerdict : ShimState \fun ShimOutcome
 \where
 \forall s : ShimState \spot \\
-\t1 (s.tree = treeDormant \land s.hostFails = zfalse \implies
+\quad (s.tree = treeDormant \land s.hostFails = zfalse \implies
   ShimVerdict~s = shimPass) \land \\
-\t1 (s.tree = treeDormant \land s.hostFails = ztrue \implies
+\quad (s.tree = treeDormant \land s.hostFails = ztrue \implies
   ShimVerdict~s = shimBlock) \land \\
-\t1 (s.tree = treeEnabled \land s.bin = binAbsent \implies
+\quad (s.tree = treeEnabled \land s.bin = binAbsent \implies
   ShimVerdict~s = shimBlock) \land \\
-\t1 (s.tree = treeEnabled \land s.bin = binOld \implies
+\quad (s.tree = treeEnabled \land s.bin = binOld \implies
   ShimVerdict~s = shimBlock) \land \\
-\t1 (s.tree = treeEnabled \land s.bin = binCurrent \land
+\quad (s.tree = treeEnabled \land s.bin = binCurrent \land
   s.policyBlocks = zfalse \land s.hostFails = zfalse \implies
   ShimVerdict~s = shimPass) \land \\
-\t1 (s.tree = treeEnabled \land s.bin = binCurrent \land
+\quad (s.tree = treeEnabled \land s.bin = binCurrent \land
   (s.policyBlocks = ztrue \lor s.hostFails = ztrue) \implies
   ShimVerdict~s = shimBlock)
 \end{axdef}

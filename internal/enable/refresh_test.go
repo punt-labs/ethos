@@ -87,7 +87,8 @@ func TestRefreshHooks(t *testing.T) {
 		}
 		assert.True(t, tracked, "steps: %+v", rep.Steps)
 		assert.Contains(t, strings.Join(rep.Warnings, "\n"), hookPath)
-		assert.Contains(t, strings.Join(rep.Warnings, "\n"), "ethos enable")
+		assert.Contains(t, strings.Join(rep.Warnings, "\n"), "not rewriting it")
+		assert.NotContains(t, strings.Join(rep.Warnings, "\n"), "ethos enable", "the warning states what ethos did, not what the user must run")
 	})
 
 	t.Run("a non-shell hook is reported as skipped", func(t *testing.T) {
@@ -120,15 +121,20 @@ func TestRefreshHooks(t *testing.T) {
 		require.NoError(t, os.WriteFile(commitMsg, []byte(stale), 0o755))
 
 		rep, err := RefreshHooks(root)
-		require.Error(t, err, "the duplicated seal section is reported")
+		require.NoError(t, err, "a duplicated section is a condition of the file, not a failure")
 		assert.Equal(t, want, readFile(t, commitMsg), "the second hook is still refreshed")
-		var refreshed bool
+		var refreshed, malformed bool
 		for _, st := range rep.Steps {
 			if st.Step == "hook:commit-msg" {
 				refreshed = true
 			}
+			if st.Step == "hook:pre-commit" && st.Status == StatusSkippedMalformed {
+				malformed = true
+				assert.Contains(t, st.Cause, "more than one section for the same tag")
+			}
 		}
 		assert.True(t, refreshed, "steps: %+v", rep.Steps)
+		assert.True(t, malformed, "the duplicated seal section is reported with its cause: %+v", rep.Steps)
 	})
 
 	t.Run("a missing hook is reported as installed", func(t *testing.T) {

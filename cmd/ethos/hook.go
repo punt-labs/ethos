@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/autorepair"
 	"github.com/punt-labs/ethos/v4/internal/enable"
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/mission"
@@ -113,9 +115,10 @@ var hookAuditLogCmd = &cobra.Command{
 }
 
 var hookCommitTrailersCmd = &cobra.Command{
-	Use:   "commit-trailers",
-	Short: "Mission/Delegation trailer values for the committing session",
-	Args:  cobra.NoArgs,
+	Use:    "commit-trailers",
+	Hidden: true,
+	Short:  "Mission/Delegation trailer values for the committing session",
+	Args:   cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runHookCommitTrailers(cmd.OutOrStdout())
 	},
@@ -160,6 +163,8 @@ func refreshGitHooks(checkout, store string) (hook.HookRefresh, error) {
 			r.Shared = append(r.Shared, name)
 		case enable.StatusSkippedTrackedMissing:
 			r.TrackedMissing = append(r.TrackedMissing, name)
+		case enable.StatusSkippedMalformed:
+			r.Malformed = append(r.Malformed, hook.HookProblem{Hook: name, Cause: st.Cause})
 		default:
 			r.Refreshed = append(r.Refreshed, name)
 		}
@@ -167,9 +172,39 @@ func refreshGitHooks(checkout, store string) (hook.HookRefresh, error) {
 	return r, err
 }
 
+// repairSessions adapts autorepair.SessionStart to the SessionStart dependency:
+// the cheap pass over dead session state, logged to the repair log.
+func repairSessions(loc resolve.Located) func(ctx context.Context) (int, error) {
+	return func(ctx context.Context) (int, error) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return 0, fmt.Errorf("locating the global store: %w", err)
+		}
+		global := filepath.Join(home, ".punt-labs", "ethos")
+		// The repair log's rotation and the session purge assume one writer: take
+		// the lock the engine holds. A busy lock means a repair is already
+		// running, so this start leaves the work to it without waiting: a
+		// session start must not stall behind a repair.
+		release, ok, err := autorepair.TryGlobalLock(global, 0)
+		if err != nil {
+			return 0, fmt.Errorf("locking the repair lock: %w", err)
+		}
+		if !ok {
+			return 0, nil
+		}
+		defer release()
+		env, err := autorepair.HookEnv(loc, global)
+		if err != nil {
+			return 0, fmt.Errorf("building the repair environment: %w", err)
+		}
+		return autorepair.SessionStart(ctx, env)
+	}
+}
+
 func runHookSessionStart() error {
 	loc := currentRoots().Located
 	is := identityStore()
+	notice, items := takeRepairNotice()
 	deps := hook.SessionStartDeps{
 		Located:      &loc,
 		Store:        is,
@@ -178,6 +213,9 @@ func runHookSessionStart() error {
 		Roles:        layeredRoleStore(is),
 		Issue:        currentRoots().configIssue(),
 		RefreshHooks: refreshGitHooks,
+		Notice:       notice,
+		NoticeItems:  items,
+		Repair:       repairSessions(loc),
 	}
 	if err := hook.HandleSessionStart(os.Stdin, deps); err != nil {
 		return fmt.Errorf("hook session-start: %w", err)
@@ -290,8 +328,12 @@ func runHookPreToolUse() error {
 func runHookCommitTrailers(out io.Writer) error {
 	sessionID, _, err := resolve.SessionID(sessionStore())
 	if err != nil {
-		if !errors.Is(err, resolve.ErrNotUnderClaudeCode) {
-			fmt.Fprintf(os.Stderr, "ethos: commit-trailers: %v; no trailer added\n", err)
+		switch {
+		case errors.Is(err, resolve.ErrNotUnderClaudeCode):
+		case errors.Is(err, resolve.ErrNoSession):
+			fmt.Fprintln(os.Stderr, "ethos: commit-trailers: no trailer added: no Claude Code session is bound to this process")
+		default:
+			fmt.Fprintf(os.Stderr, "ethos: commit-trailers: no trailer added: %v\n", err)
 		}
 		return nil
 	}

@@ -1,0 +1,22 @@
+mission_id: m-2026-11-09-002
+status: open
+type: implement
+created_at: "2026-11-09T23:02:21Z"
+updated_at: "2026-11-09T23:02:21Z"
+leader: claude
+worker: wperson
+evaluator:
+    handle: eperson
+    pinned_at: "2026-11-09T23:02:21Z"
+    hash: f2df81c97fdf61faae493ffbe2ba4d6a62ef8fd6d981b79d7c1d4193db22a011
+inputs:
+    ticket: ethos-0002
+write_set:
+    - docs/
+success_criteria:
+    - docs updated
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: corpus scenario, mission from flags

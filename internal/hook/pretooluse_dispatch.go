@@ -526,7 +526,7 @@ func RefuseIfSessionGone(ss *session.Store, sessionID string) error {
 		return nil
 	}
 	return fmt.Errorf("session %s no longer exists, so this binding was not recorded "+
-		"(it may have ended or been purged; re-run the command from a live session): %w", sessionID, err)
+		"(it may have ended or been purged): %w", sessionID, err)
 }
 
 // consumeDispatchBinding removes missionID's pending-dispatch entry

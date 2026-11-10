@@ -82,14 +82,14 @@ func TestCLI_RepositoryIdentityOverlayDivergence(t *testing.T) {
 	assert.Contains(t, stdout, "old-private", "legacy-only compatibility read")
 	_, stderr, exit = runCLI(t, se, "ext", "set", "test-agent", "private", "key", "no", "--local")
 	require.Equal(t, 1, exit)
-	assert.Contains(t, stderr, "read-only")
+	assert.Contains(t, stderr, "not in the local zone yet")
 	local := filepath.Join(se.repo, ".punt-labs", "local", "ethos", "identities", "test-agent.ext", "private.local.yaml")
 	require.NoError(t, os.MkdirAll(filepath.Dir(local), 0o700))
 	require.NoError(t, os.WriteFile(local, []byte("key: new-private\n"), 0o600))
 	for _, args := range [][]string{
 		{"ext", "get", "test-agent", "private"},
 		{"ext", "list", "test-agent"},
-		{"show", "test-agent"},
+		{"identity", "show", "test-agent"},
 	} {
 		_, stderr, exit := runCLI(t, se, args...)
 		require.Equal(t, 1, exit, "%v", args)
@@ -157,7 +157,7 @@ func TestCLI_RepositoryIdentityRefusesRedirectedBase(t *testing.T) {
 				for _, args := range [][]string{
 					{"ext", "get", "test-agent", "quarry"},
 					{"ext", "list", "test-agent"},
-					{"show", "test-agent"},
+					{"identity", "show", "test-agent"},
 					{"ext", "set", "test-agent", "quarry", "collection", "changed"},
 					{"ext", "delete", "test-agent", "quarry", "collection"},
 					{"ext", "delete", "test-agent", "quarry"},

@@ -17,6 +17,9 @@ import (
 type ScannedDir struct {
 	Chunks  []ChunkName
 	Markers []ChunkName
+	// HeldLosses are the held-loss records (KindHeldLoss), each a loss of
+	// unknown range. Only the name is carried: the stem is recovered from it.
+	HeldLosses []string
 }
 
 // ScanSealedDir lists dir and classifies every entry. In the mission
@@ -43,7 +46,7 @@ func ScanSealedDir(dir string, ns Namespace, session string) (ScannedDir, error)
 		// session's artifacts; an empty session means "every session"
 		// (the read unions all).
 		if ns == MissionNS && session != "" &&
-			(kind == KindValid || kind == KindQuarantine || kind == KindCorrupt) {
+			(kind == KindValid || kind == KindQuarantine || kind == KindCorrupt || kind == KindHeldLoss) {
 			if cn.Session != session {
 				continue
 			}
@@ -89,8 +92,10 @@ func ScanSealedDir(dir string, ns Namespace, session string) (ScannedDir, error)
 				}
 			}
 			corrupts = append(corrupts, cn)
+		case KindHeldLoss:
+			sc.HeldLosses = append(sc.HeldLosses, e.Name())
 		case KindNearMiss:
-			return ScannedDir{}, fmt.Errorf("malformed chunk name %q in %s", e.Name(), dir)
+			return ScannedDir{}, &MalformedChunkNameError{Name: e.Name(), Dir: dir}
 		case KindTemp, KindOther:
 			// Stale temps are swept elsewhere; siblings are never the seal's concern.
 		}
@@ -105,8 +110,16 @@ func ScanSealedDir(dir string, ns Namespace, session string) (ScannedDir, error)
 	return sc, nil
 }
 
+// MalformedChunkNameError is an entry that carries the chunk prefix but does
+// not parse. No repair changes the name, so it is permanent.
+type MalformedChunkNameError struct{ Name, Dir string }
+
+func (e *MalformedChunkNameError) Error() string {
+	return fmt.Sprintf("malformed chunk name %q in %s", e.Name, e.Dir)
+}
+
 // OrphanCorruptError is a .corrupt whose quarantine never finished. Chunk is
-// the chunk path `ethos audit quarantine` resumes from.
+// the chunk path the storage upgrade resumes from.
 type OrphanCorruptError struct {
 	Chunk, Dir  string
 	First, Last int64

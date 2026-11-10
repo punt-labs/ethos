@@ -19,7 +19,7 @@ import (
 
 func repositoryAuditCLI(t *testing.T, mode string) (layout.Policy, audit.Stream) {
 	t.Helper()
-	_, root, _ := auditMigrateEnv(t)
+	home, root, _ := auditMigrateEnv(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs", "ethos"), 0o700))
 	if mode != "" {
 		require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte("record: "+mode+"\n"), 0o600))
@@ -30,6 +30,9 @@ func repositoryAuditCLI(t *testing.T, mode string) (layout.Policy, audit.Stream)
 	}
 	p, err := layout.NewRepository(root, root, m)
 	require.NoError(t, err)
+	// Stamp once the repository has used ethos: the planted archive state is
+	// what the seal under test sees, not what the storage upgrade made of it.
+	stampFixture(t, home, root)
 	t.Cleanup(func() { auditSealCommitContext, auditSealVerbose, auditSealDryRun = false, false, false })
 	auditSealCommitContext, auditSealVerbose, auditSealDryRun = false, false, false
 	return p, audit.Stream{Namespace: audit.SessionNS, Session: "fixture"}
@@ -241,7 +244,7 @@ func TestRepositoryAuditCLICommitContextFailurePolicy(t *testing.T) {
 	}
 }
 
-func TestRepositoryAuditCLIArchivesAndQuarantinesWithoutStaging(t *testing.T) {
+func TestRepositoryAuditCLIArchivesWithoutStaging(t *testing.T) {
 	p, s := repositoryAuditCLI(t, "")
 	raw := []byte(`{"ts":"` + audit.FormatLineTS(time.Now().UnixNano()) + `","session":"fixture","tool":"Read","delegation_id":"d","record":"blame"}` + "\n")
 	require.NoError(t, audit.WriteLocalAtomic(p, s.LivePath(p), raw))
@@ -253,12 +256,8 @@ func TestRepositoryAuditCLIArchivesAndQuarantinesWithoutStaging(t *testing.T) {
 	stdout, _, err := execHandler(t, "audit", "show", "--delegation", "d", "--format", "json")
 	require.NoError(t, err)
 	assert.Contains(t, stdout, `"record":"blame"`)
-	require.NoError(t, os.WriteFile(files[0], []byte("corrupt bytes"), 0o600))
-	stdout, _, err = execHandler(t, "audit", "quarantine", files[0])
-	require.NoError(t, err)
-	assert.Contains(t, stdout, "nothing staged")
 	_, err = os.Stat(filepath.Join(filepath.Dir(filepath.Dir(p.RecordRoot())), ".git", "index"))
-	assert.True(t, os.IsNotExist(err), "default seal/quarantine must not create an index")
+	assert.True(t, os.IsNotExist(err), "default seal must not create an index")
 	stdout, _, err = execHandler(t, "audit", "show", "--delegation", "d", "--format", "json")
 	require.NoError(t, err)
 	assert.Contains(t, stdout, `"tool":"Read"`)

@@ -90,6 +90,11 @@ func runAllFor(loc resolve.Located, s identity.IdentityStore, ss *session.Store,
 		issue = bundle.ConfigIssueFromConfig(loc.Store, loc.Ethos, global, loc.Config)
 	}
 	results := runAll(s, ss, loc.Checkout, loc.CheckoutErr, storeRoot, storeErr, issue, loc.Config, loc.ConfigErr, teams, human)
+	if home, herr := os.UserHomeDir(); herr == nil {
+		results = append(results, CheckStorage(loc, filepath.Join(home, ".punt-labs", "ethos")))
+	} else {
+		results = append(results, CheckStorage(loc, ""))
+	}
 	if issue != nil {
 		what, _, _ := resolve.Describe(issue)
 		results = append([]Result{{Name: "Repository configuration", Status: "FAIL", Detail: what + ": " + issue.Error()}}, results...)
@@ -718,6 +723,12 @@ func checklistAgentNames(fsys fs.FS, root string) (map[string]bool, error) {
 // hookBinaryTimeout bounds the --help probe of the binary the shims run.
 const hookBinaryTimeout = 10 * time.Second
 
+// sandboxUnavailableDetail words the FAIL for a hook that cannot be run because
+// the sandbox found no git. err already names the cause.
+func sandboxUnavailableDetail(short string, err error) string {
+	return fmt.Sprintf("cannot verify the %s hook by execution: %v; check skipped", short, err)
+}
+
 // CheckHookBinary reports whether the binary the installed git hook shims
 // resolve implements the subcommands they call (DES-083). The shims look for
 // ethos on PATH, then in $HOME/.local/bin, exactly as resolveHookBinary does.
@@ -742,7 +753,7 @@ func CheckHookBinary(repoRoot string) Result {
 		bin = local
 	}
 	if bin == "" {
-		return Result{Name: name, Status: "FAIL", Detail: "ethos is enabled here but no ethos binary is on PATH or in ~/.local/bin; every commit is blocked — install ethos"}
+		return Result{Name: name, Status: "FAIL", Detail: "ethos is enabled here but no ethos binary is on PATH or in ~/.local/bin; every commit is blocked"}
 	}
 	// Git runs the hooks with its own PATH, which may differ from this
 	// process's, so what follows is about the binary doctor resolves.
@@ -762,7 +773,7 @@ func CheckHookBinary(repoRoot string) Result {
 		case err != nil && !errors.As(err, &exitErr):
 			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot run %s: %v (%s)", bin, err, resolved)}
 		case err != nil || !strings.Contains(string(out), "ethos hook "+sub):
-			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("%s predates `ethos hook %s`, so the installed hooks block every commit — upgrade ethos: make install (%s)", bin, sub, resolved)}
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("%s predates `ethos hook %s`, so the installed hooks block every commit (%s)", bin, sub, resolved)}
 		}
 	}
 	if onPath != "" && local != "" && !sameFile(onPath, local) {
@@ -829,8 +840,6 @@ func CheckTrailerHook(repoRoot string) Result { return checkHookPresence(repoRoo
 // design — PASSes "no section installed" regardless of enablement.
 func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 	name := "Audit " + spec.ShortName + " hook"
-	const remedy = " — run `ethos enable`"
-
 	if repoRoot == "" {
 		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
 	}
@@ -877,7 +886,7 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 	if statErr == nil {
 		data, err := os.ReadFile(hook)
 		if err != nil {
-			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot read %s: %v%s", hook, err, remedy)}
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot read %s: %v", hook, err)}
 		}
 		body = data
 	}
@@ -906,7 +915,7 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 	if !markerPresent {
 		chained := statErr == nil && (hasMarkerSection(body, spec.Tag) || looksLikeInvocation(body, spec.accepted()...))
 		if chained {
-			return Result{Name: name, Status: "WARN", Detail: spec.ShortName + " hook chained but ethos not enabled here" + remedy + " to converge, or remove the stale hook"}
+			return Result{Name: name, Status: "WARN", Detail: spec.ShortName + " hook chained but ethos not enabled here"}
 		}
 		return Result{Name: name, Status: "PASS", Detail: "not enabled here"}
 	}
@@ -946,8 +955,7 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 		observed, err := hookInvocationObservedAny(body, spec.accepted(), spec.NeedsMsgArg)
 		if err != nil {
 			if errors.Is(err, errSandboxGitUnavailable) {
-				return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-					"cannot verify the %s hook by execution: %v — install git to run this check", spec.ShortName, err)}
+				return Result{Name: name, Status: "FAIL", Detail: sandboxUnavailableDetail(spec.ShortName, err)}
 			}
 			if errors.Is(err, errSandboxUnsupportedPlatform) {
 				// M4: this build cannot exercise the sandbox on this GOOS.
@@ -982,10 +990,10 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 				// platform) could tell them apart.
 				if !looksLikeInvocation(body, spec.accepted()...) {
 					return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-						"the %s hook shows no textual evidence of the required call, and this platform cannot verify by execution", spec.ShortName) + remedy}
+						"the %s hook shows no textual evidence of the required call, and this platform cannot verify by execution", spec.ShortName)}
 				}
 				return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
-					"cannot verify the %s hook by execution on this platform — inspect it manually", spec.ShortName)}
+					"cannot verify the %s hook by execution on this platform", spec.ShortName)}
 			}
 			var earlyExit *hookExitedEarlyError
 			if errors.As(err, &earlyExit) && sectionIsCurrent(body, spec) {
@@ -1012,9 +1020,9 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 	// The hook must be present and active.
 	if statErr != nil {
 		if os.IsNotExist(statErr) {
-			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("enabled here but no %s hook", spec.File) + remedy}
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("enabled here but no %s hook", spec.File)}
 		}
-		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot stat %s: %v%s", hook, statErr, remedy)}
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot stat %s: %v", hook, statErr)}
 	}
 	if !active {
 		// shellHook is false here only when the body could not be executed
@@ -1024,13 +1032,13 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 		// from hookInvocationObserved above.
 		if !shellHook && looksLikeInvocation(body, spec.accepted()...) {
 			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-				"%s call present but the hook's shebang is not a shell — git runs it under another interpreter", spec.ShortName) + remedy}
+				"%s call present but the hook's shebang is not a shell — git runs it under another interpreter", spec.ShortName)}
 		}
 		if bytes.Contains(body, []byte(spec.Tag)) {
 			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-				"%s section present but no active %q call (stale)", spec.Name, strings.Join(spec.InvokeArgs, " ")) + remedy}
+				"%s section present but no active %q call (stale)", spec.Name, strings.Join(spec.InvokeArgs, " "))}
 		}
-		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("enabled here but the %s hook is not chained", spec.ShortName) + remedy}
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("enabled here but the %s hook is not chained", spec.ShortName)}
 	}
 	if hasMarkerSection(body, spec.Tag) {
 		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("chained %s section active", spec.ShortName)}
@@ -1228,11 +1236,11 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 		if os.IsNotExist(err) {
 			return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("no %s section installed", spec.Name)}
 		}
-		remedy := " — inspect the file manually"
+		cause := ""
 		if os.IsPermission(err) {
-			remedy = " — check file permissions"
+			cause = " (permissions)"
 		}
-		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot read %s: %v%s", hookPath, err, remedy)}
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot read %s: %v%s", hookPath, err, cause)}
 	}
 
 	// A host ending inside an unterminated heredoc masks its trailing lines
@@ -1242,28 +1250,28 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 	// for the same reason before trusting InstalledSection's answer.
 	if textscan.HeredocOpenAtEOF(data) {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-			"%s ends inside an unterminated here-document — close it and re-run; `ethos enable` cannot chain into it either", hookPath)}
+			"%s ends inside an unterminated here-document; ethos cannot chain its section into it", hookPath)}
 	}
 
 	installed, ok, err := githook.InstalledSection(data, spec.Tag, spec.Ident)
 	if err != nil {
 		if errors.Is(err, githook.ErrSectionTruncated) {
 			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-				"%s section has a BEGIN with no matching END — hand-truncated; fix it by hand", spec.Name)}
+				"%s section has a BEGIN with no matching END — truncated section", spec.Name)}
 		} else if errors.Is(err, githook.ErrSectionNotEthosOwned) {
 			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-				"%s section present but does not carry ethos's fingerprint — not a recognized ethos section; remove it and run `ethos enable`", spec.Name)}
+				"%s section present but does not carry ethos's fingerprint — not a recognized ethos section; ethos leaves it in place", spec.Name)}
 		} else if errors.Is(err, githook.ErrSectionDuplicated) {
 			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-				"multiple %q sections found — hand-duplicated; run `ethos enable` to collapse them into one", spec.Tag)}
+				"multiple %q sections found", spec.Tag)}
 		}
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-			"%s section could not be read: %v — re-run `ethos doctor`; if this persists, file a bug", spec.Name, err)}
+			"%s section could not be read: %v", spec.Name, err)}
 	}
 	if !ok {
 		if githook.IsLegacyStandalone(data, spec.Ident) {
 			return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
-				"%s is active but still in the legacy pre-marker standalone format — run `ethos enable` to refresh it into the current format", spec.Name)}
+				"%s is active but still in the legacy pre-marker standalone format", spec.Name)}
 		}
 		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("no %s section installed", spec.Name)}
 	}
@@ -1278,16 +1286,16 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 		on, markErr := resolve.EnabledMarker(repoRoot)
 		if markErr == nil && !on {
 			return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
-				"%s section content differs from what this ethos build would install (installed sha256:%s, current sha256:%s) (dormant repo: hook passes through; run `ethos enable` to refresh or remove the stale section)",
+				"%s section content differs from what this ethos build would install (installed sha256:%s, current sha256:%s) (dormant repo: hook passes through)",
 				spec.Name, shortHex(installedDigest), shortHex(expectedDigest))}
 		}
 		// An unreadable marker is not proof of a dormant repo: keep the FAIL.
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-			"%s section content differs from what this ethos build would install (installed sha256:%s, current sha256:%s) — stale section may block commits — run `ethos enable` (SessionStart also refreshes it)",
+			"%s section content differs from what this ethos build would install (installed sha256:%s, current sha256:%s) — stale section may block commits",
 			spec.Name, shortHex(installedDigest), shortHex(expectedDigest))}
 	}
 	return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
-		"%s section content differs from what this ethos build would install (installed sha256:%s, current sha256:%s) — run `ethos enable` to refresh",
+		"%s section content differs from what this ethos build would install (installed sha256:%s, current sha256:%s)",
 		spec.Name, shortHex(installedDigest), shortHex(expectedDigest))}
 }
 

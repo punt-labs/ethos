@@ -117,6 +117,11 @@ var Table = []Entry{
 	{Pattern: ".punt-labs/ethos/missions.jsonl.lock", Class: Never},
 	{Pattern: ".punt-labs/ethos/identities/*.yaml.lock", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/**/*.lock", Class: Never},
+	// The repository layout stamp autorepair writes (DES-084).
+	{Pattern: ".punt-labs/local/ethos/layout.yaml", Class: Never},
+	// The storage upgrade's progress through a live file it redacts in
+	// chunks; runtime state of the local zone, never published.
+	{Pattern: ".punt-labs/local/ethos/cursors/live-*.json", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/missions/*/reflection-intent.yaml", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/missions/*/reflection-intents/*.yaml", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/missions/*/correction-intent.yaml", Class: Never},

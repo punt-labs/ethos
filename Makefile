@@ -70,7 +70,7 @@ lint: ## Lint (golangci-lint + windows vet + shellcheck + ruff + mypy)
 	cd tests/e2e && uv run pytest tests/ -m "not e2e"
 
 docs: ## Lint markdown
-	npx --yes markdownlint-cli2 "**/*.md" "#node_modules"
+	npx --yes markdownlint-cli2 "**/*.md" "#node_modules" "#internal/autorepair/testdata/corpus" "#internal/autorepair/testdata/damage"
 
 # LaTeX PDFs are checked in (prfaq.pdf, docs/*.pdf). Regenerating them
 # is opt-in — `make docs-pdf` — not part of `make check`, so CI doesn't
@@ -119,6 +119,28 @@ TEST_PARALLEL ?= 2
 
 test: ## Run tests with race detection and write coverage to coverage.out
 	go test -race -count=1 -timeout 30m -p $(TEST_PARALLEL) -coverprofile=coverage.out ./...
+
+.PHONY: coverage-check coverage-baseline coverage-baseline-from-ci
+
+coverage-check: ## Compare per-package coverage in coverage.out (from make test) with coverage-baseline.txt
+	go run ./cmd/coverage-check -profile coverage.out -baseline coverage-baseline.txt
+
+coverage-baseline: ## Regenerate coverage-baseline.txt from coverage.out (keeps overall-target and comments)
+	go run ./cmd/coverage-check -write -profile coverage.out -baseline coverage-baseline.txt
+
+coverage-baseline-from-ci: ## Regenerate the linux coverage-baseline.txt from one successful CI run's coverage-out artifact (RUN=<id>; default: latest successful test.yml run on this branch)
+	@run="$(RUN)"; \
+	if [ -z "$$run" ]; then \
+		run=$$(gh run list --workflow test.yml --branch $$(git branch --show-current) --status success --limit 1 --json databaseId --jq '.[0].databaseId'); \
+	fi; \
+	if [ -z "$$run" ]; then \
+		echo "coverage-baseline-from-ci: no successful test.yml run on branch $$(git branch --show-current); pass RUN=<id>" >&2; \
+		exit 1; \
+	fi; \
+	rm -rf .tmp/coverage-ci; \
+	mkdir -p .tmp/coverage-ci; \
+	gh run download "$$run" --name coverage-out --dir .tmp/coverage-ci
+	go run ./cmd/coverage-check -write -os linux -profile .tmp/coverage-ci/coverage.out -baseline coverage-baseline.txt
 
 validate-content: ## Validate all ethos content files
 	go run ./cmd/validate-content
@@ -248,7 +270,18 @@ check-storage: ## Exercise offline storage boundaries through the real CLI, wrap
 	python3 -B -m unittest discover -s scripts -p 'storage_acceptance_test.py'
 	python3 -B scripts/storage_acceptance.py
 
-check: lint docs test validate-content fuzz-check check-opencode check-storage ## Run all quality gates
+check: lint docs test coverage-check validate-content fuzz-check check-opencode check-storage ## Run all quality gates
+
+# The legacy corpus (internal/autorepair/testdata) is real on-disk state written
+# by nine released binaries. Regenerating it builds each from its git tag, so it
+# needs full tag history and takes minutes; it is deliberately not part of check.
+.PHONY: legacy-corpus test-legacy-corpus
+
+legacy-corpus: ## Regenerate internal/autorepair/testdata from the released tags (slow; not in check)
+	scripts/legacy-corpus.sh
+
+test-legacy-corpus: ## Check the committed legacy corpus reproduces and is free of real paths and emails (not in check)
+	scripts/legacy_corpus_test.sh
 
 format: ## Format code (applies the formatters golangci-lint gates)
 	$(GOLANGCI_LINT) fmt

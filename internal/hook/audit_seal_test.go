@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
@@ -307,4 +310,33 @@ func TestSealRepoInRepoThatIgnoresSessions(t *testing.T) {
 	if strings.Contains(string(out), "sessions") {
 		t.Errorf("ignored chunk is tracked: %q", out)
 	}
+}
+
+// A live line whose ts is already archived with a different payload is stale
+// (the archive wins): the seal drops it from the live file instead of failing
+// the read with an identity conflict.
+func TestSealRepo_ArchivedTSConflictDropsLiveLine(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	sid := "sess-conflict"
+	dir := archiveSessionDir(t, repo, sid, "2026-07-15")
+	p, err := auditPolicy(repo)
+	require.NoError(t, err)
+	archived := `{"ts":"` + audit.FormatLineTS(100) + `","session":"` + sid + `","tool":"Read"}` + "\n"
+	require.NoError(t, audit.WriteLocalAtomic(p, filepath.Join(dir, audit.SessionChunkFile(100, 100)), []byte(archived)))
+	live := liveAuditPath(repo, sid)
+	require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+	conflicting := `{"ts":"` + audit.FormatLineTS(100) + `","session":"` + sid + `","tool":"Bash"}` + "\n"
+	fresh := `{"ts":"` + audit.FormatLineTS(200) + `","session":"` + sid + `","tool":"Read"}` + "\n"
+	require.NoError(t, os.WriteFile(live, []byte(conflicting+fresh), 0o600))
+
+	_, err = SealRepo(repo, time.Now().UTC(), SealOptions{})
+	require.NoError(t, err)
+	after, err := os.ReadFile(live)
+	require.NoError(t, err)
+	assert.NotContains(t, string(after), `"tool":"Bash"`, "the conflicting live line is gone")
+	assert.Contains(t, string(after), fresh)
+	_, err = audit.ReadStream(p, audit.Stream{Namespace: audit.SessionNS, Session: sid})
+	require.NoError(t, err)
 }

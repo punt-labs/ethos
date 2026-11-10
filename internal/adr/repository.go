@@ -158,7 +158,7 @@ func (s *Store) prepare(a *ADR) (*ADR, announcement, error) {
 		}
 		if !reflect.DeepEqual(*out, redacted) {
 			say = func() {
-				fmt.Fprintln(os.Stderr, "ethos: redact: ADR was rewritten before storage (a path, credential or address removed)")
+				fmt.Fprintln(os.Stderr, "ethos: redact: "+rewriteNotice)
 			}
 		}
 		out = &redacted

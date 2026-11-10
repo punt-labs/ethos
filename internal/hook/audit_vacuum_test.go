@@ -468,7 +468,7 @@ func TestVacuumCrossCheckTombstoneUsesRecordedCheckout(t *testing.T) {
 	if bytes.Contains(buf.Bytes(), []byte("live file is gone")) {
 		t.Errorf("tombstone branch called a live file gone that stands in its recorded checkout: %q", buf.String())
 	}
-	if !bytes.Contains(buf.Bytes(), []byte("1 unsealed audit line(s) still on disk")) {
+	if !bytes.Contains(buf.Bytes(), []byte("1 unsealed audit line(s) remain on disk")) {
 		t.Errorf("tombstone branch did not count the unsealed line at the recorded checkout: %q", buf.String())
 	}
 }

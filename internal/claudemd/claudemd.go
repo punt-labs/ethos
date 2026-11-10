@@ -46,9 +46,9 @@ func Register(path, line string, opts ...Option) (bool, error) {
 		// import would land inside the open fence (dead — Claude Code ignores
 		// fenced imports) and never match on re-run, so enable would append
 		// duplicates forever. Error rather than repositioning the user's
-		// content; the user closes the fence and re-runs.
+		// content.
 		if fenceOpenAtEOF(data) {
-			return fmt.Errorf("%s ends inside an unterminated code fence — close the fence and re-run", real)
+			return fmt.Errorf("%s ends inside an unterminated code fence; the import line was not added", real)
 		}
 		if len(matchIndices(data, line)) > 0 {
 			return confirmUnchangedHost(real, policies...)
@@ -96,7 +96,7 @@ func Deregister(path, line string, opts ...Option) (bool, error) {
 		// enabled⟺import biconditional (§2.11). Error rather than half-remove,
 		// symmetric with Register.
 		if fenceOpenAtEOF(data) {
-			return fmt.Errorf("%s ends inside an unterminated code fence — close the fence and re-run", real)
+			return fmt.Errorf("%s ends inside an unterminated code fence; the import line was not removed", real)
 		}
 		idx := matchIndices(data, line)
 		if len(idx) == 0 {

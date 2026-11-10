@@ -1,7 +1,6 @@
 package audit
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -21,6 +20,12 @@ type localRetirement struct {
 	VerifiedLast  int64  `json:"verified_last"`
 }
 
+// NewLocalRetirementRecord returns the bytes of a local retirement record for
+// raw bytes with the given digest, size and newest verified ts.
+func NewLocalRetirementRecord(sumHex string, size int, verifiedLast int64) ([]byte, error) {
+	return json.Marshal(localRetirement{Withheld: localRetirementWithheld, SHA256: sumHex, Size: size, VerifiedLast: verifiedLast})
+}
+
 const localRetirementWithheld = "raw corrupt bytes retained locally"
 
 func (r localRetirement) validate() error {
@@ -34,8 +39,10 @@ func (r localRetirement) validate() error {
 }
 
 // QuarantineLocal retires only the selected chunk. The caller holds its stream
-// lock and supplies a redacted reason and recovered-line guard. Raw evidence is
-// content-addressed at S. For a published source a conservative availability
+// lock and supplies a redacted reason and recovered-line guard. Recovered lines
+// are redacted by the guard, and a line that contradicts a surviving chunk is
+// not installed. The damaged bytes are held in S only while recovery runs and
+// are deleted when it completes. For a published source a conservative availability
 // marker is installed at that location BEFORE removal, without touching Git's
 // index. Local recovery never proves that the shared snapshot was repaired.
 func QuarantineLocal(p layout.Policy, s Stream, source, dir string, cn ChunkName, reason string, guard func([]byte) ([]byte, string, bool)) (Marker, error) {
@@ -138,12 +145,14 @@ func QuarantineLocal(p layout.Policy, s Stream, source, dir string, cn ChunkName
 			return Marker{}, err
 		}
 	}
+	// The raw bytes are kept only until recovery completes, so a retry that
+	// finds them gone has nothing left to compare against.
 	raw, err := os.ReadFile(rawPath)
-	if err != nil {
-		return Marker{}, fmt.Errorf("reading retained quarantine original: %w", err)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return Marker{}, fmt.Errorf("reading quarantine original: %w", err)
 	}
-	if fmt.Sprintf("%x", sha256.Sum256(raw)) != rec.SHA256 || len(raw) != rec.Size {
-		return Marker{}, errors.New("retained quarantine original does not match retirement metadata")
+	if err == nil && (fmt.Sprintf("%x", sha256.Sum256(raw)) != rec.SHA256 || len(raw) != rec.Size) {
+		return Marker{}, errors.New("quarantine original does not match retirement metadata")
 	}
 	body, err := json.Marshal(rec)
 	if err != nil {
@@ -180,15 +189,7 @@ func QuarantineLocal(p layout.Policy, s Stream, source, dir string, cn ChunkName
 		}
 	}
 	if published {
-		shared := Marker{Chunk: cn.Stem(), VerifiedLast: verifiedLast, UnrecoveredFirst: lo, UnrecoveredLast: hi, Reason: reason}
-		body, err := json.Marshal(shared)
-		if err != nil {
-			return Marker{}, err
-		}
-		if err := ensureDestinationDir(p, filepath.Dir(sharedPath)); err != nil {
-			return Marker{}, err
-		}
-		if err := replaceAuditFile(p, sharedPath, append(body, '\n')); err != nil {
+		if err := writeSharedMarker(p, source, cn, Marker{Chunk: cn.Stem(), VerifiedLast: verifiedLast, UnrecoveredFirst: lo, UnrecoveredLast: hi, Reason: reason}); err != nil {
 			return Marker{}, err
 		}
 	}
@@ -198,13 +199,8 @@ func QuarantineLocal(p layout.Policy, s Stream, source, dir string, cn ChunkName
 			// Even identical damaged bytes must not reuse the completion of a
 			// previous recovery after the recovered archive is removed again.
 			pending := prior
-			pending.RetiredSHA256 = ""
 			pending.VerifiedLast = verifiedLast
-			body, err := MarshalMarker(pending)
-			if err != nil {
-				return Marker{}, err
-			}
-			if err := ReplaceLocalFile(p, markerPath, body); err != nil {
+			if err := writeMarker(p, markerPath, pending, true); err != nil {
 				return Marker{}, err
 			}
 		}
@@ -215,66 +211,75 @@ func QuarantineLocal(p layout.Policy, s Stream, source, dir string, cn ChunkName
 			return Marker{}, err
 		}
 	}
-	live, err := readRepositoryLive(p, s)
+	// Recover from the damaged bytes themselves (when they are still held) and
+	// the live lines of the range, the same way SalvageChunk does. With the raw
+	// bytes gone, recovery can only draw on the live file.
+	r, err := recoverLines(p, s, raw, ChunkName{Namespace: cn.Namespace, Session: cn.Session, First: lo, Last: hi}, source, guard)
 	if err != nil {
 		return Marker{}, err
 	}
-	var lines []Line
-	for _, l := range live {
-		if l.TS < lo || l.TS > hi {
-			continue
-		}
-		out, _, _ := guard(l.Raw)
-		before, err := CanonicalPayload(l.Raw)
+	lo, hi = r.lo, r.hi
+	if r.verifiedLast > verifiedLast {
+		verifiedLast = r.verifiedLast
+	}
+	lines := r.keep
+	m := Marker{Chunk: cn.Stem(), VerifiedLast: verifiedLast, Reason: reason, RetiredSHA256: rec.SHA256}
+	// With the raw bytes already deleted, the retired content can be vouched
+	// for only by a replacement an earlier run installed for this range; the
+	// live file cannot say which interior lines the damaged bytes held.
+	installedBefore := false
+	if raw == nil && rec.Size > 0 {
+		installedBefore, err = replacementInstalled(dir, cn, lo, hi)
 		if err != nil {
 			return Marker{}, err
 		}
-		after, err := CanonicalPayload(out)
-		if err != nil || !bytes.Equal(before, after) {
-			return Marker{}, errors.New("quarantine recovery requires redacted migration; original live source retained")
-		}
-		lines = append(lines, l)
 	}
-	m := Marker{Chunk: cn.Stem(), VerifiedLast: verifiedLast, Reason: reason, RetiredSHA256: rec.SHA256}
-	if len(lines) > 0 {
-		first, last := lines[0].TS, lines[len(lines)-1].TS
-		if last > m.VerifiedLast {
-			m.VerifiedLast = last
-		}
-		re := ChunkName{Namespace: cn.Namespace, Session: cn.Session, First: first, Last: last}
-		var body []byte
-		for _, l := range lines {
-			body = append(body, l.Raw...)
-			body = append(body, '\n')
-		}
-		if err := WriteLocalAtomic(p, filepath.Join(dir, re.ChunkFile()), body); err != nil {
-			return Marker{}, err
-		}
+	if _, err := installRecovered(p, dir, cn, lines, source, nil); err != nil {
+		return Marker{}, err
 	}
-	recovered := map[int64]bool{}
-	for _, l := range lines {
-		recovered[l.TS] = true
-	}
-	missingContent := false
-	for _, raw := range SplitLines(raw) {
-		var h tsHolder
-		if json.Unmarshal(raw, &h) == nil {
-			if ts, err := ParseLineTS(h.TS); err == nil && !recovered[ts] {
-				missingContent = true
-			}
-		}
-	}
-	if missingContent || len(lines) == 0 || lines[0].TS > lo || lines[len(lines)-1].TS < hi || markerErr == nil && prior.HasGap() {
+	// Loss is recorded whenever the recovered lines do not account for the
+	// retired range (a recovered line was refused, a bound is held nowhere,
+	// or the raw bytes are gone with no earlier replacement to vouch for
+	// them), or a prior marker already recorded a gap. A clean completion is
+	// never written over unaccounted content.
+	if r.lost || raw == nil && rec.Size > 0 && !installedBefore || markerErr == nil && prior.HasGap() {
 		// One interval cannot encode disjoint losses. Include content-derived
 		// endpoints, rather than declaring recovery based on an untrusted name.
 		m.UnrecoveredFirst, m.UnrecoveredLast = lo, hi
 	}
-	body, err = json.Marshal(m)
-	if err != nil {
+	if err := writeMarker(p, markerPath, m, false); err != nil {
 		return Marker{}, err
 	}
-	if err := ReplaceLocalFile(p, markerPath, append(body, '\n')); err != nil {
-		return Marker{}, err
+	// Recovery is complete: the damaged bytes are no longer needed, and may hold
+	// text redaction never saw, so they are deleted rather than kept.
+	for _, path := range []string{rawPath, rawPath + ".json"} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return Marker{}, fmt.Errorf("deleting damaged chunk bytes %s: %w", path, err)
+		}
 	}
 	return m, nil
+}
+
+// replacementInstalled reports whether dir holds a readable chunk whose range
+// lies within [lo, hi]: the replacement an earlier recovery of this retirement
+// installed. The damaged source itself never reads, so it never qualifies,
+// even under the same name.
+func replacementInstalled(dir string, cn ChunkName, lo, hi int64) (bool, error) {
+	entries, err := readDirIfPresent(dir)
+	if err != nil {
+		return false, err
+	}
+	for _, e := range entries {
+		other, kind := Classify(e.Name(), cn.Namespace)
+		if kind != KindValid || other.Session != cn.Session || other.First < lo || other.Last > hi {
+			continue
+		}
+		if info, err := os.Lstat(filepath.Join(dir, e.Name())); err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if _, err := ReadChunkVerified(filepath.Join(dir, e.Name()), other.Last); err == nil {
+			return true, nil
+		}
+	}
+	return false, nil
 }

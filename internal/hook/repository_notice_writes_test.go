@@ -143,10 +143,13 @@ func TestRepositoryAuditNoticeDirectoryDurabilityUnconfirmed(t *testing.T) {
 }
 
 func TestRepositorySealNoticeImmutablePayload(t *testing.T) {
-	for _, tc := range []struct{ name, raw, wantError string }{
-		{"unsafe legacy payload", `{"ts":"2026-11-04T10:00:00.000000100Z","session":"s","tool":"Read","cwd":"/home/notice-fixture/private"}`, "requires redacted migration"},
-		{"unchanged valid payload", `{"ts":"2026-11-04T10:00:00.000000100Z","session":"s","tool":"Read"}`, ""},
-		{"malformed payload", `not JSON`, ""},
+	for _, tc := range []struct {
+		name, raw, wantError string
+		redacts              bool
+	}{
+		{"unsafe live payload", `{"ts":"2026-11-04T10:00:00.000000100Z","session":"s","tool":"Read","cwd":"/home/notice-fixture/private"}`, "", true},
+		{"unchanged valid payload", `{"ts":"2026-11-04T10:00:00.000000100Z","session":"s","tool":"Read"}`, "", false},
+		{"malformed payload", `not JSON`, "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
@@ -164,11 +167,22 @@ func TestRepositorySealNoticeImmutablePayload(t *testing.T) {
 			})
 			retained, err := os.ReadFile(s.LivePath(p))
 			require.NoError(t, err)
-			assert.Equal(t, raw, retained, "archival never rewrites or consumes the raw source")
 			assertNoRepositoryStoredNotice(t, notice)
 			paths, err := filepath.Glob(filepath.Join(audit.ArchiveRoot(p), "sessions", "*", "audit-*.jsonl"))
 			require.NoError(t, err)
-			if tc.wantError != "" || !json.Valid([]byte(tc.raw)) {
+			if tc.redacts {
+				// A live line that predates redaction is rewritten in place, then archived.
+				require.NoError(t, sealErr)
+				assert.NotContains(t, string(retained), "/home/notice-fixture")
+				assert.Equal(t, 1, res.LinesSealed)
+				require.Len(t, paths, 1)
+				archived, err := os.ReadFile(paths[0])
+				require.NoError(t, err)
+				assert.Equal(t, retained, archived, "the archive holds the redacted live line")
+				return
+			}
+			assert.Equal(t, raw, retained, "archival never rewrites or consumes the raw source")
+			if !json.Valid([]byte(tc.raw)) {
 				require.Error(t, sealErr)
 				if tc.wantError != "" {
 					assert.ErrorContains(t, sealErr, tc.wantError)

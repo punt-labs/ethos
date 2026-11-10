@@ -104,7 +104,7 @@ func TestCheckDelegatedWorkerArchetypes(t *testing.T) {
 		assert.Equal(t, "FAIL", r.Status)
 		assert.Contains(t, r.Detail, "implement (repo-local)")
 		assert.NotContains(t, r.Detail, "test (repo-local)")
-		assert.Contains(t, r.Detail, "ethos seed")
+		assert.Contains(t, r.Detail, "stale")
 	})
 
 	t.Run("only global has the archetype and it is stale → FAIL, names global", func(t *testing.T) {
@@ -224,10 +224,8 @@ func TestCheckDelegatedWorkerArchetypes(t *testing.T) {
 
 		r := CheckDelegatedWorkerArchetypes(storeRoot)
 		require.Equal(t, "FAIL", r.Status)
-		assert.Contains(t, r.Detail, "global (implement): run `ethos seed`",
+		assert.Contains(t, r.Detail, "global (implement): stale under",
 			"a stale global file's remedy must name ethos seed as the repair, not just mention it in passing: %s", r.Detail)
-		assert.Contains(t, r.Detail, "repairs a file",
-			"the remedy must say seed now fixes an additive gap automatically: %s", r.Detail)
 		assert.NotContains(t, r.Detail, "repo-local (",
 			"a purely global failure must not carry repo-local remedy text")
 	})
@@ -240,7 +238,7 @@ func TestCheckDelegatedWorkerArchetypes(t *testing.T) {
 		r := CheckDelegatedWorkerArchetypes(storeRoot)
 		require.Equal(t, "FAIL", r.Status)
 		wantPath := filepath.Join(repoArchDir(storeRoot))
-		assert.Contains(t, r.Detail, "repo-local (implement): `ethos seed` never writes a repo-local archetype",
+		assert.Contains(t, r.Detail, "repo-local (implement): stale shadowing copy under",
 			"a stale repo-local file's remedy must say seed does not reach it: %s", r.Detail)
 		assert.Contains(t, r.Detail, wantPath,
 			"the remedy must name the actual repo-local archetypes directory to fix: %s", r.Detail)

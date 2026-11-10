@@ -32,7 +32,7 @@ func appendLiveAuditReport(livePath, sealedDir, legacyPath string, entry auditEn
 			return nil, fmt.Errorf("marshaling entry: %w", mErr)
 		}
 		out, rule, marker := guardAuditLineFull(data)
-		report = guardReport{rule: rule, marker: marker}
+		report = guardReport{Rule: rule, Marker: marker}
 		return out, nil
 	})
 	if err != nil {

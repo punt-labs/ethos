@@ -3,7 +3,9 @@ package mission
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -89,9 +91,51 @@ func (s *ArchetypeStore) LoadLayer(name string) (*Archetype, string, error) {
 		if err == nil {
 			return a, "global", nil
 		}
+		if !errors.Is(err, ErrArchetypeNotFound) {
+			return nil, "", err
+		}
+	}
+	// The archetypes ethos ships are the third layer. A contract on disk
+	// keeps the rules its type carried when it was created: a closed
+	// report mission with no write_set still loads on a host whose
+	// repository and global trees never seeded that archetype.
+	if a, err := loadEmbeddedArchetype(name); err == nil {
+		return a, "embedded", nil
+	} else if !errors.Is(err, ErrArchetypeNotFound) {
 		return nil, "", err
 	}
 	return nil, "", fmt.Errorf("archetype %q: %w", name, ErrArchetypeNotFound)
+}
+
+// embeddedArchetypes is the archetypes compiled into the binary, registered
+// by internal/seed at init. mission cannot import seed (seed's tests import
+// mission), so seed hands the filesystem over instead.
+var embeddedArchetypes fs.FS
+
+// SetEmbeddedArchetypes registers the archetypes the binary ships, rooted so
+// that sidecar/archetypes/<name>.yaml resolves. internal/seed calls it at init.
+func SetEmbeddedArchetypes(fsys fs.FS) { embeddedArchetypes = fsys }
+
+// loadEmbeddedArchetype reads one of the archetypes compiled into the binary.
+func loadEmbeddedArchetype(name string) (*Archetype, error) {
+	if embeddedArchetypes == nil {
+		return nil, fmt.Errorf("archetype %q: %w", name, ErrArchetypeNotFound)
+	}
+	data, err := fs.ReadFile(embeddedArchetypes, path.Join("sidecar", "archetypes", name+".yaml"))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("archetype %q: %w", name, ErrArchetypeNotFound)
+		}
+		return nil, fmt.Errorf("reading embedded archetype %q: %w", name, err)
+	}
+	var a Archetype
+	if err := yaml.Unmarshal(data, &a); err != nil {
+		return nil, fmt.Errorf("parsing embedded archetype %q: %w", name, err)
+	}
+	if a.Name == "" {
+		a.Name = name
+	}
+	return &a, nil
 }
 
 // List returns the names of all discovered archetypes. Repo-local

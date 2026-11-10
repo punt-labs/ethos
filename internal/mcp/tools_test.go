@@ -816,9 +816,10 @@ func TestHandleDoctor_ReturnsCheckResults(t *testing.T) {
 
 	text := resultText(t, result)
 	// Isolated from optional checks enabled by the development checkout.
-	assert.Contains(t, text, "19 checks")
+	assert.Contains(t, text, "20 checks")
 	// Table should contain check names.
 	assert.Contains(t, text, "Identity directory")
+	assert.Contains(t, text, "Storage")
 	assert.Contains(t, text, "Human identity")
 	assert.Contains(t, text, "Default agent")
 	assert.Contains(t, text, "Duplicate fields")

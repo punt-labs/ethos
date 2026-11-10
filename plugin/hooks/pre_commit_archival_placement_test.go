@@ -237,7 +237,7 @@ func TestEnabledInstalledPreCommitArchivalPlacement(t *testing.T) {
 					require.Contains(t, string(live), `"record":"`+mode+`"`)
 					local := filepath.Join(store, ".punt-labs", "local", "ethos")
 					archive, published := installedAuditPaths(t, store, checkout, live)
-					policy := archivalTracePolicy{checkout: checkout, local: local, archive: archive, published: published, index: index, objects: filepath.Join(store, ".git", "objects"), full: mode == "full"}
+					policy := archivalTracePolicy{checkout: checkout, local: local, archive: archive, published: published, index: index, objects: filepath.Join(store, ".git", "objects"), global: archivalGlobalRoot(env), full: mode == "full"}
 					hook := filepath.Join(hooksDir, "pre-commit")
 					out, summary, calls, hookErr := traceInstalledArchive(t, strace, hook, checkout, env, fault.inject, policy)
 					interrupted := fault.name == "interrupted install"
@@ -303,4 +303,15 @@ func TestEnabledInstalledPreCommitArchivalPlacement(t *testing.T) {
 			}
 		}
 	}
+}
+
+// archivalGlobalRoot is the global ethos store the hook sees: ~/.punt-labs/ethos
+// under the HOME its environment names. The repair log it appends to lives there.
+func archivalGlobalRoot(env []string) string {
+	for _, e := range env {
+		if home, ok := strings.CutPrefix(e, "HOME="); ok && home != "" {
+			return filepath.Join(home, ".punt-labs", "ethos")
+		}
+	}
+	return ""
 }

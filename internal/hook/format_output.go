@@ -518,7 +518,7 @@ func formatVendor(w io.Writer, result string) error {
 		fmt.Fprintf(&b, "\n\n%s %d file(s) no longer in the closure%s: %s", head, len(pruned), suffix, strings.Join(pruned, ", "))
 	}
 	if verb == "Would vendor" {
-		b.WriteString("\n\nNothing written. Re-run with apply=true.")
+		b.WriteString("\n\nNothing written: this was a preview (apply=false).")
 	}
 	return emit(w, summary, b.String())
 }

@@ -48,17 +48,6 @@ var extDeleteCmd = &cobra.Command{
 	},
 }
 
-// Hidden alias so existing scripts using "ext del" still work.
-var extDelCmd = &cobra.Command{
-	Use:    "del <handle> <namespace> [key]",
-	Short:  "Delete extension values",
-	Hidden: true,
-	Args:   cobra.RangeArgs(2, 3),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runExtDel(cmd, args)
-	},
-}
-
 var extListCmd = &cobra.Command{
 	Use:   "list <handle>",
 	Short: "List extension namespaces for an identity",
@@ -72,8 +61,7 @@ func init() {
 	const localUsage = "Target the untracked <namespace>.local.yaml companion instead of the base file"
 	extSetCmd.Flags().BoolVar(&extLocal, "local", false, localUsage)
 	extDeleteCmd.Flags().BoolVar(&extLocal, "local", false, localUsage)
-	extDelCmd.Flags().BoolVar(&extLocal, "local", false, localUsage)
-	extCmd.AddCommand(extGetCmd, extSetCmd, extDeleteCmd, extDelCmd, extListCmd)
+	extCmd.AddCommand(extGetCmd, extSetCmd, extDeleteCmd, extListCmd)
 	rootCmd.AddCommand(extCmd)
 }
 

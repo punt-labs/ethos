@@ -8,42 +8,6 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
-// misplacedLocal distinguishes physical placement from both classification and
-// Git tracking. Published/full/exported trace is legitimate in the source tree;
-// live streams, scratch, overlays, locks and staging never are.
-func misplacedLocal(rel string) bool {
-	const source = ".punt-labs/ethos/"
-	if !strings.HasPrefix(rel, source) {
-		return false
-	}
-	if class, _, ok := layout.Classify(rel); ok && class == layout.Never {
-		return true
-	}
-	for _, pattern := range []string{
-		".punt-labs/ethos/**/*.lock",
-		".punt-labs/ethos/locks/**",
-		".punt-labs/ethos/tmp/**",
-		".punt-labs/ethos/receipts/**",
-		".punt-labs/ethos/missions/*/log.jsonl",
-		".punt-labs/ethos/missions/*/*.log.jsonl",
-		".punt-labs/ethos/missions/*/artifacts/**",
-		".punt-labs/ethos/missions/*/reflection-intent.yaml",
-		".punt-labs/ethos/missions/*/correction-intent.yaml",
-		".punt-labs/ethos/missions/*/log-*.quarantine",
-		".punt-labs/ethos/missions/*/log-*.jsonl.corrupt*",
-		".punt-labs/ethos/sessions/*/audit.jsonl",
-		".punt-labs/ethos/sessions/*.audit.jsonl",
-		".punt-labs/ethos/sessions/*/audit-*.quarantine",
-		".punt-labs/ethos/sessions/*/audit-*.jsonl.corrupt*",
-		".punt-labs/ethos/**/quarantine/**",
-	} {
-		if layout.Match(pattern, rel) {
-			return true
-		}
-	}
-	return false
-}
-
 // CheckPhysicalPlacement detects recognized local files physically under the
 // source tree, even when the classifier recognizes them and Git ignores them.
 // The root is explicit: RunAll checks C and, when different, shared S separately.
@@ -65,7 +29,7 @@ func CheckPhysicalPlacement(root string) Result {
 	}
 	var parts []string
 	if paths := sortedKeys(s.misplaced); len(paths) > 0 {
-		parts = append(parts, "machine-local files physically under source tree: "+strings.Join(paths, ", ")+" — quiesce old writers; copy/verify recognized legacy data into the shared .punt-labs/local/ethos/ before removing old paths; inspect agent-owned artifacts manually; do not add source-tree ignore exceptions")
+		parts = append(parts, "recognized legacy data found at "+strings.Join(paths, ", ")+" (agent-owned artifacts are not legacy)")
 	}
 	if skipped := sortedKeys(s.skipped); len(skipped) > 0 {
 		parts = append(parts, "not scanned: "+strings.Join(skipped, ", "))

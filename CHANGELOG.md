@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Ethos repairs its own storage (DES-084). Every CLI command, MCP call and
+  git hook runs the storage upgrade before reading storage: a store in any
+  layout since v3.11 is converted to the DES-079 layout, stamped, and the
+  user hears at most one line (`ethos: upgraded storage (N items; see
+  ~/.punt-labs/ethos/logs/repair.log)`). The user runs nothing. A repair
+  that cannot finish is retried on the next run; a loss is recorded in the
+  repair log, never fatal, and never blocks a command or a commit.
+- Product messages state what ethos found or did. None tells the user to
+  run a command or promises what a later run will do; a guard test keeps it
+  that way.
+- A mission contract loads by the rules its type carried when it was
+  created, on any host: the archetypes ethos ships are the last layer of
+  archetype resolution, so a closed report mission with no write set no
+  longer fails validation where the repository and global trees never
+  seeded that archetype.
+- A legacy session audit file archives under its own date. An earlier
+  import that gave the session an archive directory under another date no
+  longer causes the file to be refused as a collision and left in the
+  record tree.
+
+### Removed
+
+- `ethos repair`, `ethos audit quarantine`, `ethos audit migrate`,
+  `ethos mission scrub`, `ethos mission migrate`, `ethos adr migrate`,
+  `ethos session purge` and the hidden aliases `show`, `list`,
+  `resolve-agent`, `iam`, `create`, `ext del`, `session create|delete|
+  write-current|delete-current|roster` and `vendor --no-teams|--from`. The
+  storage upgrade does their work automatically. Each removed command exits
+  with git's usage error (`unknown command`). `identity get`,
+  `hook commit-trailers`, `hook commit-message` and `audit seal` stay,
+  hidden, because scripts and installed hook sections call them.
+- Legacy layout readers and the dead code behind them.
+
 ## [4.22.1] - 2026-11-09
 
 ### Fixed

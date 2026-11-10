@@ -2,6 +2,7 @@ package hook
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -117,13 +118,23 @@ func sealPolicyStreams(p layout.Policy, streams []audit.Stream, now time.Time, o
 		return res, nil
 	}
 	if err := audit.StagePublication(p, publish); err != nil {
-		return res, fmt.Errorf("full audit publication incomplete; local archive retained; retry in full mode: %w", err)
+		return res, fmt.Errorf("full audit publication incomplete; local archive retained: %w", err)
 	}
 	res.ChunksStaged = len(publish)
 	return res, nil
 }
 
 func sealPolicyStream(p layout.Policy, s audit.Stream, now time.Time, opts SealOptions) (int, []string, error) {
+	guard := LiveLineGuard(p, s.Namespace)
+	// New writes are guarded before their append. A live line may predate that
+	// guard: it is redacted in place, and a line whose ts is archived with
+	// another payload is dropped (the archive wins), before the union read
+	// would refuse it and before anything immutable is written.
+	if !opts.DryRun {
+		if _, err := audit.RedactLive(context.Background(), p, s, guard, 0); err != nil {
+			return 0, nil, err
+		}
+	}
 	data, err := audit.ReadStream(p, s)
 	if err != nil {
 		return 0, nil, err
@@ -141,11 +152,6 @@ func sealPolicyStream(p layout.Policy, s audit.Stream, now time.Time, opts SealO
 	dir, err := audit.ArchiveDir(p, s, date)
 	if err != nil {
 		return 0, nil, err
-	}
-	checkout := filepath.Dir(filepath.Dir(p.CheckoutRecordRoot()))
-	guard := sessionLineGuard(checkout)
-	if s.Namespace == audit.MissionNS {
-		guard = missionLineGuard(checkout)
 	}
 	session := ""
 	if s.Namespace == audit.MissionNS {
@@ -175,18 +181,27 @@ func sealPolicyStream(p layout.Policy, s audit.Stream, now time.Time, opts SealO
 		reportf(opts, "would archive %d line(s) for stream %s\n", len(pending), s.Key())
 		return len(pending), nil, nil
 	}
-	// New writes are guarded before their append. An older live source may
-	// not be safe to copy unchanged; do not rewrite an immutable identity and
+	// Any pending line a source other than the live file would still change
+	// (frozen legacy, a published copy) is not ours to rewrite; do not
 	// manufacture a conflict with its retained source on the next union read.
-	for _, l := range append(pending[:len(pending):len(pending)], data.Legacy...) {
+	for _, l := range pending {
 		out, _, _ := guard(l.Raw)
-		before, err := audit.CanonicalPayload(l.Raw)
+		changed, err := payloadChanged(l, out)
 		if err != nil {
 			return 0, nil, err
 		}
-		after, err := audit.CanonicalPayload(out)
-		if err != nil || !bytes.Equal(before, after) {
-			return 0, nil, fmt.Errorf("audit payload at ts %d requires redacted migration or explicit operator cleanup before immutable archival; original source retained", l.TS)
+		if changed {
+			return 0, nil, errNeedsMigration(l.TS)
+		}
+	}
+	for _, l := range data.Legacy {
+		out, _, _ := guard(l.Raw)
+		changed, err := payloadChanged(l, out)
+		if err != nil {
+			return 0, nil, err
+		}
+		if changed {
+			return 0, nil, errNeedsMigration(l.TS)
 		}
 	}
 	if len(pending) > 0 {
@@ -254,6 +269,23 @@ func sealPolicyStream(p layout.Policy, s audit.Stream, now time.Time, opts SealO
 		paths = append(paths, path)
 	}
 	return len(pending), paths, nil
+}
+
+// payloadChanged reports whether guarding l produced a different payload.
+func payloadChanged(l audit.Line, guarded []byte) (bool, error) {
+	before, err := audit.CanonicalPayload(l.Raw)
+	if err != nil {
+		return false, err
+	}
+	after, err := audit.CanonicalPayload(guarded)
+	if err != nil {
+		return false, fmt.Errorf("guarded audit payload at ts %d is not a valid line: %w", l.TS, err)
+	}
+	return !bytes.Equal(before, after), nil
+}
+
+func errNeedsMigration(ts int64) error {
+	return fmt.Errorf("audit payload at ts %d sits in a published or frozen source that ethos does not rewrite; it was left in place and the live data kept", ts)
 }
 
 func policyChunkName(s audit.Stream, first, last int64) string {
@@ -333,21 +365,21 @@ func QueryAuditByDelegationWithPolicy(p layout.Policy, globalSessionsDir, delega
 			if err != nil && !os.IsNotExist(err) {
 				return nil, err
 			}
-			lines, err = redactLegacyLines(lines, checkout)
+			lines, err = redactLegacyLines(context.Background(), lines, checkout)
 			if err != nil {
 				return nil, err
 			}
 			for _, l := range lines {
-				l.raw, _, _ = legacyGuard(l.raw)
-				l.key, err = audit.CheckLegacyIdentity(audit.SessionNS, l.raw, legacyPayloads[id])
+				l.Raw, _, _ = legacyGuard(l.Raw)
+				l.Key, err = audit.CheckLegacyIdentity(audit.SessionNS, l.Raw, legacyPayloads[id])
 				if err != nil {
 					return nil, fmt.Errorf("global legacy session %s: %w", id, err)
 				}
-				if legacyCounts[id][l.key] > 0 {
-					legacyCounts[id][l.key]--
+				if legacyCounts[id][l.Key] > 0 {
+					legacyCounts[id][l.Key]--
 					continue
 				}
-				e, err := decodeAuditLine(l.raw)
+				e, err := decodeAuditLine(l.Raw)
 				if err != nil {
 					return nil, err
 				}

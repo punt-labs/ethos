@@ -188,6 +188,13 @@ func ensureGitignoreWithIO(repoRoot string, p layout.Policy, io gitignoreIO) (ac
 // are left alone. Unknown comments/patterns terminate the recognized block;
 // broader legacy ignore cleanup and data migration require operator review.
 func removeLegacyManagedRules(data []byte) ([]byte, []string) {
+	return retireLegacyManagedRules(data, nil)
+}
+
+// retireLegacyManagedRules is removeLegacyManagedRules except that a pattern in
+// keep stays in the file. A sessions ignore line is not one of ours (no released
+// block wrote it), so it ends the block and stays as user content.
+func retireLegacyManagedRules(data []byte, keep map[string]bool) ([]byte, []string) {
 	lines := strings.SplitAfter(string(data), "\n")
 	managed := false
 	var retired []string
@@ -201,6 +208,10 @@ func removeLegacyManagedRules(data []byte) ([]byte, []string) {
 				eol = "\r\n"
 			}
 			out.WriteString(gitignoreMarker + eol)
+			continue
+		}
+		if managed && keep[text] {
+			out.WriteString(line)
 			continue
 		}
 		if managed {
@@ -260,8 +271,26 @@ func preflightLegacyIgnores(repoRoot string) error {
 // Old writers must be quiesced for migration; it cannot fence an old process
 // creating another misplaced file after the scan.
 func preflightIgnoreRetirement(repoRoot string, retired []string) error {
-	if len(retired) == 0 {
+	paths, err := ignoreDependents(repoRoot, retired)
+	if err != nil {
+		return err
+	}
+	if len(paths) == 0 {
 		return nil
+	}
+	quoted := make([]string, len(paths))
+	for i, p := range paths {
+		quoted[i] = fmt.Sprintf("%q", p)
+	}
+	return fmt.Errorf("%w: existing protected paths still depend on them: %s; ignore files unchanged", errRetirementRefused, strings.Join(quoted, ", "))
+}
+
+// ignoreDependents returns, sorted, the existing absolute paths outside the
+// new local zone that the retiring patterns match. An empty result means the
+// patterns can be retired without exposing any file.
+func ignoreDependents(repoRoot string, retired []string) ([]string, error) {
+	if len(retired) == 0 {
+		return nil, nil
 	}
 	args := []string{"ls-files", "-z", "--cached", "--others", "--ignored"}
 	for _, pattern := range retired {
@@ -273,12 +302,12 @@ func preflightIgnoreRetirement(repoRoot string, retired []string) error {
 		Git: "git", Dir: repoRoot, Env: gitenv.Parsed(), Args: args, Stderr: &stderr,
 	})
 	if err != nil {
-		return fmt.Errorf("checking legacy ignore protections in %s: %w: %s; refusing to retire rules", repoRoot, err, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("checking legacy ignore protections in %s: %w: %s; refusing to retire rules", repoRoot, err, strings.TrimSpace(stderr.String()))
 	}
 	if stderr.Len() > 0 {
 		// ls-files can exit zero after an unreadable-directory warning. That
 		// is an incomplete scan, not proof that retirement is safe.
-		return fmt.Errorf("checking legacy ignore protections in %s: %s; refusing to retire rules after an incomplete scan", repoRoot, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("checking legacy ignore protections in %s: %s; refusing to retire rules after an incomplete scan", repoRoot, strings.TrimSpace(stderr.String()))
 	}
 	seen := make(map[string]bool)
 	var paths []string
@@ -291,7 +320,7 @@ func preflightIgnoreRetirement(repoRoot string, retired []string) error {
 			if !localChecked {
 				localSafe, err = unnegatedLocalIgnore(repoRoot)
 				if err != nil {
-					return err
+					return nil, err
 				}
 				localChecked = true
 			}
@@ -303,16 +332,13 @@ func preflightIgnoreRetirement(repoRoot string, retired []string) error {
 		if _, err := os.Lstat(path); os.IsNotExist(err) {
 			continue // a tracked deletion is not existing private data
 		} else if err != nil {
-			return fmt.Errorf("examining legacy protected path %q: %w; refusing to retire rules", path, err)
+			return nil, fmt.Errorf("examining legacy protected path %q: %w; refusing to retire rules", path, err)
 		}
 		seen[rel] = true
-		paths = append(paths, fmt.Sprintf("%q", path))
-	}
-	if len(paths) == 0 {
-		return nil
+		paths = append(paths, path)
 	}
 	sort.Strings(paths)
-	return fmt.Errorf("%w: existing protected paths require migration or operator cleanup (quiesce old writers, copy and verify before removal): %s; ignore files unchanged", errRetirementRefused, strings.Join(paths, ", "))
+	return paths, nil
 }
 
 // unnegatedLocalIgnore proves the replacement directory rule is sufficient for
@@ -776,29 +802,11 @@ func trackedRuntimeFiles(repoRoot string) ([]string, error) {
 	return files, nil
 }
 
-// trackedRuntimeWarning is the loud remedy line for files that are already
-// tracked despite the .gitignore. It names the count, the files, and a
-// copy-pasteable command; enable does not run the removal itself. The command
-// uses the -- separator and shell-quotes each path, so paths with spaces or
-// special characters survive the copy-paste.
+// trackedRuntimeWarning states what ethos found for files that are already
+// tracked despite the .gitignore: it names the count and the files, and says
+// they were left tracked. It states the condition and promises nothing.
 func trackedRuntimeWarning(files []string) string {
-	quoted := make([]string, len(files))
-	for i, f := range files {
-		quoted[i] = shellQuote(f)
-	}
 	return fmt.Sprintf(
-		"%d ethos runtime file(s) are already git-tracked (%s); the .gitignore does not untrack them — run: git rm -r --cached -- %s  then commit",
-		len(files), strings.Join(files, ", "), strings.Join(quoted, " "))
-}
-
-// shellQuote wraps s in single quotes for POSIX shells. Each embedded single
-// quote is replaced by the sequence
-//
-//	'\''
-//
-// (close-quote, escaped quote, reopen-quote), so the result is a single shell
-// word safe to paste into a command line regardless of spaces or
-// metacharacters.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+		"%d ethos runtime file(s) are git-tracked (%s); left tracked.",
+		len(files), strings.Join(files, ", "))
 }

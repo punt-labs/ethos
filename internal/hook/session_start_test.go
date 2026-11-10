@@ -2,6 +2,7 @@ package hook
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -904,7 +905,7 @@ func TestHandleSessionStart_RefreshHooks(t *testing.T) {
 			},
 			wantContext: []string{
 				"Ethos could not refresh stale git hook section(s): boom.",
-				"Commits may be blocked; run `ethos enable` or `ethos doctor`.",
+				"Commits may be blocked.",
 			},
 		},
 		{
@@ -922,14 +923,21 @@ func TestHandleSessionStart_RefreshHooks(t *testing.T) {
 			refresh: func(_, _ string) (HookRefresh, error) {
 				return HookRefresh{NonShell: []string{"pre-commit"}, Warnings: []string{"non-shell shebang"}}, nil
 			},
-			wantContext: []string{"did not chain the seal section into pre-commit: non-shell hook; run `ethos doctor`."},
+			wantContext: []string{"did not chain the seal section into pre-commit: non-shell hook, so the seal never runs from it."},
+		},
+		{
+			name: "a malformed section states the condition and promises no repair",
+			refresh: func(_, _ string) (HookRefresh, error) {
+				return HookRefresh{Malformed: []HookProblem{{Hook: "commit-msg", Cause: "it has a BEGIN with no matching END"}}}, nil
+			},
+			wantContext: []string{"Ethos could not refresh the commit-msg section: it has a BEGIN with no matching END; the seal section was not refreshed."},
 		},
 		{
 			name: "a tracked hook left stale is told to the session",
 			refresh: func(_, _ string) (HookRefresh, error) {
 				return HookRefresh{Tracked: []string{"pre-commit"}}, nil
 			},
-			wantContext: []string{"did not rewrite the stale pre-commit hook"},
+			wantContext: []string{"left the stale pre-commit hook in place: core.hooksPath puts it in a tracked file"},
 		},
 		{
 			name: "a chained foreign hook is worded as chained",
@@ -943,7 +951,7 @@ func TestHandleSessionStart_RefreshHooks(t *testing.T) {
 			refresh: func(_, _ string) (HookRefresh, error) {
 				return HookRefresh{Shared: []string{"pre-commit"}}, nil
 			},
-			wantContext: []string{"core.hooksPath is shared outside this repo"},
+			wantContext: []string{"left the stale pre-commit hook in place: core.hooksPath is shared outside this repo"},
 		},
 		{
 			name: "a missing tracked hook says not installed",
@@ -978,6 +986,8 @@ func TestHandleSessionStart_RefreshHooks(t *testing.T) {
 			for _, w := range tt.wantContext {
 				assert.Contains(t, out, w)
 			}
+			assert.NotContains(t, out, "ethos enable", "repair is automatic; the user is never told to act")
+			assert.NotContains(t, out, "next session start", "a message states the condition, never a future repair")
 		})
 	}
 }
@@ -992,7 +1002,8 @@ func TestRefreshStaleHooks_StoreFailure(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos", "enabled"), nil, 0o644))
 		got := refreshStaleHooks(refresh, resolve.Located{Checkout: root, Store: root, StoreErr: errors.New("store unreadable")})
 		assert.Contains(t, got, "Git hook refresh skipped: store unreadable.")
-		assert.Contains(t, got, "run `ethos doctor`")
+		assert.Contains(t, got, "A stale seal section may block commits.")
+		assert.NotContains(t, got, "ethos doctor")
 	})
 	t.Run("dormant repo hears nothing", func(t *testing.T) {
 		root := t.TempDir()
@@ -1002,7 +1013,7 @@ func TestRefreshStaleHooks_StoreFailure(t *testing.T) {
 	t.Run("unlocated checkout is told, naming the cause", func(t *testing.T) {
 		got := refreshStaleHooks(refresh, resolve.Located{Checkout: "/c", Store: "/s", CheckoutErr: errors.New("no checkout")})
 		assert.Contains(t, got, "Git hook refresh skipped: checkout not located: no checkout.")
-		assert.Contains(t, got, "run `ethos doctor`")
+		assert.NotContains(t, got, "ethos doctor")
 	})
 	assert.False(t, called, "refresh must not run against an unlocated store or checkout")
 }
@@ -1025,4 +1036,66 @@ func TestHandleSessionStart_PolicyIssueDoesNotSkipRefresh(t *testing.T) {
 		Store: identity.NewStore(dir), Sessions: session.NewStore(dir), Issue: issue, RefreshHooks: refresh})
 	assert.Equal(t, 1, calls)
 	assert.Contains(t, out, "refreshed stale git hook section(s) at session start: pre-commit")
+}
+
+// The repair line goes into the session's JSON note only, and a repair error is
+// the repair log's to hold: neither reaches stderr.
+func TestHandleSessionStart_RepairNeverReachesStderr(t *testing.T) {
+	for name, repair := range map[string]func(context.Context) (int, error){
+		"a repaired item": func(context.Context) (int, error) { return 3, nil },
+		"a repair error":  func(context.Context) (int, error) { return 0, errors.New("boom") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, ss := setupIdentityWithAttributes(t, &identity.Identity{Name: "A", Handle: "a", Kind: "human"}, "", "")
+			var stdout string
+			stderr := captureStderr(t, func() {
+				stdout = captureSessionStartOutput(t, `{"session_id":"s-stderr"}`, SessionStartDeps{Store: s, Sessions: ss, Repair: repair})
+			})
+			assert.NotContains(t, stderr, "upgraded storage")
+			assert.NotContains(t, stderr, "session repair")
+			assert.NotContains(t, stderr, "boom")
+			if name == "a repaired item" {
+				assert.Contains(t, stdout, "upgraded storage (3 items")
+			}
+		})
+	}
+}
+
+func TestHandleSessionStart_RepairNote(t *testing.T) {
+	tests := []struct {
+		name     string
+		repair   func(context.Context) (int, error)
+		wantNote string
+		wantNone bool
+	}{
+		{
+			name:     "repaired items are told once, naming what ethos did",
+			repair:   func(context.Context) (int, error) { return 3, nil },
+			wantNote: "ethos: upgraded storage (3 items; see ~/.punt-labs/ethos/logs/repair.log)",
+		},
+		{
+			name:     "nothing repaired says nothing",
+			repair:   func(context.Context) (int, error) { return 0, nil },
+			wantNone: true,
+		},
+		{
+			name:     "a repair error never fails the session or reaches the user",
+			repair:   func(context.Context) (int, error) { return 0, errors.New("boom") },
+			wantNone: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, ss := setupIdentityWithAttributes(t, &identity.Identity{Name: "A", Handle: "a", Kind: "human"}, "", "")
+			var calls int
+			repair := func(ctx context.Context) (int, error) { calls++; return tt.repair(ctx) }
+			out := captureSessionStartOutput(t, `{"session_id":"s-repair"}`, SessionStartDeps{Store: s, Sessions: ss, Repair: repair})
+			assert.Equal(t, 1, calls)
+			if tt.wantNone {
+				assert.NotContains(t, out, "upgraded storage")
+				return
+			}
+			assert.Contains(t, out, tt.wantNote)
+		})
+	}
 }

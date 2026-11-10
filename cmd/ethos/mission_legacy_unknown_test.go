@@ -54,6 +54,9 @@ func cliLegacyUnknownFixture(t *testing.T, round int, detail string) (*cliSubpro
 		}
 		require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(path), "reflections.yaml"), body, 0o600))
 	}
+	// Stamp after the plant: the legacy contract must reach the reader as
+	// planted, not converted by the storage upgrade the command runs first.
+	stampFixture(t, se.home, se.repo)
 	p, err := layout.NewRepository(se.repo, se.repo, layout.RecordBlame)
 	require.NoError(t, err)
 	s := mission.NewRepositoryStore(p, filepath.Join(se.home, ".punt-labs", "ethos"))
@@ -73,6 +76,11 @@ func TestCLIMissionLegacyUnknown(t *testing.T) {
 			path := mission.RepoStatePath(se.repo, "missions", id, "contract.yaml")
 			before, err := os.ReadFile(path)
 			require.NoError(t, err)
+			// The fixture's layout stamps are the only local and global state
+			// before the first command; a read-only command adds nothing to
+			// either tree.
+			localBefore := auditLeafCLISnapshot(t, filepath.Join(se.repo, ".punt-labs", "local"))
+			homeBefore := auditLeafCLISnapshot(t, filepath.Join(se.home, ".punt-labs"))
 			stdout, stderr, exit := runCLI(t, se, "mission", "reflections", id, "--json")
 			require.Equal(t, 0, exit, stderr)
 			t.Logf("JSON: %s", stdout)
@@ -110,8 +118,8 @@ func TestCLIMissionLegacyUnknown(t *testing.T) {
 			loaded, err := s.Load(id)
 			require.NoError(t, err)
 			assert.Nil(t, loaded.RoundDecisions)
-			assert.NoDirExists(t, filepath.Join(se.repo, ".punt-labs", "local"), "read-only entry points must not initialize local state")
-			assert.NoDirExists(t, filepath.Join(se.home, ".punt-labs"), "read-only entry points must not initialize global state")
+			assert.Equal(t, localBefore, auditLeafCLISnapshot(t, filepath.Join(se.repo, ".punt-labs", "local")), "read-only entry points must not initialize local state")
+			assert.Equal(t, homeBefore, auditLeafCLISnapshot(t, filepath.Join(se.home, ".punt-labs")), "read-only entry points must not initialize global state")
 		})
 	}
 }

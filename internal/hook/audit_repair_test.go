@@ -87,12 +87,9 @@ func TestRepositoryPublishedQuarantineCloneRetainsGap(t *testing.T) {
 	require.Len(t, diag.Gaps, 1, "fresh snapshot must distinguish unavailable history from empty success")
 	require.Equal(t, int64(100), diag.Gaps[0].First)
 	require.Equal(t, int64(200), diag.Gaps[0].Last)
-	files, err := filepath.Glob(filepath.Join(p.LocalRoot(), "quarantine", "*", "*.corrupt"))
+	files, err := filepath.Glob(filepath.Join(p.LocalRoot(), "quarantine", "*", "*"))
 	require.NoError(t, err)
-	require.Len(t, files, 1)
-	retained, err := os.ReadFile(files[0])
-	require.NoError(t, err)
-	require.Equal(t, "corrupt original\n", string(retained))
+	require.Empty(t, files, "no raw copy of the damaged bytes is kept once recovery completes")
 	require.NotContains(t, policyGit(t, root, "ls-files"), ".corrupt")
 }
 

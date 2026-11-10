@@ -2,6 +2,7 @@ package hook
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -88,17 +89,17 @@ func TestRedactLegacyLines_UnknownFields(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	repo := t.TempDir()
 	lines := []rawAuditLine{
-		{raw: []byte(`{"ts":"2026-05-22T10:00:00Z","session":"s","tool":"Bash","tool_input":{"command":"ls"},"cwd":"/home/alice/w","audit_error":"open -I/home/alice/x"}`)},
-		{raw: []byte(`{"ts":"2026-05-22T10:00:01Z","session":"s","tool":"Read","tool_input":{"file_path":"x"}}`)},
+		{Raw: []byte(`{"ts":"2026-05-22T10:00:00Z","session":"s","tool":"Bash","tool_input":{"command":"ls"},"cwd":"/home/alice/w","audit_error":"open -I/home/alice/x"}`)},
+		{Raw: []byte(`{"ts":"2026-05-22T10:00:01Z","session":"s","tool":"Read","tool_input":{"file_path":"x"}}`)},
 	}
-	out, err := redactLegacyLines(lines, repo)
+	out, err := redactLegacyLines(context.Background(), lines, repo)
 	require.NoError(t, err)
-	assert.NotContains(t, string(out[0].raw), "alice")
+	assert.NotContains(t, string(out[0].Raw), "alice")
 	var m1 map[string]any
-	require.NoError(t, json.Unmarshal(lines[1].raw, &m1))
+	require.NoError(t, json.Unmarshal(lines[1].Raw, &m1))
 	want1, err := json.Marshal(m1)
 	require.NoError(t, err)
-	assert.Equal(t, string(want1), string(out[1].raw), "a clean line is written re-marshalled")
+	assert.Equal(t, string(want1), string(out[1].Raw), "a clean line is written re-marshalled")
 }
 
 // TestEvaluatePreconditions_CountsReadsIgnoredForTheirFormat: a legacy Read
@@ -150,9 +151,9 @@ func TestGuardAuditLine_MarksRewrittenLines(t *testing.T) {
 	require.NoError(t, err, string(cleaned))
 }
 
-// Immutable identities cannot be rewritten during seal. An older unguarded
-// source stays available for explicit redacted migration, never publication.
-func TestSealRepo_RefusesRewritingLeakingLiveLines(t *testing.T) {
+// A live line written before redaction existed is rewritten through the guard
+// before it is archived; the clean line next to it is untouched.
+func TestSealRepo_RedactsLeakingLiveLinesInPlace(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	repo := t.TempDir()
 	initGitRepo(t, repo)
@@ -163,7 +164,11 @@ func TestSealRepo_RefusesRewritingLeakingLiveLines(t *testing.T) {
 		`{"ts":"` + audit.FormatLineTS(200) + `","session":"` + sid + `","tool":"Read"}` + "\n"
 	require.NoError(t, os.WriteFile(live, []byte(body), 0o600))
 
-	assertImmutableSealRefuses(t, repo, sid, []byte(body))
+	lines := sealMigratesLive(t, repo, sid, []byte(body))
+	require.Len(t, lines, 2)
+	assert.NotContains(t, lines[0], "/home/alice")
+	assert.Contains(t, lines[0], `"redacted":true`)
+	assert.Equal(t, strings.Split(body, "\n")[1], lines[1], "a clean line is unchanged byte for byte")
 }
 
 // TestGuardAuditLine_CaseCollidingKeys: keys that differ only in case would
@@ -183,8 +188,9 @@ func TestGuardAuditLine_CaseCollidingKeys(t *testing.T) {
 	assert.Contains(t, string(out), "audit_error")
 }
 
-// Ambiguous old identities are refused rather than assigned a rewritten ts.
-func TestSealRepo_RefusesCaseCollidingTs(t *testing.T) {
+// An ambiguous old identity becomes a loss marker that keeps the ts it was read
+// with, so the identity is not reassigned.
+func TestSealRepo_MarksCaseCollidingTsAsLoss(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	repo := t.TempDir()
 	initGitRepo(t, repo)
@@ -195,7 +201,10 @@ func TestSealRepo_RefusesCaseCollidingTs(t *testing.T) {
 		`{"ts":"` + audit.FormatLineTS(150) + `","TS":"` + audit.FormatLineTS(200) + `","session":"` + sid + `","tool":"Read"}` + "\n"
 	require.NoError(t, os.WriteFile(live, []byte(body), 0o600))
 
-	assertImmutableSealRefuses(t, repo, sid, []byte(body))
+	lines := sealMigratesLive(t, repo, sid, []byte(body))
+	require.Len(t, lines, 2)
+	assert.Contains(t, lines[1], "audit_error", "a loss marker")
+	assert.Contains(t, lines[1], audit.FormatLineTS(200), "the marker keeps the ts the reader took from the line")
 }
 
 // TestGuardAuditLine_KeepsCaseVariantKeysInsideToolInput: tool_input is a map,
@@ -209,11 +218,11 @@ func TestGuardAuditLine_KeepsCaseVariantKeysInsideToolInput(t *testing.T) {
 	assert.Contains(t, string(out), `"Content-Type":"a"`)
 	assert.Contains(t, string(out), `"content-type":"b"`)
 
-	lines, err := redactLegacyLines([]rawAuditLine{{raw: in}}, t.TempDir())
+	lines, err := redactLegacyLines(context.Background(), []rawAuditLine{{Raw: in}}, t.TempDir())
 	require.NoError(t, err)
-	assert.Contains(t, string(lines[0].raw), `"Content-Type":"a"`)
-	assert.Contains(t, string(lines[0].raw), `"content-type":"b"`)
-	assert.NotContains(t, string(lines[0].raw), "audit_error")
+	assert.Contains(t, string(lines[0].Raw), `"Content-Type":"a"`)
+	assert.Contains(t, string(lines[0].Raw), `"content-type":"b"`)
+	assert.NotContains(t, string(lines[0].Raw), "audit_error")
 }
 
 // TestGuardAuditLine_UnicodeFoldedHeaderKeys: encoding/json folds ſ onto s,
@@ -438,12 +447,12 @@ func TestRedactLegacyLines_DuplicateKeyInTheOriginalBytes(t *testing.T) {
 	var out []rawAuditLine
 	notice := testhelpers.CaptureStderr(t, func() {
 		var err error
-		out, err = redactLegacyLines([]rawAuditLine{{raw: raw}}, t.TempDir())
+		out, err = redactLegacyLines(context.Background(), []rawAuditLine{{Raw: raw}}, t.TempDir())
 		require.NoError(t, err)
 		sayMigrateNotes(out)
 	})
 	assert.Contains(t, notice, "duplicate key 1 (line 1)")
-	e, err := decodeAuditLine(out[0].raw)
+	e, err := decodeAuditLine(out[0].Raw)
 	require.NoError(t, err)
 	assert.Equal(t, "b", e.Session)
 	assert.True(t, e.Redacted)
@@ -507,11 +516,11 @@ func TestRedactLegacyLines_DuplicateKeyKeepsOwnHomeAsTilde(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	raw := []byte(`{"ts":"2026-05-22T10:00:00Z","session":"a","session":"b","tool":"Read","tool_input":{"file_path":"` + home + `/x"}}`)
-	out, err := redactLegacyLines([]rawAuditLine{{raw: raw}}, t.TempDir())
+	out, err := redactLegacyLines(context.Background(), []rawAuditLine{{Raw: raw}}, t.TempDir())
 	require.NoError(t, err)
-	assert.Contains(t, string(out[0].raw), `"file_path":"~/x"`)
-	assert.NotContains(t, string(out[0].raw), home)
-	e, err := decodeAuditLine(out[0].raw)
+	assert.Contains(t, string(out[0].Raw), `"file_path":"~/x"`)
+	assert.NotContains(t, string(out[0].Raw), home)
+	e, err := decodeAuditLine(out[0].Raw)
 	require.NoError(t, err)
 	assert.Equal(t, "b", e.Session)
 	assert.True(t, e.Redacted)
@@ -529,13 +538,13 @@ func TestRedactLegacyLines_InvalidTextInTheOriginalBytes(t *testing.T) {
 			var out []rawAuditLine
 			notice := testhelpers.CaptureStderr(t, func() {
 				var err error
-				out, err = redactLegacyLines([]rawAuditLine{{raw: raw}}, t.TempDir())
+				out, err = redactLegacyLines(context.Background(), []rawAuditLine{{Raw: raw}}, t.TempDir())
 				require.NoError(t, err)
 				sayMigrateNotes(out)
 			})
 			assert.Contains(t, notice, "loss marker")
-			assert.Contains(t, string(out[0].raw), "audit_error")
-			assert.NotContains(t, string(out[0].raw), "tool_input")
+			assert.Contains(t, string(out[0].Raw), "audit_error")
+			assert.NotContains(t, string(out[0].Raw), "tool_input")
 		})
 	}
 }
@@ -595,18 +604,18 @@ func TestRedactLegacyLines_OneNoticePerChangedLine(t *testing.T) {
 	t.Setenv("HOME", home)
 	ts := "2026-05-22T10:00:00Z"
 	lines := []rawAuditLine{
-		{raw: []byte(`{"ts":"` + ts + `","session":"a","tool":"Read","tool_input":{"file_path":"` + home + `/x"}}`)},
-		{raw: []byte(`{"ts":"` + ts + `","session":"a","tool":"Bash","tool_input":{"command":"curl -H 'Authorization: Bearer abcdefghijklmnop'"}}`)},
-		{raw: []byte(`{"ts":"` + ts + `","session":"a","tool":"Bash","audit_error":"mail jane@example.org"}`)},
-		{raw: []byte(`{"ts":"` + ts + `","session":"a","tool":"Read","tool_input":{"file_path":"x"}}`)},
+		{Raw: []byte(`{"ts":"` + ts + `","session":"a","tool":"Read","tool_input":{"file_path":"` + home + `/x"}}`)},
+		{Raw: []byte(`{"ts":"` + ts + `","session":"a","tool":"Bash","tool_input":{"command":"curl -H 'Authorization: Bearer abcdefghijklmnop'"}}`)},
+		{Raw: []byte(`{"ts":"` + ts + `","session":"a","tool":"Bash","audit_error":"mail jane@example.org"}`)},
+		{Raw: []byte(`{"ts":"` + ts + `","session":"a","tool":"Read","tool_input":{"file_path":"x"}}`)},
 	}
 	notice := testhelpers.CaptureStderr(t, func() {
-		out, err := redactLegacyLines(lines, t.TempDir())
+		out, err := redactLegacyLines(context.Background(), lines, t.TempDir())
 		require.NoError(t, err)
 		sayMigrateNotes(out)
 	})
 	assert.Equal(t, 1, strings.Count(notice, "\n"), notice)
-	assert.Contains(t, notice, "audit migrate")
+	assert.Contains(t, notice, "audit import")
 	assert.Contains(t, notice, "3 of 4 line(s)")
 	assert.Contains(t, notice, "home path or content 3 (lines 1, 2, 3)")
 	assert.NotContains(t, notice, "abcdefghijklmnop")
@@ -744,9 +753,9 @@ func assertRedactedWithMatchingHash(t *testing.T, line []byte) {
 	assert.Equal(t, toolInputPreview(env), e.Preview, "the preview is of the stored input")
 }
 
-// A credential-bearing older immutable live line cannot be auto-published or
-// silently rewritten; its source is retained and the manual operation fails.
-func TestSealRepo_RefusesACredentialInAnOlderLiveLine(t *testing.T) {
+// A credential-bearing older live line is redacted in the live file before it
+// is archived; the credential survives in neither.
+func TestSealRepo_RedactsACredentialInAnOlderLiveLine(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	repo := t.TempDir()
 	initGitRepo(t, repo)
@@ -762,7 +771,12 @@ func TestSealRepo_RefusesACredentialInAnOlderLiveLine(t *testing.T) {
 	body := credentialLiveLine(100, sid) + string(cleanLine) + "\n"
 	require.NoError(t, os.WriteFile(live, []byte(body), 0o600))
 
-	assertImmutableSealRefuses(t, repo, sid, []byte(body))
+	lines := sealMigratesLive(t, repo, sid, []byte(body))
+	require.Len(t, lines, 2)
+	for _, l := range lines {
+		assert.NotContains(t, l, "hunter2")
+	}
+	assert.Equal(t, string(cleanLine), lines[1], "a clean line is unchanged byte for byte")
 }
 
 // TestQuarantineChunk_RecoveryRedactsACredentialInALiveLine: the live lines
@@ -782,12 +796,12 @@ func TestQuarantineChunk_RecoveryRedactsACredentialInALiveLine(t *testing.T) {
 	require.NoError(t, os.WriteFile(live, []byte(credentialLiveLine(150, sid)), 0o600))
 
 	_, err = QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
-	require.ErrorContains(t, err, "requires redacted migration")
-	b, err := os.ReadFile(live)
-	require.NoError(t, err)
-	assert.Equal(t, credentialLiveLine(150, sid), string(b), "recovery cannot rewrite a retained identity")
-	out, _, _ := sessionLineGuard(repo)(bytes.TrimSpace(b))
-	assertRedactedWithMatchingHash(t, out)
+	require.NoError(t, err, "recovery redacts the line it re-seals instead of refusing")
+	// The published source gets only a gap marker; the recovered chunk lands
+	// in the local archive.
+	lines := chunkLines(t, archiveSessionDir(t, repo, sid, time.Now().UTC().Format(audit.SessionDateFormat)))
+	require.Len(t, lines, 1)
+	assertRedactedWithMatchingHash(t, []byte(lines[0]))
 }
 
 // olderLiveLine is a live line an older binary wrote with extra top-level fields.
@@ -800,38 +814,29 @@ func olderLiveLine(ts int64, sid string, extra map[string]any) string {
 	return string(b) + "\n"
 }
 
-func assertImmutableSealRefuses(t *testing.T, repo, sid string, original []byte) {
+// sealMigratesLive seals a live file written before redaction existed and
+// returns the archived lines. The live file is rewritten through the writer's
+// guard first, so the archive holds exactly the lines the live file now holds
+// and the original bytes survive nowhere.
+func sealMigratesLive(t *testing.T, repo, sid string, original []byte) []string {
 	t.Helper()
 	_, err := SealRepo(repo, time.Now().UTC(), SealOptions{})
-	require.ErrorContains(t, err, "requires redacted migration")
-	retained, err := os.ReadFile(liveAuditPath(repo, sid))
 	require.NoError(t, err)
-	assert.Equal(t, original, retained, "manual failure retains the original live source")
-	dir := archiveSessionDir(t, repo, sid, "1970-01-01")
-	chunks, err := filepath.Glob(filepath.Join(dir, "audit-*.jsonl"))
+	live, err := os.ReadFile(liveAuditPath(repo, sid))
 	require.NoError(t, err)
-	assert.Empty(t, chunks, "unsafe immutable history was not archived or published")
+	assert.NotEqual(t, original, live, "the live source was rewritten through the guard")
+	lines := chunkLines(t, archiveSessionDir(t, repo, sid, "1970-01-01"))
+	assert.Equal(t, strings.Split(strings.TrimSpace(string(live)), "\n"), lines, "the archive holds the redacted live lines")
+	return lines
 }
 
-// sealedLines first verifies refusal of the unguarded old fixture, then passes
-// it through the writer's guard explicitly. The newly guarded fixture must seal
-// unchanged. This tests the guard without treating seal as an identity rewrite.
+// sealedLines seals the unguarded old fixture already on disk and returns the
+// archived lines.
 func sealedLines(t *testing.T, repo, sid string) []string {
 	t.Helper()
 	original, err := os.ReadFile(liveAuditPath(repo, sid))
 	require.NoError(t, err)
-	assertImmutableSealRefuses(t, repo, sid, original)
-	var body []byte
-	for _, raw := range audit.SplitLines(original) {
-		out, _, _ := sessionLineGuard(repo)(raw)
-		body = append(body, out...)
-		body = append(body, '\n')
-	}
-	require.NoError(t, os.WriteFile(liveAuditPath(repo, sid), body, 0o600))
-	_, err = SealRepo(repo, time.Now().UTC(), SealOptions{})
-	require.NoError(t, err)
-	dir := archiveSessionDir(t, repo, sid, "1970-01-01")
-	return chunkLines(t, dir)
+	return sealMigratesLive(t, repo, sid, original)
 }
 
 func chunkLines(t *testing.T, dir string) []string {
@@ -912,9 +917,8 @@ func TestSessionLineGuard_RedactsHeadersAndUnknownFields(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
 		require.NoError(t, os.WriteFile(live, []byte(olderLiveLine(150, sid, extra)), 0o600))
 		_, err = QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
-		require.ErrorContains(t, err, "requires redacted migration")
-		out, _, _ := sessionLineGuard(repo)([]byte(olderLiveLine(150, sid, extra)))
-		check(t, []string{string(out)})
+		require.NoError(t, err, "recovery redacts the line it re-seals instead of refusing")
+		check(t, chunkLines(t, archiveSessionDir(t, repo, sid, time.Now().UTC().Format(audit.SessionDateFormat))))
 	})
 }
 

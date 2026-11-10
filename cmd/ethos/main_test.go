@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"os/exec"
 	"runtime/debug"
@@ -210,43 +209,4 @@ func TestExitCode2_UnknownCommand(t *testing.T) {
 	exitErr, ok := err.(*exec.ExitError)
 	require.True(t, ok, "expected *exec.ExitError, got %T", err)
 	assert.Equal(t, 2, exitErr.ExitCode(), "unknown command should exit 2; output: %s", out)
-}
-
-// TestResolveAgentJSONFlag asserts that resolve-agent --json sets the
-// JSON output mode. The command calls os.Exit(1) when it cannot find
-// a git repo, which would kill the test process. The subprocess
-// pattern avoids that: spawn the real binary, let it exit however it
-// wants, and inspect the output.
-func TestResolveAgentJSONFlag(t *testing.T) {
-	if ethosBinary == "" {
-		t.Skip("ethos binary not available; TestMain build failed")
-	}
-
-	// Run in a temp dir with no git repo. The command will fail, but
-	// if --json is wired correctly the error output will be plain text
-	// on stderr (the JSON flag controls stdout formatting, not error
-	// reporting). The key assertion: the process does not panic, and
-	// running with --json does not produce a cobra parse error.
-	cmd := exec.Command(ethosBinary, "resolve-agent", "--json")
-	cmd.Dir = t.TempDir()
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-
-	err := cmd.Run()
-	// resolve-agent exits 1 when no repo is found — expected.
-	// A non-ExitError (e.g., signal, panic) would be a real failure.
-	if err != nil {
-		exitErr, ok := err.(*exec.ExitError)
-		if ok {
-			assert.Equal(t, 1, exitErr.ExitCode(),
-				"resolve-agent should exit 1 on missing repo, not crash")
-		} else {
-			t.Fatalf("resolve-agent failed unexpectedly: %v", err)
-		}
-	}
-
-	// Cobra must not complain about unknown flags.
-	assert.NotContains(t, errBuf.String(), "unknown flag",
-		"--json must be accepted as a persistent flag")
 }

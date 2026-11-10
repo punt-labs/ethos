@@ -90,6 +90,11 @@ const (
 	// classExempt: writes nothing that reaches a tracked mission or
 	// audit record. reason says why.
 	classExempt
+	// classGuardOnly: hands bytes to a sink that guards them with guardWrite and
+	// applies no redactor of its own, because the bytes are an existing record
+	// re-encoded to its canonical form. The function must call every identifier
+	// in calls; reason says why no redactor is needed.
+	classGuardOnly
 )
 
 type writerEntry struct {
@@ -117,6 +122,9 @@ func downstream(via, reason string) writerEntry {
 	return writerEntry{class: classDownstream, via: via, reason: reason}
 }
 func exempt(reason string) writerEntry { return writerEntry{class: classExempt, reason: reason} }
+func guardOnly(reason string, calls ...string) writerEntry {
+	return writerEntry{class: classGuardOnly, calls: calls, reason: reason}
+}
 
 const (
 	reasonLock     = "lock file; carries no content"
@@ -133,10 +141,13 @@ var writerRegistry = map[string]writerEntry{
 	// a captured mission/audit record. Pin its local staging boundary; the real
 	// installed-hook tests cover the callback rename and message bytes.
 	"internal/hook.installCommitMessage": checkpoint("CreateLocalTemp"),
+	// internal/autorepair: the repair log (machine-local, global root).
+	"internal/autorepair.FileLog.Logf":   checkpoint("Prose"),
+	"internal/autorepair.FileLog.rotate": exempt("renames the repair log to repair.log.1; writes no content"),
 	// internal/mission: records.
 
-	"internal/mission.migrateOneMissionLocked": exempt(
-		"renames the staging directory whose files copyIfExists wrote through the redactor"),
+	"internal/mission.migrateOneMissionLockedQ": exempt(
+		"renames the staging directory whose files copyRedacted wrote through the redactor"),
 
 	"internal/mission.writeContractBytes":            payloadCheckpoint(1, "writeContractBytesWithOutcome"),
 	"internal/mission.writeContractFile":             checkpoint("guardWrite", "writeContractBytes"),
@@ -190,6 +201,9 @@ var writerRegistry = map[string]writerEntry{
 	"internal/mission.withTraceLock":                    exempt(reasonLock),
 	"internal/mission.acquireMissionLock":               exempt(reasonLock),
 	"internal/mission.newReleaseFunc":                   exempt(reasonLock),
+	"internal/mission.withFileLockTry":                  exempt(reasonLock),
+	"internal/autorepair.runBeadAlias":                  guardOnly("re-encodes an existing contract with only the inputs.bead key renamed; ReplaceRecordFile guards the bytes with guardWrite, and no value is added that a redactor would need to see", "ReplaceRecordFile"),
+	"internal/mission.ReplaceRecordFile":                sink(1, "guards payload argument 1 with guardWrite, then installs it through localReplace; used by DES-084 repair steps that rewrite a contract's bytes"),
 	"internal/mission.allocateCounter":                  exempt(reasonCounter),
 	"internal/mission.writeCounterAtomic":               exempt(reasonCounter),
 	"internal/mission.writeSidecarFile":                 exempt("active-mission and delegation-binding sidecars: IDs, " + reasonGlobal),
@@ -204,29 +218,31 @@ var writerRegistry = map[string]writerEntry{
 	"internal/mission.redactYAMLDoc":             checkpoint(),
 	"internal/mission.redactJSONLines":           checkpoint("redactOrdered"),
 
-	"internal/hook.buildAuditEntry":        checkpoint("buildAuditEntryNote"),
-	"internal/hook.buildAuditEntryNote":    checkpoint("redactToolInputQuiet"),
-	"internal/hook.redactToolInput":        checkpoint("redactToolInputQuiet"),
-	"internal/hook.redactToolInputQuiet":   checkpoint("NewPathRedactor", "redactSensitiveContent"),
-	"internal/hook.redactSensitiveContent": checkpoint("sweepSecrets"),
-	"internal/hook.sweepSecrets":           checkpoint("SecretsValue"),
-	"internal/hook.HandleAuditLog":         checkpoint("handleAuditLog"),
-	"internal/hook.handleAuditLog":         checkpoint("buildAuditEntryNote"),
-	"internal/hook.appendLiveAuditReport":  downstream("handleAuditLog", "appends the entry buildAuditEntryNote redacted; handleAuditLog is its only caller"),
+	"internal/hook.buildAuditEntry":             checkpoint("buildAuditEntryNote"),
+	"internal/hook.buildAuditEntryNote":         checkpoint("redactToolInputQuiet"),
+	"internal/lineguard.RedactToolInput":        checkpoint("RedactToolInputQuiet"),
+	"internal/lineguard.RedactToolInputQuiet":   checkpoint("NewPathRedactor", "RedactToolInputWith"),
+	"internal/lineguard.RedactToolInputWith":    checkpoint("RedactSensitiveContent"),
+	"internal/lineguard.RedactSensitiveContent": checkpoint("SweepSecrets"),
+	"internal/lineguard.SweepSecrets":           checkpoint("SecretsValue"),
+	"internal/hook.HandleAuditLog":              checkpoint("handleAuditLog"),
+	"internal/hook.handleAuditLog":              checkpoint("buildAuditEntryNote"),
+	"internal/hook.appendLiveAuditReport":       downstream("handleAuditLog", "appends the entry buildAuditEntryNote redacted; handleAuditLog is its only caller"),
 	"internal/hook.writeAuditEntryReport": downstream("handleAuditLog",
 		"legacy path used only when there is no repo root; appends the entry buildAuditEntryNote redacted"),
-	"internal/hook.appendPolicyAudit":         checkpoint("guardAuditLineFull", "StampEligibility", "AppendMonotonic"),
-	"internal/hook.sealPolicyStream":          checkpoint("sessionLineGuard", "missionLineGuard", "guard", "CanonicalPayload", "WriteLocalAtomic", "ReplaceLocalFile"),
-	"internal/hook.QuarantineChunkWithPolicy": checkpoint("NewPathRedactor", "quarantineReason", "sessionLineGuard", "missionLineGuard", "QuarantineLocal"),
-	"internal/hook.quarantineReason":          checkpoint("Content", "LeakRule", "Leaks"),
-	"internal/hook.sessionLineGuard":          checkpoint("credentialPassLine", "redactLegacyLine", "guardAuditLineFull"),
-	"internal/hook.missionLineGuard":          checkpoint("guardMissionEvent", "credentialPassLine", "guardAuditLineFull"),
-	"internal/hook.MigrateAuditWithPolicy":    checkpoint("sessionLineGuard", "guard", "CanonicalPayload", "CheckLegacyIdentity", "ReplaceLocalFile"),
-	"internal/hook.guardMissionEvent":         checkpoint("RedactRecord", "CheckBytes"),
-	"internal/hook.appendRawAuditLines":       sink(1, "MigrateAudit's append; migrateOneSession redacts the lines first"),
-	"internal/hook.redactReason":              checkpoint("NewPathRedactor"),
-	"internal/hook.redactLegacyLines":         checkpoint("NewPathRedactor", "redactLegacyLine"),
-	"internal/hook.redactLegacyLine":          checkpoint("redactToolInputQuiet"),
+	"internal/hook.appendPolicyAudit":          checkpoint("guardAuditLineFull", "StampEligibility", "AppendMonotonic"),
+	"internal/hook.sealPolicyStream":           checkpoint("LiveLineGuard", "RedactLive", "guard", "CanonicalPayload", "WriteLocalAtomic"),
+	"internal/hook.LiveLineGuard":              checkpoint("sessionLineGuard", "missionLineGuard"),
+	"internal/hook.QuarantineChunkWithPolicy":  checkpoint("NewPathRedactor", "quarantineReason", "sessionLineGuard", "missionLineGuard", "QuarantineLocal"),
+	"internal/hook.quarantineReason":           checkpoint("Content", "LeakRule", "Leaks"),
+	"internal/lineguard.SessionLineGuardFor":   checkpoint("CredentialPassLine", "RedactLegacyLine", "GuardAuditLineFull"),
+	"internal/lineguard.MissionLineGuardFor":   checkpoint("GuardMissionEvent", "CredentialPassLine", "GuardAuditLineFull"),
+	"internal/auditimport.migrateAuditSession": checkpoint("SessionLineGuardFor", "guard", "CanonicalPayload", "CheckLegacyIdentity", "ReplaceLocalFile"),
+	"internal/lineguard.GuardMissionEvent":     checkpoint("RedactRecord", "CheckBytes"),
+	"internal/hook.appendRawAuditLines":        sink(1, "MigrateAudit's append; migrateOneSession redacts the lines first"),
+	"internal/hook.redactReason":               checkpoint("NewPathRedactor"),
+	"internal/auditimport.RedactLegacyLines":   checkpoint("NewPathRedactor", "RedactLegacyLine"),
+	"internal/lineguard.RedactLegacyLine":      checkpoint("RedactToolInputWith"),
 	// These identity writers now delegate installation rather than opening files.
 	"internal/hook.GenerateAgentFilesTo":    checkpoint("writeAgentFile"),
 	"internal/hook.InstallAgentDefinitions": checkpoint("writeAgentFile"),
@@ -245,14 +261,30 @@ var writerRegistry = map[string]writerEntry{
 	// WriteLocalAtomic installs via a function-valued os.Link, invisible to the
 	// primitive matcher. Pin its implementation AND discover every payload caller.
 	"internal/audit.WriteLocalAtomic": payloadCheckpoint(2, "CreateLocalTemp", "writeFile", "installLocalFile"),
-	"internal/audit.QuarantineLocal":  checkpoint("guard", "CanonicalPayload", "WriteLocalAtomic", "ReplaceLocalFile", "replaceAuditFile"),
-	"internal/audit.StagePublication": exempt("copies Git index bytes to a local candidate and installs that index; no record payload is written by this helper; sealPolicyStream checks the selected record files separately"),
+	"internal/audit.QuarantineLocal":  checkpoint("recoverLines", "installRecovered", "writeMarker", "WriteLocalAtomic", "ReplaceLocalFile"),
+	// The one recovery shared by QuarantineLocal and SalvageChunk: every line it
+	// returns went through the caller's guard inside decodeSalvageLine.
+	"internal/audit.recoverLines":          checkpoint("decodeSalvageLine", "ReadLiveLines", "chunkEvidence", "CanonicalPayload"),
+	"internal/audit.decodeSalvageLine":     checkpoint("guard", "CanonicalPayload"),
+	"internal/audit.SalvageChunk":          checkpoint("salvageBytes"),
+	"internal/audit.salvageBytes":          checkpoint("recoverLines", "installRecovered", "writeMarker", "writeSharedMarker"),
+	"internal/audit.RecoverHeldQuarantine": checkpoint("salvageBytes", "recoverUnnamedHeld"),
+	"internal/audit.recoverUnnamedHeld":    exempt("writes a held-loss record of the held bytes' digest and size only; none of their content, and the bytes are deleted"),
+	"internal/audit.writeMarker":           sink(3, "the one marker writer: merges into the marker on disk; carries a stem, ts bounds, a digest and the caller's redacted reason, no payload"),
+	"internal/audit.installRecovered":      sink(4, "writes the lines recoverLines returned, each already guarded; reads the result back through ReadChunkVerified"),
+	"internal/audit.installEachLine":       sink(4, "writes the lines recoverLines returned, each already guarded, one chunk per line; reads each back through ReadChunkVerified"),
+	"internal/audit.writeSharedMarker":     sink(4, "availability marker beside a published chunk; its Reason is the caller's redacted reason and it carries no payload"),
+	"internal/audit.RedactLive":            checkpoint("guard", "CanonicalPayload", "archivedPayloads", "ReplaceLocalFile"),
+	"internal/audit.TryLock":               exempt(reasonLock),
+	"internal/autorepair.repairOrphan":     checkpoint("QuarantineLocal", "salvage"),
+	"internal/autorepair.recoverHeld":      checkpoint("RecoverHeldQuarantine"),
+	"internal/audit.StagePublication":      exempt("copies Git index bytes to a local candidate and installs that index; no record payload is written by this helper; sealPolicyStream checks the selected record files separately"),
 
 	// Repository ADRs are in scope; standalone global ADRs share these helpers.
-	"internal/adr.Store.withLock": exempt(reasonLock),
-	"internal/adr.Store.prepare":  checkpoint("Record", "Prose", "LeakRule"),
-	"internal/adr.Store.write":    checkpoint("prepare", "Marshal", "publish"),
-	"internal/adr.Store.publish":  sink(1, "data is argument 1; Store.write marshals only Store.prepare output after shared redaction and leak checking"),
+	"internal/adr.Store.withLock":   exempt(reasonLock),
+	"internal/adr.Store.prepare":    checkpoint("Record", "Prose", "LeakRule"),
+	"internal/adr.Store.writeQuiet": checkpoint("prepare", "Marshal", "publish"),
+	"internal/adr.Store.publish":    sink(1, "data is argument 1; Store.write marshals only Store.prepare output after shared redaction and leak checking"),
 
 	// Publication's selected records are guarded by RedactPublicationSnapshot.
 	// Do not classify publishLocked as downstream: it also merges existing
@@ -277,11 +309,32 @@ var writerRegistry = map[string]writerEntry{
 
 	"internal/repair.Plan.Apply": exempt("opens existing lock files with O_RDWR to tryLock, then deletes explicitly selected obsolete files; writes no new record content"),
 
+	// Self-repair (DES-084). Step 5 archives record-tree trace into the local
+	// archive: every payload reaches archiver.install already redacted, by
+	// the shared record redactor, the path redactor's Body pass, or the
+	// seal's own line guards.
+	"internal/autorepair.lockHeld":                    exempt(reasonLock),
+	"internal/autorepair.archiver.archiveAndDelete":   exempt("opens the mission-state or audit stream lock to TryLock, then deletes the inventoried original; the archive copy is written by archiver.install"),
+	"internal/autorepair.archiver.archiveReflections": exempt("opens the mission-state lock to TryLock, then deletes the legacy aggregate; the envelopes are written by archiver.install"),
+	"internal/autorepair.archiver.install":            sink(1, "installs payload argument 1 via ReplaceLocalFile after proving an existing destination is byte-equal; reflections, prompt, jsonl and diagnostic redact and leak-check the bytes first"),
+	"internal/autorepair.archiver.reflections":        checkpoint("RedactReflection", "LegacyReflectionEnvelope", "LeakRule", "install"),
+	"internal/autorepair.archiver.prompt":             checkpoint("Body", "LeakRule", "install"),
+	"internal/autorepair.archiver.jsonl":              checkpoint("guard", "install"),
+	"internal/autorepair.archiver.diagnostic":         checkpoint("Body", "LeakRule", "install"),
+	// internal/autorepair: the step and repair locks, the stamp (the repair log
+	// rows are above).
+	"internal/autorepair.acquire":       exempt("creates and flocks an empty lock file; writes no content"),
+	"internal/autorepair.WriteStamp":    checkpoint("Prose"),
+	"internal/autorepair.runConfigFile": exempt("rename and directory sync only; no content written"),
+
 	// cmd/ethos.
 	"cmd/ethos.editContent":           exempt("identity graph: operator edits an attribute file by hand"),
 	"cmd/ethos.ensureLocalExtIgnored": checkpoint("EnsureLocalIgnored"),
 	"cmd/ethos.exportSoulSpec":        exempt("out of scope (identity graph): exports identity content to a directory the operator names"),
 	"cmd/ethos.writeConfigFile":       exempt("out of scope: .punt-labs/ethos.yaml repo config"),
+
+	// cmd/coverage-check: developer tooling, not a product writer.
+	"cmd/coverage-check.writeBaseline": exempt("writes coverage-baseline.txt from a Go coverage profile: package paths and percentages only, no repository or identity content"),
 }
 
 // outOfScopePackages are packages whose writes are the identity graph,
@@ -318,6 +371,7 @@ var chokePoints = map[string]bool{
 	"redactToolInputQuiet": true,
 	"redactReason":         true,
 	"redactLegacyLines":    true,
+	"RedactLegacyLines":    true,
 	"Prose":                true,
 	"Body":                 true,
 	"Content":              true,
@@ -632,7 +686,7 @@ func checkWriters(funcs map[string]*funcInfo, registry map[string]writerEntry, e
 			bad = append(bad, fmt.Sprintf("registry entry %s has no reason", k))
 		}
 		switch e.class {
-		case classCheckpoint:
+		case classCheckpoint, classGuardOnly:
 			for _, c := range e.calls {
 				if !fi.callees[c] {
 					bad = append(bad, fmt.Sprintf("%s is registered as redacting but does not call %s", k, c))

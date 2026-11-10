@@ -47,12 +47,12 @@ func execHandler(t *testing.T, args ...string) (stdout, stderr string, err error
 	// Reset package-level flag state so tests do not leak into each
 	// other via persistent cobra flag bindings.
 	jsonOutput = false
-	showReference = false
 	whoamiReference = false
+	identityReference = false
 	t.Cleanup(func() {
 		jsonOutput = false
-		showReference = false
 		whoamiReference = false
+		identityReference = false
 	})
 
 	var outBuf, errBuf bytes.Buffer
@@ -187,8 +187,8 @@ func TestRunDoctor_JSON(t *testing.T) {
 	var results []map[string]string
 	require.NoError(t, json.Unmarshal([]byte(stdout), &results))
 	// DES-079 adds physical placement and exact agent-file currency checks;
-	// DES-083 adds the hook binary check.
-	require.Len(t, results, 19)
+	// DES-083 adds the hook binary check; DES-084 adds the Storage row.
+	require.Len(t, results, 20)
 	names := make([]string, len(results))
 	for i, r := range results {
 		names[i] = r["name"]
@@ -197,7 +197,7 @@ func TestRunDoctor_JSON(t *testing.T) {
 	assert.Contains(t, names, "Human identity")
 	assert.Contains(t, names, "Team members")
 	assert.Contains(t, names, "Repo-only completeness")
-	assert.Contains(t, names, "Mission file hand-edits")
+	assert.Contains(t, names, "Mission file comments")
 	assert.Contains(t, names, "Physical storage placement")
 	assert.Contains(t, names, "Agent file currency")
 }
@@ -229,7 +229,7 @@ func TestRunWhoami_LoudWhenSessionUnresolvableUnderClaudeCode(t *testing.T) {
 
 	_, _, err := execHandler(t, "whoami")
 	require.Error(t, err, "must not silently resolve via git/OS when a session was expected")
-	assert.Contains(t, err.Error(), "cannot identify the calling session")
+	assert.Contains(t, err.Error(), "no Claude Code session is bound to this process")
 }
 
 func TestRunWhoami_JSON(t *testing.T) {
@@ -258,7 +258,7 @@ func TestRunList_Plain(t *testing.T) {
 	se := setupCLISubprocessEnv(t)
 	setInProcessEnv(t, se)
 
-	stdout, _, err := execHandler(t, "list")
+	stdout, _, err := execHandler(t, "identity", "list")
 	require.NoError(t, err)
 	assert.Contains(t, stdout, "HANDLE")
 	assert.Contains(t, stdout, "NAME")
@@ -270,7 +270,7 @@ func TestRunList_JSON(t *testing.T) {
 	se := setupCLISubprocessEnv(t)
 	setInProcessEnv(t, se)
 
-	stdout, _, err := execHandler(t, "list", "--json")
+	stdout, _, err := execHandler(t, "identity", "list", "--json")
 	require.NoError(t, err)
 	var ids []map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &ids))
@@ -293,7 +293,7 @@ func TestRunList_Empty(t *testing.T) {
 	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
 	t.Chdir(repo)
 
-	stdout, _, err := execHandler(t, "list")
+	stdout, _, err := execHandler(t, "identity", "list")
 	require.NoError(t, err)
 	assert.Contains(t, stdout, "No identities found")
 }
@@ -304,7 +304,7 @@ func TestRunShow_Plain(t *testing.T) {
 	se := setupCLISubprocessEnv(t)
 	setInProcessEnv(t, se)
 
-	stdout, _, err := execHandler(t, "show", "test-agent")
+	stdout, _, err := execHandler(t, "identity", "show", "test-agent")
 	require.NoError(t, err)
 	assert.Contains(t, stdout, "Test Agent")
 	assert.Contains(t, stdout, "test-agent")
@@ -314,7 +314,7 @@ func TestRunShow_JSON(t *testing.T) {
 	se := setupCLISubprocessEnv(t)
 	setInProcessEnv(t, se)
 
-	stdout, _, err := execHandler(t, "show", "test-agent", "--json")
+	stdout, _, err := execHandler(t, "identity", "show", "test-agent", "--json")
 	require.NoError(t, err)
 	var parsed map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &parsed))
@@ -325,7 +325,7 @@ func TestRunShow_NotFound(t *testing.T) {
 	se := setupCLISubprocessEnv(t)
 	setInProcessEnv(t, se)
 
-	_, _, err := execHandler(t, "show", "no-such-handle")
+	_, _, err := execHandler(t, "identity", "show", "no-such-handle")
 	require.Error(t, err, "expected error for unknown handle")
 }
 
@@ -335,7 +335,7 @@ func TestRunShow_Reference(t *testing.T) {
 	se := setupCLISubprocessEnv(t)
 	setInProcessEnv(t, se)
 
-	stdout, _, err := execHandler(t, "show", "test-agent", "--reference")
+	stdout, _, err := execHandler(t, "identity", "show", "test-agent", "--reference")
 	require.NoError(t, err)
 	assert.Contains(t, stdout, "test-agent")
 }
@@ -364,7 +364,7 @@ talents:
 	path := filepath.Join(globalEthos, "identities", "full-agent.yaml")
 	require.NoError(t, os.WriteFile(path, idData, 0o644))
 
-	stdout, _, err := execHandler(t, "show", "full-agent")
+	stdout, _, err := execHandler(t, "identity", "show", "full-agent")
 	require.NoError(t, err)
 	assert.Contains(t, stdout, "full-agent")
 	assert.Contains(t, stdout, "Terse")
@@ -423,29 +423,6 @@ func TestRunDoctor_FailureJSON(t *testing.T) {
 	assert.NotEmpty(t, results)
 }
 
-func TestRunResolveAgent_Malformed(t *testing.T) {
-	// Malformed ethos.yaml causes ResolveAgent to return an error.
-	home := t.TempDir()
-	repo := t.TempDir()
-	gitInitDir(t, repo, home)
-
-	cfgDir := filepath.Join(repo, ".punt-labs")
-	require.NoError(t, os.MkdirAll(cfgDir, 0o755))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(cfgDir, "ethos.yaml"),
-		[]byte("agent: [not a string"),
-		0o644))
-
-	t.Setenv("HOME", home)
-	t.Setenv("USER", "test-agent")
-	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
-	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
-	t.Chdir(repo)
-
-	_, _, err := execHandler(t, "resolve-agent")
-	require.Error(t, err)
-}
-
 func TestRunList_EmptyJSON(t *testing.T) {
 	home := t.TempDir()
 	globalIDs := filepath.Join(home, ".punt-labs", "ethos", "identities")
@@ -461,38 +438,9 @@ func TestRunList_EmptyJSON(t *testing.T) {
 	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
 	t.Chdir(repo)
 
-	stdout, _, err := execHandler(t, "list", "--json")
+	stdout, _, err := execHandler(t, "identity", "list", "--json")
 	require.NoError(t, err)
 	var ids []map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &ids))
 	assert.Empty(t, ids)
-}
-
-// --- resolve-agent ---
-
-func TestRunResolveAgent_Configured(t *testing.T) {
-	se := setupCLISubprocessEnv(t)
-	setInProcessEnv(t, se)
-
-	stdout, _, err := execHandler(t, "resolve-agent")
-	require.NoError(t, err)
-	assert.Contains(t, stdout, "test-agent")
-}
-
-func TestRunResolveAgent_NotConfigured(t *testing.T) {
-	// Git-init repo without ethos.yaml: CheckoutRootIfAny finds repo, but
-	// ResolveAgent returns empty, so handler prints nothing and exits 0.
-	home := t.TempDir()
-	repo := t.TempDir()
-	gitInitDir(t, repo, home)
-
-	t.Setenv("HOME", home)
-	t.Setenv("USER", "test-agent")
-	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
-	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
-	t.Chdir(repo)
-
-	stdout, _, err := execHandler(t, "resolve-agent")
-	require.NoError(t, err)
-	assert.Empty(t, stdout)
 }

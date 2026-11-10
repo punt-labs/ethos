@@ -405,3 +405,12 @@ func TestHookInvocationObserved_ReportsAGroupItCouldNotReap(t *testing.T) {
 	assert.Contains(t, err.Error(), "could not end the hook's process group")
 	assert.Contains(t, err.Error(), "operation not permitted")
 }
+
+// TestSandboxUnavailableDetail: the cause appears once.
+func TestSandboxUnavailableDetail(t *testing.T) {
+	got := sandboxUnavailableDetail("seal", errSandboxGitUnavailable)
+	want := "cannot verify the seal hook by execution: git not found on PATH; check skipped"
+	if got != want {
+		t.Errorf("detail = %q, want %q", got, want)
+	}
+}

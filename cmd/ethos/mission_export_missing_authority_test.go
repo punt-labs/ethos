@@ -81,6 +81,9 @@ func TestMissionExportFullMissingCorrectionAuthority(t *testing.T) {
 				require.NoError(t, err)
 				require.Nil(t, loaded.RoundDecisions)
 			}
+			// Stamp after the authority is removed: export, not the storage
+			// upgrade's decision step, is what this test exercises against it.
+			stampCurrent(t, p)
 			retained := map[string][]byte{}
 			for _, path := range []string{contract, filepath.Join(p.RecordRoot(), "missions", id, "results.yaml"), filepath.Join(se.repo, ".git", "index")} {
 				retained[path], err = os.ReadFile(path)

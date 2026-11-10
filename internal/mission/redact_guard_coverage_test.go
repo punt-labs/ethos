@@ -36,8 +36,14 @@ var guardedSinks = map[string]string{
 	"internal/mission.Store.appendTraceLine":                   "guardWrite",
 	"internal/mission.Store.prepareTraceSummary":               "guardWrite",
 	"internal/hook.sealPolicyStream":                           "guard",
-	"internal/hook.MigrateAuditWithPolicy":                     "guard",
-	"internal/audit.QuarantineLocal":                           "guard",
+	"internal/mission.ReplaceRecordFile":                       "guardWrite",
+	"internal/auditimport.migrateAuditSession":                 "guard",
+	"internal/audit.QuarantineLocal":                           "recoverLines",
+	"internal/audit.SalvageChunk":                              "salvageBytes",
+	"internal/audit.salvageBytes":                              "recoverLines",
+	"internal/audit.recoverLines":                              "decodeSalvageLine",
+	"internal/audit.decodeSalvageLine":                         "guard",
+	"internal/audit.RedactLive":                                "guard",
 	"internal/audit.Quarantine":                                "guardLine",
 	"internal/hook.appendPolicyAudit":                          "guardAuditLineFull",
 	"internal/hook.appendLiveAuditReport":                      "guardAuditLineFull",
@@ -46,7 +52,7 @@ var guardedSinks = map[string]string{
 	"internal/hook.emitAuditSentinel":                          "guardAuditLineNote",
 	"internal/hook.emitLegacySentinel":                         "guardAuditLineNote",
 	"cmd/ethos.runMissionExport":                               "WriteExportFiles",
-	"internal/adr.Store.write":                                 "prepare",
+	"internal/adr.Store.writeQuiet":                            "prepare",
 	"internal/adr.Store.prepare":                               "LeakRule",
 	"internal/provenance.Publisher.Publish":                    "RedactPublicationSnapshot",
 	"internal/provenance.Publisher.publishLocked":              "GuardPublicationSummary",
@@ -71,11 +77,11 @@ var guardAllowed = map[string]string{
 	"internal/mission.writeTrackedTemp":              "staging callback passed by WriteTrackedFiles to writeTrackedFiles, which guardWrite-checks every new payload; restoreTrackedWith uses the same callback only for saved destination bytes",
 	"internal/audit.WriteLocalAtomic":                "sealPolicyStream requires canonical equality with its namespace guard before local archival or publication; QuarantineLocal guards recovered lines, receives a quarantineReason-checked marker, and stores raw damaged bytes ONLY at p.LocalRoot()/quarantine/<stream-hash>/<digest>.corrupt (retirement records contain a constant, digest, size and timestamp)",
 	"internal/audit.replaceAuditFile":                "ReplaceLocalFile forwards only sealPolicyStream canonical-guard-equal immutable payloads, MigrateAuditWithPolicy final sessionLineGuard output (refusing unsafe existing identities), or QuarantineLocal generated diagnostics; QuarantineLocal also calls directly for the explicitly selected published marker with a quarantineReason-checked reason and numeric availability bounds; raw originals go only through WriteLocalAtomic into S quarantine",
-	"internal/adr.Store.publish":                     "Store.write is its sole caller and marshals Store.prepare output; prepare applies shared redact.Record/redact.Prose and rejects every field with redact.LeakRule for repository ADRs; standalone ADRs remain global",
+	"internal/adr.Store.publish":                     "Store.writeQuiet is its sole caller and marshals Store.prepare output; prepare applies shared redact.Record/redact.Prose and rejects every field with redact.LeakRule for repository ADRs; standalone ADRs remain global",
 }
 
 // guardScopes are the packages whose writers reach the tracked tree.
-var guardScopes = []string{"internal/mission.", "internal/hook.", "internal/audit.", "internal/adr.", "internal/provenance.", "cmd/ethos."}
+var guardScopes = []string{"internal/mission.", "internal/hook.", "internal/lineguard.", "internal/auditimport.", "internal/audit.", "internal/adr.", "internal/provenance.", "cmd/ethos."}
 
 // TestTrackedSinksCallTheGuard is the source scan for the sink guard: every
 // function in a tracked-tree package that creates or renames a file is either

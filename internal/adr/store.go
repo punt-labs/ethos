@@ -253,24 +253,32 @@ func (s *Store) path(id string) string {
 // write publishes only prepared, validated ADRs. Callers hold the store lock;
 // create uses a no-clobber link, replacement uses an atomic rename.
 func (s *Store) write(a *ADR, create bool) error {
+	rewritten, err := s.writeQuiet(a, create)
+	if installed(err) && rewritten {
+		announcement(func() { fmt.Fprintln(os.Stderr, "ethos: redact: "+rewriteNotice) }).Say()
+	}
+	return err
+}
+
+// writeQuiet is write without the stderr notice. It reports whether the
+// redactor changed the record on the way to disk so the caller can say so
+// where it chooses: stderr for a command, a log line for the repair engine.
+func (s *Store) writeQuiet(a *ADR, create bool) (bool, error) {
 	// Keep redaction at the sole ADR sink as well as candidate preparation.
 	// New mutation paths cannot accidentally marshal an unredacted record.
 	prepared, say, err := s.prepare(a)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := s.recordDir(true); err != nil {
-		return err
+		return false, err
 	}
 	data, err := yaml.Marshal(prepared)
 	if err != nil {
-		return fmt.Errorf("marshaling ADR: %w", err)
+		return false, fmt.Errorf("marshaling ADR: %w", err)
 	}
 	err = s.publish(s.path(prepared.ID), data, create)
-	if installed(err) {
-		say.Say()
-	}
-	return err
+	return say != nil, err
 }
 
 // nextID scans existing ADRs and returns the next DES-NNN ID.

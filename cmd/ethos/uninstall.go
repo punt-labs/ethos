@@ -94,7 +94,7 @@ func runUninstall() error {
 
 	// Step 4: Remove binary.
 	if binErr != nil {
-		fmt.Fprintln(os.Stderr, "ethos: cannot determine binary path — remove manually")
+		fmt.Fprintln(os.Stderr, "ethos: cannot determine binary path; the binary is left in place")
 		hadError = true
 	} else if err := os.Remove(bin); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: failed to remove %s: %v\n", bin, err)

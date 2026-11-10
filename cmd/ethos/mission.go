@@ -525,7 +525,8 @@ var missionReflectCmd = &cobra.Command{
 	Short: "Submit a structured reflection for the current round",
 	Long: `Submit a structured reflection for the mission's current round.
 
-The reflection is read from a YAML file containing round, author,
+The reflection is read from a YAML file containing mission (the mission
+ID, which must match the argument), round, author,
 converging, signals, recommendation, and (when the recommendation is
 stop or escalate) reason. The round number must equal the mission's
 current round; reflections are append-only and a duplicate is refused.
@@ -543,6 +544,7 @@ Examples:
 
   # Minimal valid reflection (YAML file body):
   #
+  #   mission: m-2026-04-08-005
   #   round: 1
   #   author: claude
   #   converging: true
@@ -849,143 +851,6 @@ agent artifacts and transcripts are excluded. No export stages the Git index.`,
 	RunE: runMissionExport,
 }
 
-// --- mission migrate ---
-
-var (
-	missionMigrateToRepo  bool
-	missionMigrateDryRun  bool
-	missionMigrateVerbose bool
-)
-
-var missionMigrateCmd = &cobra.Command{
-	Use:   "migrate [mission-id]",
-	Short: "Migrate a mission from the legacy global tree into the repo tree",
-	Long: `Migrate one or every mission from the legacy global tree into the
-DES-054 per-repo tree.
-
-The legacy layout is ~/.punt-labs/ethos/missions/<id>.yaml plus sibling
-.jsonl / .results.yaml / .reflections.yaml files. The repo layout is
-<repo>/.punt-labs/ethos/missions/<id>/{contract.yaml,log.jsonl,results.yaml,
-reflections.yaml}.
-
-Without a mission-id argument, every legacy mission whose contract_id
-is referenced by an audit entry in <repo>/.punt-labs/ethos/sessions/ is moved.
-Missions belonging to other repos' work trees are left in place —
-cross-repo policy.
-
-Idempotent: a mission already migrated is a no-op. Atomic per-mission:
-the move stages artifacts in a sibling temp directory and renames into
-place; a failure before the rename leaves the legacy tree intact.
-
-Flags:
-  --to-repo   migrate into the per-repo .punt-labs/ethos/missions/ tree (default
-              and currently the only target)
-  --dry-run   show what would change without writing or deleting
-  --verbose   print one decision line per mission to stdout
-
-Exit codes:
-  0  migration completed (including the no-op "nothing to migrate" case)
-  1  one or more missions failed mid-migration; legacy files stayed in place
-  2  must run inside a repo (no <repo>/.punt-labs/ethos/missions/ destination)`,
-	Args: cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		var id string
-		if len(args) == 1 {
-			id = args[0]
-		}
-		return runMissionMigrate(id, cmd.OutOrStdout(), cmd.ErrOrStderr())
-	},
-}
-
-// --- mission scrub ---
-
-var missionScrubApply bool
-
-var missionScrubCmd = &cobra.Command{
-	Use:   "scrub",
-	Short: "Redact the tracked mission records an older ethos wrote unredacted",
-	Long: `Redact the tracked mission records an older ethos wrote unredacted.
-
-Runs the shared redactor (credentials, addresses, home paths) over the
-mutable mission records git tracks under .punt-labs/ethos: each mission's
-contract.yaml, results.yaml and reflections.yaml, each delegation's
-record.yaml and prompt.md, missions.jsonl, and the plain output of
-'ethos mission export' (missions/<id>.contract.yaml and
-missions/<id>.result.yaml). Exports written with a non-default --dir are
-not covered; scrub them by hand. Every file is processed; a file that cannot
-be parsed is reported and left untouched, and the rest are still scrubbed.
-
-Sealed audit chunks, sealed mission-log chunks, and the legacy log.jsonl
-and audit.jsonl files are never touched: sealed chunks are immutable
-(DES-058) and history is not rewritten. A tracked file deleted from the
-worktree is skipped with a note.
-
-By default nothing is written: the command lists the files that would
-change. Pass --apply to rewrite them in place, then commit the result.
-
-Flags:
-  --apply   rewrite the files (default is a dry run)
-
-Exit codes:
-  0  completed (a dry run that lists files is still 0)
-  1  one or more files failed
-  2  must run inside a repo`,
-	Args: cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runMissionScrub(cmd.OutOrStdout(), cmd.ErrOrStderr())
-	},
-}
-
-// runMissionScrub handles `ethos mission scrub`. It resolves the current
-// checkout, not the shared store root: the files to scrub are the tracked
-// ones in the tree the operator will commit from.
-func runMissionScrub(out, errOut io.Writer) error {
-	roots := currentRoots()
-	if roots.CheckoutErr != nil {
-		fmt.Fprintf(errOut, "ethos: mission scrub: %v\n", roots.CheckoutErr)
-		return failClosed{}
-	}
-	if roots.Checkout == "" {
-		fmt.Fprintln(errOut, "ethos: mission scrub must run inside a repo")
-		return usageError{}
-	}
-	p, err := roots.Layout()
-	if err != nil {
-		return fmt.Errorf("mission scrub: %w", err)
-	}
-	rels, err := mission.TrackedRecordFiles(roots.Checkout)
-	if err != nil {
-		return fmt.Errorf("mission scrub: %w", err)
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("mission scrub: resolving the global store root: %w", err)
-	}
-	res, err := mission.ScrubFilesWithPolicy(p, filepath.Join(home, ".punt-labs", "ethos"), rels, !missionScrubApply)
-	for _, rel := range res.Skipped {
-		fmt.Fprintf(errOut, "ethos: mission scrub: skipping %s: tracked but missing from the worktree\n", rel)
-	}
-	verb := "rewrote"
-	if !missionScrubApply {
-		verb = "would rewrite"
-	}
-	for _, rel := range res.Changed {
-		fmt.Fprintf(out, "%s %s\n", verb, rel)
-	}
-	if err != nil {
-		return fmt.Errorf("mission scrub: %w", err)
-	}
-	switch {
-	case len(res.Changed) == 0:
-		fmt.Fprintln(out, "mission scrub: nothing to change")
-	case missionScrubApply:
-		fmt.Fprintf(out, "mission scrub: %d file(s) rewritten\n", len(res.Changed))
-	default:
-		fmt.Fprintf(out, "mission scrub: %d file(s) would change (dry run; use --apply to rewrite)\n", len(res.Changed))
-	}
-	return nil
-}
-
 // --- mission claim / release (active-mission sidecar) ---
 //
 // `claim` writes the active-mission sidecar for the caller's session;
@@ -1104,16 +969,6 @@ func init() {
 	missionDispatchCmd.Flags().StringVar(&dispatchType, "type", "implement", "Archetype type")
 	missionDispatchCmd.Flags().IntVar(&dispatchBudget, "budget", 2, "Round budget")
 
-	missionMigrateCmd.Flags().BoolVar(&missionMigrateToRepo, "to-repo", true,
-		"Migrate into the per-repo .punt-labs/ethos/missions/ tree (default and currently the only target)")
-	missionMigrateCmd.Flags().BoolVar(&missionMigrateDryRun, "dry-run", false,
-		"Enumerate what would migrate without making changes")
-	missionMigrateCmd.Flags().BoolVar(&missionMigrateVerbose, "verbose", false,
-		"Print per-mission decisions to stdout")
-
-	missionScrubCmd.Flags().BoolVar(&missionScrubApply, "apply", false,
-		"Rewrite the files in place (default is a dry run)")
-
 	missionScaffoldCmd.AddCommand(
 		missionScaffoldContractCmd,
 		missionScaffoldResultCmd,
@@ -1134,62 +989,11 @@ func init() {
 		missionExportCmd,
 		missionLintCmd,
 		missionDispatchCmd,
-		missionMigrateCmd,
-		missionScrubCmd,
 		missionClaimCmd,
 		missionReleaseCmd,
 		missionScaffoldCmd,
 	)
 	rootCmd.AddCommand(missionCmd)
-}
-
-// runMissionMigrate handles `ethos mission migrate [mission-id]`.
-//
-// Resolves repoRoot via the standard ancestor walk and the global root
-// at ~/.punt-labs/ethos. Surfaces "must run inside a repo" with exit
-// code 2 when no repo root can be found. The default --to-repo flag is
-// the only migration target today; the flag is exposed so a future
-// reverse migration can land on the same surface without breaking
-// scripts.
-func runMissionMigrate(missionID string, out, errOut io.Writer) error {
-	if !missionMigrateToRepo {
-		return fmt.Errorf("mission migrate: only --to-repo is supported")
-	}
-	repoRoot, err := requireStore(errOut, "mission migrate")
-	if err != nil {
-		return err
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("resolving home directory: %w", err)
-	}
-	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
-
-	sink := out
-	if !missionMigrateVerbose {
-		sink = io.Discard
-	}
-	// checkoutRoot: the same repoRoot-vs-checkout distinction
-	// missionStore() already threads via WithCheckoutRoot, so the
-	// migrate command's ownership scan also sees a linked worktree's
-	// own audit state that repoRoot alone cannot: the live
-	// (not-yet-sealed) session audit files (PR #508 round 4, finding
-	// H1), AND, since "git-tracked" means identical at the same
-	// commit, not identical across every checkout, sealed audit chunks
-	// committed to an unmerged branch that repoRoot's own working copy
-	// does not carry either (PR #508 round 7, finding J1).
-	checkoutRoot := missionCheckoutRoot(repoRoot)
-	if err := mission.MigrateMission(globalRoot, repoRoot, checkoutRoot, missionID, missionMigrateDryRun, sink); err != nil {
-		return fmt.Errorf("mission migrate: %w", err)
-	}
-	if !missionMigrateVerbose {
-		if missionMigrateDryRun {
-			fmt.Fprintln(out, "mission migrate: dry-run complete")
-		} else {
-			fmt.Fprintln(out, "mission migrate: complete")
-		}
-	}
-	return nil
 }
 
 // runMissionCreate handles `ethos mission create --file <path>`.
@@ -2329,7 +2133,7 @@ func writeExport(out io.Writer, id string, files []mission.TrackedFile, write fu
 		fmt.Fprintf(out, "exported: %s\n", f.Path)
 	}
 	if err != nil {
-		return fmt.Errorf("exporting mission %s: %w; re-run `ethos mission export %s` to retry", id, err, id)
+		return fmt.Errorf("exporting mission %s: %w", id, err)
 	}
 	return nil
 }

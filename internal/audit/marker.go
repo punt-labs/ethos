@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 // Marker retires a corrupt sealed chunk. It carries deterministic content
@@ -34,6 +37,15 @@ type Marker struct {
 	// recovery completed, and they have no local retirement pointer to cover.
 	RetiredSHA256 string `json:"retired_sha256,omitempty"`
 }
+
+// ErrTornMarker is returned when a marker already at the path cannot be
+// decoded. It may have recorded a loss whose range is now unknown, so no writer
+// replaces it.
+var ErrTornMarker = errors.New("marker is unreadable")
+
+// ErrMarkerCoversOtherChunk is returned when the marker at a stem's name
+// covers a different chunk.
+var ErrMarkerCoversOtherChunk = errors.New("marker covers another chunk")
 
 // HasGap reports whether the marker records an unrecovered sub-range.
 func (m Marker) HasGap() bool {
@@ -70,4 +82,70 @@ func MarshalMarker(m Marker) ([]byte, error) {
 		return nil, fmt.Errorf("marshaling marker: %w", err)
 	}
 	return append(data, '\n'), nil
+}
+
+// MergeMarkers returns the marker that records everything old and next record:
+// the union of their unrecovered ranges (a record of loss is only ever widened),
+// the higher VerifiedLast, and the retirement digest of either (next's wins when
+// both carry one). The two must describe the same chunk; Reason is next's unless
+// empty.
+func MergeMarkers(old, next Marker) Marker {
+	m := next
+	if m.Reason == "" {
+		m.Reason = old.Reason
+	}
+	if old.VerifiedLast > m.VerifiedLast {
+		m.VerifiedLast = old.VerifiedLast
+	}
+	if m.RetiredSHA256 == "" {
+		m.RetiredSHA256 = old.RetiredSHA256
+	}
+	switch {
+	case !old.HasGap():
+	case !next.HasGap():
+		m.UnrecoveredFirst, m.UnrecoveredLast = old.UnrecoveredFirst, old.UnrecoveredLast
+	default:
+		m.UnrecoveredFirst = min(old.UnrecoveredFirst, next.UnrecoveredFirst)
+		m.UnrecoveredLast = max(old.UnrecoveredLast, next.UnrecoveredLast)
+	}
+	return m
+}
+
+// writeMarker is the one place an audit marker is written. It reads any marker
+// already at path and merges next into it (MergeMarkers), so no write narrows a
+// recorded loss or drops a completion digest. clearRetired drops the digest from
+// the result: a repeated retirement must invalidate the old completion before
+// its source is removed, and a published marker never carries one. An existing
+// marker that is torn or undecodable may have recorded a loss of unknown range,
+// so it is never replaced: ErrTornMarker. One that cannot be read, or that
+// covers another chunk (ErrMarkerCoversOtherChunk), is also an error.
+func writeMarker(p layout.Policy, path string, next Marker, clearRetired bool) error {
+	old, err := ReadMarker(path)
+	var pathErr *os.PathError
+	switch {
+	case err == nil:
+		if old.Chunk != next.Chunk {
+			return fmt.Errorf("marker %s covers chunk %s, not %s: %w", path, old.Chunk, next.Chunk, ErrMarkerCoversOtherChunk)
+		}
+		if clearRetired {
+			old.RetiredSHA256 = ""
+		}
+		next = MergeMarkers(old, next)
+	case errors.Is(err, os.ErrNotExist):
+	case errors.As(err, &pathErr):
+		return err
+	default:
+		return fmt.Errorf("marker %s: %w: %v", path, ErrTornMarker, err)
+	}
+	if clearRetired {
+		next.RetiredSHA256 = ""
+	}
+	body, err := MarshalMarker(next)
+	if err != nil {
+		return err
+	}
+	if err := ensureDestinationDir(p, filepath.Dir(path)); err != nil {
+		return err
+	}
+	return replaceAuditFile(p, path, body)
 }

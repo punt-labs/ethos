@@ -39,6 +39,9 @@ func TestPhysicalPlacementIsNotClassificationOrTracking(t *testing.T) {
 			r := CheckPhysicalPlacement(root)
 			assert.Equal(t, "FAIL", r.Status, r.Detail)
 			assert.Contains(t, r.Detail, rel)
+			assert.Contains(t, r.Detail, "recognized legacy data found at ")
+			assert.Contains(t, r.Detail, "(agent-owned artifacts are not legacy)")
+			assert.NotContains(t, r.Detail, "is moved")
 			assert.FileExists(t, path, "doctor must not remove legacy bytes")
 		})
 	}
@@ -101,7 +104,6 @@ func TestPhysicalPlacementFindsRecognizableRuntimeBeyondClassTable(t *testing.T)
 		".punt-labs/ethos/locks/agent.lock",
 		".punt-labs/ethos/adrs/adr.yaml.lock",
 		".punt-labs/ethos/missions/m-1/reflection-intent.yaml",
-		".punt-labs/ethos/sessions/old/audit-1.quarantine",
 	} {
 		t.Run(rel, func(t *testing.T) {
 			root := t.TempDir()
@@ -137,5 +139,23 @@ func TestTrackedLegacyLocalPathsAreExactAndTraceIsNotAllLocal(t *testing.T) {
 		assert.FileExists(t, filepath.Join(root, filepath.FromSlash(rel)))
 	}
 	assert.NotContains(t, r.Detail, trace)
-	assert.Contains(t, r.Detail, "git rm --cached --")
+	assert.NotContains(t, r.Detail, "git rm --cached")
+}
+
+// A quarantine marker beside a published chunk is a publication the seal and
+// the repair write on purpose (DES-058): a reader of the tracked tree learns
+// the chunk's range is gone. It is not machine-local state out of place.
+func TestPhysicalPlacementAllowsPublishedQuarantineMarkers(t *testing.T) {
+	root := gitRepo(t)
+	for _, rel := range []string{
+		".punt-labs/ethos/sessions/2026-07-26-abcd1234-0000-0000-0000-000000000000/audit-000001-000002.quarantine",
+		".punt-labs/ethos/sessions/date/audit-000001-000002.jsonl",
+		".punt-labs/ethos/missions/m-1/log-sid-000001-000002.quarantine",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		require.NoError(t, os.WriteFile(path, []byte("first: 1\nlast: 2\n"), 0o600))
+	}
+	r := CheckPhysicalPlacement(root)
+	assert.Equal(t, "PASS", r.Status, r.Detail)
 }

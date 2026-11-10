@@ -305,12 +305,12 @@ func (s *Store) snapshotExportEvents(id string) ([]TrackedFile, []Event, error) 
 				return err
 			}
 			if pending != 0 {
-				return fmt.Errorf("full export incomplete: mission %s tail changed after sealing; retry export", id)
+				return fmt.Errorf("full export incomplete: mission %s tail changed after sealing; export not written, ethos retries on the next export", id)
 			}
 			// Build deterministic portable chunks from the verified union. This
 			// never rewrites retained chunks, and never copies a live file as a file.
 			if len(data.Legacy) > 0 {
-				return fmt.Errorf("full export incomplete: legacy mission events require explicit operator handling")
+				return fmt.Errorf("full export incomplete: mission %s has legacy event history that is not in sealed chunks; export not written", id)
 			}
 			if len(data.Lines) == 0 {
 				return nil

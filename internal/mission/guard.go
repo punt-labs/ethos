@@ -91,6 +91,10 @@ func AuditLeakRule(s string, path bool) string {
 	return ""
 }
 
+// ErrGuardRefused is wrapped by every refusal of guardWrite, so a caller
+// classifies a refusal by kind and never by message text.
+var ErrGuardRefused = errors.New("refusing to write")
+
 // guardWrite is the check at the sink of every mission-tree writer. It takes
 // the bytes bound for dest and returns the bytes to write in their place, or
 // refuses. A structured file (.yaml, .yml, .json, .jsonl) is canonicalised:
@@ -115,10 +119,10 @@ func guardWrite(dest string, data []byte) ([]byte, error) {
 		// every surrogate escape in a double-quoted scalar itself, valid pairs
 		// included, and elsewhere in YAML \ud800 is plain text.
 		if !utf8.Valid(data) {
-			return nil, fmt.Errorf("refusing to write %s: its content is not valid UTF-8; remove or rephrase it", base)
+			return nil, fmt.Errorf("%w %s: its content is not valid UTF-8; remove or rephrase it", ErrGuardRefused, base)
 		}
 		if (ext == ".json" || ext == ".jsonl") && loneSurrogateEscape(data) {
-			return nil, fmt.Errorf("refusing to write %s: its content holds an unpaired surrogate escape; remove or rephrase it", base)
+			return nil, fmt.Errorf("%w %s: its content holds an unpaired surrogate escape; remove or rephrase it", ErrGuardRefused, base)
 		}
 	}
 	switch ext {
@@ -139,7 +143,7 @@ func guardWrite(dest string, data []byte) ([]byte, error) {
 		}
 	}
 	if r != "" {
-		return nil, fmt.Errorf("refusing to write %s: %s %s; remove or rephrase it", base, where, r)
+		return nil, fmt.Errorf("%w %s: %s %s; remove or rephrase it", ErrGuardRefused, base, where, r)
 	}
 	return out, nil
 }

@@ -89,6 +89,16 @@ func TestRunSnapshot_CheckoutEmbedSync(t *testing.T) {
 	}
 }
 
+// A stale deposited .punt-labs/ethos/ETHOS-SETUP.md fails the setup sync check
+// even when docs/ETHOS-SETUP.md matches the embed.
+func TestCheckSetupSync_DepositedCopyDrift(t *testing.T) {
+	repo, ethos := minimalRepo(t, "repo-only")
+	require.NoError(t, os.WriteFile(filepath.Join(ethos, "ETHOS-SETUP.md"), []byte("stale deposited copy\n"), 0o600))
+	r := checkSetupSync(repo)
+	assert.False(t, r.pass, r.detail)
+	assert.Contains(t, r.detail, ".punt-labs/ethos/ETHOS-SETUP.md")
+}
+
 func TestValidateContent_ExplicitTargetEmbedSync(t *testing.T) {
 	bin := buildValidateContent(t)
 	for _, driftTarget := range []bool{false, true} {

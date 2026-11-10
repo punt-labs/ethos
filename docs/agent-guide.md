@@ -6,12 +6,12 @@ This is the consumer reference. Development instructions are in
 
 How to use ethos from an AI agent session — CLI, MCP tools, hooks, and extending identities with custom attributes.
 
-**Storage status:** DES-080 redaction shipped in v4.20.0. DES-079 storage,
-round-decision, publication and full-export behavior below is the required
-contract, **pending final entry-point acceptance**, not a claim about an
-installed binary. The [storage and publication contract](storage-layout.md)
-supersedes older path and tracked-by-default seal descriptions in linked
-historical references and lists the outstanding acceptance cases.
+**Storage:** The DES-079 storage, round-decision, publication and full-export
+behavior below is the shipped behavior. Ethos converts any older layout itself
+at every entry point; see [Automatic storage upgrade](#automatic-storage-upgrade).
+The [storage and publication contract](storage-layout.md) supersedes older path
+and tracked-by-default seal descriptions in linked historical references and
+names the test that proves each promise.
 
 ## Prerequisites: Agent Definitions
 
@@ -74,7 +74,7 @@ Ethos provides two things:
 Tools integrate with ethos at whatever coupling level fits:
 
 - **Filesystem** — read YAML at known paths. Zero dependency on the ethos binary.
-- **CLI** — call `ethos whoami`, `ethos show`, etc. from hooks and scripts. Requires the binary.
+- **CLI** — call `ethos whoami`, `ethos identity get`, etc. from hooks and scripts. Requires the binary.
 - **MCP server** — connect to `ethos serve` for structured identity operations during a session.
 
 ## Repo Enablement
@@ -171,12 +171,12 @@ the full walkthrough and [DESIGN.md](../DESIGN.md) DES-057 for rationale.
 ```bash
 # Shortcuts — canonical forms in parentheses.
 ethos whoami                          # Show active identity   (ethos identity whoami)
-ethos iam mal                         # Declare active persona (ethos session iam)
-ethos create                          # Interactive identity creation
-ethos create -f persona.yaml          # Create from YAML file
-ethos list                            # List all identities   (ethos identity list)
-ethos show mal                        # Full identity          (ethos identity show)
-ethos show mal --json                 # JSON output
+ethos identity create                 # Interactive identity creation
+ethos identity create -f persona.yaml # Create from YAML file
+ethos identity list                   # List all identities
+ethos identity show mal               # Full identity
+ethos session iam mal                 # Declare active persona
+ethos identity get mal --json         # JSON output
 ethos identity schema                 # Field reference for an identity YAML
 ethos identity schema --json          # Same reference as JSON
 ```
@@ -275,10 +275,9 @@ auto-resolution is wrong; a bogus override (missing dir, or no
 
 ```bash
 ethos session start                   # Open a session (prints the export line)
-ethos iam archie                      # Declare "I am archie" in this session
+ethos session iam archie              # Declare "I am archie" in this session
 ethos session                         # Show current session roster
 ethos session end                     # Delete the current session roster
-ethos session purge                   # Clean up stale rosters
 ```
 
 ### MCP Tools
@@ -346,15 +345,15 @@ The tree structure encodes authority: root → primary agent → subagents. Any 
 
 ### Persona Auto-Matching
 
-When a subagent starts, the hook does a case-sensitive `ethos show "$AGENT_TYPE"` to check if an ethos identity exists with that exact handle. Identity handles are restricted to lowercase alphanumeric plus hyphens, so auto-matching only works for lowercase `agent_type` values.
+When a subagent starts, the hook does a case-sensitive `ethos identity show "$AGENT_TYPE"` to check if an ethos identity exists with that exact handle. Identity handles are restricted to lowercase alphanumeric plus hyphens, so auto-matching only works for lowercase `agent_type` values.
 
 ```bash
 # Create personas for common agent types
-ethos create -f code-reviewer.yaml    # auto-matches agent_type "code-reviewer"
-ethos create -f explore.yaml          # auto-matches agent_type "explore"
+ethos identity create -f code-reviewer.yaml   # auto-matches agent_type "code-reviewer"
+ethos identity create -f explore.yaml         # auto-matches agent_type "explore"
 ```
 
-A subagent can override the default via `ethos iam <different-persona>`.
+A subagent can override the default via `ethos session iam <different-persona>`.
 
 ## Extending Identities
 
@@ -408,7 +407,7 @@ ethos ext set --local mal vox api_token <value>
 ```
 
 Each namespace has an optional local overlay for machine-specific values.
-Under the pending DES-079 contract, repository overlays live at
+Repository overlays live at
 `S/.punt-labs/local/ethos/identities/<handle>.ext/<namespace>.local.yaml`,
 not beside tracked extensions. The base stays in the identity's source layer.
 Global identities retain their existing sibling `.local.yaml` layout.
@@ -418,13 +417,11 @@ selection and read-only bundle behavior remain unchanged. Vendor never copies
 overlays. This is Git exclusion, not a vault: merged values can reach model
 context (DES-057).
 
-Legacy repository sibling `<namespace>.local.yaml` overlays are read-only
-compatibility inputs. Before modifying one, stop writers and explicitly reconcile
-it into S's local destination above, preserving every credential and resolving
-any existing destination before removing the old copy. Unequal copies refuse
-reads; local writes refuse while a legacy sibling remains. Do not print values
-or put the merged identity into the tracked base. `ethos repair` excludes overlays
-and credentials; there is no storage-upgrade command. Global overlays are unchanged.
+An old repository sibling `<namespace>.local.yaml` overlay is moved into S's
+local destination above automatically, preserving every credential. When an
+overlay exists in both the old and the new location, the new one is kept and the
+old one is deleted. Do not print values or put the merged identity into the
+tracked base. Global overlays are unchanged.
 
 ### MCP Tools
 
@@ -437,7 +434,7 @@ and credentials; there is no storage-upgrade command. Global overlays are unchan
 
 ### Merged View
 
-When you read an identity (via `ethos show`, `identity` method `get`, or `Load()`), extensions appear under the `ext` map:
+When you read an identity (via `ethos identity get`, `identity` method `get`, or `Load()`), extensions appear under the `ext` map:
 
 ```yaml
 name: Mal Reynolds
@@ -785,12 +782,13 @@ with `reflections: [...]`. See the
 [filesystem shapes and authority join](storage-layout.md#reflection-files-and-the-authority-join)
 for exact fields, conflict checks and unavailable-versus-unsubmitted outcomes.
 
-Readers must distinguish no submission, legacy unknown, submitted with detail
-unavailable here, corrupt optional detail and unreadable authority. Unavailable
-prose is not an empty reflection list and does not change advancement permission;
-malformed authority is an error/unknown. Filesystem-only consumers have the same
-obligation. Quarry's indexing and later explicit repair of incomplete memory are
-consumer work, not something Ethos legacy fallback supplies automatically.
+Readers must distinguish no submission, a mission with incomplete round history,
+submitted with detail unavailable here, corrupt optional detail and unreadable
+authority. Unavailable prose is not an empty reflection list and does not change
+advancement permission; malformed authority is an error/unknown. Filesystem-only
+consumers have the same obligation. Quarry's indexing and later explicit repair
+of incomplete memory are consumer work, which Ethos does not supply
+automatically.
 
 ### Closing
 
@@ -832,14 +830,14 @@ Call mcp__plugin_ethos_self__mission with method="log", mission_id="..."
 Under DES-079, required mission events are local transactional evidence, not
 best-effort audit telemetry. Shared corrections use strict versioned
 `corrections.yaml` authority with durable intent/event-before-install ordering;
-they change no lifecycle field. Readers union local live/archive, published and
-supported legacy sources in either mode. Compare canonical overlapping payloads
-before watermark filtering: equal identities collapse; unequal copies are loud
-conflicts. Keep legacy timestamp-collision rules distinct.
+they change no lifecycle field. Readers union local live/archive and published
+sources in either mode. Compare canonical overlapping payloads before watermark
+filtering: equal identities collapse; unequal copies are loud conflicts. Keep
+timestamp-collision rules distinct.
 
-### Publication and Export (DES-079; acceptance pending)
+### Publication and Export (DES-079)
 
-| Command | Required behavior |
+| Command | Behavior |
 |---|---|
 | `ethos mission publish <id>...` | Snapshot selected complete blame records from S into C and its actual index; no implicit trace under blame |
 | `ethos provenance message <ref>` | Generate the squash body for the final publication commit |
@@ -862,10 +860,10 @@ paths, blob identities, ranges and branch-derived evidence sufficient after
 branch deletion. Historical reads use the manifest-bearing commit; later blame
 uses that commit's original filename and line. Ambiguity stays ambiguous, never
 a first-delegation or ticket guess. Changed source blobs require regeneration.
-The supported [GitHub squash route](example/07-pr-and-merge.md#des-079-squash-route-acceptance-pending)
+The supported [GitHub squash route](example/07-pr-and-merge.md#des-079-squash-route)
 supplies the generated body, pins the reviewed head, then fetches and verifies
 the actual merge SHA. Local hooks do not run on GitHub's squash server; failed
-verification is failed provenance. These commands still need product acceptance.
+verification is failed provenance.
 
 Plain export defaults to C's root regardless of cwd; explicit `--dir` remains
 cwd-relative. Full export first snapshots/seals the mission's unsealed tail
@@ -896,56 +894,6 @@ Three views: dashboard (mission list with counts), mission detail
 (record + dispatch prompt + full audit trail table). Pure Go —
 `html/template` with `go:embed`, Tailwind via CDN. No npm, no build
 step. Ctrl-C stops the server.
-
-### Migration from v3.11
-
-These historical one-time relocation commands move legacy global artifacts into
-the DES-054 per-repo tree. Both are idempotent, both honour
-`--dry-run`, and both refuse to touch artifacts that belong to a
-different repo's work tree.
-
-```bash
-ethos audit migrate                    # legacy global session audit logs
-ethos audit migrate --dry-run --verbose
-ethos mission migrate                  # all migratable missions
-ethos mission migrate <mission-id>     # a single mission
-ethos mission migrate --to-repo --dry-run
-```
-
-Cross-repo policy: a session whose id has no matching repo-tree
-session directory, or a mission whose `contract_id` is not referenced
-by any audit entry in `<repo>/.punt-labs/ethos/sessions/`, stays where it is —
-it belongs to another checkout.
-
-These historical shipped commands are not expanded into a DES-079 migration or
-backfill workflow and do not prove its acceptance.
-
-### Bounded legacy repair (DES-079; final acceptance pending)
-
-`ethos repair --dry-run` shows known obsolete trace/runtime files. Destructive
-`ethos repair` lists the paths, warns of permanent loss of old prompts,
-reflections, events/audit history and runtime residue, then asks
-`Are you sure? [y/N]` in a terminal. Empty input, no and EOF delete nothing.
-`ethos repair --yes` explicitly consents for automation; it also asserts that all
-old/new writers, hooks and MCP servers have stopped. Busy locks refuse cleanup.
-Deletion currently refuses on Windows: inventory is available, but destructive
-repair requires a Unix host with all writers stopped.
-
-There is no backup, lossless migration or authority backfill. Cleanup excludes
-shared identities, contracts, results, corrections, provenance and ADRs, private
-credentials/overlays, configuration, global data, arbitrary/agent-owned files and
-canonical local history. Current publications and flat current exports
-(`missions/<id>.contract.yaml` / `<id>.result.yaml`, with associated trace) are
-retained, including incomplete/ambiguous exports. Other intentional publications
-and exports are not blanket deletion targets. Private legacy overlays require
-the explicit credential-preserving handling described above, not repair.
-
-Deletion is incremental; if interrupted, inspect the new inventory and confirm
-again, without assuming rollback. Historical missions may need manual retirement;
-repair does not invent decisions, corrections or lifecycle transitions. Afterward,
-review tracked deletions and stage/commit normally, run `ethos enable` to refresh
-integration, then reconnect long-lived MCP servers. Re-enable maintains the shared
-local-zone exclusion, not record-tree ignore exceptions; it is not migration proof.
 
 ## Audited Delegation
 
@@ -1047,14 +995,9 @@ regex (`^(?:<pattern>)$`); a malformed pattern is rejected at
 ethos audit show --delegation <id>             # forensic query across sessions
 ethos audit show --delegation <id> --format text
 ethos audit seal [--dry-run]                   # immutable archive; DES-079 defaults to local, not staged
-ethos audit quarantine <chunk>                 # retire a corrupt sealed chunk, recover the live tail
-ethos audit migrate                            # historical legacy → repo-tree audit logs
-ethos audit migrate --dry-run --verbose
-ethos mission migrate --to-repo                # historical legacy → repo-tree missions
-ethos mission migrate <mission-id> --to-repo
 ```
 
-DES-079 requires live lines and immutable archives at S in **both** modes.
+Live lines and immutable archives are kept at S in **both** modes.
 Default `record: blame` sealing neither queries nor changes the index and
 stages no trace. Full mode adds eligible published copies in C, including
 sealed session audits, while retaining the local copy. Consent belongs to
@@ -1063,9 +1006,11 @@ consent is private. Mode changes alone publish nothing, never promote older
 private entries and never delete already published history. Captured eligible
 pending copies remain retryable even after returning to blame.
 
-`ethos audit show` must union local live/archive, published and supported legacy
-sources and print matching `delegation_id` entries, refusing divergent copies
-and exposing corruption or gaps. JSON output is one entry per line and is
+`ethos audit show` unions local live/archive and published sources and prints
+matching `delegation_id` entries, refusing divergent copies and exposing
+corruption or gaps. A corrupt sealed chunk is salvaged automatically by the
+next ethos run (decodable lines are redacted into a replacement chunk, raw
+bytes deleted, digests logged). JSON output is one entry per line and is
 itself a valid audit-log fragment — pipes cleanly into `jq`.
 
 Audit recording failures remain visible without blocking a tool call. Manual
@@ -1218,7 +1163,7 @@ record: blame             # DES-079: default when omitted; full opts in prospect
 | `agent` | *(none)* | Handle of the primary agent identity. When set, ethos injects this persona at session start. When omitted, no agent persona is injected. |
 | `team` | *(none)* | Team name. When set, ethos injects members, roles, and collaboration graph into session context. |
 | `active_bundle` | *(none)* | Bundle name for layer 2 resolution. Omit if not using bundles. |
-| `record` | `blame` | DES-079: `blame` retains trace locally; `full` additionally publishes eligible entries. Invalid values fail visibly on CLI, hooks and MCP. Acceptance pending. |
+| `record` | `blame` | DES-079: `blame` retains trace locally; `full` additionally publishes eligible entries. Invalid values fail visibly on CLI, hooks and MCP. |
 
 Resolve and validate roots plus policy once at request entry, including each
 call in a long-lived MCP server; subordinate operations use that immutable
@@ -1348,7 +1293,7 @@ Talent slugs are listed but not expanded inline — full talent content is avail
 
 3. **Match the names.** The agent definition's `name:` in frontmatter must match the ethos identity's `handle:`. This is how SubagentStart finds the persona.
 
-4. **On spawn**, ethos hooks inject the personality and writing style content into the agent's context automatically. The agent .md file does not need to call `ethos show` — the identity is already present.
+4. **On spawn**, ethos hooks inject the personality and writing style content into the agent's context automatically. The agent .md file does not need to call `ethos identity get` — the identity is already present.
 
 ### What Goes Where
 
@@ -1379,9 +1324,31 @@ talents:                               # slugs → talents/<slug>.md
 
 The `agent` field is a channel binding — like email or GitHub. Ethos defines *who*. The agent `.md` file defines *what tools and workflow*. Voice configuration lives in the `ext/vox` namespace, not as a core field.
 
+## Automatic storage upgrade
+
+Ethos upgrades its own storage; no command exists for it. Every CLI command,
+hook and MCP call first checks a stamp, one at
+`S/.punt-labs/local/ethos/layout.yaml` and one at
+`~/.punt-labs/ethos/layout.yaml`. When a stamp is missing, ethos converts older
+layouts into the shared local zone and appends what it did to
+`~/.punt-labs/ethos/logs/repair.log`. The only output is one line, and only when
+something changed:
+
+```text
+ethos: upgraded storage (N items; see ~/.punt-labs/ethos/logs/repair.log)
+```
+
+A busy lock defers the upgrade to the next run, which resumes it. Losses are
+logged, never fatal. `ethos doctor` shows the layout in its `Storage` row.
+Shared identities, contracts, results, corrections, provenance and ADRs,
+private credentials, configuration, global data and agent-owned files are never
+moved or deleted, and ethos performs no Git staging or commit. Reconnect
+long-lived MCP servers after installing a new binary. The steps and their
+order are in [storage-layout.md](storage-layout.md#automatic-storage-upgrade).
+
 ## Storage Layout
 
-The following DES-079 paths are required targets, pending acceptance. S is the
+The following DES-079 paths are the shipped layout. S is the
 canonical store root; C is the invoking checkout. A "Yes" means intended for
 Git, not automatically staged/committed. The complete authority, reader and
 failure contract is [storage-layout.md](storage-layout.md).
@@ -1424,8 +1391,8 @@ adds copies under C's record tree; it never relocates the only archive there.
 | Prompts, full reflections, sealed mission/session chunks | `S/.punt-labs/local/ethos/trace/` plus record-relative path | No |
 | Publication copies and immutable manifests | `C/.punt-labs/ethos/` selected paths; `provenance/` manifests | Yes |
 | Repository locks, receipts, eligibility metadata, scratch and temporaries | `S/.punt-labs/local/ethos/` | No |
-| Mission contract (legacy global, read-only fallback) | `~/.punt-labs/ethos/missions/<mission-id>.yaml` | No |
-| Session audit log (legacy global, read-only fallback) | `~/.punt-labs/ethos/sessions/<session-id>.audit.jsonl` | No |
+| Mission contract, outside a repository | `~/.punt-labs/ethos/missions/<mission-id>.yaml` | No |
+| Session audit log, outside a repository | `~/.punt-labs/ethos/sessions/<session-id>.audit.jsonl` | No |
 | Mission ID counter | `~/.punt-labs/ethos/counters/missions-YYYY-MM-DD` | No |
 | Delegation ID counter | `~/.punt-labs/ethos/counters/delegations-YYYY-MM-DD` | No |
 

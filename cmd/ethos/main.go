@@ -48,8 +48,53 @@ type silentError struct{}
 
 func (silentError) Error() string { return "" }
 
+// unknownGroupCommand reports a non-flag argument that lands on a command
+// group (a command with subcommands). Cobra turns that into a help request,
+// and --help beats argument validation, so a removed subcommand would print
+// the group's help and exit 0. Groups take no positional arguments, and the
+// only persistent flag is the boolean --json, so skipping every flag and
+// reporting the first remaining word is safe. "help <topic>" is held to the
+// same rule: an unknown topic is a usage error.
+func unknownGroupCommand(args []string) error {
+	if i := firstWord(args); i >= 0 && args[i] == "help" {
+		args = append(append([]string{}, args[:i]...), args[i+1:]...)
+		if i := firstWord(args); i >= 0 {
+			c, rest, err := rootCmd.Find(args)
+			if err != nil {
+				return err // Find itself reports an unknown top-level word
+			}
+			if j := firstWord(rest); j >= 0 {
+				return fmt.Errorf("unknown command %q for %q", rest[j], c.CommandPath())
+			}
+		}
+		return nil
+	}
+	c, rest, err := rootCmd.Find(args)
+	if err != nil || !c.HasSubCommands() {
+		return nil
+	}
+	if i := firstWord(rest); i >= 0 {
+		return fmt.Errorf("unknown command %q for %q", rest[i], c.CommandPath())
+	}
+	return nil
+}
+
+// firstWord returns the index of the first argument that is not a flag, or -1.
+func firstWord(args []string) int {
+	for i, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			return i
+		}
+	}
+	return -1
+}
+
 func main() {
-	if err := rootCmd.Execute(); err != nil {
+	err := unknownGroupCommand(os.Args[1:])
+	if err == nil {
+		err = rootCmd.Execute()
+	}
+	if err != nil {
 		if _, ok := err.(silentError); !ok {
 			// A usageError speaks only when it carries a message; the
 			// zero value means the command already printed its own.
@@ -161,56 +206,6 @@ var whoamiCmd = &cobra.Command{
 	},
 }
 
-// --- show ---
-
-var showReference bool
-
-var showCmd = &cobra.Command{
-	Use:    "show <handle>",
-	Short:  "Show identity details",
-	Hidden: true,
-	Args:   cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runShow(cmd, args[0], showReference)
-	},
-}
-
-// --- list ---
-
-var listCmd = &cobra.Command{
-	Use:    "list",
-	Short:  "List all identities",
-	Hidden: true,
-	Args:   cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runList(cmd)
-	},
-}
-
-// --- resolve-agent ---
-
-var resolveAgentCmd = &cobra.Command{
-	Use:    "resolve-agent",
-	Short:  "Show default agent from repo config",
-	Args:   cobra.NoArgs,
-	Hidden: true,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runResolveAgent(cmd)
-	},
-}
-
-// --- iam ---
-
-var iamCmd = &cobra.Command{
-	Use:    "iam <persona>",
-	Short:  "Declare persona in current session",
-	Hidden: true,
-	Args:   cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runIam(args[0])
-	},
-}
-
 // --- serve ---
 
 var serveCmd = &cobra.Command{
@@ -229,18 +224,12 @@ var serveCmd = &cobra.Command{
 
 func init() {
 	serveCmd.Flags().Bool("opencode-session-metadata", false, "Opt into OpenCode session metadata caller routing (not authentication)")
-	showCmd.Flags().BoolVar(&showReference, "reference", false, "Include reference identity data")
 	whoamiCmd.Flags().BoolVar(&whoamiReference, "reference", false, "Include reference identity data")
-	iamCmd.Flags().StringVar(&sessionIamSession, "session", "", "Session ID (full or prefix)")
 
 	rootCmd.AddCommand(
 		versionCmd,
 		doctorCmd,
 		whoamiCmd,
-		showCmd,
-		listCmd,
-		resolveAgentCmd,
-		iamCmd,
 		serveCmd,
 	)
 }
@@ -363,21 +352,6 @@ func runWhoami(cmd *cobra.Command) error {
 		return writeJSON(out, id)
 	}
 	fmt.Fprintf(out, "%s (%s)\n", id.Name, id.Handle)
-	return nil
-}
-
-func runResolveAgent(cmd *cobra.Command) error {
-	r := currentRoots()
-	if err := r.StoreFailure(); err != nil {
-		return fmt.Errorf("resolve-agent: locating the repository store: %w", err)
-	}
-	handle := ""
-	if r.Config != nil {
-		handle = r.Config.Agent
-	}
-	if handle != "" {
-		fmt.Fprintln(cmd.OutOrStdout(), handle)
-	}
 	return nil
 }
 

@@ -865,7 +865,7 @@ plugin namespace is sufficient.
 - **Selective top-level** (only deploy unique names) — still fragile.
   Any new plugin or Claude Code feature could claim the name.
 
-## DES-013: Session-start hook must not write to shared directories (SETTLED)
+## DES-013: Session-start hook must not write to shared directories (SETTLED; AMENDED 2026-11-09 by DES-084)
 
 ### Incident — 2026-03-21 (8 hours lost across 2 engineers + 1 agent)
 
@@ -1260,7 +1260,7 @@ field-level merging. Extensions always resolve from user-global.
   repo/global semantics.
 - **PII overlay mechanism** — eliminated by DES-019 (voice as extension).
 
-## DES-019: Voice as extension, not core field (SETTLED)
+## DES-019: Voice as extension, not core field (SETTLED; AMENDED 2026-11-09 by DES-084)
 
 ### Problem
 
@@ -4271,7 +4271,7 @@ regardless of how the contract was framed.
 **Implications**: The `pipeline` field is semantically "grouping label for
 related missions that share files." It is not a security boundary.
 
-## DES-049: Rename inputs.bead to inputs.ticket (SETTLED)
+## DES-049: Rename inputs.bead to inputs.ticket (SETTLED; AMENDED 2026-11-09 by DES-084)
 
 **Context**: The `bead` field on Contract.Inputs is named after Punt
 Labs' internal issue tracker. Ethos is open-source; non-Punt-Labs users
@@ -4957,7 +4957,7 @@ change it.
   3.4/3.5/3.6 enforcement.** DES-052 is purely a write-set
   authorization extension.
 
-## DES-054: Audited delegation — Tier A audit + Tier B contracts (SETTLED; AMENDED 2026-10-24 by DES-079, DES-080)
+## DES-054: Audited delegation — Tier A audit + Tier B contracts (SETTLED; AMENDED 2026-10-24 by DES-079, DES-080; 2026-11-09 by DES-084)
 
 **Status**: Settled. Shipped across PRs #326–#328 (2026-05-22/23); hardened in v4.9.0 by the mission-lifecycle cluster (#415, DES-067). Bead `ethos-98u9`. Supersedes `ethos-717p`, `ethos-gqg3`. Reviewed across four rounds (rop minimalism / rsc compatibility / jra formal invariants). Round 4 verdict: 3× APPROVE — converged. Design converged at v5; the revision history below is retained for provenance.
 
@@ -5523,7 +5523,7 @@ silent and non-blocking.
 
 ---
 
-## DES-057: Self-standing repos — repo-authoritative resolution, `ethos vendor`, and ext `.local` (SETTLED)
+## DES-057: Self-standing repos — repo-authoritative resolution, `ethos vendor`, and ext `.local` (SETTLED; AMENDED 2026-11-09 by DES-084)
 
 **Status**: Settled. Design ratified 2026-07-11 (bead ethos-ni0y). Amends
 DES-008. v1 ships all three parts together. Consumer/first adopter: vox
@@ -5823,7 +5823,7 @@ Design missions (specialist drafts preserved in branch history):
 
 ---
 
-## DES-058: Live audit write path and sealed committed record (amends DES-054) (SETTLED; AMENDED 2026-10-24 by DES-079)
+## DES-058: Live audit write path and sealed committed record (amends DES-054) (SETTLED; AMENDED 2026-10-24 by DES-079; 2026-11-09 by DES-084)
 
 **Status**: Settled. Shipped in v4.8.0. Bead `ethos-t5b6`. Amends DES-054 v5 storage.
 Cross-repo request from punt-kit (clean-tree gate on `punt release`
@@ -6487,7 +6487,7 @@ ships the same slug). See `docs/setup-consistency.md` for the full analysis.
   an explicit, reviewable operator action (`ethos seed`, `ethos team
   activate`), not a silent hook side effect.
 
-## DES-061: Harness-neutral sessions — CLI-first session start/end (SETTLED)
+## DES-061: Harness-neutral sessions — CLI-first session start/end (SETTLED; AMENDED 2026-11-09 by DES-084)
 
 **Status**: Settled. Bead `ethos-leh7`. Full design in
 `docs/harness-sessions.md`.
@@ -9241,7 +9241,7 @@ as "do not block". The output field is `permissionDecision`, an unexported
 bool type that marshals only to `"deny"` and is omitted otherwise, so `allow`
 cannot be written.
 
-## DES-075: Mission storage layer model — what the repo tree, the global tree, and their locks are each authoritative for (AMENDED 2026-09-08; 2026-10-24 by DES-079)
+## DES-075: Mission storage layer model — what the repo tree, the global tree, and their locks are each authoritative for (AMENDED 2026-09-08; 2026-10-24 by DES-079; 2026-11-09 by DES-084)
 
 ### DES-079 amendment — physical placement and authority (acceptance pending)
 
@@ -9774,7 +9774,7 @@ history — not merged to the main tree — is now caught by
 `create`/`dispatch`'s admission control; it previously was not. See
 `CHANGELOG.md` under `[Unreleased]`.
 
-## DES-076: Active-mission dispatch binding is single-use, scoped to the declared Worker (AMENDED 2026-09-08 — round 3)
+## DES-076: Active-mission dispatch binding is single-use, scoped to the declared Worker (AMENDED 2026-09-08 — round 3; 2026-11-09 by DES-084)
 
 **Context.** DES-075's "Consequence for ethos-7tqd" section named this
 as follow-up work outside PR #508's write-set. Reproduced live
@@ -13075,13 +13075,14 @@ Full writeups, including two historical exploit traces, are in
 
 ---
 
-## DES-079: What ethos puts in git — a blame tier by default, a trace tier by opt-in (amends DES-026, DES-054, DES-058, DES-070, DES-072, DES-075) (SETTLED)
+## DES-079: What ethos puts in git — a blame tier by default, a trace tier by opt-in (amends DES-026, DES-054, DES-058, DES-070, DES-072, DES-075) (SETTLED; AMENDED 2026-11-09 by DES-084)
 
 **Status**: Settled 2026-10-23 by operator ruling; ADRs added to the blame
 tier 2026-10-24. Beads `ethos-g3g3` (implementation), `ethos-yjh0` (ADR
 store in the repository) and `ethos-3e3f` (redaction, DES-080).
 DES-080 redaction shipped in v4.20.0 (see `CHANGELOG.md`). DES-079's storage,
-authority, publication and upgrade repair is in progress, **not release-accepted**.
+authority, publication and repair features shipped in v4.21.0 (see
+`CHANGELOG.md`); release acceptance is pending.
 Earlier path-class/doctor work is not proof of physical-boundary compliance.
 The [storage contract](docs/storage-layout.md) maps promises to implementation
 surfaces and still-pending executable acceptance.
@@ -13766,7 +13767,7 @@ release claims until real entry-point acceptance passes.
 
 ---
 
-## DES-080: Mission-record and audit writers redact — paths, addresses and credentials (amends DES-050, DES-054) (SETTLED)
+## DES-080: Mission-record and audit writers redact — paths, addresses and credentials (amends DES-050, DES-054) (SETTLED; AMENDED 2026-11-09 by DES-084)
 
 **Status**: Settled 2026-10-23, scope corrected 2026-10-24 after review.
 Bead `ethos-3e3f` (P1, security), mission `m-2026-10-23-025`.
@@ -14088,7 +14089,7 @@ checks provides the required development capability directly.
 
 ---
 
-## DES-083: Thin-shim git hooks — the binary owns seal and trailer policy (SETTLED)
+## DES-083: Thin-shim git hooks — the binary owns seal and trailer policy (SETTLED; AMENDED 2026-11-09 by DES-084)
 
 **Status:** Design merged in #585; the fail-closed old-binary behaviour and
 exit 2 on both shims are operator rulings. Amends DES-058 and DES-054
@@ -14153,3 +14154,119 @@ this replaces. Policy in a configuration file needs a second parser in shell and
 bypasses the binary's single validated snapshot. `exec` of the binary breaks
 chaining, because a section after foreign content cannot `exec` away the host's
 status.
+
+---
+
+## DES-084: Ethos repairs its own state — a layout stamp and an automatic Ensure gate (SETTLED; implemented 2026-11-10)
+
+**Status**: Settled; ratified 2026-11-09, implemented 2026-11-10 in `internal/autorepair` and released as v5.0.0. Epic `ethos-ftey`. Operator rulings of 2026-11-09 bind this ADR: repair is 100% automatic and the user runs nothing; output is at most one diagnostic line plus `~/.punt-labs/ethos/logs/repair.log`; obsolete pre-redaction local data may be deleted once a redacted copy is archived; a repository overlay conflict keeps the new location and deletes the old; gitleaks and trufflehog are out of scope; everything ships in one PR. A further ruling of 2026-11-10 sets the acceptance bar: no crash, no hang, no blocked command or hook; a loss is logged in the repair log and is never fatal; a residual loss path is a follow-up, not a reject. The "Mechanism" section below records what the implementation settled beyond the decision.
+
+### Context
+
+DES-079 moved repository storage in v4.21.0 and left upgrade to the user: seven repair commands (`repair`, `audit quarantine`, `audit migrate`, `mission scrub`, `mission migrate`, `adr migrate`, `session purge`) and about 45 messages telling the user to reconcile, clean up or `git rm --cached` by hand. One leftover has no fix at all: a live audit tail written before redaction (v4.20.0) makes every commit warn, and quarantine, repair, scrub and migrate all refuse it (`internal/hook/audit_repository.go:189`, `internal/audit/quarantine_local.go:234`). Because old layouts may exist, every reader keeps a legacy branch. The cost is about 4,300 production lines of union and fallback readers.
+
+### Decision
+
+Ethos converts every legacy layout itself, once per machine and once per repository, and records the result in a layout stamp. Nothing reads storage without passing the gate, so the legacy readers can be deleted.
+
+**Stamp.** `S/.punt-labs/local/ethos/layout.yaml` and `~/.punt-labs/ethos/layout.yaml` hold `{version: 5, ethos: <binary>, repaired_at: <RFC 3339>, items: <N>, residual: [{step, id, reason}]}`; `items`, the count of conversions applied to that store, is written only when non-zero and is what the doctor `Storage` row shows. Layout number 5 names the DES-079 layout and is independent of the release number. A missing stamp means unknown, so every step runs. A stamp with a higher number is treated as current: a downgraded binary never converts backward. The repository stamp needs a class-4 entry in `layout.Table` beside `internal/layout/layout.go:119`, or the unmatched-path test of DES-079 (DESIGN.md:13198) fails.
+
+**Gate.** `autorepair.Ensure(ctx, roots, global) (Result, error)`; the error is always nil, because a repair problem is logged and left for the next entry. Current stamps cost two `stat` calls and one small read, under 1 ms. Otherwise Ensure takes the global lock (`~/.punt-labs/ethos/locks/<sha256>.lock`, the `internal/claudemd/claudemd.go:193` convention), then `p.LockPath("autorepair", "repository")` (`internal/layout/policy.go:110`). The repair lock is outermost: Ensure is never called while another ethos lock is held, and steps take the locks DES-075 orders (DESIGN.md:9351; `internal/mission/store.go:2723`) inside it. A busy lock is waited on for at most 2 s, the stamp is re-read, and the caller continues without failing. Each step is idempotent by state, not by version. Each step has a 5 s budget and Ensure a 30 s budget (initial values). A step past budget or deferred by a busy lock, an index lock or an unreadable file logs and leaves the stamp unwritten, and the next entry resumes. A step that finds a permanent condition records it in `residual` and counts as finished, so a stamp can be written. The stamp is written only when every step finished or recorded a residual.
+
+**Wiring.** One call in `establishRoots` (`cmd/ethos/store_refusal.go:173`, installed at `cmd/ethos/root.go:18`) covers every CLI command and every hook, because each hook is a cobra command under `hookCmd` (`cmd/ethos/hook.go:34`), including `hook pre-commit` and `hook commit-msg` that the DES-083 shims call. `version`, `completion`, `help` and `uninstall` are exempt. The MCP server calls Ensure in `Handler.addTool` before `h.current()` (`internal/mcp/store_guard.go:137`). The repository pass runs only when the store is located; the global pass always runs. A test walks the cobra tree and the MCP tool table and fails when an entry point does not pass Ensure (the technique of `cmd/ethos/store_refusal_test.go:186`). Windows is not a shipped target (DESIGN.md:9502-9504): there Ensure compiles and does nothing.
+
+**Cheap passes.** Pre-commit runs steps 6, 9 (unstage) and 16 on every commit, before the seal (`autorepair.PreCommit`). Session start runs step 17 and then step 7 on every start (`autorepair.SessionStart`): a sealed chunk damaged after the stamp was written is salvaged at the next start, since no later Ensure revisits a stamped store. Both passes run outside the stamp and never write one. A hook obtains its environment from `autorepair.HookEnv` and runs named steps through `autorepair.CheapPass`; a hook never builds its own pass, log or summary line, so the design has exactly one "upgraded storage" line.
+
+**Failure.** Nothing a repair step does can fail a command, hook or MCP call. The existing fail-closed cases stand: invalid configuration, required full-mode publication, and a seal that still meets a line the redaction guard cannot clear. Their messages stop naming user actions.
+
+**Output.** At most one line: `ethos: upgraded storage (N items; see ~/.punt-labs/ethos/logs/repair.log)`. Session start puts it in `systemMessage` and `additionalContext` (`internal/hook/session_start.go:25-31,505`); its stderr goes to an unread log. Pre-commit prints it to stderr only, because any stdout blocks the commit (`plugin/hooks/pre-commit.sh:85-110`). CLI prints it to stderr and MCP adds a second content block, only when something was repaired. A residual never produces a line; `ethos doctor` shows a `Storage` row: `PASS layout v5 (upgraded <time>, N items)`.
+
+**Log.** JSON lines `{time, store, checkout, ethos, step, action, paths, error}`: paths redacted by the DES-080 redactor, never file contents, capped at 1 MB with one rotation (`repair.log.1`), appended with `O_APPEND` and rotated under the global lock.
+
+### Steps, in order
+
+Each bullet: legacy state (origin), conversion, code reused. Citations verified against the worktree on 2026-11-09.
+
+1. Global mission tree for this repo's missions (v3.0-v3.11): import into `S/.punt-labs/ethos/missions/<id>/` through the redactor; other missions stay. `mission.MigrateMission` (`internal/mission/migrate.go:79`), ownership by `repoMissionIDs` (`:235`), so the DES-075 F4 ownership signal (DESIGN.md:9510-9536) is unchanged.
+2. Global session audit (v3.0-v3.11): import this repo's sessions into the local archive, redacted. `hook.MigrateAuditWithPolicy` (`internal/hook/audit_repository_migrate.go:21`).
+3. Missions without `round_decisions` or `corrections.yaml` (before v4.21.0): run the existing importers eagerly, only from complete validated evidence. `importLegacyDecisions` (`internal/mission/reflection_authority.go:616`), `importLegacyCorrections` (`internal/mission/correction_authority.go:167`). A mission whose crossed-round history is incomplete, or whose evidence a redaction refuses, is recorded as a residual and stays fenced from lifecycle writes. No decision is fabricated. See open question 1.
+4. Tracked mission records written before redaction (before v4.20.0): scrub in place, as a normal diff. `mission.TrackedRecordFiles`, `ScrubFilesWithPolicy` (`internal/mission/scrub.go:24,120`).
+5. Frozen `audit.jsonl`/`log.jsonl`, sealed chunks, `prompt.md` and `reflections.yaml` in the record tree that are not full-mode publications (v3.12-v4.20): redact-copy into the local archive, then delete from the tree. `repair.Inventory`, `obsolete`, `retainMissionTrace` (`internal/repair/repair.go:47,152,218`); `audit.WriteLocalAtomic`, `ReplaceLocalFile` (`internal/audit/repository.go:142,196`).
+6. Live audit or mission-log lines written before redaction (before v4.20.0): under the stream lock, rewrite pending lines through the guard, recomputing `tool_input_hash` and preview; drop a line whose `ts` is already archived. `sessionLineGuard` (`internal/hook/audit_guard.go:639`), `missionLineGuard` (`internal/hook/audit_mission_guard.go:25`), `audit.ReplaceLocalFile`, an exported live reader beside `readCompleteLive` (`internal/audit/repository_read.go:163`). Closes `ethos-kic6` and the stuck warning.
+7. Corrupt sealed chunk, or tracked lines made invalid by hand redaction (any version): salvage decodable lines, redact, write a replacement chunk, refuse to install a line that conflicts with surviving evidence, log both digests, delete the raw bytes. `audit.QuarantineLocal` (`internal/audit/quarantine_local.go:41`) changed at `:234` to redact instead of refuse, plus a conflict check before install. Closes `ethos-jn25` and `ethos-h5z8`.
+8. Repository overlay in the old sibling location (v4.10-v4.20): under the identity lock move old to new; if both exist keep new and delete old. `legacyExtLocalPath`, `extLocalPath` (`internal/identity/ext.go:52-59`), `withLock` (`internal/identity/persistence.go:72`).
+9. Local or trace files tracked by git (any version): stage removal from the index, files stay on disk. Scope is `.punt-labs/local/**`, class-4 paths, and the non-publication trace of step 5. Never explicit exports, full-mode copies or agent artifacts. New `gitenv` helper over `git rm --cached -q --` under `gitenv.ActualIndexEnv()` (`internal/gitenv/index.go:33`); the file list comes from `doctor.trackedLocalExt` (`internal/doctor/repo_only.go:202`). A held `index.lock` defers.
+10. Old managed `.gitignore` block (v4.1-v4.20) or missing `.punt-labs/local/` rule: replace the block with the single rule, always ensure the rule, refresh hooks first. `enable.EnsureLocalIgnored` (`internal/enable/gitignore.go:576`), `removeLegacyManagedRules` (`:190`), `preflightLegacyIgnores` (`:243`). Closes `ethos-fdmx`.
+11. `.punt-labs/ethos/config.yaml` (v0.6-v2.1): rename to `.punt-labs/ethos.yaml` if absent, else keep the new and delete the old. `resolve.loadRepoConfig` (`internal/resolve/resolve.go:610-621`).
+12. Global ADRs linked from this repo's missions (before v4.21.0): copy into the repository store; others stay global. `adr.Store.Migrate` (`internal/adr/migrate.go:22`).
+13. Identity YAML with a top-level `voice:` (before v2.0.0): move to the `vox` extension and rewrite. `identity.migrateVoiceUnlocked` (`internal/identity/store.go:148`), `relocateRepoVoiceUnlocked` (`internal/identity/layered.go:207`).
+14. Contracts using `inputs.bead` (any version through v4.22.1, where the alias is still accepted): rewrite to `inputs.ticket`. `mission.BeadAlias` (`internal/mission/inputs.go:102`).
+15. Old lock files, `.<id>.migrate-*` staging directories, `.ethos-tmp` and `.tmp` leftovers (any version): delete; a busy lock skips and retries. `repair.Plan.Apply` changed from refuse-all to skip-busy; `layout.LegacyTmpSuffix` (`internal/layout/temp.go:25`).
+16. Stale git hook sections (any version): refresh. `enable.RefreshHooksTo` (`internal/enable/refresh.go:50`).
+17. Dead rosters, `current/<pid>` files, purge tombstones (any version): non-force purge; log each tombstone once, then retire it. `session.PurgeCurrent`, `PurgeTombstonedReport(force=false)` (`internal/session/store.go:830,531`), `audit.AckTombstone` (`internal/audit/tombstone.go:164`). Rosters without `checkout` are not filled in: the DES-058 residual (DESIGN.md:6221) stays and ages out.
+
+### What repair never touches
+
+A contract's lifecycle fields (status, current round, budget, evaluator, `closed_at`); accepted results; `corrections.yaml` entries; ADR text; provenance manifests; identity content other than step 13; overlay values (the file moves, the values do not change); explicit exports (`<id>.contract.yaml`, `<id>.result.yaml`); full-mode published copies (`internal/repair/repair.go:42,77`); agent-written `missions/<id>/artifacts/` (`repair.go:164-166`); user `.gitignore` lines outside the exact former block; foreign git hooks; other tools' files under `.punt-labs/`; git history; and the outside-a-repository global stores (missions, ADRs, identities, session audit), which remain a supported mode.
+
+### Commands removed
+
+`ethos repair`, `audit quarantine`, `audit migrate`, `mission scrub`, `mission migrate`, `adr migrate`, `session purge` with `--force` and `--ack`, and the hidden aliases `show`, `list`, `resolve-agent`, `iam`, `create`, `ext del`, `session create|delete|write-current|delete-current|roster`, `vendor --no-teams|--from`. `audit seal` stays, hidden, because the hooks call it. No MCP tool exposed a removed command; the MCP `identity get` and `ext del` methods are not CLI aliases and stay. Their `storeUses` rows and test rows go with them. Kept on purpose, hidden: `identity get` (the workspace's `.bin/git-identity.sh` calls it), `hook commit-trailers` and `hook commit-message` (commit-msg sections written by v4.13.0 through v4.21.0 call them, and a shared or tracked `core.hooksPath` cannot be refreshed), `audit seal` (the shims call it) and `session iam`. A removed command exits with a usage error; `cmd/ethos/removed_commands_test.go` runs every removed and every kept name through the built binary.
+
+### Legacy readers deleted
+
+Everything in the plan's section 6 whose only purpose is to read a layout that Ensure has converted: the mission global-layer dispatch and unions, the legacy event pool, the `legacy_unknown` read state, legacy `reflections.yaml`/`prompt.md` unions, the `inputs.bead` alias, `StreamData.Legacy` and its readers, the in-repository audit unions, the ADR `legacy` field, the legacy gitignore retirement, the overlay sibling path, voice migration and the `config.yaml` fallback. Kept: the outside-a-repository stores and their paths (`legacyAuditPath`, `queryLegacyAudit`, `NewStore` for missions and ADRs; `internal/hook/audit_paths.go:44`, `internal/hook/preconditions.go:374`). Dead code the `deadcode` tool proves unreachable is deleted with it. The pre-DES-074 PID participant fallback is not deleted by this ADR: a session that straddles an upgrade is not re-created at the next start, and DESIGN.md:8347-8353 and 8967 exist for that case. Kept until a later release.
+
+### Amends
+
+Each clause is quoted by its first words, with its DESIGN.md line. The status line of each ADR gains `AMENDED 2026-11-09 by DES-084`.
+
+- **DES-079**: "legacy misplaced artifacts require operator-directed cleanup" (13108-13109), for ethos-owned legacy files only; "the legacy pre-DES-058 `log.jsonl` (appended to only by `ethos mission migrate`)" (13591-13593) and "the legacy pre-DES-058 `audit.jsonl`" (13596-13597); "For a repository that still tracks recognized legacy local state, diagnostics must distinguish it" (13665-13667); "**Operator amendment: bounded legacy repair.**" (13671-13690), replaced in full: the `Are you sure? [y/N]` command, its inventory and the line "No new storage-upgrade command, backfill guarantee or migration framework is required" give way to the stamp and Ensure; "`ethos mission migrate`, which copies a legacy global mission" (13736); the stale citation "`internal/resolve/resolve.go:497`" (13530-13531), now `:610-621`.
+- **DES-058**: "Existing tracked `audit.jsonl`/`log.jsonl` are frozen historical chunks and stay" (6256), now archived redacted and unstaged by steps 5 and 9; "warning repeats at each commit until the operator acknowledges it with `ethos session purge --ack`" (6147-6148), now logged once and retired by step 17; "The specified escape from a corrupt-chunk exit 2 is **`ethos audit quarantine <chunk>`**" (6077-6079), now step 7. Chunk immutability is unchanged: a chunk is never modified, and the tracked copy leaves the working tree and the index only after a redacted copy is archived.
+- **DES-075**: "**Decision 2 — which tree is authoritative for READS of an existing mission.**" (9310), whose global fallback inside a repository ends after step 1; "Both locks exist and both stay" (9351), for the global create-lock fence only (`internal/mission/store.go:497-505,2877-2925`); the layer model's global reads remain for the outside-a-repository store.
+- **DES-054**: "**`ethos audit migrate` behaviour**" (5221) and "**`ethos mission migrate --to-repo`**" (5230), automatic as steps 1 and 2; "Legacy reader fallback applies for the transition window" (5184), ended by the readers' deletion; the rejected alternative "**Backfill historical audit logs automatically.** Operators run `ethos audit migrate` explicitly." (5361), reversed by the operator ruling (open question 5).
+- **DES-061**: "refuse a roster that exists but cannot be parsed ... with a remedy (`ethos session purge` / `ethos audit quarantine`)" (6559-6562): a corrupt roster is logged and replaced; the live audit files are separate and sealed by the next seal.
+- **DES-076**: "K3's own fix is NOT automatic (`ethos session purge` is an explicit, operator- or tooling-invoked step" (10753-10755), now automatic at every session start (step 17).
+- **DES-080**: "Upgrade exception: lines already in a live audit file or live event log" (13821), closed by step 6; "A repository upgrading from an earlier ethos runs it once" (13927-13936, decision 6), now step 4.
+- **DES-083**: "A section copied before the shim keeps working with a new binary" (14128-14131) and "so a section copied before the shim, which calls `audit seal`, is reported stale" (14134-14135): a section that calls a retired hook subcommand is refreshed by step 16, subject to open question 3.
+- **DES-049**: "Accept `inputs.bead` as a deprecated alias during a transition period" (4282) and "A future major release removes the `bead` alias" (4298): v5.0.0 is that release; step 14 rewrites stored contracts first.
+- **DES-019**: "Auto-migration: on Load, if a legacy `voice:` key exists in the YAML" (1277-1281), now step 13 at stamp time, not on every Load.
+- **DES-013** (also amended): "Session-start hooks may read global state but not write it" (997). Session start already writes the repository (DES-026 agents, DES-083 hook refresh); Ensure extends that to the repository's local zone, record tree, `.gitignore` and index paths named above, and never `~/.claude/`.
+- **DES-057** (also amended): "Doctor reports legacy misplaced/tracked overlays; migration copy-verifies, refuses divergent values and reports exact operator cleanup" (5698-5700), now step 8, which keeps the new overlay and deletes the old on conflict.
+
+### Open questions — ruled
+
+Five questions were open when this ADR was proposed; each was ruled on 2026-11-09 under the operator's rules and the rulings are implemented.
+
+1. **Incomplete round history (step 3).** A mission whose crossed-round history is incomplete, or whose evidence a redaction refuses, is fenced (reads show authority unavailable, lifecycle writes refuse) and recorded as a residual `{step: round-decisions, id: <mission>, reason: ...}`. Nothing is fabricated; DESIGN.md:2906-2908 and `docs/spec-mission-lifecycle.tex:450-456` stand. A terminal mission is not marked history-incomplete with relaxed validation.
+2. **`identity get`** stays, hidden, because the workspace's `.bin/git-identity.sh` calls it; removal would be a cross-repo breaking change.
+3. **`hook commit-trailers` and `hook commit-message`** stay, hidden, because commit-msg sections written by v4.13.0 through v4.21.0 call them and a shared or tracked `core.hooksPath` cannot be refreshed (DESIGN.md:14105-14107).
+4. **Pre-DES-074 PID participant fallback** stays until a later release, for a session that straddles an upgrade.
+5. **DES-054 and DES-065.** This ADR amends both: the rejected alternative "Backfill historical audit logs automatically" (5361) and "No pre-feature migration" (6912) are reversed for storage by the 2026-11-09 ruling.
+
+### Mechanism
+
+What the implementation settled beyond the decision above. Each item is enforced by a named test.
+
+- **Step registry.** Each step is a `Step{Name, Scope, Run}` registered from its file's `init`; `StepOrder` in `internal/autorepair/autorepair.go` is the DES-084 order. A registered step not in `StepOrder` fails the order test. A name in `StepOrder` with no registered step is a step that has not run: Ensure treats it as deferred, logs the set once per pass, and writes no stamp of a scope that step would serve, so a binary built without every step never stamps a store current (`engine_test.go`).
+- **Zero-step rule.** When the stamps are current, or when no registered step would serve a needed store, Ensure returns before taking any lock or opening the log; the stores are byte-identical. A repository without a `.punt-labs/` directory has no repository target at all, so a stray `ethos whoami` there creates nothing for `git add -A` to pick up (`repositoryTarget`).
+- **Write contract.** In a repository that has used ethos, every command that passes the gate, read-only and failing commands included, may write the repository stamp, the step lock files, the `.punt-labs/local/` ignore rule (step 10) and the repair log on its first run after an upgrade; `TestTeamBundleDiagnosticPhysicalPlacement` admits exactly those paths. Outside a repository only the global stamp, locks and log are written.
+- **Step locks.** Each step runs in its own goroutine under `~/.punt-labs/ethos/locks/step-<name>.lock` with the 5 s step budget; a step that ignores its context is abandoned at the deadline, its result goes nowhere, and the pass ends there because the abandoned step may hold inner locks the next would contend for. The global and repository repair locks are held until every goroutine has returned; after the 30 s Ensure budget that wait is unbounded by design, so a step that never returns holds the locks and the next entry defers at the 2 s lock wait and converts nothing, which is the correct degradation.
+- **Residual scope.** A `Residual` carries a `Scope`; a `ScopeBoth` step sets it. A residual is written only into the stamp of its own scope; when the pass serves no stamp of that scope it is carried in `Result.Residuals` and the owning store's own pass records it when it runs.
+- **Step dependencies.** Step 14 (`bead-alias`) records a residual for a contract it cannot read or rewrite instead of failing; step 3's fenced missions are left as they are by every later step.
+- **Hook entry.** `HookEnv(roots, global)` builds the same `Env` Ensure builds; `CheapPass(ctx, names, env)` runs the named registered steps under the global lock without waiting (a busy lock skips the pass: a session start must not stall behind a repair) and never writes a stamp. `SessionStart` runs steps 17 and 7; `PreCommit` unstages `.punt-labs/local/` from the committing index and runs steps 6 and 16 (step 9 is not a commit-time step: it stages record-tree deletions, which must never ride along in the user's commit).
+- **Ensure before any storage read.** `TestEveryCommandPassesEnsure` walks the cobra tree and fails for a non-exempt command whose `PersistentPreRunE` chain does not reach `ensureForCommand`; the MCP handler installs the gate with `WithEnsure` and runs it after locating and before any tool reads storage. `TestAutorepairNeverImportsHook` keeps `internal/autorepair` a leaf below `internal/hook`; the line guard and the audit importer live in `internal/lineguard` and `internal/auditimport` for that reason. The located-use scanner in `internal/resolve/retired_test.go` fails any direct read of a retired path outside the step packages.
+- **Pre-v4.0 record tree.** Releases before v4.0 kept the record tree at `<store>/.ethos`; `repair.LegacyRecordRoot` adds it to the inventory and the archiver, queried for tracked files from the store with the `.ethos/` pathspec. A legacy `missions/<id>/log.jsonl` is not retained by a contract's `round_decisions`; only an explicit export retains it.
+- **Global audit import (step 2).** Every session audit the import succeeds on is deleted from the global store: the import is its redacted archive, and a session another checkout owns never reaches the importer.
+- **Messages.** `TestNoMessageTellsTheUserToRepair` and `TestMessagesStateOnlyWhatThisCodeDid` (`cmd/ethos`) fail a product message that tells the user to run a command or promises what a later run will do; messages state what ethos found or did.
+- **Shipped archetypes are the last resolution layer.** A contract loads by the rules its type carried when it was created: `mission.ArchetypeStore.LoadLayer` tries repo-local, global, then the archetypes compiled into the binary, and `validateContract` consults the embedded layer when no store resolves the type. A closed report mission with no `write_set` therefore loads on a host whose trees never seeded the report archetype, instead of fencing `round-decisions` on every run. `cmd/ethos` registers `seed.Archetypes` into `mission` at init, because `internal/seed` and `internal/mission` each have tests that import the other, so neither may import the other in production (`TestLoadReportContractWithoutWriteSetOnAHostWithoutTheArchetype`).
+- **Legacy session files archive under their own date.** The repair's `sessionArchiveDir` builds the archive path from the legacy directory's own name; `audit.ArchiveDir` keeps its contract of preferring a session's existing directory, which the seal relies on, and would otherwise route a July file to a November directory and refuse it there as a collision (`TestRecordTreeTraceArchivesLegacySessionUnderItsOwnDate`).
+- **Every unresolvable condition is a residual.** A condition a step cannot change on a later run is recorded once in the stamp so the stamp lands, never deferred so the whole repair re-runs on each command: a global audit file a whole budget cannot finish (and a file that fails fast does not shield the next one from that rule), a roster the filesystem will not hand over, an undecodable live line, a file named like a chunk that is not one. A deferral is reserved for a condition that changes between runs: a busy lock, a budget spent on other files, a commit in progress.
+- **Acceptance.** `scripts/storage_acceptance.py` (`make check-storage`) runs the `upgrade` case over nine corpus snapshots from v3.11.0 to v4.22.1 (`scripts/legacy-corpus.sh`, test tooling that never ships) through the built binary, plus `audit_recovery` and the eight DES-079 cases; `cmd/coverage-check` holds `internal/autorepair` at 81.0 % and the suite at its baseline.
+
+### Rejected alternatives
+
+- **A user-run repair command** (the DES-079 `ethos repair`, DESIGN.md:13671-13690). It cannot fix the live-tail case, relies on the user knowing to run it, and needs the 45 messages that tell them to. A command nobody runs repairs nothing.
+- **Lazy per-reader compatibility** (the status quo). Every reader decides what a legacy file means, so each new reader re-opens the question. DES-075 found three worktree-state bugs of that shape (DESIGN.md:9663-9722, 9724-9775). It leaves about 4,300 lines of union readers and no point at which the old layout is known to be gone.
+- **A versioned migration framework** (a script per release, replayed in order). More machinery than one layout number: steps here are idempotent by observed state, so no step needs to know which release wrote the data. DES-065 and DES-054 rejected per-file and per-release stamps for the same reason (DESIGN.md:6914-6916, 4974).
+- **Repair only at session start.** Repositories are committed to, queried and served over MCP without a session start, and the pre-commit seal is where the stuck warning appears.

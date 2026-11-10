@@ -28,11 +28,9 @@ make check                              # All quality gates (vet, staticcheck, s
 ./ethos doctor                          # Check installation health
 ./ethos setup                           # Interactive repo setup wizard
 ./ethos whoami                          # Show caller's identity (iam/git/OS)
-./ethos resolve-agent                   # Show default agent from repo config
 ./ethos serve                           # Start MCP server (stdio transport)
-./ethos iam <persona>                   # Declare persona in current session
+./ethos session iam <persona>           # Declare persona in current session
 ./ethos session                         # Show current session participants
-./ethos session purge                   # Clean up stale sessions
 ./ethos adr list                        # List architecture decision records
 ./ethos import --from soulspec <file>   # Import identity from SoulSpec
 ./ethos export --to soulspec <handle>   # Export identity to SoulSpec or claude-md
@@ -137,6 +135,23 @@ make check                             # All gates: lint + docs + test + validat
 
 Expands to `make lint docs test validate-content fuzz-check check-opencode check-storage`: `go vet`, `staticcheck`, `shellcheck plugin/hooks/*.sh install.sh`, `markdownlint`, `go test -race -count=1 ./...`, `go run ./cmd/validate-content`, plus `fuzz` type-checking of every Z-specification `.tex` under `docs/` (content-detected; loud skip locally when `fuzz` is absent, hard failure in CI), offline native OpenCode configuration tests, and the real CLI/MCP/Git-hook storage acceptance gate. The storage gate requires every case to execute and records binary/source fingerprints; it is final-placement evidence, not proof of transient placement or crash durability. Live workstation checks are separate: `make doctor-opencode` and `make smoke-opencode`; product `make doctor` is unchanged.
 
+### Coverage baseline
+
+`make coverage-check` compares per-package statement coverage in `coverage.out` (written by `make test`) with `coverage-baseline.txt`. A package may drop at most 0.1 point; `overall-target` is the overall floor.
+
+The baseline records the GOOS it was generated on in one `# os:` line. Statement counts differ per OS, so the check fails outright when that line differs from the host's GOOS. CI runs linux, so the committed baseline must be a linux one. A package whose tests cannot run on the generating host is listed as `# unmeasured: <pkg> (reason)` and kept out of the gate.
+
+To regenerate the linux baseline from a CI run on the branch:
+
+```bash
+make coverage-baseline-from-ci           # latest successful test.yml run on the current branch
+make coverage-baseline-from-ci RUN=<id>  # a specific run
+```
+
+The target downloads that run's `coverage-out` artifact, then runs `-write -os linux`. It refuses when the branch has no successful run and `RUN` is not given: the artifact upload runs even when the Test step fails, so an unqualified download could take a partial profile from any branch.
+
+The CI Test job uploads `coverage.out` as the `coverage-out` artifact (7-day retention). `-write` prints a `WARN` for any package that has profile data but a stale `# unmeasured:` comment; delete that comment and rerun to baseline the package.
+
 ## Architecture
 
 ### Repository Layout
@@ -199,8 +214,8 @@ and are inert there; Claude Code ignores files it does not recognize.
 
 ### Storage Layout
 
-DES-079 requires the following repository boundary; final entry-point acceptance
-is pending. Resolve canonical store root **S** through Git's common directory
+DES-079 shipped the following repository boundary in v4.21.0; release
+acceptance is pending. Resolve canonical store root **S** through Git's common directory
 separately from invoking checkout **C**. Repository paths below are relative to S
 unless marked C. "Yes" means intended for Git, not automatically staged/committed.
 See [storage and publication contract](storage-layout.md) for the full roots,

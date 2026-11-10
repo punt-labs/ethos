@@ -1,0 +1,385 @@
+package lineguard
+
+import (
+	"maps"
+	"slices"
+	"strings"
+
+	"github.com/punt-labs/ethos/v4/internal/redact"
+)
+
+// audit_content.go is the per-tool content redaction policy for the
+// PostToolUse audit write path (ethos-ggtu).
+//
+// Path redaction (audit_entry.go) rewrites $HOME and repoRoot and
+// nothing else, so message bodies and addresses passed straight
+// through into the sealed, git-tracked record: a full outbound email
+// body plus its recipient, and a recipient address inside a CronCreate
+// prompt, both landed in a public repo.
+//
+// Two policy passes run here, both name-based and both fail-closed in the
+// sense that matching more than necessary is the safe direction:
+//
+//  1. Sensitive tools reduce to a keep-list. Everything the list does
+//     not name is replaced, so a field added to the tool later — a cc,
+//     a reply-to, an attachment — is redacted the day it appears
+//     rather than the day someone remembers to extend a deny-list.
+//  2. Prompt-bearing fields get a PII sweep. Free-form prose authored
+//     by or for a model is where an address turns up incidentally;
+//     structured fields (a file_path, a glob) are left alone so a
+//     non-sensitive tool's line stays byte-identical.
+//
+// A third pass, redact.SecretsValue, runs first over every string whatever
+// its key (except the file paths in pathKeys): a credential has no reliable
+// key to hang a keep-list on, and a matched value is replaced with
+// redact.SecretToken. The email pattern and the credential patterns live
+// in internal/redact so the mission writers share one definition.
+//
+// All passes run BEFORE tool_input_hash is computed, so the hash is
+// over the stored form (DES-054). That is the cross-machine
+// collision-detection invariant: two machines making the same logical
+// call must produce the same hash, and a hash over a form that never
+// reaches disk cannot be checked against anything. A line that carries a
+// credential therefore hashes differently than it did before the
+// credential pass existed; the hash follows the stored form, by design.
+//
+// The tokens match the hand-redacted lines from the public-website
+// PR #259 cleanup so one grep finds both the hand-redacted history and
+// everything written since.
+const (
+	RedactedValueToken = "[redacted]"
+	redactedEmailToken = redact.EmailToken
+)
+
+// sensitiveTools maps a tool's bare name to the tool_input keys that
+// survive redaction. Every other key's value is replaced with
+// RedactedValueToken.
+//
+// The key is the bare name: an MCP tool arrives as
+// mcp__plugin_beadle_email__send_email, and matching the trailing
+// segment covers every namespace that exposes the same tool. A second
+// email plugin therefore inherits the policy without an edit here.
+//
+// Keeping the subject is deliberate. It is what makes the audit line
+// useful — an operator reconstructing a session needs to know an email
+// went out and roughly what about — and it passes through the PII
+// sweep below, so an address in the subject is still removed.
+//
+// The keep-list is fail-closed within an enrolled tool, but the
+// enrolment itself is a list, so every tool on the surface that
+// composes a message or names a person has to be on it. Enrolling only
+// send_email left reply_message writing full bodies into the
+// git-tracked log, which is the same defect one name over. create_draft
+// is not on beadle's surface today; it is the conventional name for a
+// third compose path, and enrolling a tool that does not exist costs
+// nothing while enrolling it late costs a leak.
+//
+// The contact tools are enrolled with an empty keep-list. An address
+// book is a list of real people: add_contact carries a legal name, an
+// address, and nicknames; remove_contact carries the name. None of that
+// belongs in a git-tracked file, and "add_contact was called" is the
+// whole of the audit value — the keys stay, so the line still shows it.
+//
+// The rest of the beadle surface reads or files mail (list, read,
+// search, move, mark, download) and composes nothing.
+var sensitiveTools = map[string][]string{
+	"send_email":     {"subject"},
+	"reply_message":  {"subject"},
+	"create_draft":   {"subject"},
+	"add_contact":    {},
+	"remove_contact": {},
+}
+
+// recipientKeys names structured tool_input keys that address a
+// message rather than describe it. They are swept on every tool,
+// enrolled or not, so a mail tool nobody has enrolled yet still cannot
+// put a recipient into the log.
+//
+// A value here is reduced whole once it contains an address, not
+// patched at the match. A recipient field holds "Display Name <addr>",
+// and the display name identifies the person as surely as the address
+// does; leaving it behind would redact the machine-readable half of a
+// leak and commit the readable half.
+//
+// The trigger is still the address, because these key names are not
+// unique to mail: SendMessage carries recipient="bwk-audit-seal-r2" and
+// biff write carries to="claude:tty16", both agent names an operator
+// needs when reconstructing a session. No address in the value means no
+// leak to close, and the line keeps its audit value.
+var recipientKeys = map[string]bool{
+	"bcc":        true,
+	"cc":         true,
+	"email":      true,
+	"from":       true,
+	"recipient":  true,
+	"recipients": true,
+	"reply_to":   true,
+	"to":         true,
+}
+
+// PromptBearingKeys names the tool_input keys carrying free-form prose
+// rather than structured arguments. The PII sweep runs over strings
+// reachable under these keys and nowhere else, so a Read's file_path
+// or a Glob's pattern is untouched and its audit line is unchanged.
+//
+// Add a key here when a tool starts carrying model-authored text under
+// a new name. Widening the set can only redact more; it cannot leak —
+// but it is not free, and command is the key that proved it. See
+// TestEmailPattern_AddressShapedNonAddresses: `git@github.com` in a
+// clone line and the `.linux` in a Go toolchain module path are both
+// address-shaped, and both are now rewritten. That is a legibility
+// cost in the log, paid to stop committing operator addresses; the
+// pattern is not narrowed to dodge it, because redact.EmailPattern is shared
+// with the send_email sweep and a carve-out here opens a hole there.
+//
+// A key earns its place by a tool actually writing prose under it, not
+// by the name sounding prose-like. query earns its place from
+// find_contact, which looks a person up by "name, email, or alias" — an
+// operator asking for a contact by address wrote that address into the
+// log under a key no other pass covered.
+//
+// command is Bash's, and it is the largest free-text surface in the
+// system: 5,293 of the tool_input keys in this repo's sealed chunks,
+// more than every other tool combined. Leaving it out was an
+// inconsistency, not a gap — send_email's body was reduced while the
+// same address inside `bd update -d "…"` or `git config user.email`
+// sealed verbatim into a git-tracked chunk, and a heredoc redirect is
+// Write's content by another route.
+//
+// old_string and new_string are Edit's, and they are content by the
+// same argument: content is already here for Write, and an Edit writes
+// the same bytes to the same file under a different key — the
+// reply_message defect one name over again.
+//
+// args is Skill's, which carries a whole /loop poll prompt.
+//
+// title, commit_title, and commit_message are the github PR tools'.
+// body is already here for the same tools, so their authored prose was
+// half-covered; a merge commit message is also where a Co-Authored-By
+// trailer lands, an address observed 9 times in this repo's chunks by
+// way of a `git commit -m` heredoc under command.
+var PromptBearingKeys = map[string]bool{
+	"args":           true,
+	"body":           true,
+	"command":        true,
+	"commit_message": true,
+	"commit_title":   true,
+	"content":        true,
+	"description":    true,
+	"instructions":   true,
+	"message":        true,
+	"new_string":     true,
+	"notes":          true,
+	"old_string":     true,
+	"prompt":         true,
+	"query":          true,
+	"reason":         true,
+	"subject":        true,
+	"summary":        true,
+	"text":           true,
+	"title":          true,
+}
+
+// RedactSensitiveContent applies the policy to one tool call's
+// already-path-redacted tool_input. It reports whether anything
+// changed so the caller can stamp the redacted marker on the entry.
+//
+// Returns input unchanged — same map, no copy — when the tool is not
+// sensitive and carries no address, so a non-sensitive line is
+// byte-identical to what the pre-policy writer produced.
+func RedactSensitiveContent(toolName string, input map[string]any) (map[string]any, bool) {
+	if input == nil {
+		return nil, false
+	}
+	// The credential pass runs first, as in redact.Prose: the address
+	// sweep would otherwise cut a URL password that holds '@' or '#' and
+	// leave a fragment. It covers every string whatever its key, because a
+	// token has no reliable key to hang a keep-list on.
+	in, changed := SweepSecrets(input)
+	var m map[string]any
+	if keep, ok := sensitiveTools[BareToolName(toolName)]; ok {
+		var c bool
+		m, c = reduceToKeepList(in, keep)
+		changed = changed || c
+	} else {
+		out, c := sweepPII(in, sweepOff)
+		m, _ = out.(map[string]any)
+		changed = changed || c
+	}
+	return m, changed
+}
+
+// pathKeys name tool_input keys that hold the file a tool acts on. The
+// precondition evaluator compares a recorded Read's file_path byte-for-byte
+// with the contract's require_read, so these values get the path pass
+// alone, as enforcement fields do in a contract: a credential-shaped name
+// such as cfg/token=abc must be recorded as it was read.
+var pathKeys = map[string]bool{
+	"file_path":     true,
+	"path":          true,
+	"notebook_path": true,
+}
+
+// SweepSecrets applies the credential pass to input except for the string
+// values under pathKeys. It reports whether anything changed and never
+// mutates input.
+func SweepSecrets(input map[string]any) (map[string]any, bool) {
+	held := map[string]string{}
+	rest := input
+	for k := range pathKeys {
+		if v, ok := input[k].(string); ok {
+			if len(held) == 0 {
+				rest = maps.Clone(input)
+			}
+			held[k] = v
+			delete(rest, k)
+		}
+	}
+	out, changed := redact.SecretsValue(rest)
+	if !changed {
+		return input, false
+	}
+	m, _ := out.(map[string]any)
+	for k, v := range held {
+		m[k] = v
+	}
+	return m, true
+}
+
+// BareToolName returns the trailing segment of an MCP tool name.
+// mcp__plugin_beadle_email__send_email becomes send_email; a built-in
+// like Bash is already bare and passes through.
+func BareToolName(toolName string) string {
+	if i := strings.LastIndex(toolName, "__"); i >= 0 {
+		return toolName[i+len("__"):]
+	}
+	return toolName
+}
+
+// reduceToKeepList returns a copy of input holding only the named keys
+// at their swept values; every other key is present with its value
+// replaced by RedactedValueToken. The keys stay so the audit line
+// still shows the shape of the call — which fields were supplied —
+// without their contents.
+//
+// Non-kept values are replaced wholesale regardless of type. A nested
+// map or slice can hide prose at any depth, and one rule that reduces
+// everything is easier to verify than a type table that has to be
+// right about each case.
+//
+// The bool reports whether anything was actually removed, so a call
+// that supplied only kept fields is not mismarked as having lost
+// content it never had.
+func reduceToKeepList(input map[string]any, keep []string) (map[string]any, bool) {
+	kept := make(map[string]bool, len(keep))
+	for _, k := range keep {
+		kept[k] = true
+	}
+	out := make(map[string]any, len(input))
+	changed := false
+	for k, v := range input {
+		if !kept[k] {
+			out[k] = RedactedValueToken
+			changed = true
+			continue
+		}
+		swept, c := sweepPII(v, SweepPrompt)
+		out[k] = swept
+		changed = changed || c
+	}
+	return out, changed
+}
+
+// sweepMode says how a string at the current position is treated.
+// A key selects the mode for everything beneath it, so an address
+// nested in a structured argument of a prompt, or one element of a to:
+// list, is reached at the same mode as the key that opened it.
+type sweepMode int
+
+const (
+	// sweepOff is a structured argument: a file_path, a glob, a cron
+	// expression. Left verbatim so a non-sensitive line keeps its bytes.
+	sweepOff sweepMode = iota
+	// SweepPrompt is prose. Addresses inside it are replaced at the
+	// match; the surrounding sentence is what makes the line useful.
+	SweepPrompt
+	// sweepAddress is a recipient field. A string holding an address is
+	// replaced whole — see recipientKeys.
+	sweepAddress
+)
+
+// modeFor returns the mode for a value reached under key k at the
+// current mode. A recipient key always wins, including inside a
+// prompt, because the widest reduction is the safe one. Otherwise a
+// mode already in force propagates down: prose stays prose however
+// deeply it is nested.
+func modeFor(mode sweepMode, k string) sweepMode {
+	switch {
+	case recipientKeys[k]:
+		return sweepAddress
+	case mode != sweepOff:
+		return mode
+	case PromptBearingKeys[k]:
+		return SweepPrompt
+	default:
+		return sweepOff
+	}
+}
+
+// sweepPII walks v and removes addresses according to mode.
+//
+// A container is cloned only once the first match inside it is found,
+// so a line with nothing to redact is returned as the value that came
+// in — no copy, and it marshals to exactly the bytes it did before
+// this policy existed.
+func sweepPII(v any, mode sweepMode) (any, bool) {
+	switch x := v.(type) {
+	case string:
+		return SweepString(x, mode)
+	case map[string]any:
+		out, copied := x, false
+		for k, vv := range x {
+			swept, c := sweepPII(vv, modeFor(mode, k))
+			if !c {
+				continue
+			}
+			if !copied {
+				out, copied = maps.Clone(x), true
+			}
+			out[k] = swept
+		}
+		return out, copied
+	case []any:
+		out, copied := x, false
+		for i, vv := range x {
+			swept, c := sweepPII(vv, mode)
+			if !c {
+				continue
+			}
+			if !copied {
+				out, copied = slices.Clone(x), true
+			}
+			out[i] = swept
+		}
+		return out, copied
+	default:
+		return v, false
+	}
+}
+
+// SweepString applies one mode to one string and reports whether it
+// changed.
+func SweepString(s string, mode sweepMode) (string, bool) {
+	switch mode {
+	case SweepPrompt:
+		r := redact.EmailPattern.ReplaceAllString(s, redactedEmailToken)
+		return r, r != s
+	case sweepAddress:
+		if redact.EmailPattern.MatchString(s) {
+			return RedactedValueToken, true
+		}
+		return s, false
+	default:
+		return s, false
+	}
+}

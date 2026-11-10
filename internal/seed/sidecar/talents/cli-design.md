@@ -30,7 +30,7 @@ Use subcommands when the tool has distinct operations on a shared resource:
 ```text
 ethos identity list
 ethos identity show mal
-ethos session purge
+ethos session iam mal
 ```
 
 Keep the tree shallow. Two levels is typical. Three is acceptable for large
@@ -38,7 +38,7 @@ tools (e.g., `git remote set-url`). Four is a sign that the tool should be
 split.
 
 Every subcommand is a noun-verb or verb-noun pair. Be consistent within the
-tool. `ethos session purge` (noun-verb) and `ethos purge session`
+tool. `ethos session iam` (noun-verb) and `ethos iam session`
 (verb-noun) are both valid, but mixing them in the same tool is not.
 
 ### Flags

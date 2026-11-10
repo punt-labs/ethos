@@ -8,7 +8,7 @@ buildable contract.
 
 ## Problem
 
-`ethos iam` and the session flow work only inside Claude Code. From a
+`ethos session iam` and the session flow work only inside Claude Code. From a
 plain terminal, or a non-Claude harness such as Codex, they fail. The
 product intent is CLI-first: ethos must work for any harness.
 
@@ -25,7 +25,7 @@ Proven empirically, in a detached process with no `claude` ancestor
 (ppid=1) and a clean `HOME`:
 
 ```text
-$ ethos iam bwk
+$ ethos session iam bwk
 ethos: no session found in process tree. Use --session to specify one   # exit 1
 ```
 
@@ -209,7 +209,7 @@ failure — nor harden the mission claim path into a best-effort one.
 `whoami` is a **soft** consumer: it runs the chain for the session lookup
 first (so a persona declared by `iam` under Codex is reflected), then falls
 through to its existing git → email → `$USER` chain when no session
-resolves. Persona reflection is the point of `iam`: under Codex, `ethos iam
+resolves. Persona reflection is the point of `iam`: under Codex, `ethos session iam
 bwk` followed by `ethos whoami` must report `bwk`, not the git fallback
 identity. Today `resolveFromSession` does a bare PID walk and ignores
 `ETHOS_SESSION` (`internal/resolve/resolve.go:109-129`), so it never sees a
@@ -252,8 +252,8 @@ liveness; a non-numeric ID falls back to a 24h TTL
 primary is a persona handle (e.g. `bwk`) or an `ETHOS_AGENT_ID` string is
 non-numeric, so it ages out by the TTL. **This is the decided behavior
 (R5):** no PID-liveness for harness sessions, no new machinery. A harness
-that wants prompt cleanup calls `ethos session end`; otherwise `ethos
-session purge` reclaims it after 24h. The design documents this rather than
+that wants prompt cleanup calls `ethos session end`; otherwise the
+automatic stale-session sweep reclaims it after 24h. The design documents this rather than
 adding process-liveness for arbitrary harnesses, which would re-introduce
 the process coupling this work removes.
 
@@ -310,7 +310,7 @@ scratch `HOME`) becomes the standalone test fixture. Cases:
 1. **`session start` standalone** — detached, clean `HOME`, inside a repo.
    Assert exit 0, that stdout is a single `export ETHOS_SESSION=<id>` line,
    that the roster file exists, and that the ID is 32 hex characters.
-2. **`iam` after `start`** — `eval` the start output, run `ethos iam bwk`,
+2. **`iam` after `start`** — `eval` the start output, run `ethos session iam bwk`,
    assert exit 0 and that the roster records persona `bwk` for the resolved
    agent. This is the end-to-end proof the investigation ran by hand,
    automated.
@@ -325,7 +325,7 @@ scratch `HOME`) becomes the standalone test fixture. Cases:
    different one.
 5. **`whoami` reflects the declared persona (REC-1)** — detached, clean
    `HOME`, with a git identity configured so the fallback would resolve a
-   *different* handle. `eval` the start output, `ethos iam bwk`, then
+   *different* handle. `eval` the start output, `ethos session iam bwk`, then
    `ethos whoami`; assert it reports `bwk` (the session persona), not the
    git-fallback identity. A second assertion with no session set confirms
    the git/OS fallback still works — the standalone virtue is preserved.

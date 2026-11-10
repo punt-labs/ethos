@@ -153,7 +153,7 @@ func Quarantine(repoRoot, sealedDir string, cn ChunkName, livePath, reason strin
 		} else if err := WriteChunkAtomic(sealedDir, re.TempFile(), re.ChunkFile(), reseal); err != nil {
 			return Marker{}, err
 		} else {
-			for _, n := range tally.Notices("ethos: audit quarantine:") {
+			for _, n := range tally.Notices("ethos: audit:") {
 				fmt.Fprintln(os.Stderr, n)
 			}
 		}
@@ -509,6 +509,13 @@ func IsWithheldRecord(b []byte) bool {
 	return err == nil && bytes.Equal(b, rebuilt)
 }
 
+// NewWithheldRecord returns the bytes of a tracked-tree withheld record for
+// raw bytes with the given digest and size; ts is the newest ts they held, or
+// negative for none.
+func NewWithheldRecord(sumHex string, size int, ts int64) ([]byte, error) {
+	return recordBytes(sumHex, size, WithheldRule, ts)
+}
+
 // recordBytes is the one encoding of a record: the fields, ts only when it is
 // not negative, as one line.
 func recordBytes(sumHex string, size int, rule string, ts int64) ([]byte, error) {
@@ -791,6 +798,20 @@ func maxParseableTSOK(data []byte) (int64, bool) {
 // writeMarkerAtomic writes a marker via temp + fsync + rename so it never
 // appears in a torn state (a torn marker reads as absent everywhere).
 func writeMarkerAtomic(dir, name string, m Marker) error {
+	old, err := ReadMarker(filepath.Join(dir, name))
+	switch {
+	case err == nil:
+		if old.Chunk == m.Chunk {
+			m = MergeMarkers(old, m)
+		}
+	case errors.Is(err, os.ErrNotExist):
+	default:
+		var pathErr *os.PathError
+		if errors.As(err, &pathErr) {
+			return err
+		}
+		return fmt.Errorf("marker %s: %w: %v", filepath.Join(dir, name), ErrTornMarker, err)
+	}
 	data, err := MarshalMarker(m)
 	if err != nil {
 		return err

@@ -48,6 +48,9 @@ func fullExportFixture(t *testing.T) (*cliSubprocessEnv, *mission.Store, string)
 	_, err = mission.WriteDelegationSkeletonWithPolicy(p, id, "d-export", mission.DelegationSkeleton{
 		Tier: mission.TierB, AgentType: "bwk", PromptHash: "hash", Prompt: []byte("private-prompt-signal read " + se.home + "/notes token=ghp_abcdefghijklmnopqrstuvwxyz0123456789abcd")})
 	require.NoError(t, err)
+	// Stamp once the mission tree exists: export sees the planted records,
+	// not what the storage upgrade made of them.
+	stampFixture(t, se.home, se.repo)
 	return se, s, id
 }
 

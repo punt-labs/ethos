@@ -459,3 +459,12 @@ func TestDropSameFile(t *testing.T) {
 	require.NoError(t, dropSameFile(files, root, info))
 	assert.Equal(t, map[string]bool{"a/other": true, "a/vanished": true}, files)
 }
+
+// A live-tail redaction cursor is a file ethos writes under the local zone
+// during the storage upgrade; the doctor must not report it as misplaced.
+func TestCheckUnclassifiedFiles_LiveCursorIsClassified(t *testing.T) {
+	root := repoTemp(t)
+	touch(t, root, ".punt-labs/local/ethos/cursors/live-0123abcd.json")
+	r := CheckUnclassifiedFiles(root)
+	assert.Equal(t, "PASS", r.Status, r.Detail)
+}

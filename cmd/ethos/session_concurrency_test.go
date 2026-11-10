@@ -97,7 +97,7 @@ func TestCLI_ConcurrentIam_FlockNoLoss(t *testing.T) {
 			defer wg.Done()
 			// Distinct agent id per join, so each is a separate participant.
 			sh := withSession(se, id, "agent-"+string(rune('a'+i)))
-			_, _, codes[i], errs[i] = spawnCLI(sh, "iam", "persona-"+string(rune('a'+i)))
+			_, _, codes[i], errs[i] = spawnCLI(sh, "session", "iam", "persona-"+string(rune('a'+i)))
 		}(i)
 	}
 	wg.Wait()
@@ -159,13 +159,13 @@ func TestCLI_IamAfterEnd_NoResurrection(t *testing.T) {
 	rosterPath := filepath.Join(se.home, ".punt-labs", "ethos", "sessions", id+".yaml")
 
 	// (a) env still set → fails at load, roster not resurrected.
-	_, stderr, code := runCLI(t, sh, "iam", "claude")
+	_, stderr, code := runCLI(t, sh, "session", "iam", "claude")
 	assert.NotEqual(t, 0, code, "iam after end must fail")
 	assert.Contains(t, stderr, "not found")
 	assert.NoFileExists(t, rosterPath, "iam must not recreate the ended roster")
 
 	// (b) env unset → step-4 no-active-session error (walk finds nothing).
-	_, stderr, code = runCLI(t, se, "iam", "claude")
+	_, stderr, code = runCLI(t, se, "session", "iam", "claude")
 	assert.NotEqual(t, 0, code)
 	assert.Contains(t, stderr, "no active session")
 }

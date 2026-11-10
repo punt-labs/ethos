@@ -97,7 +97,7 @@ func TestInventoryAndCleanupRetainProtectedData(t *testing.T) {
 	assert.Empty(t, plan.Items)
 }
 
-func TestBusyOldAndNewLocksRefuseBeforeAnyDeletion(t *testing.T) {
+func TestBusyOldAndNewLocksSkipTheirMission(t *testing.T) {
 	for _, current := range []bool{false, true} {
 		t.Run(map[bool]string{false: "old", true: "new"}[current], func(t *testing.T) {
 			p := fixture(t)
@@ -118,8 +118,9 @@ func TestBusyOldAndNewLocksRefuseBeforeAnyDeletion(t *testing.T) {
 			plan, err := Inventory(context.Background(), p)
 			require.NoError(t, err)
 			removed, err := plan.Apply(context.Background())
-			require.ErrorContains(t, err, "busy or unavailable lock")
+			require.NoError(t, err)
 			assert.Empty(t, removed)
+			assert.Contains(t, plan.Skipped, trace)
 			assert.FileExists(t, trace)
 			assert.FileExists(t, lock)
 		})
@@ -161,7 +162,7 @@ func TestInterruptedDeletionReportsProgressAndRetries(t *testing.T) {
 	plan, err := Inventory(context.Background(), p)
 	require.NoError(t, err)
 	removed, err := plan.Apply(context.Background())
-	require.ErrorContains(t, err, "rerun repair for remaining files")
+	require.ErrorContains(t, err, "deleting "+last)
 	assert.Equal(t, []string{first}, removed)
 	assert.NoFileExists(t, first)
 	assert.FileExists(t, last)
@@ -202,7 +203,7 @@ func TestSymlinkAndMalformedAuthorityHaveExactBlockers(t *testing.T) {
 	put(t, filepath.Join(m, "reflections.yaml"), "detail")
 	put(t, filepath.Join(m, "contract.yaml"), "[broken")
 	_, err := Inventory(context.Background(), p)
-	require.ErrorContains(t, err, "inspect "+filepath.Join(m, "contract.yaml"))
+	require.ErrorContains(t, err, "left in place: "+filepath.Join(m, "contract.yaml"))
 	require.NoError(t, os.Remove(filepath.Join(m, "contract.yaml")))
 	require.NoError(t, os.Symlink(t.TempDir(), filepath.Join(m, "outside")))
 	_, err = Inventory(context.Background(), p)
@@ -290,7 +291,14 @@ func TestRetainCurrentExportAndAmbiguousMissionTrace(t *testing.T) {
 				put(t, filepath.Join(p.CheckoutRecordRoot(), filepath.FromSlash(rel)), "{\"record\":\"blame\"}\n")
 				remove, lock, err := obsolete(p, p.CheckoutRecordRoot(), rel)
 				require.NoError(t, err)
-				assert.False(t, remove, rel)
+				// The legacy event log is never authority: current round
+				// decisions in the contract do not retain it; only an explicit
+				// export does. Every other detail file follows the authority.
+				if name == "log.jsonl" && tc.exportSuffix == "" {
+					assert.True(t, remove, rel)
+				} else {
+					assert.False(t, remove, rel)
+				}
 				assert.False(t, lock, rel)
 			}
 		})
@@ -305,8 +313,61 @@ func TestAmbiguousAuthorityCannotLicenseDeletion(t *testing.T) {
 			path := filepath.Join(p.RecordRoot(), "missions", "m-one", "contract.yaml")
 			put(t, path, body)
 			remove, _, err := obsolete(p, p.CheckoutRecordRoot(), "missions/m-one/reflections.yaml")
-			require.ErrorContains(t, err, "inspect "+path)
+			require.ErrorContains(t, err, "left in place: "+path)
 			assert.False(t, remove)
 		})
 	}
+}
+
+// A live audit.jsonl in a directory that matches no session is legacy, yet a
+// copy carrying visible full consent is retained; Obsolete and Inventory agree.
+func TestObsoleteAndInventoryAgreeOnUnmatchedSessionAudit(t *testing.T) {
+	p := fixture(t)
+	root := p.RecordRoot()
+	put(t, filepath.Join(root, "sessions", "sess-a", "audit.jsonl"), "{\"record\":\"full\"}\n")
+	put(t, filepath.Join(root, "sessions", "sess-b", "audit.jsonl"), "{\"record\":\"blame\"}\n")
+
+	full, err := Obsolete(p, root, "sessions/sess-a/audit.jsonl", nil)
+	require.NoError(t, err)
+	assert.False(t, full)
+	blame, err := Obsolete(p, root, "sessions/sess-b/audit.jsonl", nil)
+	require.NoError(t, err)
+	assert.True(t, blame)
+
+	plan, err := Inventory(context.Background(), p)
+	require.NoError(t, err)
+	var paths []string
+	for _, it := range plan.Items {
+		paths = append(paths, filepath.ToSlash(strings.TrimPrefix(it.Path, root+"/")))
+	}
+	assert.Equal(t, []string{"sessions/sess-b/audit.jsonl"}, paths)
+
+	// Working file gone: the fallback bytes decide.
+	gone, err := Obsolete(p, root, "sessions/sess-c/audit.jsonl", func() ([]byte, error) { return []byte("{\"record\":\"full\"}\n"), nil })
+	require.NoError(t, err)
+	assert.False(t, gone)
+}
+
+// A pre-v4.0 record tree sits one level under the store, not two, so its
+// tracked-file query must run in the store with the `.ethos/` pathspec. Run
+// from the store's parent it either fails (the parent is not a repository)
+// or silently reports nothing tracked.
+func TestInventoryTracksLegacyRecordTreeFiles(t *testing.T) {
+	p := fixture(t)
+	store := filepath.Dir(filepath.Dir(p.RecordRoot()))
+	legacyLog := filepath.Join(store, ".ethos", "missions", "m-old", "log.jsonl")
+	put(t, legacyLog, `{"event":"old"}`+"\n")
+	_, err := gitenv.Output(store, "git", "add", "--", ".ethos/missions/m-old/log.jsonl")
+	require.NoError(t, err)
+
+	plan, err := Inventory(context.Background(), p)
+	require.NoError(t, err)
+	var found *Item
+	for i := range plan.Items {
+		if plan.Items[i].Path == legacyLog {
+			found = &plan.Items[i]
+		}
+	}
+	require.NotNil(t, found, "legacy event log is a cleanup candidate")
+	assert.True(t, found.Tracked, "the staged legacy log is tracked")
 }

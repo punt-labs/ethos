@@ -6,12 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/attribute"
-	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/process"
@@ -22,7 +20,7 @@ import (
 
 var sessionCmd = &cobra.Command{
 	Use:     "session",
-	Short:   "Manage session roster",
+	Short:   "Show and join the session's participants",
 	GroupID: "session",
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -58,44 +56,10 @@ var sessionEndSession string
 
 var sessionEndCmd = &cobra.Command{
 	Use:   "end",
-	Short: "End the active session (delete its roster)",
+	Short: "End the active session and remove its roster",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runSessionEnd(cmd)
-	},
-}
-
-// --- session create ---
-
-var (
-	sessionCreateSession        string
-	sessionCreateRootID         string
-	sessionCreateRootPersona    string
-	sessionCreatePrimaryID      string
-	sessionCreatePrimaryPersona string
-)
-
-var sessionCreateCmd = &cobra.Command{
-	Use:    "create",
-	Short:  "Create a new session roster",
-	Hidden: true,
-	Args:   cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runSessionCreate(cmd)
-	},
-}
-
-// --- session delete ---
-
-var sessionDeleteSession string
-
-var sessionDeleteCmd = &cobra.Command{
-	Use:    "delete",
-	Short:  "Delete a session roster",
-	Hidden: true,
-	Args:   cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runSessionDelete(cmd)
 	},
 }
 
@@ -134,37 +98,6 @@ var sessionLeaveCmd = &cobra.Command{
 	},
 }
 
-// --- session write-current ---
-
-var (
-	sessionWriteCurrentPID     string
-	sessionWriteCurrentSession string
-)
-
-var sessionWriteCurrentCmd = &cobra.Command{
-	Use:    "write-current",
-	Short:  "Write PID-to-session mapping",
-	Args:   cobra.NoArgs,
-	Hidden: true,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runSessionWriteCurrent(cmd)
-	},
-}
-
-// --- session delete-current ---
-
-var sessionDeleteCurrentPID string
-
-var sessionDeleteCurrentCmd = &cobra.Command{
-	Use:    "delete-current",
-	Short:  "Delete PID-to-session mapping",
-	Args:   cobra.NoArgs,
-	Hidden: true,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runSessionDeleteCurrent(cmd)
-	},
-}
-
 // --- session list ---
 
 var sessionListCmd = &cobra.Command{
@@ -180,23 +113,8 @@ var sessionListCmd = &cobra.Command{
 
 var sessionShowCmd = &cobra.Command{
 	Use:   "show [session-id]",
-	Short: "Show session roster",
+	Short: "Show the session's participants",
 	Args:  cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if len(args) == 1 {
-			return runSessionShowByID(cmd, args[0])
-		}
-		return runSessionShow(cmd)
-	},
-}
-
-// --- session roster (hidden alias) ---
-
-var sessionRosterCmd = &cobra.Command{
-	Use:    "roster [session-id]",
-	Short:  "Show session roster (alias for show)",
-	Hidden: true,
-	Args:   cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 1 {
 			return runSessionShowByID(cmd, args[0])
@@ -218,54 +136,10 @@ var sessionIamCmd = &cobra.Command{
 	},
 }
 
-// --- session purge ---
-
-var (
-	sessionPurgeForce bool
-	sessionPurgeAck   string
-)
-
-var sessionPurgeCmd = &cobra.Command{
-	Use:   "purge",
-	Short: "Clean up stale sessions",
-	Long: `Clean up stale sessions.
-
-Refuses to purge a session whose live audit file still holds unsealed
-lines (commit to seal them, or re-run with --force to leave a flagged
-tombstone and proceed). The seal's vacuum cross-check warns on a flagged
-tombstone at every commit until it is acknowledged with
---ack <session-id>, which retires the tombstone without discarding the
-loss record.`,
-	Args: cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runSessionPurge(cmd)
-	},
-}
-
 func init() {
 	// session start / end flags
 	sessionStartCmd.Flags().StringVar(&sessionStartPersona, "persona", "", "Persona for the primary agent (folds the first iam)")
 	sessionEndCmd.Flags().StringVar(&sessionEndSession, "session", "", "Session ID (full or prefix; auto-detected if omitted)")
-
-	// session create flags
-	sessionCreateCmd.Flags().StringVar(&sessionCreateSession, "session", "", "Session ID (required)")
-	sessionCreateCmd.Flags().StringVar(&sessionCreateRootID, "root-id", "", "Root agent ID (required)")
-	sessionCreateCmd.Flags().StringVar(&sessionCreateRootPersona, "root-persona", "", "Root agent persona")
-	sessionCreateCmd.Flags().StringVar(&sessionCreatePrimaryID, "primary-id", "", "Primary agent ID (required)")
-	sessionCreateCmd.Flags().StringVar(&sessionCreatePrimaryPersona, "primary-persona", "", "Primary agent persona")
-	_ = sessionCreateCmd.MarkFlagRequired("session")
-	_ = sessionCreateCmd.MarkFlagRequired("root-id")
-	_ = sessionCreateCmd.MarkFlagRequired("primary-id")
-
-	// session delete flags
-	sessionDeleteCmd.Flags().StringVar(&sessionDeleteSession, "session", "", "Session ID (required)")
-	_ = sessionDeleteCmd.MarkFlagRequired("session")
-
-	// session purge flags
-	sessionPurgeCmd.Flags().BoolVar(&sessionPurgeForce, "force", false,
-		"Purge even when a session has unsealed audit lines (leaves a flagged tombstone)")
-	sessionPurgeCmd.Flags().StringVar(&sessionPurgeAck, "ack", "",
-		"Acknowledge and retire the tombstone for the named session id")
 
 	// session join flags
 	sessionJoinCmd.Flags().StringVar(&sessionJoinAgentID, "agent-id", "", "Agent ID (required)")
@@ -283,30 +157,14 @@ func init() {
 	// session iam flags
 	sessionIamCmd.Flags().StringVar(&sessionIamSession, "session", "", "Session ID (full or prefix)")
 
-	// session write-current flags
-	sessionWriteCurrentCmd.Flags().StringVar(&sessionWriteCurrentPID, "pid", "", "Claude PID (required)")
-	sessionWriteCurrentCmd.Flags().StringVar(&sessionWriteCurrentSession, "session", "", "Session ID (required)")
-	_ = sessionWriteCurrentCmd.MarkFlagRequired("pid")
-	_ = sessionWriteCurrentCmd.MarkFlagRequired("session")
-
-	// session delete-current flags
-	sessionDeleteCurrentCmd.Flags().StringVar(&sessionDeleteCurrentPID, "pid", "", "Claude PID (required)")
-	_ = sessionDeleteCurrentCmd.MarkFlagRequired("pid")
-
 	sessionCmd.AddCommand(
 		sessionStartCmd,
 		sessionEndCmd,
-		sessionCreateCmd,
-		sessionDeleteCmd,
 		sessionJoinCmd,
 		sessionLeaveCmd,
 		sessionIamCmd,
 		sessionListCmd,
 		sessionShowCmd,
-		sessionRosterCmd,
-		sessionWriteCurrentCmd,
-		sessionDeleteCurrentCmd,
-		sessionPurgeCmd,
 	)
 	rootCmd.AddCommand(sessionCmd)
 }
@@ -481,7 +339,7 @@ func runSessionStart(cmd *cobra.Command) error {
 			}
 			return printSessionStart(cmd, envID, sessionStartPersona, false)
 		case !errors.Is(lerr, os.ErrNotExist):
-			return fmt.Errorf("session start: ETHOS_SESSION %q names an unreadable roster (%v); repair or clear it — see `ethos session purge` / `ethos audit quarantine`", envID, lerr)
+			return fmt.Errorf("session start: ETHOS_SESSION %q names an unreadable roster (%v); left in place", envID, lerr)
 		}
 		// not-found: fall through to mint a fresh session (by design).
 	}
@@ -657,7 +515,7 @@ func runSessionEnd(cmd *cobra.Command) error {
 			fmt.Fprintf(cmd.ErrOrStderr(), "ethos: session %s not found; nothing to end\n", sid)
 			return nil
 		}
-		return fmt.Errorf("session end: session %q has an unreadable roster (%v); repair or clear it — see `ethos session purge` / `ethos audit quarantine`", sid, lerr)
+		return fmt.Errorf("session end: session %q has an unreadable roster (%v); left in place", sid, lerr)
 	}
 	if err := ss.Delete(sid); err != nil {
 		return err
@@ -698,24 +556,6 @@ func runSessionEnd(cmd *cobra.Command) error {
 		fmt.Fprintln(cmd.ErrOrStderr(), "ethos: run `unset ETHOS_SESSION` to clear the stale export from your shell")
 	}
 	return nil
-}
-
-func runSessionCreate(cmd *cobra.Command) error {
-	ss := sessionStore()
-	root := session.Participant{AgentID: sessionCreateRootID, Persona: sessionCreateRootPersona}
-	primary := session.Participant{AgentID: sessionCreatePrimaryID, Persona: sessionCreatePrimaryPersona, Parent: sessionCreateRootID}
-	if err := ss.Create(sessionCreateSession, root, primary, "", ""); err != nil {
-		return err
-	}
-	if jsonOutput {
-		return writeJSON(cmd.OutOrStdout(), map[string]string{"session": sessionCreateSession})
-	}
-	return nil
-}
-
-func runSessionDelete(cmd *cobra.Command) error {
-	ss := sessionStore()
-	return ss.Delete(sessionDeleteSession)
 }
 
 func runSessionJoin(cmd *cobra.Command) error {
@@ -768,16 +608,6 @@ func runSessionLeave(cmd *cobra.Command) error {
 	}
 
 	return ss.Leave(sid, sessionLeaveAgentID)
-}
-
-func runSessionWriteCurrent(cmd *cobra.Command) error {
-	ss := sessionStore()
-	return ss.WriteCurrentSession(sessionWriteCurrentPID, sessionWriteCurrentSession)
-}
-
-func runSessionDeleteCurrent(cmd *cobra.Command) error {
-	ss := sessionStore()
-	return ss.DeleteCurrentSession(sessionDeleteCurrentPID)
 }
 
 func runSessionList(cmd *cobra.Command) error {
@@ -861,127 +691,4 @@ func shortID(id string) string {
 // any future command share one time-formatting convention.
 func formatStarted(raw string) string {
 	return hook.FormatLocalTime(raw)
-}
-
-func runSessionPurge(cmd *cobra.Command) error {
-	ss := sessionStore()
-	out := cmd.OutOrStdout()
-
-	// --ack retires a session's tombstone so the seal's vacuum cross-check
-	// stops warning on it, without discarding the loss record (DES-058).
-	if sessionPurgeAck != "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("resolving home directory: %w", err)
-		}
-		retired, err := audit.AckTombstone(filepath.Join(home, ".punt-labs", "ethos", "sessions"), sessionPurgeAck)
-		if err != nil {
-			return err
-		}
-		if jsonOutput {
-			return writeJSON(out, map[string]string{
-				"acked":   sessionPurgeAck,
-				"retired": retired,
-			})
-		}
-		fmt.Fprintf(out, "Acknowledged tombstone for %s (retired to %s)\n", sessionPurgeAck, retired)
-		return nil
-	}
-
-	// Purge stale PID files first (independent of roster purge).
-	pidPurged, pidErr := ss.PurgeCurrent()
-	if pidErr != nil {
-		pidErr = fmt.Errorf("purging PID files: %w", pidErr)
-	}
-
-	// DES-058: PurgeTombstoned refuses to strand a session's unsealed audit
-	// lines unless --force, and leaves a flagged tombstone when it proceeds. It
-	// probes the live audit zone under this checkout (repoRoot) and only for
-	// sessions whose recorded identity matches this checkout's (repoID); a purge
-	// run outside any repo leaves every repo-bound session for its owning
-	// checkout.
-	loc := currentRoots()
-	repoRoot, repoID := loc.Checkout, ""
-	var lookupErr error
-	if loc.CheckoutErr != nil {
-		lookupErr = fmt.Errorf("session purge: locating the checkout: %w", loc.CheckoutErr)
-	} else if id, err := audit.RepoIdentity(repoRoot); err != nil {
-		lookupErr = err
-	} else {
-		repoID = id
-	}
-	if lookupErr != nil {
-		// A purge that cannot name its checkout can still remove what needs no
-		// checkout (a roster whose repository was never resolved), but it
-		// cannot verify any other session's unsealed state: without --force it
-		// stops; with it, it runs as a purge outside any repository, which
-		// leaves every repository-bound session for its owner.
-		if !sessionPurgeForce {
-			return lookupErr
-		}
-		fmt.Fprintf(cmd.ErrOrStderr(), "ethos: purge: %v; --force: purging as if outside any repository\n", lookupErr)
-		repoRoot, repoID = "", ""
-	}
-	rep, err := ss.PurgeTombstonedReport(repoRoot, repoID, sessionPurgeForce)
-	if err != nil {
-		return err
-	}
-	purged, refused := rep.Purged, rep.Refused
-	if jsonOutput {
-		if purged == nil {
-			purged = []string{}
-		}
-		if pidPurged == nil {
-			pidPurged = []string{}
-		}
-		if refused == nil {
-			refused = []string{}
-		}
-		skipped := rep.Skipped
-		if skipped == nil {
-			skipped = []session.SkippedSession{}
-		}
-		forcedUnresolved := rep.ForcedUnresolved
-		if forcedUnresolved == nil {
-			forcedUnresolved = []session.ForcedSession{}
-		}
-		if werr := writeJSON(out, map[string]any{
-			"sessions":          purged,
-			"pid_files":         pidPurged,
-			"refused":           refused,
-			"skipped":           skipped,
-			"forced_unresolved": forcedUnresolved,
-		}); werr != nil {
-			return werr
-		}
-		if pidErr != nil {
-			return pidErr
-		}
-		return nil
-	}
-	for _, sk := range rep.Skipped {
-		fmt.Fprintf(out, "Skipped %s: repository identity never resolved (%s); --force removes it\n", sk.Session, sk.Reason)
-	}
-	for _, id := range refused {
-		fmt.Fprintf(out, "Refused to purge %s (see stderr for cause; --force overrides)\n", id)
-	}
-	for _, id := range purged {
-		fmt.Fprintf(out, "Purged session %s\n", id)
-	}
-	for _, f := range rep.ForcedUnresolved {
-		fmt.Fprintf(out, "Warning: %s was removed unverified: %s\n", f.Session, f.Warning)
-	}
-	for _, pid := range pidPurged {
-		fmt.Fprintf(out, "Purged PID file %s\n", pid)
-	}
-	if pidErr != nil {
-		return pidErr
-	}
-	switch {
-	case len(purged) == 0 && len(pidPurged) == 0 && len(refused) == 0 && len(rep.Skipped) == 0:
-		fmt.Fprintln(out, "No stale sessions found.")
-	case len(purged) == 0 && len(pidPurged) == 0:
-		fmt.Fprintf(out, "Nothing purged; %d session(s) refused (see above).\n", len(refused))
-	}
-	return nil
 }

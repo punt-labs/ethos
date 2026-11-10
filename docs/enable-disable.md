@@ -393,7 +393,7 @@ material (agent-facing, condensed):
 How an agent drives ethos — not how to develop ethos itself.
 
 ## Who am I
-- `ethos whoami` / `ethos iam <persona>` — resolve and declare identity
+- `ethos whoami` / `ethos session iam <persona>` — resolve and declare identity
 - Session hooks inject your persona; restart Claude Code to regenerate
   `.claude/agents/<handle>.md` after a team change
 
@@ -406,10 +406,10 @@ How an agent drives ethos — not how to develop ethos itself.
 ## Audit
 - `ethos audit show --delegation <id>` — reconstruct a delegation's trail
 - `ethos audit seal` runs at pre-commit; sealed chunks travel with the work
-- `ethos audit quarantine` — the specified recovery for a corrupt chunk
+- A corrupt chunk is salvaged by the next ethos run (decodable lines are redacted into a replacement chunk, raw bytes deleted, digests logged); no command is needed
 
 ## Session
-- `ethos session` — current roster; `ethos session purge` — clear stale
+- `ethos session` — current roster; stale sessions are cleared automatically
 
 ## Gotchas
 - Never run `make install` from inside Claude Code (running binary)
