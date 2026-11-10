@@ -466,3 +466,37 @@ func TestShimEnabledUnstagesLocalPaths(t *testing.T) {
 	require.NoError(t, err, out)
 	assert.NotContains(t, out, "unstaged", "a commit with no local path prints nothing")
 }
+
+// A live line whose ts is already archived with a different payload (the
+// worker-reported gap behind the stuck warning) is dropped by the first
+// commit: the archive wins, the commit prints no warning, the live file keeps
+// its other lines, and a second commit prints nothing.
+func TestShimEnabledArchivedTSConflictIsDroppedByCommit(t *testing.T) {
+	r := newShimRepo(t, true)
+	p, err := layout.NewRepository(r.dir, r.dir, layout.RecordBlame)
+	require.NoError(t, err)
+	s := audit.Stream{Namespace: audit.SessionNS, Session: "s-conflict"}
+	dir, err := audit.ArchiveDir(p, s, "2026-07-15")
+	require.NoError(t, err)
+	archived := `{"ts":"` + audit.FormatLineTS(100) + `","session":"s-conflict","tool":"Read","record":"blame"}` + "\n"
+	require.NoError(t, audit.WriteLocalAtomic(p, filepath.Join(dir, audit.SessionChunkFile(100, 100)), []byte(archived)))
+	conflicting := `{"ts":"` + audit.FormatLineTS(100) + `","session":"s-conflict","tool":"Bash","record":"blame"}` + "\n"
+	fresh := `{"ts":"` + audit.FormatLineTS(200) + `","session":"s-conflict","tool":"Read","record":"blame"}` + "\n"
+	require.NoError(t, audit.WriteLocalAtomic(p, s.LivePath(p), []byte(conflicting+fresh)))
+	_, err = audit.ReadStream(p, s)
+	require.ErrorContains(t, err, "identity conflict", "fixture: the unrepaired stream is refused")
+
+	env := r.withPath(ethosBinDir(t))
+	out, err := r.commit(t, env, "first")
+	require.NoError(t, err, out)
+	assert.NotContains(t, out, "retained-data warning")
+	assert.NotContains(t, out, "identity conflict")
+	assert.Empty(t, containsPath(t, filepath.Join(r.dir, ".punt-labs", "local"), `"tool":"Bash"`), "the conflicting live line is gone")
+	data, err := audit.ReadStream(p, s)
+	require.NoError(t, err)
+	require.Len(t, data.Lines, 2, "the archived line and the fresh line")
+
+	out, err = r.commit(t, env, "second")
+	require.NoError(t, err, out)
+	assert.NotContains(t, out, "audit seal", "the second commit has nothing to warn about")
+}
