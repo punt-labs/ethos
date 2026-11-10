@@ -109,7 +109,7 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO) (*Report, error) {
 
 	// Guard the gitlink case: a submodule-mounted .punt-labs/ethos is a
 	// foreign git repo the vendored zone cannot be written into. After the
-	// hooks check, so a missing git is reported as "install git".
+	// hooks check, so a missing git is reported as "git not found on PATH".
 	gitlink, err := audit.IsGitlinkMount(repoRoot)
 	if err != nil {
 		return rep, fmt.Errorf("checking for a gitlink mount: %w", err)
@@ -261,11 +261,11 @@ func DisableTo(repoRoot, storeRoot string, force bool) (*Report, error) {
 		siblings, err := enabledSiblingWorktrees(repoRoot)
 		if err != nil {
 			return rep, fmt.Errorf(
-				"cannot verify sibling worktrees are disabled: %w — refusing; re-run with --force to unchain anyway", err)
+				"cannot verify sibling worktrees are disabled: %w — refusing; --force unchains anyway", err)
 		}
 		if len(siblings) > 0 {
 			return rep, fmt.Errorf(
-				"disable would unchain the shared git hooks, but these worktrees are still enabled: %s — re-run with --force to unchain anyway",
+				"disable would unchain the shared git hooks, but these worktrees are still enabled: %s — --force unchains anyway",
 				strings.Join(siblings, ", "))
 		}
 	}
@@ -422,7 +422,7 @@ func unchainTarget(repoRoot string, force bool) (githook.Lookup, string, error) 
 	case force:
 		return l, "", nil
 	}
-	return l, "", fmt.Errorf("%s; or re-run with --force to remove the import and marker and leave hook sections in place", err.Error())
+	return l, "", fmt.Errorf("%s; --force removes the import and marker and leaves hook sections in place", err.Error())
 }
 
 // unchainHooks strips the seal and trailer sections from the hooks in dir. An
