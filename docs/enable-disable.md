@@ -406,7 +406,7 @@ How an agent drives ethos — not how to develop ethos itself.
 ## Audit
 - `ethos audit show --delegation <id>` — reconstruct a delegation's trail
 - `ethos audit seal` runs at pre-commit; sealed chunks travel with the work
-- A corrupt chunk is set aside by ethos itself; no command is needed
+- A corrupt chunk is salvaged by the next ethos run (decodable lines are redacted into a replacement chunk, raw bytes deleted, digests logged); no command is needed
 
 ## Session
 - `ethos session` — current roster; stale sessions are cleared automatically

@@ -1,13 +1,13 @@
 # Storage and publication contract
 
-**Status:** The DES-079 features listed under 4.21.0 in `CHANGELOG.md` shipped
-in v4.21.0; release acceptance is pending. The placements in the Paths table
-were observed on v4.22.1 through real entry points on 2026-11-09. Every row in
-"Promise to implementation to acceptance" stays **Pending**. "Shipped versus
-proven" lists the partial `check-storage` evidence per row.
+**Status:** The DES-079 layout described here is the shipped layout. Ethos
+converts any older layout itself, once per machine and once per repository, at
+every entry point (DES-084); the user runs nothing. "Promise to implementation
+to acceptance" names the test or acceptance case that proves each row.
 `make check` includes `check-storage` (`scripts/storage_acceptance.py`), which
-drives the real CLI, hook wrappers and Git hooks. DES-080 redaction shipped in
-v4.20.0; that does not establish DES-079 acceptance.
+drives the real CLI, hook wrappers, MCP server and Git hooks through the cases
+`default_seal`, `modes`, `audit_recovery`, `lifecycle`, `required_event_failure`,
+`worktree_retention`, `full_export`, `publish_squash`, `mcp_modes` and `upgrade`.
 
 ## Roots and ownership
 
@@ -56,7 +56,7 @@ Paths in the first column are relative to S unless C is explicit.
 | Configuration | `.punt-labs/ethos.yaml` | Source; documented exception to the record-tree location |
 | Contract, including inline decisions | `.punt-labs/ethos/missions/<id>/contract.yaml` (with the `round_decisions` v1 block, written at dispatch) | Shared workflow authority |
 | All accepted results, delegation records, corrections | `.punt-labs/ethos/missions/<id>/{results.yaml,delegations/<d>/record.yaml,corrections.yaml}`. in repository (two-tree) mode `corrections.yaml` is initialized at mission create as an empty file (`version`, `mission`, `entries: []`); `results.yaml` on result; `record.yaml` when the Agent spawn passes pre-tool-use | Blame records |
-| Mission summaries; repo ADRs | `.punt-labs/ethos/{missions.jsonl,adrs/<id>.yaml}`; `missions.jsonl` is written on close; `ethos adr create` writes `adrs/<id>.yaml` in the repository store (`S/.punt-labs/ethos/adrs/`) | Blame records; ADR reads repo-first, legacy global fallback |
+| Mission summaries; repo ADRs | `.punt-labs/ethos/{missions.jsonl,adrs/<id>.yaml}`; `missions.jsonl` is written on close; `ethos adr create` writes `adrs/<id>.yaml` in the repository store (`S/.punt-labs/ethos/adrs/`) | Blame records; ADRs read from the repository store |
 | Immutable publication manifest | `C/.punt-labs/ethos/provenance/<sha256>.yaml` (written by `ethos mission publish`, which also stages it and the published records into C's index) | Committed snapshot inventory and attribution evidence |
 | Plain export | `<dir>/<id>.contract.yaml` and `<dir>/<id>.result.yaml`. Default `<dir>` is `C/.punt-labs/ethos/missions` (`cmd/ethos/mission.go`, `missionExportDefaultDir`); `--dir` is cwd-relative | Unstaged |
 | Full export additions | `<dir>/<id>/log-<sid>-<t0>-<t1>.jsonl`, alongside retained prompts and reflections, same `<dir>` rule | Unstaged |
@@ -83,15 +83,15 @@ Paths in the first column are relative to S unless C is explicit.
 | Submodule registration | `.gitmodules` (written by `team add-bundle`) | Source |
 | Vendor manifest | `.punt-labs/ethos/.vendor.yaml` | Source |
 | Git hook files | hook files under an in-tree `core.hooksPath` | Source |
-| Legacy, read-only | record-tree locks (`missions/**/*.lock`, `missions.jsonl.lock`, `identities/*.yaml.lock`), `missions/*/log.jsonl`, `log-*.quarantine`, `*.corrupt*`, `missions/*/artifacts/**`, `sessions/*/audit.jsonl`, `.punt-labs/ethos/config.yaml`, singular `reflection-intent.yaml` | Compatibility inputs; new writes go elsewhere |
+| Older layouts | record-tree locks (`missions/**/*.lock`, `missions.jsonl.lock`, `identities/*.yaml.lock`), `missions/*/log.jsonl`, `log-*.quarantine`, `*.corrupt*`, `sessions/*/audit.jsonl`, `.punt-labs/ethos/config.yaml`, singular `reflection-intent.yaml` | The automatic storage upgrade converts or deletes them (steps 1-15); nothing reads them afterward. `missions/*/artifacts/**` is agent-owned and never touched |
 | New worker artifacts | `.punt-labs/local/ethos/artifacts/missions/<id>/delegations/<d>/`, the value pre-tool-use exports as `MISSION_ARTIFACTS_DIR` (`internal/mission/delegation.go`, `internal/hook/pretooluse_dispatch.go`) | Agent-owned, not automatically exported or redacted |
 | Generated agents and enablement guides | C's `.claude/agents/*.md` (generated plus the three seeded review agents), the `CLAUDE.md` `@`-import, the `.gitignore` rule `.punt-labs/local/`, and `.punt-labs/ethos/{CLAUDE.md,ETHOS-SETUP.md,enabled,.vendored-manifest}` | Intended source; staging still local to S |
 
 The delegation prompt and its consent receipt are
 `.punt-labs/local/ethos/trace/missions/<id>/delegations/<d>/{prompt.md,prompt-consent.yaml}`.
-`internal/layout/layout.go` also still lists a legacy pattern
-`missions/*/reflection-intent.yaml` (singular, classified never-tracked); new
-writes use `reflection-intents/<round>.yaml`.
+`internal/layout/layout.go` also lists the pattern
+`missions/*/reflection-intent.yaml` (singular, classified never-tracked) so the
+upgrade can recognize it; writes use `reflection-intents/<round>.yaml`.
 
 ### Global paths
 
@@ -116,10 +116,11 @@ Under `~/.punt-labs/ethos/` (not part of S or C):
 - Seed content from `ethos seed`: `roles/`, `talents/`, `personalities/`,
   `writing-styles/`, `archetypes/`, `pipelines/`, `bundles/`, skills, and
   `.seed-manifest.json`; skills are also placed at `~/.claude/skills/<name>`.
-- Legacy ADRs `adrs/<id>.yaml` (read-only fallback). In repository mode the
-  ADR mutation takes the legacy store's lock `adrs/.adr.lock` in this directory
-  first, then the repository lock
-  `S/.punt-labs/local/ethos/locks/adr/<sha256>.lock`
+- Global ADRs `adrs/<id>.yaml`, the store outside a repository. A global ADR
+  linked from a repository's missions is copied into the repository store by
+  the automatic upgrade (step 12). In repository mode the ADR mutation takes the
+  global store's lock `adrs/.adr.lock` in this directory first, then the
+  repository lock `S/.punt-labs/local/ethos/locks/adr/<sha256>.lock`
   (`internal/adr/persistence.go`); no global ADR is written.
 
 Prompt and chunk archives mirror paths relative to `.punt-labs/ethos/`, for
@@ -127,9 +128,9 @@ example `trace/missions/<id>/delegations/<d>/prompt.md` and
 `trace/sessions/<date>-<sid>/audit-<first>-<last>.jsonl`. Reflections instead use
 per-round envelopes, not a local aggregate `trace/missions/<id>/reflections.yaml`.
 Raw quarantined bytes stay local even if their redacted diagnostic is shareable.
-Legacy misplaced agent artifacts require operator-directed cleanup, not a new
-ignore exception under `.punt-labs/ethos/`. Ethos does not silently move or redact
-agent-owned files.
+Agent artifacts written to an older location are agent-owned: ethos does not
+move, delete or redact them, and adds no ignore exception under
+`.punt-labs/ethos/`.
 
 S retains prompts, reflections, sealed chunks **and unsealed tails** in both
 modes. Removing a feature worktree C distinct from S cannot remove their only
@@ -197,9 +198,12 @@ No reason, signals, digest, budget copy or evaluator copy belongs in this block.
 A complete structured Reflection is still mandatory on submission. Validate
 supplied timestamps; fill an omitted one once and retain it on retry. Supplied
 authors are validated, not authenticated as the leader. Missing decision blocks
-mean legacy authority requiring inspection, not initialized empty authority.
-Explicit null, malformed/unknown versions, duplicate YAML keys, missing/null
-entries and multiple documents refuse; legacy defaults cannot repair malformed v1.
+mean a mission whose round history is incomplete, not initialized empty
+authority; the automatic upgrade (step 3) writes decisions only from complete
+validated evidence and otherwise leaves the mission fenced from lifecycle
+writes. Explicit null, malformed/unknown versions, duplicate YAML keys,
+missing/null entries and multiple documents refuse; defaults cannot repair
+malformed v1.
 
 Under the canonical mission lock, reconcile pending receipts before later mission
 events can overtake them. Persist a durable local redacted intent containing the
@@ -241,7 +245,7 @@ of a prepared correction event; unreadable authority leaves acceptance unknown.
 
 ## Publication, squash and exports
 
-These commands shipped in v4.21.0; entry-point acceptance is pending:
+These commands are proved by the `publish_squash`, `full_export` and `modes` cases:
 
 | Operation | Contract |
 |---|---|
@@ -305,8 +309,7 @@ For new repository writes, let **L** = `S/.punt-labs/local/ethos/` and read:
 - Published aggregate: `C/.punt-labs/ethos/missions/<id>/reflections.yaml` (also
   inspect S's record copy when S differs from C). Full export uses this aggregate
   representation at the chosen export destination. It is a YAML mapping with
-  `reflections: [<Reflection>, ...]`, not the local envelope format. Supported
-  legacy aggregates are compatibility inputs, not new local write targets.
+  `reflections: [<Reflection>, ...]`, not the local envelope format.
 
 Both the per-round archive and receipt are single YAML documents with these
 top-level fields:
@@ -348,16 +351,16 @@ absence final, and retain unknown/conflict outcomes rather than invent acceptanc
 ### Reader outcomes
 
 Filesystem integration remains independent of the binary. Readers resolve S/C and
-union local live/archive, published and supported legacy sources independently of
-current mode. Compare canonical payloads **before** watermark filtering: equal
-identities collapse, unequal content is a named conflict. Legacy timestamp
-collisions retain their separate identity rules, not lossy first-wins dedup.
+union local live/archive and published sources independently of current mode.
+Compare canonical payloads **before** watermark filtering: equal identities
+collapse, unequal content is a named conflict. Timestamp collisions retain
+their separate identity rules, not lossy first-wins dedup.
 
 | Observation | Required meaning |
 |---|---|
 | Mission absent | Mission-not-found error |
 | Valid initialized authority, no decision for round | Not submitted; preparation may additionally be pending |
-| Missing legacy decision block | Legacy unknown; inspect/migrate before certifying non-submission |
+| Missing decision block (round history incomplete) | Authority unavailable; not certified as non-submission, and lifecycle writes refuse |
 | Accepted decision, no admissible detail in this clone | Submitted, detail unavailable here; not an empty reflection log |
 | Valid authority, corrupt optional detail | Decision present, detail unreadable; permission unchanged |
 | Malformed/unreadable authority or conflicting copies | Error/unknown, never an empty-success or lifecycle bypass |
@@ -365,8 +368,8 @@ collisions retain their separate identity rules, not lossy first-wins dedup.
 
 Quarry must distinguish these outcomes and explicitly repair incomplete indexed
 memory after later authorized sharing. Desk must discover local versus published
-prompts and the local artifact destination. Their existing sibling-file readers
-are not fixed merely by an Ethos legacy fallback. Mission transcript tagging in
+prompts and the local artifact destination. Ethos keeps no fallback reader for
+them. Mission transcript tagging in
 Quarry remains proposed; no implemented hook parity is claimed.
 
 Audit recording failures remain visible without blocking the tool invocation.
@@ -378,32 +381,73 @@ successful lifecycle acceptance.
 
 ## Automatic storage upgrade
 
-Ethos upgrades its own storage; no command exists for it. The first ethos run
-after an upgrade relocates recognized legacy data into the shared local zone
-and writes a repair log under `~/.punt-labs/ethos/`. There is no lossless
-legacy-trace release guarantee.
+Ethos upgrades its own storage; no command exists for it. Every CLI command,
+hook and MCP call passes the upgrade gate (`autorepair.Ensure`) before it reads
+storage. `version`, `completion`, `help` and `uninstall` are exempt.
 
-Shared identities, contracts, results, corrections, provenance and ADRs,
-private credentials, configuration, global data and arbitrary files are never
-removed. Canonical local history, current publications and flat current exports
-(`missions/<id>.contract.yaml`, `missions/<id>.result.yaml` with their associated
-trace) are retained, including incomplete/ambiguous exports. No backup,
-authority backfill, lifecycle transition, Git staging/commit or configuration
-rewrite is performed. The upgrade does not weaken new shared authority, correct
-placement, ordinary commits or retention of new local history when a feature
-worktree is removed. A busy lock defers the upgrade to the next run and is never
-stolen. Reconnect long-lived MCP servers after an upgrade. Re-running `enable`
-maintains the shared local-zone exclusion and current hooks, not record-tree
-ignore exceptions.
+**Stamps.** A stamp file records that a store is at layout 5, the DES-079
+layout. There are two: `S/.punt-labs/local/ethos/layout.yaml` for the
+repository and `~/.punt-labs/ethos/layout.yaml` for the machine. Each holds the
+layout number, the ethos binary version, the time of the upgrade and any
+residual items. With both stamps current the gate costs two `stat` calls and
+one small read. A missing stamp means unknown, so every step runs. A stamp with
+a higher number is treated as current: an older binary never converts backward.
 
-**Private legacy overlays.** A repository sibling
-`S/.punt-labs/ethos/identities/<handle>.ext/<ns>.local.yaml` is relocated to
-`S/.punt-labs/local/ethos/identities/<handle>.ext/<ns>.local.yaml`, preserving all
-credentials. Divergent values are never overwritten, a merged identity is never
-serialized into the base, and credentials are never printed in diagnostics.
-Legacy siblings are read-only compatibility inputs; local writes refuse while
-one remains, and unequal local/legacy copies refuse reads. Global overlay
-locations are unchanged.
+**Steps.** Seventeen steps run in a fixed order (`autorepair.StepOrder`). Each
+is idempotent by observed state, not by release number. They import this
+repository's missions, session audit and ADRs from the global store; write
+round decisions and corrections from complete validated evidence; scrub
+tracked records and rewrite live tails that predate redaction; archive
+record-tree trace into the local zone, redacted, then remove it from the tree;
+salvage a corrupt sealed chunk (decodable lines are redacted into a replacement
+chunk, raw bytes deleted, digests logged); move repository overlays; untrack
+local files from the index (they stay on disk); replace the old managed
+`.gitignore` block with the single `.punt-labs/local/` rule; rename
+`.punt-labs/ethos/config.yaml` to `.punt-labs/ethos.yaml`; move a `voice:` field
+into the `vox` extension; rewrite `inputs.bead` to `inputs.ticket`; delete old
+locks and staging leftovers; refresh stale hook sections; retire dead session
+rosters. Pre-commit runs the untrack, live-tail and hook steps on every commit,
+before the seal; session start runs the roster step.
+
+**Log and notice.** Each step appends JSON lines to
+`~/.punt-labs/ethos/logs/repair.log`: step, action, redacted paths and any
+error, never file contents. The log is capped at 1 MB with one rotation
+(`repair.log.1`). The only user-visible output is one line, printed only when
+something was repaired:
+
+```text
+ethos: upgraded storage (N items; see ~/.punt-labs/ethos/logs/repair.log)
+```
+
+Session start puts it in the hook's system message; pre-commit prints it to
+stderr only; the CLI prints it to stderr; an MCP call adds a second content
+block. `ethos doctor` shows a `Storage` row with the layout and upgrade time.
+
+**Busy locks and losses.** The upgrade takes a global lock, then a repository
+lock, and waits at most 2 s. A busy lock, an index lock or an unreadable file
+defers the step: it logs, the stamp is not written, and the next run resumes. A
+lock is never stolen. A step that finds a permanent condition (for example a
+mission whose round history is incomplete) records it as a residual in the
+stamp and counts as finished. Nothing an upgrade step does fails the command,
+hook or MCP call. Losses are logged, never fatal.
+
+**Never touched.** Shared identities, contract lifecycle fields, accepted
+results, corrections, ADR text, provenance manifests, private credentials,
+configuration, the outside-a-repository global stores, current publications,
+explicit exports (`missions/<id>.contract.yaml`, `missions/<id>.result.yaml`
+with their associated trace), full-mode published copies, agent-written
+artifacts, user `.gitignore` lines outside the former managed block, foreign
+git hooks and git history. The upgrade does not stage or commit anything, and
+there is no backup. Reconnect long-lived MCP servers after installing a new
+binary. Re-running `enable` maintains the shared local-zone exclusion and
+current hooks, not record-tree ignore exceptions.
+
+**Private overlays.** A repository sibling
+`S/.punt-labs/ethos/identities/<handle>.ext/<ns>.local.yaml` is moved under
+`S/.punt-labs/local/ethos/identities/<handle>.ext/<ns>.local.yaml`, with all
+credentials preserved. When both exist the new one is kept and the old one is
+deleted. A merged identity is never serialized into the base, and credentials
+are never printed in diagnostics. Global overlay locations are unchanged.
 
 Repository overlay handling preserves base-only writes, per-key local precedence,
 namespace limits, source-layer selection and read-only bundles. Direct base-file
@@ -413,56 +457,29 @@ vault and may reach runtime model context. Global overlay behavior is unchanged.
 
 ## Promise to implementation to acceptance
 
-All DES-079 rows are **pending** until the leader attaches actual command results
-at the tested revision. Package/file pointers are implementation targets, not
-claims of completeness. Focused checks alone do not establish release acceptance.
+Each row names the acceptance case in `scripts/storage_acceptance.py` (run by
+`make check-storage` against the built CLI, plugin hook wrappers, MCP server and
+installed Git hooks in scratch repositories) and the Go tests that prove it.
+The script does not inject crashes, fsync failures or `EXDEV`, and has no
+competing-index writer; the Go tests named here cover those boundaries.
 
-| Promise / authority | Implementation surface | Required acceptance / current evidence |
+| Promise / authority | Implementation surface | Proof |
 |---|---|---|
-| Physical boundary, including transient writes (DES-079/075) | `internal/layout`, all record/identity/enable/seed/hook writers | **Pending:** real CLI/MCP/hooks; observe transient and final paths, failures and `EXDEV`; old targets intact |
-| Canonical local owner (DES-058/062) | `internal/resolve`, audit/mission paths, close/seal/purge | **Pending:** linked C removal without SessionEnd retains prompts, reflections, chunks and tails; interrupted seal/retry |
-| Strict request policy and prospective consent | Config resolver, CLI/hooks, MCP request guard, trace writers | **Pending:** unset/blame/full/invalid, both switches in one server, concurrent requests and mid-call config edit, mixed private/full entries |
-| Mandatory reflection, shared decisions (DES-034) | Mission strict decoder, reflect/advance/Update, CLI/MCP/UI | **Pending:** malformed/null/duplicate/multidoc inputs, all five recommendations, rounds 1–10, stale Update, isolated-HOME handoff |
-| Event-before-decision acceptance | Mission intent/event persistence and recovery | **Pending:** every interruption/write/fsync/rename boundary, exact cross-session retry, prepared-event rendering, conflict refusal, unchanged ordinary rollback |
-| Shared corrections (DES-072) | Correct writer/readers, export/publication | **Pending:** interruption/retry, fresh clone, repeated identical legitimate annotations, unchanged lifecycle |
-| Complete selected blame publication | Mission snapshots, provenance, Git actual-index transaction | **Pending:** two missions/multiple delegations, all results/ADRs/corrections, unknown/missing inventory, alternate/partial index, competing writer, lock/fault cases; unrelated staged bytes unchanged |
-| Squash-safe line attribution | Manifest/message/verify, UI original blame coordinates | **Pending:** actual squash, branch removal, isolated-HOME fresh clone, known and ambiguous ranges, later insertion/rename, tampered source/reference refusal |
-| Local audit usability without source churn | Audit append/seal/query/quarantine and hooks | **Pending:** real entry points, seal twice, visible corruption/gaps, equal/conflicting overlaps, default seal no index access, nonblocking audit versus required-event failure |
-| Plain versus full export | Mission CLI/export readers/redactor | **Pending:** plain C-root/cwd `--dir` regression; full blame-history export with unsealed tail, missing history, redaction, exclusions and ordinary add |
-| Extensions and repo ADRs (DES-057/079) | Identity layering/persistence, ADR CLI/MCP store | **Pending:** base-only writes preserve overlay secrecy/limits/bundles; repo-first/global fallback; redacted ADR publication |
-| Bounded legacy repair; generated content | Repair, enable, doctor, generator | No lossless migration gate. **Pending:** known-obsolete inventory, permanent-loss warning, default-no confirmation, explicit `--yes`, cleanup exclusions; new lock coordination, byte-identical agents; generated/installed drift fails, seeded edits warn |
-| Independent integration surfaces | Filesystem contract, Quarry/Desk consumers | **Pending:** identity without missions, missions without teams, tracing without Quarry, blame without origin-local state, later explicit memory repair |
-| Redaction shipped; repair still required | DES-080 writers; `CHANGELOG.md` v4.20.0 | Release evidence exists for DES-080. **Pending:** new destinations, publication/export/ADR sinks and legacy-tail handling at final DES-079 revision |
+| Physical boundary, including transient writes (DES-079/075) | `internal/layout`, all record/identity/enable/seed/hook writers | Final-path walk (`check_boundary`) at the end of `default_seal`, `modes`, `audit_recovery`, `lifecycle`, `required_event_failure`, `worktree_retention`, `full_export`, `publish_squash`, `mcp_modes`, `upgrade`; `TestGeneratedGateStorageBoundary` |
+| Canonical local owner (DES-058/062) | `internal/resolve`, audit/mission paths, close/seal | `worktree_retention`: linked C removed without SessionEnd; sealed audit, unsealed tail and reflection stay readable from S |
+| Strict request policy and prospective consent | Config resolver, CLI/hooks, MCP request guard, trace writers | `modes` (unset, blame, full, seven invalid values; private history not promoted), `mcp_modes` (one server switched blame/full/blame, then invalid), `TestDoctorConfigSnapshotConcurrentRequests`, `TestCorrectionAuthorityInterruptedRetryPreservesConsent` |
+| Mandatory reflection, shared decisions (DES-034) | Mission strict decoder, reflect/advance/Update, CLI/MCP/UI | `lifecycle`: five recommendations, null/unknown-version/null-entries decision blocks, unknown field, multi-document, wrong mission and round, exact versus changed retry, fresh-clone handoff |
+| Event-before-decision acceptance | Mission intent/event persistence and recovery | `required_event_failure`: a failed mission event stream leaves shared authority unchanged for `reflect` and `result`, and retry does not duplicate; `TestCorrectionIntentAncestryAcceptedRetry`, `TestCorrectionPriorAcceptedRecoveryWarning` |
+| Shared corrections (DES-072) | Correct writer/readers, export/publication | `lifecycle` (a correction after close leaves lifecycle state unchanged; `corrections.yaml` present), `publish_squash` (corrections survive squash and fresh clone), `TestCorrectionAuthorityMissingV1RefusesBeforePreparation` |
+| Complete selected blame publication | Mission snapshots, provenance, Git actual-index transaction | `publish_squash`: two missions, three delegations, ADR, alternate `GIT_INDEX_FILE`, held index lock, missing inventory caught by `provenance verify-index`, unrelated staged bytes unchanged |
+| Squash-safe line attribution | Manifest/message/verify, UI original blame coordinates | `publish_squash`: actual `merge --squash`, source branch deleted, fresh clone verifies, known and ambiguous sources |
+| Local audit usability without source churn | Audit append/seal/query and hooks | `default_seal` (dry-run and repeated seal, index bytes unchanged, held index lock, foreign pre-commit hook runs once, `enable` idempotent), `audit_recovery` (corrupt chunk salvaged automatically, unrelated commit not blocked), `required_event_failure` (audit write failure is an advisory message), `TestPreCommitUnstagesLocalAndRunsNamedSteps` |
+| Plain versus full export | Mission CLI/export readers/redactor | `full_export`: unsealed tail exported; session audit, scratch, quarantine and other missions excluded; live files not copied; no staging; ordinary `git add` works; synthetic credential not exported |
+| Extensions and repo ADRs (DES-057/079) | Identity layering/persistence, ADR CLI/MCP store | `publish_squash` (`adr create`, then `adr show` in a fresh clone), `TestOverlaysStepMovesLegacyOverlay`, `TestOverlaysStepBothLocationsKeepsNew`, `TestCLI_RepositoryIdentityOverlayDivergence` |
+| Automatic storage upgrade; generated content | `internal/autorepair`, enable, doctor, generator | `upgrade`: every released layout in the committed corpus upgraded with no user action, at most one notice line, no tracked machine-local files afterward, no credential-shaped token in files or new history; `TestEnsureWritesStampsAndIsIdempotent`, `TestEnsureBusyLockContinuesWithoutFailing`, `TestEnsureRecordsResidualsInStamp`, `TestEnsureConcurrentCallsConvertOnce`; `TestAgentCurrencySourceEditsCauseDrift` (generated drift) |
+| Independent integration surfaces | Filesystem contract, Quarry/Desk consumers | `lifecycle` and `worktree_retention` read S's files with no Quarry or Desk present |
+| Redaction (DES-080) | DES-080 writers | `full_export` (synthetic credential absent from the export), `upgrade` (redaction of pre-redaction tails and no token in files or new history) |
 
-### Shipped versus proven
-
-The table above keeps its rows **Pending**. The table below names, per row,
-what ships and which `check-storage` scenario in `scripts/storage_acceptance.py`
-exercises it. The script runs the built CLI, the plugin hook wrappers and the
-installed Git hooks in scratch repositories. By its own `coverage_limits` it
-does not prove transient placement, and it has no crash/fsync/`EXDEV`
-injection, competing-index writer, live UI or external-consumer checks. A
-scenario named here is evidence for the listed behavior only, not for the whole
-row.
-
-| Row | Shipped | Covered by `check-storage` scenario | Proof still missing |
-|---|---|---|---|
-| Physical boundary | `internal/layout` | Final-path walk (`check_boundary`) at the end of `default_seal`, `modes`, `audit_recovery`, `lifecycle`, `required_event_failure`, `worktree_retention`, `full_export`, `publish_squash`, `mcp_modes` | Transient writes, failures, `EXDEV`; MCP/hook paths beyond those scenarios |
-| Canonical local owner | `internal/resolve`, seal, purge | `worktree_retention`: linked C removed without SessionEnd; sealed audit, unsealed tail and reflection remain readable from S | Interrupted seal/retry |
-| Strict request policy | Config resolver, request guard | `modes` (unset/blame/full and seven invalid values; private history not promoted), `mcp_modes` (one long-lived server switched blame/full/blame, then invalid) | Concurrent requests, mid-call config edit, mixed private/full entries beyond these |
-| Mandatory reflection, shared decisions | `internal/mission` strict decoder, reflect/advance | `lifecycle`: all five recommendations, null/unknown-version/null-entries decision blocks, unknown field, multi-document, wrong mission and round, exact retry versus changed retry, fresh-clone handoff | Rounds 1-10 (the scenario uses budgets of 2), stale Update, UI |
-| Event-before-decision acceptance | Intent/event persistence | `required_event_failure`: failed mission event stream leaves shared authority unchanged for `reflect` and `result`, and retry does not duplicate | Interruption at each write/fsync/rename boundary, cross-session retry, conflict refusal |
-| Shared corrections | `corrections.yaml` authority | `lifecycle` (correction after close leaves lifecycle state unchanged; `corrections.yaml` present), `publish_squash` (corrections survive squash and fresh clone) | Interruption/retry, repeated identical annotations |
-| Complete selected blame publication | `ethos mission publish`, `internal/provenance` | `publish_squash`: two missions, three delegations, ADR, alternate `GIT_INDEX_FILE`, held index lock, missing inventory caught by `provenance verify-index`, unrelated staged bytes unchanged | Competing writer, partial-commit forms, lock/fault cases |
-| Squash-safe line attribution | `provenance message`, `provenance verify` | `publish_squash`: actual `merge --squash`, source branch deleted, fresh clone verifies, known and ambiguous sources | Later insertion/rename, tampered source/reference refusal, UI blame coordinates |
-| Local audit usability | `ethos audit seal`, `show`, `quarantine`, hooks | `default_seal` (dry-run and repeated seal, index bytes unchanged, held index lock, foreign pre-commit hook still runs once, `enable` idempotent), `audit_recovery` (corrupt chunk, quarantine twice, unrelated commit not blocked), `required_event_failure` (audit write failure is an advisory message) | Equal/conflicting overlaps |
-| Plain versus full export | `ethos mission export [--full]` | `full_export`: unsealed tail exported, session audit/scratch/quarantine/other mission excluded, live files not copied, no staging, ordinary `git add` works, synthetic credential not exported | Plain export C-root versus `--dir` regression, missing-history reporting |
-| Extensions and repo ADRs | `internal/adr` repository store | `publish_squash`: `adr create` then `adr show` in a fresh clone | Overlay secrecy/limits/bundles, global fallback, redacted ADR publication |
-| Bounded legacy repair; generated content | `internal/autorepair`, enable, doctor | None for the upgrade or `doctor`; `default_seal` covers `enable` idempotence only | Everything listed in the row |
-| Independent integration surfaces | Filesystem contract | None | Everything listed in the row |
-| Redaction shipped; repair still required | DES-080 writers, v4.20.0 | `full_export` checks one synthetic credential is absent from the export | New destinations, ADR sinks, legacy-tail handling |
-
-Required release proof includes `make check` (race tests and applicable formal
-checks), real entry-point acceptance, independent product/code/security/formal
-review, and compilation/inspection of changed product/formal PDFs. None is
-replaced by path classification, model intent, an unrun test, or this table.
+Release proof is `make check` (race tests and applicable formal checks),
+including `check-storage`, plus independent product, code, security and formal
+review and compilation of changed product and formal PDFs.
