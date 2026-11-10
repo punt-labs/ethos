@@ -118,6 +118,7 @@ GOTOOLCHAIN=go1.26.5 go build ./... && GOTOOLCHAIN=go1.26.5 go vet ./...
 GOTOOLCHAIN=go1.26.5 go test -race -count=1 ./plugin/hooks/ -run 'Shim.*(Redact|Unstage|Local)' -v
 GOTOOLCHAIN=go1.26.5 go test -race -count=1 ./internal/gitenv/ ./internal/autorepair/
 ```
+
 Then reproduce bug 1 and bug 2 through the real binary built from the branch
 (`go build -o .tmp/ethos ./cmd/ethos`, isolated `HOME`, scratch repo, `ethos
 enable`, plant `.punt-labs/local/ethos/sessions/x.audit.jsonl` with
