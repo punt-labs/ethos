@@ -314,15 +314,15 @@ func refreshStaleHooks(refresh func(checkout, store string) (HookRefresh, error)
 	}
 	for _, h := range r.Tracked {
 		problems = append(problems, fmt.Sprintf(
-			"Ethos did not rewrite the stale %s hook: core.hooksPath places it in a tracked file; run `ethos enable` to update it.", h))
+			"Ethos left the stale %s hook in place: core.hooksPath puts it in a tracked file.", h))
 	}
 	for _, h := range r.Shared {
 		problems = append(problems, fmt.Sprintf(
-			"Ethos did not rewrite the stale %s hook: core.hooksPath is shared outside this repo; run `ethos enable`.", h))
+			"Ethos left the stale %s hook in place: core.hooksPath is shared outside this repo.", h))
 	}
 	for _, h := range r.TrackedMissing {
 		problems = append(problems, fmt.Sprintf(
-			"Ethos did not install the %s hook: core.hooksPath places it in the work tree; run `ethos enable` to install it.", h))
+			"Ethos did not install the %s hook: core.hooksPath places it in the work tree.", h))
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: refreshing git hook sections: %v\n", err)
