@@ -141,21 +141,40 @@ func TestGlobalAuditOtherCheckoutStaysGlobal(t *testing.T) {
 
 // TestGlobalAuditNoSignalIsResidual: the v3.11.0 corpus as it is. Its roster
 // has no checkout field and its audit lines carry no repository, so nothing
-// says whose session this is. The file stays global and the step records
-// the session as a residual rather than guessing an owner.
+// says whose session this is. The repository that upgrades first gains a
+// redacted copy of the history it may own; the global file is kept
+// byte-identical for any other owner, and the session is recorded as a
+// residual. Nothing is deleted and nothing is guessed.
 func TestGlobalAuditNoSignalIsResidual(t *testing.T) {
-	env, _ := corpusEnv(t, "v3.11.0")
+	env, log := corpusEnv(t, "v3.11.0")
 	roster, err := os.ReadFile(filepath.Join(env.Global, "sessions", corpusSession+".yaml"))
 	require.NoError(t, err)
 	require.NotContains(t, string(roster), "checkout:", "the v3.11 roster names no checkout")
+	home := realHome(t, env)
+	before, err := os.ReadFile(globalAuditFile(env))
+	require.NoError(t, err)
+
 	out, err := runGlobalAudit(context.Background(), env)
 	require.NoError(t, err)
-	assert.Equal(t, 0, out.Items)
-	assert.FileExists(t, globalAuditFile(env))
+	assert.Equal(t, 1, out.Items, "the unmodified v3.11 corpus imports")
+	got := archivedAudit(t, env, corpusSession)
+	require.NotEmpty(t, got, "the redacted copy is in this repository's local archive")
+	assert.Equal(t, 3, strings.Count(got, "\n"))
+	assert.NotContains(t, got, "ghp_FAKE")
+	assert.NotContains(t, got, home)
+	after, err := os.ReadFile(globalAuditFile(env))
+	require.NoError(t, err, "the global file is kept")
+	assert.Equal(t, before, after, "the global file is byte-identical")
 	require.Len(t, out.Residuals, 1)
-	assert.Equal(t, "global-audit", out.Residuals[0].Step)
-	assert.Equal(t, corpusSession, out.Residuals[0].ID)
-	assert.Contains(t, out.Residuals[0].Reason, "no roster checkout")
+	assert.Equal(t, Residual{Step: "global-audit", ID: corpusSession, Reason: "no owner signal; global copy kept"}, out.Residuals[0])
+	assert.Contains(t, log.steps, "global-audit:import-keep-global")
+
+	repoBefore, globalBefore := treeDigest(t, env.Roots.Store), treeDigest(t, env.Global)
+	out, err = runGlobalAudit(context.Background(), env)
+	require.NoError(t, err)
+	assert.Equal(t, 0, out.Items, "second run finds the copy")
+	assert.Equal(t, repoBefore, treeDigest(t, env.Roots.Store))
+	assert.Equal(t, globalBefore, treeDigest(t, env.Global))
 }
 
 func TestGlobalAuditNoGlobalFiles(t *testing.T) {
