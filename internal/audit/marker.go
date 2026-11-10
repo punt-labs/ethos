@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 // Marker retires a corrupt sealed chunk. It carries deterministic content
@@ -70,4 +73,67 @@ func MarshalMarker(m Marker) ([]byte, error) {
 		return nil, fmt.Errorf("marshaling marker: %w", err)
 	}
 	return append(data, '\n'), nil
+}
+
+// MergeMarkers returns the marker that records everything old and next record:
+// the union of their unrecovered ranges (a record of loss is only ever widened),
+// the higher VerifiedLast, and the retirement digest of either (next's wins when
+// both carry one). The two must describe the same chunk; Reason is next's unless
+// empty.
+func MergeMarkers(old, next Marker) Marker {
+	m := next
+	if m.Reason == "" {
+		m.Reason = old.Reason
+	}
+	if old.VerifiedLast > m.VerifiedLast {
+		m.VerifiedLast = old.VerifiedLast
+	}
+	if m.RetiredSHA256 == "" {
+		m.RetiredSHA256 = old.RetiredSHA256
+	}
+	switch {
+	case !old.HasGap():
+	case !next.HasGap():
+		m.UnrecoveredFirst, m.UnrecoveredLast = old.UnrecoveredFirst, old.UnrecoveredLast
+	default:
+		m.UnrecoveredFirst = min(old.UnrecoveredFirst, next.UnrecoveredFirst)
+		m.UnrecoveredLast = max(old.UnrecoveredLast, next.UnrecoveredLast)
+	}
+	return m
+}
+
+// writeMarker is the one place an audit marker is written. It reads any marker
+// already at path and merges next into it (MergeMarkers), so no write narrows a
+// recorded loss or drops a completion digest. clearRetired drops the digest from
+// the result: a repeated retirement must invalidate the old completion before
+// its source is removed, and a published marker never carries one. An existing
+// marker that is torn or undecodable reads as absent, as everywhere else; one
+// that cannot be read, or that covers another chunk, is an error.
+func writeMarker(p layout.Policy, path string, next Marker, clearRetired bool) error {
+	old, err := ReadMarker(path)
+	var pathErr *os.PathError
+	switch {
+	case err == nil:
+		if old.Chunk != next.Chunk {
+			return fmt.Errorf("marker %s covers chunk %s, not %s", path, old.Chunk, next.Chunk)
+		}
+		if clearRetired {
+			old.RetiredSHA256 = ""
+		}
+		next = MergeMarkers(old, next)
+	case errors.Is(err, os.ErrNotExist):
+	case errors.As(err, &pathErr):
+		return err
+	}
+	if clearRetired {
+		next.RetiredSHA256 = ""
+	}
+	body, err := MarshalMarker(next)
+	if err != nil {
+		return err
+	}
+	if err := ensureDestinationDir(p, filepath.Dir(path)); err != nil {
+		return err
+	}
+	return replaceAuditFile(p, path, body)
 }

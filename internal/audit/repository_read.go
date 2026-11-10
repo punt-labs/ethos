@@ -426,7 +426,7 @@ func readAuditArtifactDir(dir string, ns Namespace, session string) ([]os.DirEnt
 	for _, e := range entries {
 		cn, kind := Classify(e.Name(), ns)
 		if e.Name() != legacy {
-			if kind != KindValid && kind != KindQuarantine && kind != KindCorrupt {
+			if kind != KindValid && kind != KindQuarantine && kind != KindCorrupt && kind != KindHeldLoss {
 				continue
 			}
 			if ns == MissionNS && session != "" && cn.Session != session {

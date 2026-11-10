@@ -9,6 +9,7 @@
 package audit
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -56,6 +57,10 @@ const (
 	KindQuarantine
 	// KindTemp is a stale temp file (.<stem>.jsonl.ethos-tmp).
 	KindTemp
+	// KindHeldLoss is the record of held raw bytes that named no ts
+	// (<prefix>held-<sha256>.heldloss): a loss of unknown range, named from the
+	// content so no chunk or marker can collide with it.
+	KindHeldLoss
 )
 
 // Namespace distinguishes the two chunk grammars.
@@ -180,6 +185,12 @@ func Classify(name string, ns Namespace) (ChunkName, Kind) {
 		}
 		return ChunkName{Namespace: ns}, KindNearMiss
 	}
+	if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, heldLossSuffix) {
+		if cn, ok := parseHeldLossStem(strings.TrimSuffix(name, heldLossSuffix), ns); ok {
+			return cn, KindHeldLoss
+		}
+		return ChunkName{Namespace: ns}, KindNearMiss
+	}
 	if strings.HasPrefix(name, prefix) && strings.Contains(name, ".jsonl.corrupt") {
 		idx := strings.Index(name, ".jsonl.corrupt")
 		if cn, ok := parseChunkStem(name[:idx], ns); ok {
@@ -198,6 +209,51 @@ func Classify(name string, ns Namespace) (ChunkName, Kind) {
 		return ChunkName{Namespace: ns}, KindNearMiss
 	}
 	return ChunkName{Namespace: ns}, KindOther
+}
+
+const heldLossSuffix = ".heldloss"
+
+// HeldLossTS is the ts a held-loss record reports as its range on both ends: a
+// loss whose range is unknown. 1 is a ts a marker name can carry and no line
+// can precede.
+const HeldLossTS = int64(1)
+
+// HeldLossStem returns the stem of the loss record for held bytes whose
+// content digest is sum (hex). session is used in the mission namespace only.
+func HeldLossStem(ns Namespace, session, sum string) string {
+	if ns == MissionNS {
+		return "log-" + session + "-held-" + sum
+	}
+	return "audit-held-" + sum
+}
+
+// HeldLossFile returns the file name of a held-loss record.
+func HeldLossFile(ns Namespace, session, sum string) string {
+	return HeldLossStem(ns, session, sum) + heldLossSuffix
+}
+
+// parseHeldLossStem parses "<prefix>[<session>-]held-<64 hex>".
+func parseHeldLossStem(stem string, ns Namespace) (ChunkName, bool) {
+	rest, ok := strings.CutPrefix(stem, chunkPrefix(ns))
+	if !ok {
+		return ChunkName{}, false
+	}
+	session := ""
+	if ns == MissionNS {
+		i := strings.LastIndex(rest, "-held-")
+		if i <= 0 {
+			return ChunkName{}, false
+		}
+		session, rest = rest[:i], rest[i+1:]
+	}
+	sum, ok := strings.CutPrefix(rest, "held-")
+	if !ok || len(sum) != 64 {
+		return ChunkName{}, false
+	}
+	if _, err := hex.DecodeString(sum); err != nil || strings.ToLower(sum) != sum {
+		return ChunkName{}, false
+	}
+	return ChunkName{Namespace: ns, Session: session}, true
 }
 
 // chunkPrefix returns the leading token of a namespace's chunk names.

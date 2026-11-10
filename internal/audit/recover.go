@@ -285,15 +285,7 @@ func publishedSource(p layout.Policy, source string) bool {
 // offers the range, and a reader of that copy alone must not treat the hole
 // as empty success. Git's index is not touched.
 func writeSharedMarker(p layout.Policy, source string, cn ChunkName, m Marker) error {
-	m.RetiredSHA256 = ""
-	body, err := json.Marshal(m)
-	if err != nil {
-		return err
-	}
-	if err := ensureDestinationDir(p, filepath.Dir(source)); err != nil {
-		return err
-	}
-	return replaceAuditFile(p, filepath.Join(filepath.Dir(source), cn.MarkerFile()), append(body, '\n'))
+	return writeMarker(p, filepath.Join(filepath.Dir(source), cn.MarkerFile()), m, true)
 }
 
 // removeSource deletes the damaged bytes and confirms the directory entry is

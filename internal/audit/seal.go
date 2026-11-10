@@ -427,12 +427,12 @@ func ChunkArtifacts(dir string, ns Namespace, session string) ([]string, error) 
 		}
 		cn, kind := Classify(e.Name(), ns)
 		if ns == MissionNS && session != "" &&
-			(kind == KindValid || kind == KindQuarantine || kind == KindCorrupt) &&
+			(kind == KindValid || kind == KindQuarantine || kind == KindCorrupt || kind == KindHeldLoss) &&
 			cn.Session != session {
 			continue
 		}
 		switch kind {
-		case KindValid, KindQuarantine, KindCorrupt:
+		case KindValid, KindQuarantine, KindCorrupt, KindHeldLoss:
 			paths = append(paths, filepath.Join(dir, e.Name()))
 		case KindOther, KindNearMiss, KindTemp:
 		}

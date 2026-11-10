@@ -185,7 +185,7 @@ func obsolete(p layout.Policy, root, rel string) (remove, lock bool, err error) 
 			ns, legacy = audit.SessionNS, base == "audit.jsonl"
 		}
 		_, kind := audit.Classify(base, ns)
-		diagnostic := kind == audit.KindCorrupt || kind == audit.KindQuarantine
+		diagnostic := kind == audit.KindCorrupt || kind == audit.KindQuarantine || kind == audit.KindHeldLoss
 		// Quarantine deliberately publishes gap/watermark diagnostics without
 		// captured record:full consent. Sessions have no authority record that
 		// can distinguish these current publications from legacy diagnostics.

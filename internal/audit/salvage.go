@@ -92,11 +92,7 @@ func salvageBytes(p layout.Policy, s Stream, in salvageInput, guard LineGuard) (
 	// keeps the source's name overwrites the raw bytes, so it runs first.
 	writeMarkers := func() error {
 		if m.HasGap() || in.retired {
-			mb, err := MarshalMarker(m)
-			if err != nil {
-				return err
-			}
-			if err := ReplaceLocalFile(p, filepath.Join(dir, cn.MarkerFile()), mb); err != nil {
+			if err := writeMarker(p, filepath.Join(dir, cn.MarkerFile()), m, false); err != nil {
 				return fmt.Errorf("writing gap marker for chunk %s: %w", source, err)
 			}
 		}
@@ -174,12 +170,10 @@ func RecoverHeldQuarantine(p layout.Policy, s Stream, held string, guard LineGua
 	if first == 0 {
 		// No line and no sidecar says when these bytes were written, and a
 		// file's mtime is not evidence: it can lie outside every ts a chunk
-		// name can hold. The loss is recorded over the stream's known bounds.
-		var err error
-		first, last, err = streamBounds(p, s)
-		if err != nil {
-			return res, err
-		}
+		// name can hold. Naming the loss from the stream's bounds would land on
+		// a chunk's own stem and share its marker, so the bytes get a record
+		// named from their content instead.
+		return recoverUnnamedHeld(p, s, held, data)
 	}
 	cn := ChunkName{Namespace: s.Namespace, First: first, Last: last}
 	if s.Namespace == MissionNS {
@@ -196,6 +190,47 @@ func RecoverHeldQuarantine(p layout.Policy, s Stream, held string, guard LineGua
 	if err := os.Remove(held + ".json"); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return res, fmt.Errorf("deleting held quarantine sidecar %s: %w", held+".json", err)
 	}
+	return res, nil
+}
+
+// recoverUnnamedHeld records held bytes that name no ts as a held-loss record
+// keyed by their content digest, then deletes the bytes and their sidecar. No
+// decodable line can exist in them (a line needs a ts), so there is nothing to
+// install; N distinct blobs are N records and none collides with a chunk or a
+// marker.
+func recoverUnnamedHeld(p layout.Policy, s Stream, held string, data []byte) (SalvageResult, error) {
+	res := SalvageResult{Lost: true}
+	sum := digest(data)
+	first, _, err := streamBounds(p, s)
+	if err != nil {
+		return res, err
+	}
+	dir, err := ArchiveDir(p, s, timeFromUnixNanoDate(first))
+	if err != nil {
+		return res, err
+	}
+	body, err := json.Marshal(struct {
+		Kind   string `json:"kind"`
+		SHA256 string `json:"sha256"`
+		Size   int    `json:"size"`
+	}{"held bytes named no ts; their entries are lost", sum, len(data)})
+	if err != nil {
+		return res, err
+	}
+	session := ""
+	if s.Namespace == MissionNS {
+		session = s.Session
+	}
+	rec := filepath.Join(dir, HeldLossFile(s.Namespace, session, sum))
+	if err := WriteLocalAtomic(p, rec, append(body, '\n')); err != nil {
+		return res, fmt.Errorf("writing held-loss record for %s: %w", held, err)
+	}
+	for _, path := range []string{held, held + ".json"} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return res, fmt.Errorf("deleting held quarantine bytes %s: %w", path, err)
+		}
+	}
+	res.Replaced, res.Replacement = true, rec
 	return res, nil
 }
 

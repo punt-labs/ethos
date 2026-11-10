@@ -791,6 +791,9 @@ func maxParseableTSOK(data []byte) (int64, bool) {
 // writeMarkerAtomic writes a marker via temp + fsync + rename so it never
 // appears in a torn state (a torn marker reads as absent everywhere).
 func writeMarkerAtomic(dir, name string, m Marker) error {
+	if old, err := ReadMarker(filepath.Join(dir, name)); err == nil && old.Chunk == m.Chunk {
+		m = MergeMarkers(old, m)
+	}
 	data, err := MarshalMarker(m)
 	if err != nil {
 		return err

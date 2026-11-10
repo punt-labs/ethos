@@ -669,3 +669,61 @@ func TestSameTSDamagedLinesBesideValidChunkAreRecorded(t *testing.T) {
 	assertSameTSRecorded(t, env, log, s, dir)
 	fixSecondRun(t, env)
 }
+
+// Held bytes with no ts are named from the stream's bounds, which equal an
+// existing chunk's stem: an existing marker with a wider gap is kept wide.
+func TestHeldWithoutTSDoesNotNarrowAnExistingGap(t *testing.T) {
+	env, _, s, dir, home := fixEnv(t)
+	cn := audit.ChunkName{Namespace: audit.SessionNS, First: fixT0, Last: fixT0 + 2000}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, cn.ChunkFile()), []byte(stableLine(fixT0, "A")+stableLine(fixT0+2000, "C")), 0o600))
+	mb, err := audit.MarshalMarker(audit.Marker{Chunk: cn.Stem(), VerifiedLast: fixT0 + 2000, UnrecoveredFirst: fixT0, UnrecoveredLast: fixT0 + 5000, Reason: "prior loss"})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, cn.MarkerFile()), mb, 0o600))
+	plantHeld(t, env, s, "garbage "+fakeToken+"\n")
+	runStep(t, runCorruptChunks, env)
+	data, err := audit.ReadStream(env.Policy, s)
+	require.NoError(t, err)
+	covered := false
+	for _, g := range data.Gaps {
+		covered = covered || g.First <= fixT0 && g.Last >= fixT0+5000
+	}
+	assert.True(t, covered, "the prior gap [T0,T0+5000] is still recorded; gaps=%v", data.Gaps)
+	assert.Empty(t, walkContains(t, env.Roots.Store, fakeToken, home), "no token survives")
+	fixSecondRun(t, env)
+}
+
+// Held bytes over a completed local retirement: the repair's own output must
+// scan, and a second run must change nothing.
+func TestHeldWithoutTSKeepsACompletedRetirementScanning(t *testing.T) {
+	env, _, s, dir, _ := fixEnv(t)
+	cn := audit.ChunkName{Namespace: audit.SessionNS, First: fixT0, Last: fixT0 + 2000}
+	src := filepath.Join(dir, cn.ChunkFile())
+	require.NoError(t, os.WriteFile(src, []byte(stableLine(fixT0, "A")+"garbage\n"+stableLine(fixT0+2000, "C")), 0o600))
+	_, err := audit.QuarantineLocal(env.Policy, s, src, dir, cn, "test", lineGuard(env.Policy, s.Namespace))
+	require.NoError(t, err)
+	_, err = audit.ScanSealedDir(dir, audit.SessionNS, "")
+	require.NoError(t, err, "scan before the held bytes")
+	plantHeld(t, env, s, "garbage no ts\n")
+	runStep(t, runCorruptChunks, env)
+	_, err = audit.ScanSealedDir(dir, audit.SessionNS, "")
+	require.NoError(t, err, "the repair's own output scans")
+	fixSecondRun(t, env)
+}
+
+// Two distinct held blobs with no ts in an empty stream are two records, and
+// the read reports both.
+func TestTwoHeldBlobsWithoutTSAreTwoRecords(t *testing.T) {
+	env, _, s, dir, home := fixEnv(t)
+	h1 := plantHeld(t, env, s, "garbage one "+fakeToken+"\n")
+	h2 := plantHeld(t, env, s, "garbage two "+home+"/q\n")
+	runStep(t, runCorruptChunks, env)
+	assert.NoFileExists(t, h1)
+	assert.NoFileExists(t, h2)
+	_, err := audit.ScanSealedDir(dir, audit.SessionNS, "")
+	require.NoError(t, err)
+	data, err := audit.ReadStream(env.Policy, s)
+	require.NoError(t, err)
+	assert.Len(t, data.Gaps, 2, "each held blob is its own recorded loss")
+	assert.Empty(t, walkContains(t, env.Roots.Store, fakeToken, home), "no token survives")
+	fixSecondRun(t, env)
+}

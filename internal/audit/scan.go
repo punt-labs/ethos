@@ -17,6 +17,9 @@ import (
 type ScannedDir struct {
 	Chunks  []ChunkName
 	Markers []ChunkName
+	// HeldLosses are the held-loss records (KindHeldLoss), each a loss of
+	// unknown range. Only the name is carried: the stem is recovered from it.
+	HeldLosses []string
 }
 
 // ScanSealedDir lists dir and classifies every entry. In the mission
@@ -43,7 +46,7 @@ func ScanSealedDir(dir string, ns Namespace, session string) (ScannedDir, error)
 		// session's artifacts; an empty session means "every session"
 		// (the read unions all).
 		if ns == MissionNS && session != "" &&
-			(kind == KindValid || kind == KindQuarantine || kind == KindCorrupt) {
+			(kind == KindValid || kind == KindQuarantine || kind == KindCorrupt || kind == KindHeldLoss) {
 			if cn.Session != session {
 				continue
 			}
@@ -89,6 +92,8 @@ func ScanSealedDir(dir string, ns Namespace, session string) (ScannedDir, error)
 				}
 			}
 			corrupts = append(corrupts, cn)
+		case KindHeldLoss:
+			sc.HeldLosses = append(sc.HeldLosses, e.Name())
 		case KindNearMiss:
 			return ScannedDir{}, &MalformedChunkNameError{Name: e.Name(), Dir: dir}
 		case KindTemp, KindOther:

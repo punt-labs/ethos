@@ -193,13 +193,8 @@ func QuarantineLocal(p layout.Policy, s Stream, source, dir string, cn ChunkName
 			// Even identical damaged bytes must not reuse the completion of a
 			// previous recovery after the recovered archive is removed again.
 			pending := prior
-			pending.RetiredSHA256 = ""
 			pending.VerifiedLast = verifiedLast
-			body, err := MarshalMarker(pending)
-			if err != nil {
-				return Marker{}, err
-			}
-			if err := ReplaceLocalFile(p, markerPath, body); err != nil {
+			if err := writeMarker(p, markerPath, pending, true); err != nil {
 				return Marker{}, err
 			}
 		}
@@ -246,11 +241,7 @@ func QuarantineLocal(p layout.Policy, s Stream, source, dir string, cn ChunkName
 		// endpoints, rather than declaring recovery based on an untrusted name.
 		m.UnrecoveredFirst, m.UnrecoveredLast = lo, hi
 	}
-	body, err = json.Marshal(m)
-	if err != nil {
-		return Marker{}, err
-	}
-	if err := ReplaceLocalFile(p, markerPath, append(body, '\n')); err != nil {
+	if err := writeMarker(p, markerPath, m, false); err != nil {
 		return Marker{}, err
 	}
 	// Recovery is complete: the damaged bytes are no longer needed, and may hold
