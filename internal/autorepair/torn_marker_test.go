@@ -27,7 +27,7 @@ func TestTornMarkerBesideLegacyCorruptIsResidual(t *testing.T) {
 	_, before := audit.ReadStream(env.Policy, s)
 	require.Error(t, before, "an orphan .corrupt fails loud before repair")
 
-	out := runStepT(t,runCorruptChunks, env)
+	out := runStepT(t, runCorruptChunks, env)
 	assert.False(t, out.Deferred)
 	require.Len(t, out.Residuals, 1)
 	assert.Contains(t, out.Residuals[0].Reason, "unreadable")
@@ -43,7 +43,7 @@ func TestTornMarkerBesideLegacyCorruptIsResidual(t *testing.T) {
 	require.Error(t, err, "reads still fail loud")
 
 	snap := fixStoreSnap(t, env)
-	again := runStepT(t,runCorruptChunks, env)
+	again := runStepT(t, runCorruptChunks, env)
 	assert.Len(t, again.Residuals, 1, "the condition is reported again, and only once")
 	assert.False(t, again.Deferred)
 	assert.Equal(t, snap, fixStoreSnap(t, env), "run 2 changes nothing")
@@ -59,7 +59,7 @@ func TestMarkerCoveringAnotherChunkIsResidual(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, cn.MarkerFile()), mb, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, cn.ChunkFile()), []byte(stableLine(fixT0, "A")+"garbage\n"+stableLine(fixT0+2000, "C")), 0o600))
 	for i := 1; i <= 3; i++ {
-		out := runStepT(t,runCorruptChunks, env)
+		out := runStepT(t, runCorruptChunks, env)
 		assert.False(t, out.Deferred, "run %d", i)
 		require.Len(t, out.Residuals, 1, "run %d", i)
 		assert.Contains(t, out.Residuals[0].Reason, "covers another chunk")
@@ -77,7 +77,7 @@ func TestCoveredLegacyCorruptIsSalvaged(t *testing.T) {
 	corrupt := filepath.Join(dir, audit.CorruptName(cn.Stem()))
 	require.NoError(t, os.WriteFile(corrupt, []byte(fixCmd(fixT0, "Bash", "echo "+fakeToken)), 0o600))
 
-	out := runStepT(t,runCorruptChunks, env)
+	out := runStepT(t, runCorruptChunks, env)
 	assert.False(t, out.Deferred)
 	assert.Empty(t, out.Residuals)
 	assert.Positive(t, out.Items)
@@ -113,7 +113,7 @@ func TestTornMarkerWithoutAMarkerWriteIsResidual(t *testing.T) {
 			require.Error(t, rerr)
 			snap := fixStoreSnap(t, env)
 			for i := 1; i <= 2; i++ {
-				out := runStepT(t,runCorruptChunks, env)
+				out := runStepT(t, runCorruptChunks, env)
 				assert.False(t, out.Deferred, "run %d", i)
 				require.Len(t, out.Residuals, 1, "run %d", i)
 				assert.Zero(t, out.Items, "run %d", i)

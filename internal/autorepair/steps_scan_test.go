@@ -58,7 +58,7 @@ func assertSecondRunChangesNothing(t *testing.T, run func(context.Context, Env) 
 		return out
 	}
 	before := snap()
-	assert.Equal(t, Outcome{}, runStepT(t,run, env), "second run reports nothing")
+	assert.Equal(t, Outcome{}, runStepT(t, run, env), "second run reports nothing")
 	assert.Equal(t, before, snap(), "second run changes no file in the local root, the store or the checkout")
 }
 
@@ -91,7 +91,7 @@ func TestCorruptChunksLegacyRawCorruptOrphan(t *testing.T) {
 	var orphan *audit.OrphanCorruptError
 	require.ErrorAs(t, err, &orphan, "fixture: the scan reports the orphan")
 
-	out := runStepT(t,runCorruptChunks, env)
+	out := runStepT(t, runCorruptChunks, env)
 	assert.Equal(t, 1, out.Items)
 	assert.Empty(t, out.Residuals)
 	assert.False(t, out.Deferred)
@@ -118,7 +118,7 @@ func TestCorruptChunksPendingMarkerResumes(t *testing.T) {
 	_, err = audit.ScanSealedDir(dir, s.Namespace, "")
 	require.Error(t, err, "fixture: the pending marker leaves the scan dirty")
 
-	out := runStepT(t,runCorruptChunks, env)
+	out := runStepT(t, runCorruptChunks, env)
 	assert.Equal(t, 1, out.Items)
 	assert.Empty(t, out.Residuals)
 	assertStreamClean(t, env, s, dir)
@@ -143,7 +143,7 @@ func TestCorruptChunksDamagedSourceBesideRetirementRecord(t *testing.T) {
 	_, err = audit.ScanSealedDir(dir, s.Namespace, "")
 	require.Error(t, err, "fixture: the scan is dirty")
 
-	out := runStepT(t,runCorruptChunks, env)
+	out := runStepT(t, runCorruptChunks, env)
 	assert.GreaterOrEqual(t, out.Items, 1)
 	assert.Empty(t, out.Residuals)
 	assertStreamClean(t, env, s, dir)
@@ -163,7 +163,7 @@ func TestCorruptChunksValidChunkBesideUncoveredCorrupt(t *testing.T) {
 	_, err := audit.ScanSealedDir(dir, s.Namespace, "")
 	require.Error(t, err, "fixture: the uncovered .corrupt leaves the scan dirty")
 
-	out := runStepT(t,runCorruptChunks, env)
+	out := runStepT(t, runCorruptChunks, env)
 	assert.GreaterOrEqual(t, out.Items, 1)
 	assert.Empty(t, out.Residuals)
 	assertStreamClean(t, env, s, dir)
@@ -187,7 +187,7 @@ func TestLiveTailsDefersDirtyScanThenRedacts(t *testing.T) {
 	before, err := os.ReadFile(live)
 	require.NoError(t, err)
 
-	out := runStepT(t,runLiveTails, env)
+	out := runStepT(t, runLiveTails, env)
 	assert.True(t, out.Deferred, "a dirty scan is transient: step 7 repairs it")
 	assert.Empty(t, out.Residuals, "not a permanent condition")
 	assert.Equal(t, 0, out.Items)
@@ -196,8 +196,8 @@ func TestLiveTailsDefersDirtyScanThenRedacts(t *testing.T) {
 	assert.Equal(t, before, after, "a deferred stream is untouched")
 	assert.Contains(t, log.text(), "defer-dirty-scan")
 
-	require.Equal(t, 1, runStepT(t,runCorruptChunks, env).Items)
-	out = runStepT(t,runLiveTails, env)
+	require.Equal(t, 1, runStepT(t, runCorruptChunks, env).Items)
+	out = runStepT(t, runLiveTails, env)
 	assert.False(t, out.Deferred)
 	assert.Equal(t, 1, out.Items)
 	assert.Empty(t, walkContains(t, env.Roots.Store, home, fakeToken))

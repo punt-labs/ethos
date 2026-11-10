@@ -59,7 +59,7 @@ func TestWithheldRecordUnderMarkerIsKept(t *testing.T) {
 	cpath := filepath.Join(pub, audit.CorruptName(cn.Stem()))
 	require.NoError(t, os.WriteFile(cpath, rec, 0o644))
 
-	out := runStepT(t,runCorruptChunks, env)
+	out := runStepT(t, runCorruptChunks, env)
 	assert.Zero(t, out.Items, "nothing is repaired")
 	got, err := os.ReadFile(cpath)
 	require.NoError(t, err, "the withheld record stays")

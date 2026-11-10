@@ -139,7 +139,7 @@ func TestLiveTailsRedactsPreRedactionLine(t *testing.T) {
 	require.NoError(t, err)
 	cleanLine := strings.Split(string(before), "\n")[1] + "\n"
 
-	out := runStepT(t,runLiveTails, env)
+	out := runStepT(t, runLiveTails, env)
 	assert.Equal(t, 1, out.Items)
 	assert.False(t, out.Deferred)
 	assert.Empty(t, out.Residuals)
@@ -160,7 +160,7 @@ func TestLiveTailsRecomputesToolInputHash(t *testing.T) {
 	env, _ := damageEnv(t, "live-audit-pre-redaction")
 	s := audit.Stream{Namespace: audit.SessionNS, Session: damageSession}
 	plant(t, env.Policy, s.LivePath(env.Policy), `{"session":"`+damageSession+`","tool":"Bash","tool_input":{"command":"cat `+home+`/x"},"tool_input_hash":"0000","ts":"`+audit.FormatLineTS(1000)+`"}`+"\n")
-	runStepT(t,runLiveTails, env)
+	runStepT(t, runLiveTails, env)
 	b, err := os.ReadFile(s.LivePath(env.Policy))
 	require.NoError(t, err)
 	assert.NotContains(t, string(b), `"tool_input_hash":"0000"`, "the hash is recomputed over the redacted input")
@@ -173,7 +173,7 @@ func TestLiveTailsMissionLog(t *testing.T) {
 	require.NoError(t, os.Remove(audit.Stream{Namespace: audit.SessionNS, Session: damageSession}.LivePath(env.Policy)))
 	s := audit.Stream{Namespace: audit.MissionNS, Mission: "m-2026-07-01-001", Session: "sess-m"}
 	plant(t, env.Policy, s.LivePath(env.Policy), `{"ts":"`+audit.FormatLineTS(1000)+`","event":"update","actor":"a","details":{"note":"see `+home+`/x","key":"`+fakeToken+`"}}`+"\n")
-	out := runStepT(t,runLiveTails, env)
+	out := runStepT(t, runLiveTails, env)
 	assert.Equal(t, 1, out.Items)
 	b, err := os.ReadFile(s.LivePath(env.Policy))
 	require.NoError(t, err)
@@ -207,7 +207,7 @@ func TestLiveTailsArchivedTSConflictDropsLiveLine(t *testing.T) {
 			_, err = audit.ReadStream(env.Policy, s)
 			require.ErrorContains(t, err, "identity conflict", "fixture: the stream is refused before the step")
 
-			out := runStepT(t,runLiveTails, env)
+			out := runStepT(t, runLiveTails, env)
 			assert.Equal(t, 1, out.Items)
 			assert.Regexp(t, `drop-live-line ts=100 archive-sha256=[0-9a-f]{64} live-sha256=[0-9a-f]{64}`, log.text())
 			_, err = audit.ReadStream(env.Policy, s)
@@ -226,13 +226,13 @@ func TestLiveTailsDefersOnHeldStreamLock(t *testing.T) {
 	resolveHome(t, env.Roots.Store, home)
 	s := audit.Stream{Namespace: audit.SessionNS, Session: damageSession}
 	require.NoError(t, audit.WithStreamLock(env.Policy, s, func() error {
-		out := runStepT(t,runLiveTails, env)
+		out := runStepT(t, runLiveTails, env)
 		assert.True(t, out.Deferred)
 		assert.Equal(t, 0, out.Items)
 		return nil
 	}))
 	assert.NotEmpty(t, walkContains(t, env.Roots.Store, home), "a deferred step changed nothing")
-	out := runStepT(t,runLiveTails, env)
+	out := runStepT(t, runLiveTails, env)
 	assert.False(t, out.Deferred)
 	assert.Equal(t, 1, out.Items)
 	assertSecondRunChangesNothing(t, runLiveTails, env)
@@ -243,7 +243,7 @@ func TestLiveTailsOutsideRepositoryAndNoStreams(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, Outcome{}, out)
 	env, _ := damageEnv(t, "corrupt-sealed-chunk")
-	assert.Equal(t, Outcome{}, runStepT(t,runLiveTails, env), "no live file, nothing to do")
+	assert.Equal(t, Outcome{}, runStepT(t, runLiveTails, env), "no live file, nothing to do")
 }
 
 func TestLiveTailsHonoursCancelledContext(t *testing.T) {
@@ -285,7 +285,7 @@ func TestCorruptChunksCorruptSealedChunk(t *testing.T) {
 	require.Error(t, err, "fixture: the chunk set is unreadable")
 	require.Len(t, chunkFiles(t, env), 1)
 
-	out := runStepT(t,runCorruptChunks, env)
+	out := runStepT(t, runCorruptChunks, env)
 	assert.Equal(t, 1, out.Items)
 	assert.Empty(t, out.Residuals)
 	data, err := audit.ReadStream(env.Policy, s)
@@ -307,8 +307,8 @@ func TestCorruptChunksRecoversRedactedLiveLine(t *testing.T) {
 	plant(t, env.Policy, s.LivePath(env.Policy), `{"session":"`+damageSession+`","tool":"Bash","tool_input":{"command":"cat `+home+`/n --token `+fakeToken+`"},"tool_input_hash":"0000","ts":"`+audit.FormatLineTS(ts)+`"}`+"\n")
 
 	// The engine runs live-tails (step 6) before corrupt-chunks (step 7).
-	assert.Equal(t, 1, runStepT(t,runLiveTails, env).Items)
-	out := runStepT(t,runCorruptChunks, env)
+	assert.Equal(t, 1, runStepT(t, runLiveTails, env).Items)
+	out := runStepT(t, runCorruptChunks, env)
 	assert.Equal(t, 1, out.Items)
 	data, err := audit.ReadStream(env.Policy, s)
 	require.NoError(t, err)
@@ -332,7 +332,7 @@ func TestCorruptChunksInvalidEscapeLines(t *testing.T) {
 	_, err = audit.ReadStream(env.Policy, s)
 	require.Error(t, err, "fixture: the invalid escape makes the chunk unreadable")
 
-	out := runStepT(t,runCorruptChunks, env)
+	out := runStepT(t, runCorruptChunks, env)
 	assert.Equal(t, 1, out.Items)
 	data, err := audit.ReadStream(env.Policy, s)
 	require.NoError(t, err)
@@ -350,7 +350,7 @@ func TestCorruptChunksConflictingRecoveredLine(t *testing.T) {
 	require.Error(t, err)
 	require.Len(t, chunkFiles(t, env), 2)
 
-	out := runStepT(t,runCorruptChunks, env)
+	out := runStepT(t, runCorruptChunks, env)
 	assert.Equal(t, 1, out.Items)
 	assert.Regexp(t, `refuse-conflicting-line ts=1793786400000001000 surviving-sha256=[0-9a-f]{64} recovered-sha256=[0-9a-f]{64}`, log.text())
 	data, err := audit.ReadStream(env.Policy, s)
@@ -370,7 +370,7 @@ func TestCorruptChunksHealthyAndOutside(t *testing.T) {
 	require.NoError(t, err)
 	name := audit.SessionChunkFile(100, 100)
 	require.NoError(t, audit.WriteLocalAtomic(env.Policy, filepath.Join(dir, name), []byte(stableLine(100, "Read"))))
-	assert.Equal(t, Outcome{}, runStepT(t,runCorruptChunks, env), "a readable chunk is left alone")
+	assert.Equal(t, Outcome{}, runStepT(t, runCorruptChunks, env), "a readable chunk is left alone")
 	out, err := runCorruptChunks(context.Background(), Env{})
 	require.NoError(t, err)
 	assert.Equal(t, Outcome{}, out)
@@ -380,13 +380,13 @@ func TestCorruptChunksDefersOnHeldStreamLock(t *testing.T) {
 	env, _ := damageEnv(t, "corrupt-sealed-chunk")
 	s := audit.Stream{Namespace: audit.SessionNS, Session: damageSession}
 	require.NoError(t, audit.WithStreamLock(env.Policy, s, func() error {
-		out := runStepT(t,runCorruptChunks, env)
+		out := runStepT(t, runCorruptChunks, env)
 		assert.True(t, out.Deferred)
 		assert.Equal(t, 0, out.Items)
 		return nil
 	}))
 	assert.Len(t, chunkFiles(t, env), 1, "a deferred step left the chunk alone")
-	assert.Equal(t, 1, runStepT(t,runCorruptChunks, env).Items)
+	assert.Equal(t, 1, runStepT(t, runCorruptChunks, env).Items)
 	assertSecondRunChangesNothing(t, runCorruptChunks, env)
 }
 
@@ -435,7 +435,7 @@ func TestAuditStepsOverCorpusAreIdempotent(t *testing.T) {
 				name string
 				run  func(context.Context, Env) (Outcome, error)
 			}{{stepLiveTails, runLiveTails}, {stepCorruptChunks, runCorruptChunks}} {
-				first := runStepT(t,step.run, env)
+				first := runStepT(t, step.run, env)
 				assert.False(t, first.Deferred, "%s deferred", step.name)
 				assert.Empty(t, first.Residuals, "%s residuals", step.name)
 				assertSecondRunChangesNothing(t, step.run, env)
@@ -462,7 +462,7 @@ func TestLiveTailsAfterRecordTreeRedactionDropsStaleCorpusLines(t *testing.T) {
 	s := audit.Stream{Namespace: audit.SessionNS, Session: "sess-corpus-0001"}
 	live := s.LivePath(env.Policy)
 	require.NotEmpty(t, walkContains(t, live, fakeToken), "fixture: the live tail holds the token")
-	assert.Equal(t, 0, runStepT(t,runLiveTails, env).Items, "an identically archived line is not rewritten")
+	assert.Equal(t, 0, runStepT(t, runLiveTails, env).Items, "an identically archived line is not rewritten")
 
 	// Stand in for step 5: move the tracked chunk into the local archive in its
 	// redacted form, then delete it from the record tree.
@@ -488,7 +488,7 @@ func TestLiveTailsAfterRecordTreeRedactionDropsStaleCorpusLines(t *testing.T) {
 
 	// Each stale live line redacts to exactly what the archive now holds, so
 	// it is brought to that form rather than dropped as a conflict.
-	out := runStepT(t,runLiveTails, env)
+	out := runStepT(t, runLiveTails, env)
 	assert.Equal(t, 3, out.Items, "every stale live line is rewritten")
 	assert.Contains(t, log.text(), "redact-live lines=3")
 	assert.NotContains(t, log.text(), "drop-live-line")
@@ -531,7 +531,7 @@ func TestCorruptChunksCompletesOrphanCorrupt(t *testing.T) {
 	var orphan *audit.OrphanCorruptError
 	require.ErrorAs(t, err, &orphan, "fixture: the scan reports the orphan before the step")
 
-	out := runStepT(t,runCorruptChunks, env)
+	out := runStepT(t, runCorruptChunks, env)
 	assert.Equal(t, 1, out.Items)
 	assert.Empty(t, out.Residuals)
 	_, err = audit.ScanSealedDir(dir, audit.SessionNS, "")
