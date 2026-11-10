@@ -1,0 +1,4 @@
+.create.lock
+.ethos/missions.jsonl
+.ethos/sessions/2026-11-09-sess-corpus-0001/audit.jsonl
+.punt-labs/ethos.yaml

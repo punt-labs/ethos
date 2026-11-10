@@ -46,7 +46,11 @@ WORKDIR=$(mktemp -d "${TMPROOT%/}/legacy-corpus-test.XXXXXX")
 trap 'rm -rf "$WORKDIR"' EXIT
 
 # --- 1. reproducibility ---------------------------------------------------
-if ! "$SCRIPT_DIR/legacy-corpus.sh" --versions "$TAG" --out "$WORKDIR/out" --work "$WORKDIR/work" --no-damage --no-readme >"$WORKDIR/gen.log" 2>&1; then
+# LEGACY_CORPUS_SKIP_REGEN=1 skips only this multi-minute rebuild (for iterating
+# on the static checks below); a full run never sets it.
+if [ -n "${LEGACY_CORPUS_SKIP_REGEN:-}" ]; then
+  :
+elif ! "$SCRIPT_DIR/legacy-corpus.sh" --versions "$TAG" --out "$WORKDIR/out" --work "$WORKDIR/work" --no-damage --no-readme >"$WORKDIR/gen.log" 2>&1; then
   cat "$WORKDIR/gen.log" >&2
   fail "regenerating $TAG failed"
 else
@@ -74,6 +78,40 @@ else
     fail "$TAG: contents differ beyond timestamps and ids:$differing"
   fi
 fi
+
+# --- 1b. committed snapshots are complete ----------------------------------
+# Every path a snapshot's git/tracked-files.txt lists must exist under repo/, and
+# git ls-files under repo/ must equal the union of that list and the files on
+# disk. The root .gitignore drops .ethos/, *.create.lock and others, so a file
+# that was never `git add -f`'d is missing from a clean clone yet still named in
+# tracked-files.txt and the bundle; this fails for every tag, not just TAG.
+for snap in "$TESTDATA"/corpus/*/; do
+  v=$(basename "$snap")
+  missing=""
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    [ -e "$snap/repo/$line" ] || [ -L "$snap/repo/$line" ] || missing="$missing $line"
+  done <"$snap/git/tracked-files.txt"
+  [ -z "$missing" ] || fail "$v: tracked-files.txt lists paths absent from repo/:$missing"
+  { cat "$snap/git/tracked-files.txt"; ( cd "$snap/repo" && find . \( -type f -o -type l \) | sed 's|^\./||' ); } | LC_ALL=C sort -u >"$WORKDIR/want.set"
+  git -C "$REPO_ROOT" ls-files -- "internal/autorepair/testdata/corpus/$v/repo" | sed "s|^internal/autorepair/testdata/corpus/$v/repo/||" | LC_ALL=C sort -u >"$WORKDIR/have.set"
+  if ! diff -u "$WORKDIR/want.set" "$WORKDIR/have.set" >"$WORKDIR/set.diff"; then
+    cat "$WORKDIR/set.diff" >&2
+    fail "$v: git ls-files under repo/ differs from the snapshot's file set (a force-add is missing; use git add -f)"
+  fi
+done
+# git/repo-files.txt lists every file under repo/ (generation-time manifest); it
+# also sees untracked live tails under .punt-labs/local/ that git ls-files cannot.
+for snap in "$TESTDATA"/corpus/*/; do
+  v=$(basename "$snap")
+  if [ ! -f "$snap/git/repo-files.txt" ]; then fail "$v: git/repo-files.txt is missing"; continue; fi
+  ( cd "$snap/repo" && find . -type f | sed 's|^\./||' | LC_ALL=C sort ) >"$WORKDIR/disk.list"
+  if ! diff -u "$snap/git/repo-files.txt" "$WORKDIR/disk.list" >"$WORKDIR/files.diff"; then
+    cat "$WORKDIR/files.diff" >&2
+    fail "$v: files under repo/ differ from git/repo-files.txt (a file was lost or added since generation)"
+  fi
+done
+[ "$failures" -ne 0 ] || pass "every snapshot's tracked-files.txt exists under repo/ and is committed"
 
 # --- 2. privacy -----------------------------------------------------------
 scan_fail() { fail "privacy: $1"; }

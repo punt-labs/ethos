@@ -120,6 +120,28 @@ TEST_PARALLEL ?= 2
 test: ## Run tests with race detection and write coverage to coverage.out
 	go test -race -count=1 -timeout 30m -p $(TEST_PARALLEL) -coverprofile=coverage.out ./...
 
+.PHONY: coverage-check coverage-baseline coverage-baseline-from-ci
+
+coverage-check: ## Compare per-package coverage in coverage.out (from make test) with coverage-baseline.txt
+	go run ./cmd/coverage-check -profile coverage.out -baseline coverage-baseline.txt
+
+coverage-baseline: ## Regenerate coverage-baseline.txt from coverage.out (keeps overall-target and comments)
+	go run ./cmd/coverage-check -write -profile coverage.out -baseline coverage-baseline.txt
+
+coverage-baseline-from-ci: ## Regenerate the linux coverage-baseline.txt from one successful CI run's coverage-out artifact (RUN=<id>; default: latest successful test.yml run on this branch)
+	@run="$(RUN)"; \
+	if [ -z "$$run" ]; then \
+		run=$$(gh run list --workflow test.yml --branch $$(git branch --show-current) --status success --limit 1 --json databaseId --jq '.[0].databaseId'); \
+	fi; \
+	if [ -z "$$run" ]; then \
+		echo "coverage-baseline-from-ci: no successful test.yml run on branch $$(git branch --show-current); pass RUN=<id>" >&2; \
+		exit 1; \
+	fi; \
+	rm -rf .tmp/coverage-ci; \
+	mkdir -p .tmp/coverage-ci; \
+	gh run download "$$run" --name coverage-out --dir .tmp/coverage-ci
+	go run ./cmd/coverage-check -write -os linux -profile .tmp/coverage-ci/coverage.out -baseline coverage-baseline.txt
+
 validate-content: ## Validate all ethos content files
 	go run ./cmd/validate-content
 
@@ -248,7 +270,7 @@ check-storage: ## Exercise offline storage boundaries through the real CLI, wrap
 	python3 -B -m unittest discover -s scripts -p 'storage_acceptance_test.py'
 	python3 -B scripts/storage_acceptance.py
 
-check: lint docs test validate-content fuzz-check check-opencode check-storage ## Run all quality gates
+check: lint docs test coverage-check validate-content fuzz-check check-opencode check-storage ## Run all quality gates
 
 # The legacy corpus (internal/autorepair/testdata) is real on-disk state written
 # by nine released binaries. Regenerating it builds each from its git tag, so it

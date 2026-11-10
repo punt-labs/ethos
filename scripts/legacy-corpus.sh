@@ -585,6 +585,9 @@ snapshot() {
   if [ -s "$W/tracked.z" ]; then tr '\0' '\n' <"$W/tracked.z" >"$stage/git/tracked-files.txt"; fi
   cp "$W/seed-omitted.txt" "$stage/seed-omitted.txt"
   rewrite_tree "$stage/git"
+  # Every file under repo/, sorted and relative, so a test sees the loss of an
+  # untracked file (the live tails under .punt-labs/local/) that git never lists.
+  ( cd "$stage/repo" && find . -type f | sed 's|^\./||' | LC_ALL=C sort ) >"$stage/git/repo-files.txt"
 
   privacy_scan "$tag" "$stage" || { purge_dir "$stage"; return 1; }
 
@@ -819,6 +822,10 @@ write_readme() {
     echo "# one tag only (the damage fixtures and this README are rewritten from what is present):"
     echo 'scripts/legacy-corpus.sh --versions "v4.22.1"'
     echo '```'
+    echo
+    echo "The root \`.gitignore\` drops \`.ethos/\`, \`*.create.lock\` and \`.punt-labs/local/\`, so after regenerating, run"
+    echo "\`git add -f internal/autorepair/testdata/corpus\` (the generator's own \`git add -f\` runs inside the scratch"
+    echo "repository, a different step). \`make test-legacy-corpus\` fails when a snapshot's \`git ls-files\` differs from its file set."
     echo
     echo "\`make test-legacy-corpus\` (\`scripts/legacy_corpus_test.sh\`) rebuilds one tag into a temporary directory"
     echo "and checks it against the committed copy. Neither target is part of \`make check\`: they build nine"
