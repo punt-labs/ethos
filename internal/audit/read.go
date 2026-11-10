@@ -241,28 +241,6 @@ func ResidueLinesFiltered(path string, sessionSealedLast map[string]int64) ([]Li
 	return out, nil
 }
 
-// DedupByIdentity collapses lines sharing an identity to the first seen.
-// Post-discipline lines (chunks + live tail) dedup on (session, ts) —
-// loss-free, since equal identity means a byte-identical line from the same
-// append-only live file. Input order is preserved for survivors.
-func DedupByIdentity(in []Line) []Line {
-	type key struct {
-		s  string
-		ts int64
-	}
-	seen := make(map[key]struct{}, len(in))
-	out := in[:0:0]
-	for _, l := range in {
-		k := key{l.Session, l.TS}
-		if _, ok := seen[k]; ok {
-			continue
-		}
-		seen[k] = struct{}{}
-		out = append(out, l)
-	}
-	return out
-}
-
 // SortChunks returns chunks ordered by First so a concatenated read is in
 // time order before the stable sort.
 func SortChunks(chunks []ChunkName) []ChunkName {
