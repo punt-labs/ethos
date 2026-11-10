@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -30,37 +29,29 @@ func (l *recLog) Logf(step, action string, paths []string, err error) {
 	l.steps = append(l.steps, step+":"+action)
 }
 
-// copyTree copies dir src to dst, creating dst.
+// copyTree copies src into dst, creating dst. A missing src is not an error.
+// It lives in this untagged file because both the portable and the
+// unix-only fixtures call it.
 func copyTree(t *testing.T, src, dst string) {
 	t.Helper()
-	err := filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+	if _, err := os.Stat(src); err != nil {
+		return
+	}
+	require.NoError(t, filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(src, p)
-		if err != nil {
-			return err
-		}
+		rel, _ := filepath.Rel(src, path)
 		target := filepath.Join(dst, rel)
 		if d.IsDir() {
 			return os.MkdirAll(target, 0o700)
 		}
-		in, err := os.Open(p)
+		b, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		defer in.Close()
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(out, in); err != nil {
-			_ = out.Close()
-			return err
-		}
-		return out.Close()
-	})
-	require.NoError(t, err)
+		return os.WriteFile(target, b, 0o600)
+	}))
 }
 
 // treeDigest maps every regular file under root (relative path) to the hex
@@ -97,7 +88,7 @@ func treeDigest(t *testing.T, root string) map[string]string {
 // corpusEnv copies one corpus snapshot into a temp dir and returns an Env
 // whose repository is the snapshot's repo/ and whose global root is its
 // home/.punt-labs/ethos. HOME is set to a distinct temp dir.
-func corpusEnv(t *testing.T, version string) (Env, *recLog) {
+func corpusEnvLogged(t *testing.T, version string) (Env, *recLog) {
 	t.Helper()
 	base := t.TempDir()
 	src := filepath.Join("testdata", "corpus", version)

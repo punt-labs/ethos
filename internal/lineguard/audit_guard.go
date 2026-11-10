@@ -1,4 +1,4 @@
-package hook
+package lineguard
 
 import (
 	"bytes"
@@ -28,8 +28,8 @@ import (
 //
 // Without a resolvable home directory every absolute path counts as a leak
 // (mission.LeakRule).
-func guardAuditLineNote(line []byte) ([]byte, string) {
-	out, rule, marker := guardAuditLineFull(line)
+func GuardAuditLineNote(line []byte) ([]byte, string) {
+	out, rule, marker := GuardAuditLineFull(line)
 	return out, auditGuardNotice(rule, marker)
 }
 
@@ -46,8 +46,8 @@ func auditGuardNotice(rule string, marker bool) string {
 	return ""
 }
 
-// printNotices writes each non-empty notice to stderr, one line each.
-func printNotices(notes []string) {
+// PrintNotices writes each non-empty notice to stderr, one line each.
+func PrintNotices(notes []string) {
 	for _, n := range notes {
 		if n != "" {
 			fmt.Fprintln(os.Stderr, n)
@@ -55,23 +55,23 @@ func printNotices(notes []string) {
 	}
 }
 
-// guardAuditLineWhy is guardAuditLineNote returning the rule that forced a
+// GuardAuditLineWhy is GuardAuditLineNote returning the rule that forced a
 // rewrite instead of a notice; the rule is "" when the line was clean.
 //
 // The bytes returned are always the re-marshalled decoded line, never the
 // input bytes: whitespace, duplicate keys, escapes and key order of the input
 // do not reach the file.
-func guardAuditLineWhy(line []byte) ([]byte, string) {
-	out, rule, _ := guardAuditLineFull(line)
+func GuardAuditLineWhy(line []byte) ([]byte, string) {
+	out, rule, _ := GuardAuditLineFull(line)
 	return out, rule
 }
 
-// guardAuditLineFull is guardAuditLineWhy also reporting whether the whole
+// GuardAuditLineFull is GuardAuditLineWhy also reporting whether the whole
 // line became a loss marker.
-func guardAuditLineFull(line []byte) ([]byte, string, bool) {
+func GuardAuditLineFull(line []byte) ([]byte, string, bool) {
 	out, rule, marker := guardAuditLineOnce(line)
 	marker2 := func(kind, r string) ([]byte, string, bool) {
-		return lossMarker(line, kind), r, true
+		return LossMarker(line, kind), r, true
 	}
 	if marker {
 		return out, rule, true
@@ -80,13 +80,13 @@ func guardAuditLineFull(line []byte) ([]byte, string, bool) {
 	// decoded from the input: seal selects a line by its ts and names the
 	// chunk by it, and the rest of the header links the line to its session,
 	// delegation and mission.
-	got, gotOK := headerOf(out)
+	got, gotOK := HeaderOf(out)
 	if !gotOK {
 		// A reader could not decode this line. Coerce it as a rewrite does (a
 		// non-map tool_input becomes {}); if that is still undecodable, the
 		// line becomes a loss marker.
 		const why = "has a header a reader cannot decode"
-		coerced, ok, variant := coerceHeader(out)
+		coerced, ok, variant := CoerceHeader(out)
 		if variant {
 			return marker2("case-variant of a field ethos writes", caseVariantRule)
 		}
@@ -95,7 +95,7 @@ func guardAuditLineFull(line []byte) ([]byte, string, bool) {
 		}
 		return coerced, orRule(rule, why), false
 	}
-	in, inOK := headerOf(line)
+	in, inOK := HeaderOf(line)
 	if !inOK {
 		if lineTS(line) != lineTS(out) {
 			return marker2("ts that would change in re-encoding", orRule(rule, "would change its ts in re-encoding"))
@@ -108,11 +108,11 @@ func guardAuditLineFull(line []byte) ([]byte, string, bool) {
 	return out, rule, false
 }
 
-// coerceHeader replaces a non-map tool_input with {}, marks the line redacted
+// CoerceHeader replaces a non-map tool_input with {}, marks the line redacted
 // and recomputes its tool_input_hash, and reports whether the result decodes
-// into auditEntry; the third result reports a case-variant of a field it
+// into Entry; the third result reports a case-variant of a field it
 // would write, which makes the line a loss marker instead.
-func coerceHeader(line []byte) ([]byte, bool, bool) {
+func CoerceHeader(line []byte) ([]byte, bool, bool) {
 	dec := json.NewDecoder(bytes.NewReader(line))
 	dec.UseNumber()
 	var m map[string]any
@@ -128,31 +128,31 @@ func coerceHeader(line []byte) ([]byte, bool, bool) {
 		}
 	}
 	if _, ok := m["tool_input_hash"]; ok {
-		m["tool_input_hash"] = hashToolInput(map[string]any{"tool_input": m["tool_input"]})
+		m["tool_input_hash"] = HashToolInput(map[string]any{"tool_input": m["tool_input"]})
 	}
 	m["redacted"] = true
 	out, err := json.Marshal(m)
-	if err != nil || lineRule(out) != "" {
+	if err != nil || LineRule(out) != "" {
 		return nil, false, false
 	}
-	if _, ok := headerOf(out); !ok {
+	if _, ok := HeaderOf(out); !ok {
 		return nil, false, false
 	}
 	return out, true, false
 }
 
-// quoteUnlessLeak is k, passed through the prose redaction and quoted with %q,
+// QuoteUnlessLeak is k, passed through the prose redaction and quoted with %q,
 // so neither a home nor a control character in it can reach a notice or a
 // stand-in when k names a home.
-func quoteUnlessLeak(k string) string {
+func QuoteUnlessLeak(k string) string {
 	if mission.LeakRule(k) != "" {
 		return "(its name names a home)"
 	}
 	return fmt.Sprintf("%q", redact.Prose(k))
 }
 
-// joinRules accumulates rules: a line that breaks two names both.
-func joinRules(a, b string) string {
+// JoinRules accumulates rules: a line that breaks two names both.
+func JoinRules(a, b string) string {
 	if a == "" {
 		return b
 	}
@@ -192,11 +192,11 @@ func orRule(rule, alt string) string {
 	return alt
 }
 
-// headerOf decodes the struct-decoded header of an audit line.
-func headerOf(line []byte) (auditEntry, bool) {
-	var e auditEntry
+// HeaderOf decodes the struct-decoded header of an audit line.
+func HeaderOf(line []byte) (Entry, bool) {
+	var e Entry
 	if err := json.Unmarshal(line, &e); err != nil {
-		return auditEntry{}, false
+		return Entry{}, false
 	}
 	return e, true
 }
@@ -204,7 +204,7 @@ func headerOf(line []byte) (auditEntry, bool) {
 // headerDiff names the first header field that out does not hold as in did,
 // or "". A value replaced by the redaction token is a redaction, not a change,
 // and a rewritten line's tool_input_hash is recomputed on purpose.
-func headerDiff(in, out auditEntry, rewritten bool) string {
+func headerDiff(in, out Entry, rewritten bool) string {
 	fields := []struct {
 		name    string
 		in, out string
@@ -221,7 +221,7 @@ func headerDiff(in, out auditEntry, rewritten bool) string {
 		{"tool_input_hash", in.ToolInputHash, out.ToolInputHash},
 	}
 	for _, f := range fields {
-		if f.in == f.out || f.out == redactedPath {
+		if f.in == f.out || f.out == RedactedPath {
 			continue
 		}
 		if f.name == "tool_input_hash" && rewritten {
@@ -253,10 +253,10 @@ func sessionOf(line []byte) string {
 	return h.Session
 }
 
-// lossMarker is the line that stands for one that cannot be stored: it keeps
+// LossMarker is the line that stands for one that cannot be stored: it keeps
 // the ts and session a reader took from the original, and says in kind, a
 // phrase that names no value, why it could not be stored.
-func lossMarker(line []byte, kind string) []byte {
+func LossMarker(line []byte, kind string) []byte {
 	m := map[string]any{"audit_error": kind, "redacted": true}
 	if ts := lineTS(line); ts != "" && mission.LeakRule(ts) == "" && !strings.ContainsRune(ts, '\uFFFD') {
 		m["ts"] = ts
@@ -288,12 +288,12 @@ func delegationOf(line []byte) string {
 	return h.DelegationID
 }
 
-// caseCollision reports whether two top-level keys of an audit line fold to
+// CaseCollision reports whether two top-level keys of an audit line fold to
 // the same name the way encoding/json folds a key onto a struct field
 // (Unicode simple folding, so ſession meets session and K meets k). Only the
 // top level is decoded into a struct; tool_input is a map, where keys that
 // differ in case (HTTP headers) are distinct and legitimate.
-func caseCollision(m map[string]any) bool {
+func CaseCollision(m map[string]any) bool {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
@@ -313,9 +313,9 @@ func guardAuditLineOnce(line []byte) ([]byte, string, bool) {
 	// unpaired surrogate escape into U+FFFD and the line would be stored with
 	// text it never held.
 	if r := mission.InvalidText(line); r != "" {
-		return lossMarker(line, "invalid text"), r, true
+		return LossMarker(line, "invalid text"), r, true
 	}
-	rule := lineRule(line)
+	rule := LineRule(line)
 	dec := json.NewDecoder(bytes.NewReader(line))
 	dec.UseNumber()
 	var m map[string]any
@@ -323,32 +323,32 @@ func guardAuditLineOnce(line []byte) ([]byte, string, bool) {
 		if rule == "" {
 			rule = "is not a JSON object"
 		}
-		return lossMarker(line, "not a JSON object"), rule, true
+		return LossMarker(line, "not a JSON object"), rule, true
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		if rule == "" {
 			rule = "is not a single JSON object"
 		}
-		return lossMarker(line, "not a single JSON object"), rule, true
+		return LossMarker(line, "not a single JSON object"), rule, true
 	}
 	// Keys that differ only in case let re-marshalling change which one a
 	// reader takes; such a line is not stored.
-	if caseCollision(m) {
-		return lossMarker(line, "keys that differ only in case"), "holds keys that differ only in case", true
+	if CaseCollision(m) {
+		return LossMarker(line, "keys that differ only in case"), "holds keys that differ only in case", true
 	}
 	if _, k, dup := redact.DuplicateJSONKey(line); dup {
 		// The last value is the one a reader takes, and the one m holds;
 		// the line is rewritten so the duplicate is gone and the notice fires.
-		rule = joinRules(rule, "holds duplicate key "+quoteUnlessLeak(k))
+		rule = JoinRules(rule, "holds duplicate key "+QuoteUnlessLeak(k))
 	}
 	if rule == "" {
-		if out, err := json.Marshal(m); err == nil && lineRule(out) == "" {
+		if out, err := json.Marshal(m); err == nil && LineRule(out) == "" {
 			return out, "", false
 		}
 		rule = "cannot be re-encoded cleanly"
 	}
 	if caseVariantOfRewritten(m) {
-		return lossMarker(line, "case-variant of a field ethos writes"), caseVariantRule, true
+		return LossMarker(line, "case-variant of a field ethos writes"), caseVariantRule, true
 	}
 	cleaned, _ := scrubAuditValue(m, true).(map[string]any)
 	cleaned["redacted"] = true
@@ -361,10 +361,10 @@ func guardAuditLineOnce(line []byte) ([]byte, string, bool) {
 			}
 		}
 		if _, ok := cleaned["tool_input_hash"]; ok {
-			cleaned["tool_input_hash"] = hashToolInput(map[string]any{"tool_input": cleaned["tool_input"]})
+			cleaned["tool_input_hash"] = HashToolInput(map[string]any{"tool_input": cleaned["tool_input"]})
 		}
 		out, err := json.Marshal(cleaned)
-		if err != nil || lineRule(out) != "" {
+		if err != nil || LineRule(out) != "" {
 			return nil
 		}
 		return out
@@ -376,7 +376,7 @@ func guardAuditLineOnce(line []byte) ([]byte, string, bool) {
 		if _, ok := cleaned[k]; !ok {
 			continue
 		}
-		cleaned[k] = redactedPath
+		cleaned[k] = RedactedPath
 		if k == "tool_input" {
 			// The reader decodes tool_input as a map; a string would make it
 			// drop the line.
@@ -386,12 +386,12 @@ func guardAuditLineOnce(line []byte) ([]byte, string, bool) {
 	if out := finish(cleaned); out != nil {
 		return out, rule, false
 	}
-	return lossMarker(line, "path that could not be removed"), rule, true
+	return LossMarker(line, "path that could not be removed"), rule, true
 }
 
-// lineRule names the rule the raw bytes or any decoded string or key of a
+// LineRule names the rule the raw bytes or any decoded string or key of a
 // JSON line break, or returns "".
-func lineRule(line []byte) string {
+func LineRule(line []byte) string {
 	dec := json.NewDecoder(bytes.NewReader(line))
 	dec.UseNumber()
 	var v any
@@ -454,7 +454,7 @@ func previewExempt(x map[string]any, k string, e any) bool {
 	if hasInput {
 		env["tool_input"] = ti
 	}
-	return s == toolInputPreview(env) && valueRuleIn(ti, ctxInput) == ""
+	return s == ToolInputPreview(env) && valueRuleIn(ti, ctxInput) == ""
 }
 
 func valueRule(v any) string { return valueRuleIn(v, ctxLine) }
@@ -495,8 +495,8 @@ func valueRuleIn(v any, c leakCtx) string {
 	return ""
 }
 
-// scrubAuditValue replaces every string that leaks by redactedPath and every
-// key that leaks by redactedKey, numbering collisions in sorted order.
+// scrubAuditValue replaces every string that leaks by RedactedPath and every
+// key that leaks by RedactedKey, numbering collisions in sorted order.
 func scrubAuditValue(v any, top bool) any {
 	ctx := ctxOther
 	if top {
@@ -509,7 +509,7 @@ func scrubAuditIn(v any, c leakCtx) any {
 	switch x := v.(type) {
 	case string:
 		if mission.AuditLeakRule(x, c == ctxPath) != "" {
-			return redactedPath
+			return RedactedPath
 		}
 		return x
 	case []any:
@@ -529,7 +529,7 @@ func scrubAuditIn(v any, c leakCtx) any {
 		// the keys of the struct-decoded header.
 		out, _ := redact.RenameKeys(x, func(k string) string {
 			if mission.LeakRule(k) != "" {
-				return redactedKey
+				return RedactedKey
 			}
 			return k
 		}, c == ctxLine, func(k string, e any) any {
@@ -543,13 +543,13 @@ func scrubAuditIn(v any, c leakCtx) any {
 	return v
 }
 
-// credentialPassLine is the part of the audit content pass that needs no home:
+// CredentialPassLine is the part of the audit content pass that needs no home:
 // credentials and addresses, in tool_input (by the writer's per-tool policy, with
 // the input hash and preview rebuilt when it changes) and in every other field of
 // the line, header or unknown, whatever its key. ts and the derived hash and
 // preview are left alone. A line it cannot decode, or that it leaves unchanged,
 // is returned as it came.
-func credentialPassLine(line []byte, missionLine bool) (out []byte, changed bool, markerRule string) {
+func CredentialPassLine(line []byte, missionLine bool) (out []byte, changed bool, markerRule string) {
 	dec := json.NewDecoder(bytes.NewReader(line))
 	dec.UseNumber()
 	var m map[string]any
@@ -570,14 +570,14 @@ func credentialPassLine(line []byte, missionLine bool) (out []byte, changed bool
 	}
 	if ti, ok := m["tool_input"].(map[string]any); ok && !missionLine {
 		tool, _ := m["tool"].(string)
-		if red, c := redactSensitiveContent(tool, ti); c {
+		if red, c := RedactSensitiveContent(tool, ti); c {
 			m["tool_input"] = red
 			env := map[string]any{"tool_input": red}
 			if _, has := m["tool_input_hash"]; has {
-				m["tool_input_hash"] = hashToolInput(env)
+				m["tool_input_hash"] = HashToolInput(env)
 			}
 			if _, has := m["tool_input_preview"]; has {
-				m["tool_input_preview"] = toolInputPreview(env)
+				m["tool_input_preview"] = ToolInputPreview(env)
 			}
 			m["redacted"] = true
 			changed = true
@@ -593,7 +593,7 @@ func credentialPassLine(line []byte, missionLine bool) (out []byte, changed bool
 		}
 	}
 	swept, c1 := redact.SecretsValue(rest)
-	swept, c2 := sweepPII(swept, sweepPrompt)
+	swept, c2 := sweepPII(swept, SweepPrompt)
 	if c1 || c2 {
 		out, _ := swept.(map[string]any)
 		for k := range rest {
@@ -613,13 +613,13 @@ func credentialPassLine(line []byte, missionLine bool) (out []byte, changed bool
 		// cannot be followed by a rebuilt hash and preview from here: the line is
 		// a loss marker, reported through the guard's marker path. A line that
 		// needed no change was returned above, for the guard to handle as before.
-		return lossMarker(line, "case-variant of a field ethos writes"), true, caseVariantRule
+		return LossMarker(line, "case-variant of a field ethos writes"), true, caseVariantRule
 	}
 	// A decoded map merges duplicate keys silently, so a line that holds one is
 	// not rewritten from it: a loss marker names the key, as the guard does for a
 	// line it cannot rewrite safely.
 	if _, k, dup := redact.DuplicateJSONKey(line); dup {
-		return lossMarker(line, "duplicate key"), true, "holds duplicate key " + quoteUnlessLeak(k)
+		return LossMarker(line, "duplicate key"), true, "holds duplicate key " + QuoteUnlessLeak(k)
 	}
 	b, err := json.Marshal(m)
 	if err != nil {
@@ -628,20 +628,20 @@ func credentialPassLine(line []byte, missionLine bool) (out []byte, changed bool
 	return b, true, ""
 }
 
-// sessionLineGuard is the sink check for a session audit line that did not come
+// SessionLineGuardFor is the sink check for a session audit line that did not come
 // from this binary's writer: a live tail an older ethos appended, or one a
 // quarantine re-seals. The guard itself is home-only, so the line first gets the
 // audit content pass migrate gives a legacy line: credentials and addresses
-// (credentialPassLine, which needs no home and always runs), then the paths
-// (redactLegacyLine, when a path redactor can be built; without a home the guard
+// (CredentialPassLine, which needs no home and always runs), then the paths
+// (RedactLegacyLine, when a path redactor can be built; without a home the guard
 // treats every absolute path as a leak). A line the passes leave alone goes to
 // the guard as it is.
-func sessionLineGuard(repoRoot string) lineGuard {
+func SessionLineGuardFor(repoRoot string) LineGuard {
 	r, err := mission.NewPathRedactor(repoRoot)
 	return func(line []byte) ([]byte, string, bool) {
 		pre, note := line, ""
-		if isJSONObject(line) {
-			red, changed, markerRule := credentialPassLine(pre, false)
+		if IsJSONObject(line) {
+			red, changed, markerRule := CredentialPassLine(pre, false)
 			if markerRule != "" {
 				return red, markerRule, true
 			}
@@ -649,15 +649,15 @@ func sessionLineGuard(repoRoot string) lineGuard {
 				pre, note = red, "held a credential or an address"
 			}
 			if err == nil {
-				if red, changed, e := redactLegacyLine(pre, repoRoot, r); e == nil && changed {
+				if red, changed, e := RedactLegacyLine(pre, repoRoot, r); e == nil && changed {
 					pre, note = red, "held a credential, an address or a path the content pass rewrites"
 				}
 			}
 		}
-		out, rule, marker := guardAuditLineFull(pre)
+		out, rule, marker := GuardAuditLineFull(pre)
 		if marker {
 			return out, rule, marker
 		}
-		return out, joinRules(note, rule), false
+		return out, JoinRules(note, rule), false
 	}
 }

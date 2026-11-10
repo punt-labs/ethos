@@ -97,7 +97,7 @@ func TestInventoryAndCleanupRetainProtectedData(t *testing.T) {
 	assert.Empty(t, plan.Items)
 }
 
-func TestBusyOldAndNewLocksRefuseBeforeAnyDeletion(t *testing.T) {
+func TestBusyOldAndNewLocksSkipTheirMission(t *testing.T) {
 	for _, current := range []bool{false, true} {
 		t.Run(map[bool]string{false: "old", true: "new"}[current], func(t *testing.T) {
 			p := fixture(t)
@@ -118,8 +118,9 @@ func TestBusyOldAndNewLocksRefuseBeforeAnyDeletion(t *testing.T) {
 			plan, err := Inventory(context.Background(), p)
 			require.NoError(t, err)
 			removed, err := plan.Apply(context.Background())
-			require.ErrorContains(t, err, "busy or unavailable lock")
+			require.NoError(t, err)
 			assert.Empty(t, removed)
+			assert.Contains(t, plan.Skipped, trace)
 			assert.FileExists(t, trace)
 			assert.FileExists(t, lock)
 		})
@@ -161,7 +162,7 @@ func TestInterruptedDeletionReportsProgressAndRetries(t *testing.T) {
 	plan, err := Inventory(context.Background(), p)
 	require.NoError(t, err)
 	removed, err := plan.Apply(context.Background())
-	require.ErrorContains(t, err, "rerun repair for remaining files")
+	require.ErrorContains(t, err, "deleting "+last)
 	assert.Equal(t, []string{first}, removed)
 	assert.NoFileExists(t, first)
 	assert.FileExists(t, last)
@@ -202,7 +203,7 @@ func TestSymlinkAndMalformedAuthorityHaveExactBlockers(t *testing.T) {
 	put(t, filepath.Join(m, "reflections.yaml"), "detail")
 	put(t, filepath.Join(m, "contract.yaml"), "[broken")
 	_, err := Inventory(context.Background(), p)
-	require.ErrorContains(t, err, "inspect "+filepath.Join(m, "contract.yaml"))
+	require.ErrorContains(t, err, "left in place: "+filepath.Join(m, "contract.yaml"))
 	require.NoError(t, os.Remove(filepath.Join(m, "contract.yaml")))
 	require.NoError(t, os.Symlink(t.TempDir(), filepath.Join(m, "outside")))
 	_, err = Inventory(context.Background(), p)
@@ -305,7 +306,7 @@ func TestAmbiguousAuthorityCannotLicenseDeletion(t *testing.T) {
 			path := filepath.Join(p.RecordRoot(), "missions", "m-one", "contract.yaml")
 			put(t, path, body)
 			remove, _, err := obsolete(p, p.CheckoutRecordRoot(), "missions/m-one/reflections.yaml")
-			require.ErrorContains(t, err, "inspect "+path)
+			require.ErrorContains(t, err, "left in place: "+path)
 			assert.False(t, remove)
 		})
 	}

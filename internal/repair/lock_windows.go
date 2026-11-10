@@ -1,12 +1,18 @@
+//go:build windows
+
 package repair
 
 import (
-	"errors"
 	"os"
+
+	"golang.org/x/sys/windows"
 )
 
-const supportsDeletion = false
-
-func tryLock(*os.File) error {
-	return errors.New("repair deletion is unsupported on Windows; use a Unix host with all writers stopped")
+// TryLock takes an exclusive whole-file lock without waiting. It fails when
+// another process holds the lock.
+func TryLock(f *os.File) error {
+	var overlapped windows.Overlapped
+	return windows.LockFileEx(windows.Handle(f.Fd()),
+		windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY,
+		0, 0xFFFFFFFF, 0xFFFFFFFF, &overlapped)
 }

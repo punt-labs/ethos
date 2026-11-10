@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/punt-labs/ethos/v4/internal/hook"
+	"github.com/punt-labs/ethos/v4/internal/auditimport"
 )
 
 const stepGlobalAudit = "global-audit"
@@ -41,7 +41,7 @@ func runGlobalAudit(ctx context.Context, env Env) (Outcome, error) {
 		return out, nil
 	}
 	dir := filepath.Join(env.Global, "sessions")
-	res, err := hook.ImportGlobalAudit(env.Policy, dir, env.Roots.Checkout, env.Roots.Store)
+	res, err := auditimport.ImportGlobalAudit(env.Policy, dir, env.Roots.Checkout, env.Roots.Store)
 	if err != nil {
 		return out, fmt.Errorf("importing global session audit: %w", err)
 	}
@@ -60,7 +60,7 @@ func runGlobalAudit(ctx context.Context, env Env) (Outcome, error) {
 		env.Log.Logf(stepGlobalAudit, "import-keep-global", []string{file(d.Session)}, nil)
 		reason := reasonSharedOwnership
 		if d.NoSignal {
-			reason = hook.ReasonNoAuditOwner
+			reason = auditimport.ReasonNoAuditOwner
 		}
 		out.Residuals = append(out.Residuals, Residual{Step: stepGlobalAudit, ID: d.Session, Reason: reason})
 	}

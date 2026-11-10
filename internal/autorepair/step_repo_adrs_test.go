@@ -27,7 +27,7 @@ func linkGlobalADR(t *testing.T, env Env, id string) {
 func TestRepoADRs(t *testing.T) {
 	for _, v := range []string{"v4.0.0", "v4.8.0", "v4.13.0", "v4.17.0", "v4.20.4"} {
 		t.Run(v+"/linked", func(t *testing.T) {
-			env, _ := corpusEnv(t, v)
+			env, _ := corpusEnvLogged(t, v)
 			linkGlobalADR(t, env, "m-2026-11-09-001")
 			out, err := runRepoADRs(context.Background(), env)
 			require.NoError(t, err)
@@ -50,7 +50,7 @@ func TestRepoADRs(t *testing.T) {
 			assert.Equal(t, globalBefore, treeDigest(t, env.Global), "second run leaves the global tree unchanged")
 		})
 		t.Run(v+"/unlinked", func(t *testing.T) {
-			env, _ := corpusEnv(t, v)
+			env, _ := corpusEnvLogged(t, v)
 			out, err := runRepoADRs(context.Background(), env)
 			require.NoError(t, err)
 			assert.Equal(t, 0, out.Items)
@@ -61,7 +61,7 @@ func TestRepoADRs(t *testing.T) {
 }
 
 func TestRepoADRsLinkedByReference(t *testing.T) {
-	env, _ := corpusEnv(t, "v4.20.4")
+	env, _ := corpusEnvLogged(t, "v4.20.4")
 	cp := filepath.Join(env.Roots.Store, ".punt-labs", "ethos", "missions", "m-2026-11-09-001", "contract.yaml")
 	b, err := os.ReadFile(cp)
 	require.NoError(t, err)
@@ -78,7 +78,7 @@ func TestRepoADRsLinkedByReference(t *testing.T) {
 func TestRepoADRsLinkedByFreeFormReference(t *testing.T) {
 	for _, ref := range []string{"docs/DES-001.md", "'DES-001: Use a corpus'", "see DES-001 before changing the corpus"} {
 		t.Run(ref, func(t *testing.T) {
-			env, _ := corpusEnv(t, "v4.20.4")
+			env, _ := corpusEnvLogged(t, "v4.20.4")
 			cp := filepath.Join(env.Roots.Store, ".punt-labs", "ethos", "missions", "m-2026-11-09-001", "contract.yaml")
 			b, err := os.ReadFile(cp)
 			require.NoError(t, err)
@@ -97,7 +97,7 @@ func TestRepoADRsLinkedByFreeFormReference(t *testing.T) {
 // redactor rewrites the copy. The global ADR is given a home path so that the
 // repository copy differs from the source and the rewrite notice fires.
 func TestRepoADRsPrintsNothing(t *testing.T) {
-	env, log := corpusEnv(t, "v4.20.4")
+	env, log := corpusEnvLogged(t, "v4.20.4")
 	linkGlobalADR(t, env, "m-2026-11-09-001")
 	path := filepath.Join(env.Global, "adrs", "DES-001.yaml")
 	b, err := os.ReadFile(path)
@@ -124,7 +124,7 @@ func TestRepoADRsPrintsNothing(t *testing.T) {
 // the empty ID a match for every ADR without one, and an unreadable contract
 // is logged, not skipped in silence.
 func TestRepoADRsContractEdgeCases(t *testing.T) {
-	env, log := corpusEnv(t, "v4.20.4")
+	env, log := corpusEnvLogged(t, "v4.20.4")
 	missions := filepath.Join(env.Roots.Store, ".punt-labs", "ethos", "missions")
 	require.NoError(t, os.MkdirAll(filepath.Join(missions, "m-no-id"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(missions, "m-no-id", "contract.yaml"), []byte("status: open\n"), 0o600))
@@ -138,14 +138,14 @@ func TestRepoADRsContractEdgeCases(t *testing.T) {
 }
 
 func TestRepoADRsNoGlobalADRs(t *testing.T) {
-	env, _ := corpusEnv(t, "v4.22.1")
+	env, _ := corpusEnvLogged(t, "v4.22.1")
 	out, err := runRepoADRs(context.Background(), env)
 	require.NoError(t, err)
 	assert.Equal(t, 0, out.Items)
 }
 
 func TestRepoADRsDivergentCopyIsResidual(t *testing.T) {
-	env, _ := corpusEnv(t, "v4.20.4")
+	env, _ := corpusEnvLogged(t, "v4.20.4")
 	linkGlobalADR(t, env, "m-2026-11-09-001")
 	dir := filepath.Join(env.Roots.Store, ".punt-labs", "ethos", "adrs")
 	require.NoError(t, os.MkdirAll(dir, 0o700))

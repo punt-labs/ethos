@@ -31,7 +31,7 @@ func writeAuditEntryReport(path string, entry auditEntry) (guardReport, error) {
 		return guardReport{}, fmt.Errorf("marshaling entry: %w", err)
 	}
 	guarded, rule, marker := guardAuditLineFull(data)
-	report := guardReport{rule: rule, marker: marker}
+	report := guardReport{Rule: rule, Marker: marker}
 	line := append(guarded, '\n')
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o600)

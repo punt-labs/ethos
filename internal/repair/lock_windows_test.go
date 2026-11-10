@@ -1,21 +1,28 @@
+//go:build windows
+
 package repair
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestWindowsDeletionRefusesEvenWithoutLocks(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "history")
-	require.NoError(t, os.WriteFile(path, []byte("retained"), 0o600))
-	p := &Plan{Items: []Item{{Path: path}}}
-	removed, err := p.Apply(context.Background())
-	require.ErrorContains(t, err, "unsupported on Windows")
-	assert.Empty(t, removed)
-	assert.FileExists(t, path)
+// TryLock fails at once on a file another handle holds, and succeeds again
+// once that handle is closed.
+func TestTryLockFailsImmediatelyWhenHeld(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "x.lock")
+	holder, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	require.NoError(t, err)
+	require.NoError(t, TryLock(holder))
+
+	second, err := os.OpenFile(path, os.O_RDWR, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { second.Close() })
+	require.Error(t, TryLock(second), "a held lock must fail without waiting")
+
+	require.NoError(t, holder.Close())
+	require.NoError(t, TryLock(second))
 }

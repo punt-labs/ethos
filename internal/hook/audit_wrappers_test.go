@@ -32,7 +32,7 @@ func guardAuditLine(line []byte) []byte {
 func sayMigrateNotes(lines []rawAuditLine) {
 	var notes []*migrateNote
 	for _, l := range lines {
-		notes = append(notes, l.note)
+		notes = append(notes, l.Note)
 	}
 	noticeMigratedFile("file", notes, len(lines), false)
 }

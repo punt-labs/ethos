@@ -384,16 +384,16 @@ func QueryAuditByDelegationWithPolicy(p layout.Policy, globalSessionsDir, delega
 				return nil, err
 			}
 			for _, l := range lines {
-				l.raw, _, _ = legacyGuard(l.raw)
-				l.key, err = audit.CheckLegacyIdentity(audit.SessionNS, l.raw, legacyPayloads[id])
+				l.Raw, _, _ = legacyGuard(l.Raw)
+				l.Key, err = audit.CheckLegacyIdentity(audit.SessionNS, l.Raw, legacyPayloads[id])
 				if err != nil {
 					return nil, fmt.Errorf("global legacy session %s: %w", id, err)
 				}
-				if legacyCounts[id][l.key] > 0 {
-					legacyCounts[id][l.key]--
+				if legacyCounts[id][l.Key] > 0 {
+					legacyCounts[id][l.Key]--
 					continue
 				}
-				e, err := decodeAuditLine(l.raw)
+				e, err := decodeAuditLine(l.Raw)
 				if err != nil {
 					return nil, err
 				}

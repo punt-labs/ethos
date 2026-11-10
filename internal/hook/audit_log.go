@@ -228,7 +228,7 @@ func appendPolicyAudit(p layout.Policy, entry auditEntry, now time.Time) (auditE
 				return nil, err
 			}
 			out, rule, marker := guardAuditLineFull(raw)
-			report = guardReport{rule: rule, marker: marker}
+			report = guardReport{Rule: rule, Marker: marker}
 			return audit.StampEligibility(p, s, ts, out)
 		})
 		if err != nil {
@@ -389,15 +389,15 @@ func buildAuditEntryNote(input map[string]any, sessionID, repoRoot string, now t
 func noticeStoredLine(toolName string, rewritten bool, g guardReport) {
 	tool := redact.Prose(toolName)
 	switch {
-	case g.marker:
-		fmt.Fprintf(os.Stderr, "ethos: audit-log: the line for tool %q was replaced by a loss marker (it %s)\n", tool, g.rule)
-	case rewritten || g.rule != "":
+	case g.Marker:
+		fmt.Fprintf(os.Stderr, "ethos: audit-log: the line for tool %q was replaced by a loss marker (it %s)\n", tool, g.Rule)
+	case rewritten || g.Rule != "":
 		what := "its input was rewritten (a path, content or a key)"
-		if g.rule != "" {
+		if g.Rule != "" {
 			if rewritten {
-				what += "; it " + g.rule
+				what += "; it " + g.Rule
 			} else {
-				what = "it " + g.rule
+				what = "it " + g.Rule
 			}
 		}
 		fmt.Fprintf(os.Stderr, "ethos: audit-log: the line for tool %q was rewritten before it was stored: %s\n", tool, what)

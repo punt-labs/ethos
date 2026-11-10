@@ -88,7 +88,7 @@ func readAll(t *testing.T, dir string) string {
 func TestGlobalMissions(t *testing.T) {
 	for _, v := range []string{"v3.11.0", "v3.12.0"} {
 		t.Run(v, func(t *testing.T) {
-			env, log := corpusEnv(t, v)
+			env, log := corpusEnvLogged(t, v)
 			ownMission(t, env, ownedMission)
 			plantSecrets(t, env, ownedMission)
 			require.NotEmpty(t, globalMissionFiles(t, env, ownedMission))
@@ -135,7 +135,7 @@ func TestGlobalMissions(t *testing.T) {
 // back after the rename; a copy that does not match the redacted expectation
 // is a distinct residual, not an import.
 func TestGlobalMissionsCorruptCopyIsNotAnImport(t *testing.T) {
-	env, _ := corpusEnv(t, "v3.11.0")
+	env, _ := corpusEnvLogged(t, "v3.11.0")
 	ownMission(t, env, ownedMission)
 	globalBefore := treeDigest(t, env.Global)
 	restore := mission.SetImportVerifyHook(func(dir string) {
@@ -177,7 +177,7 @@ func TestGlobalMissionsCorruptCopyIsNotAnImport(t *testing.T) {
 // a legitimate reason; the step says so with its own reason, not the
 // corruption one, and nothing changes.
 func TestGlobalMissionsDivergedRepositoryCopy(t *testing.T) {
-	env, _ := corpusEnv(t, "v3.11.0")
+	env, _ := corpusEnvLogged(t, "v3.11.0")
 	ownMission(t, env, ownedMission)
 	out, err := runGlobalMissions(context.Background(), env)
 	require.NoError(t, err)
@@ -200,7 +200,7 @@ func TestGlobalMissionsDivergedRepositoryCopy(t *testing.T) {
 func TestGlobalMissionsNothingGlobal(t *testing.T) {
 	for _, v := range []string{"v4.0.0", "v4.8.0", "v4.13.0", "v4.17.0", "v4.20.4", "v4.21.0", "v4.22.1"} {
 		t.Run(v, func(t *testing.T) {
-			env, _ := corpusEnv(t, v)
+			env, _ := corpusEnvLogged(t, v)
 			ownMission(t, env, ownedMission)
 			out, err := runGlobalMissions(context.Background(), env)
 			require.NoError(t, err)
@@ -214,7 +214,7 @@ func TestGlobalMissionsNothingGlobal(t *testing.T) {
 }
 
 func TestGlobalMissionsUnparsableIsResidual(t *testing.T) {
-	env, log := corpusEnv(t, "v3.11.0")
+	env, log := corpusEnvLogged(t, "v3.11.0")
 	ownMission(t, env, ownedMission)
 	ownMission(t, env, unownedMission)
 	// A torn log line cannot be redacted, so mission 001 cannot be imported.
@@ -245,7 +245,7 @@ func TestGlobalMissionsUnparsableIsResidual(t *testing.T) {
 }
 
 func TestGlobalMissionsOutsideRepository(t *testing.T) {
-	env, _ := corpusEnv(t, "v3.11.0")
+	env, _ := corpusEnvLogged(t, "v3.11.0")
 	env.Roots.Store = ""
 	out, err := runGlobalMissions(context.Background(), env)
 	require.NoError(t, err)

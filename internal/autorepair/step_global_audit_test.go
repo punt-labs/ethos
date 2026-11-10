@@ -73,7 +73,7 @@ func archivedAudit(t *testing.T, env Env, session string) string {
 // imported, redacted, and its global file deleted; the second run changes
 // nothing in either tree.
 func TestGlobalAudit(t *testing.T) {
-	env, log := corpusEnv(t, "v3.11.0")
+	env, log := corpusEnvLogged(t, "v3.11.0")
 	rosterCheckout(t, env, corpusSession, env.Roots.Checkout)
 	home := realHome(t, env)
 	raw, err := os.ReadFile(globalAuditFile(env))
@@ -115,7 +115,7 @@ func TestGlobalAudit(t *testing.T) {
 // proof that no other repository holds one too, so the global file stays
 // and the step says why.
 func TestGlobalAuditStreamOnlyImportsButKeepsGlobal(t *testing.T) {
-	env, _ := corpusEnv(t, "v3.11.0")
+	env, _ := corpusEnvLogged(t, "v3.11.0")
 	holdSession(t, env, corpusSession)
 	out, err := runGlobalAudit(context.Background(), env)
 	require.NoError(t, err)
@@ -129,7 +129,7 @@ func TestGlobalAuditStreamOnlyImportsButKeepsGlobal(t *testing.T) {
 // TestGlobalAuditOtherCheckoutStaysGlobal: a roster naming another checkout
 // is another repository's session; nothing is imported and nothing deleted.
 func TestGlobalAuditOtherCheckoutStaysGlobal(t *testing.T) {
-	env, log := corpusEnv(t, "v3.11.0")
+	env, log := corpusEnvLogged(t, "v3.11.0")
 	rosterCheckout(t, env, corpusSession, filepath.Join(t.TempDir(), "other"))
 	out, err := runGlobalAudit(context.Background(), env)
 	require.NoError(t, err)
@@ -147,7 +147,7 @@ func TestGlobalAuditOtherCheckoutStaysGlobal(t *testing.T) {
 // byte-identical for any other owner, and the session is recorded as a
 // residual. Nothing is deleted and nothing is guessed.
 func TestGlobalAuditNoSignalIsResidual(t *testing.T) {
-	env, log := corpusEnv(t, "v3.11.0")
+	env, log := corpusEnvLogged(t, "v3.11.0")
 	roster, err := os.ReadFile(filepath.Join(env.Global, "sessions", corpusSession+".yaml"))
 	require.NoError(t, err)
 	require.NotContains(t, string(roster), "checkout:", "the v3.11 roster names no checkout")
@@ -181,7 +181,7 @@ func TestGlobalAuditNoSignalIsResidual(t *testing.T) {
 func TestGlobalAuditNoGlobalFiles(t *testing.T) {
 	for _, v := range []string{"v3.12.0", "v4.0.0", "v4.8.0", "v4.13.0", "v4.17.0", "v4.20.4", "v4.21.0", "v4.22.1"} {
 		t.Run(v, func(t *testing.T) {
-			env, _ := corpusEnv(t, v)
+			env, _ := corpusEnvLogged(t, v)
 			out, err := runGlobalAudit(context.Background(), env)
 			require.NoError(t, err)
 			assert.Equal(t, 0, out.Items)
@@ -191,7 +191,7 @@ func TestGlobalAuditNoGlobalFiles(t *testing.T) {
 }
 
 func TestGlobalAuditOutsideRepository(t *testing.T) {
-	env, _ := corpusEnv(t, "v3.11.0")
+	env, _ := corpusEnvLogged(t, "v3.11.0")
 	env.Roots.Store = ""
 	out, err := runGlobalAudit(context.Background(), env)
 	require.NoError(t, err)

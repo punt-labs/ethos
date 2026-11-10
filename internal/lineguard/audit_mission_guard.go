@@ -1,4 +1,4 @@
-package hook
+package lineguard
 
 import (
 	"bytes"
@@ -12,27 +12,27 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/redact"
 )
 
-// lineGuard judges one line about to be stored: the line to store, the rule it
+// LineGuard judges one line about to be stored: the line to store, the rule it
 // broke ("" when it was clean), and whether it became a loss marker.
-type lineGuard func(line []byte) (out []byte, rule string, marker bool)
+type LineGuard func(line []byte) (out []byte, rule string, marker bool)
 
-// missionLineGuard is the guard for a mission event line. The audit guard marks
+// MissionLineGuardFor is the guard for a mission event line. The audit guard marks
 // a rewritten line with a top-level redacted field, which the mission-event
 // schema does not have: the strict decoder would drop the sealed event. A
 // decodable event is instead redacted by the mission writer's own record pass
 // and checked by its sink guard, and stays an event. A line that is not an
 // event, or that cannot be redacted into one, falls back to the audit guard.
-func missionLineGuard(repoRoot string) lineGuard {
+func MissionLineGuardFor(repoRoot string) LineGuard {
 	return func(line []byte) ([]byte, string, bool) {
-		if out, rule, ok := guardMissionEvent(repoRoot, line); ok {
+		if out, rule, ok := GuardMissionEvent(repoRoot, line); ok {
 			return out, rule, false
 		}
 		// The line is not an event this schema knows (an unknown top-level
 		// field, say): the credential and address passes run over the whole
 		// payload before the home-only audit guard, which keeps ts.
 		pre, note := line, ""
-		if isJSONObject(line) {
-			red, changed, markerRule := credentialPassLine(line, true)
+		if IsJSONObject(line) {
+			red, changed, markerRule := CredentialPassLine(line, true)
 			if markerRule != "" {
 				return red, markerRule, true
 			}
@@ -40,15 +40,15 @@ func missionLineGuard(repoRoot string) lineGuard {
 				pre, note = red, "held a credential or an address"
 			}
 		}
-		out, rule, marker := guardAuditLineFull(pre)
+		out, rule, marker := GuardAuditLineFull(pre)
 		if marker {
 			return out, rule, marker
 		}
-		return out, joinRules(note, rule), false
+		return out, JoinRules(note, rule), false
 	}
 }
 
-func guardMissionEvent(repoRoot string, line []byte) ([]byte, string, bool) {
+func GuardMissionEvent(repoRoot string, line []byte) ([]byte, string, bool) {
 	if mission.InvalidText(line) != "" {
 		return nil, "", false
 	}
@@ -56,7 +56,7 @@ func guardMissionEvent(repoRoot string, line []byte) ([]byte, string, bool) {
 	// first value is gone and the line would be rewritten with no notice.
 	rule := ""
 	if _, k, dup := redact.DuplicateJSONKey(line); dup {
-		rule = "holds duplicate key " + quoteUnlessLeak(k)
+		rule = "holds duplicate key " + QuoteUnlessLeak(k)
 	}
 	// Keys that differ only in case are folded onto one field by the typed
 	// decode below, silently; they are looked for in a plain map decode first,
@@ -64,7 +64,7 @@ func guardMissionEvent(repoRoot string, line []byte) ([]byte, string, bool) {
 	var generic map[string]any
 	gdec := json.NewDecoder(bytes.NewReader(line))
 	gdec.UseNumber()
-	if err := gdec.Decode(&generic); err != nil || generic == nil || caseCollision(generic) || caseVariantOfRewritten(generic) {
+	if err := gdec.Decode(&generic); err != nil || generic == nil || CaseCollision(generic) || caseVariantOfRewritten(generic) {
 		return nil, "", false
 	}
 	dec := json.NewDecoder(bytes.NewReader(line))
@@ -109,15 +109,15 @@ func guardMissionEvent(repoRoot string, line []byte) ([]byte, string, bool) {
 			if red, err = mission.RedactRecord(repoRoot, scrubbed); err != nil {
 				return nil, "", false
 			}
-			rule = joinRules(rule, "held details that could not be redacted")
+			rule = JoinRules(rule, "held details that could not be redacted")
 		} else {
-			rule = joinRules(rule, "held details with a leaf that could not be redacted")
+			rule = JoinRules(rule, "held details with a leaf that could not be redacted")
 			if markerKey != "" {
 				rule += `; marked details under "` + markerKey + `" (key "redacted" was taken)`
 			}
 		}
 	case !reflect.DeepEqual(red, e):
-		rule = joinRules(rule, "held a home path, a credential or an address")
+		rule = JoinRules(rule, "held a home path, a credential or an address")
 	}
 	raw, err := json.Marshal(red)
 	if err != nil {
@@ -131,7 +131,7 @@ func guardMissionEvent(repoRoot string, line []byte) ([]byte, string, bool) {
 			if raw, err = json.Marshal(red); err == nil {
 				canon, err = mission.CheckBytes("log.jsonl", append(raw, '\n'))
 			}
-			rule = joinRules(rule, "held details that could not be redacted")
+			rule = JoinRules(rule, "held details that could not be redacted")
 		}
 		if err != nil {
 			return nil, "", false
@@ -161,7 +161,7 @@ func scrubLeaf(r mission.PathRedactor, v any) any {
 	case string:
 		c := r.Content(x)
 		if r.Leaks(c) {
-			return redactedPath
+			return RedactedPath
 		}
 		return c
 	case []any:
@@ -174,7 +174,7 @@ func scrubLeaf(r mission.PathRedactor, v any) any {
 		out, _ := redact.RenameKeys(x, func(k string) string {
 			c := r.Content(k)
 			if r.Leaks(c) {
-				return redactedKey
+				return RedactedKey
 			}
 			return c
 		}, false, func(_ string, e any) any { return scrubLeaf(r, e) })
