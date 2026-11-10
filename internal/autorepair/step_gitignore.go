@@ -28,9 +28,11 @@ func runGitignore(ctx context.Context, env Env) (Outcome, error) {
 		out.Deferred = true
 		return out, nil
 	}
-	if _, err := refreshHookSections(ctx, env, stepGitignore); err != nil {
-		env.Log.Logf(stepGitignore, "refresh-hooks", nil, err)
-	}
+	// refreshHookSections logs its own failure. A failed refresh must not stop
+	// the .gitignore conversion, but the hooks it left in place are residuals
+	// of this step too.
+	hooks, _ := refreshHookSections(ctx, env, stepGitignore)
+	out.Residuals = append(out.Residuals, hooks.Residuals...)
 	roots := []string{env.Roots.Checkout}
 	if env.Roots.Store != "" && env.Roots.Store != env.Roots.Checkout {
 		roots = append(roots, env.Roots.Store)

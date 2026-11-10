@@ -150,6 +150,32 @@ func TestGitignoreSessionsLineInsideBlockIsRetired(t *testing.T) {
 	})
 }
 
+// Step 10 refreshes hooks first; the hooks it cannot rewrite are its residuals
+// too, not dropped.
+func TestGitignoreCarriesHookRefreshResiduals(t *testing.T) {
+	env := fixtureEnv(t, "corpus/v4.20.4")
+	shared := filepath.Join(t.TempDir(), "shared-hooks")
+	require.NoError(t, os.MkdirAll(shared, 0o755))
+	for _, name := range []string{"pre-commit", "commit-msg"} {
+		b, err := os.ReadFile(filepath.Join(env.Roots.Checkout, ".git", "hooks", name))
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(shared, name), b, 0o755))
+	}
+	cfg := filepath.Join(env.Roots.Checkout, ".git", "config")
+	f, err := os.OpenFile(cfg, os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, err = f.WriteString("[core]\n\thooksPath = " + shared + "\n")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	out, err := runGitignore(context.Background(), env)
+	require.NoError(t, err)
+	require.Len(t, out.Residuals, 2)
+	for _, r := range out.Residuals {
+		assert.Equal(t, stepGitignore, r.Step)
+	}
+}
+
 func TestGitignoreRefreshesHooksFirst(t *testing.T) {
 	env := fixtureEnv(t, "corpus/v4.20.4")
 	_, err := runGitignore(context.Background(), env)
