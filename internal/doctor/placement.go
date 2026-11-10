@@ -65,7 +65,7 @@ func CheckPhysicalPlacement(root string) Result {
 	}
 	var parts []string
 	if paths := sortedKeys(s.misplaced); len(paths) > 0 {
-		parts = append(parts, "machine-local files physically under source tree: "+strings.Join(paths, ", ")+" — recognized legacy data is moved into the shared .punt-labs/local/ethos/; agent-owned artifacts are left in place")
+		parts = append(parts, "recognized legacy data found at "+strings.Join(paths, ", ")+"; the storage upgrade relocates it on the next ethos run (agent-owned artifacts stay in place)")
 	}
 	if skipped := sortedKeys(s.skipped); len(skipped) > 0 {
 		parts = append(parts, "not scanned: "+strings.Join(skipped, ", "))
