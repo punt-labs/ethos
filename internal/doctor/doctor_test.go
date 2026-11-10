@@ -2773,13 +2773,15 @@ func gateAudit(runAll gateFunction, locating map[string]bool) (gated, ungated []
 	}
 	// Parser objects suffice for the local lexical bindings this syntax audit
 	// follows. They deliberately do not stand in for type/receiver resolution.
-	located := map[*ast.Object]int{} //nolint:staticcheck // SA1019: bounded local syntax analysis, not general object resolution.
+	// Keyed by the parser's per-binding *ast.Object pointer, held as any so the
+	// deprecated type is never named.
+	located := map[any]int{}
 	for _, field := range runAll.Type.Params.List {
 		for _, id := range field.Names {
 			located[id.Obj] = inputKinds[id.Name]
 		}
 	}
-	gates := map[*ast.Object]int{} //nolint:staticcheck // SA1019: only the parser-local checkout/store bindings are trusted.
+	gates := map[any]int{}
 	for _, stmt := range runAll.Body.List {
 		if as, ok := stmt.(*ast.AssignStmt); ok && as.Tok == token.DEFINE {
 			for _, e := range as.Lhs {
