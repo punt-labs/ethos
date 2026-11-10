@@ -85,7 +85,7 @@ func checkGuideSync(repoRoot string) result {
 		return fail(label, fmt.Sprintf("reading %s: %v", path, err))
 	}
 	if !bytes.Equal(onDisk, enable.Guide) {
-		return fail(label, ".punt-labs/ethos/CLAUDE.md and internal/enable/guide/CLAUDE.md have drifted — run `ethos enable` to redeposit the guide")
+		return fail(label, ".punt-labs/ethos/CLAUDE.md and internal/enable/guide/CLAUDE.md have drifted — the two files must be identical")
 	}
 	return pass(label)
 }

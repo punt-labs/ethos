@@ -20,10 +20,21 @@ var bannedMessageTerms = []string{
 	"ethos repair", "audit quarantine", "audit migrate", "mission scrub",
 	"mission migrate", "adr migrate", "session purge", "session write-current",
 	"operator cleanup", "operator-directed", "manual migration", "manually",
-	"by hand", "git rm --cached", "reconcile",
+	"by hand", "hand-", "reconcile",
+	"ethos show", "ethos list", "ethos iam", "ethos create", "resolve-agent",
+	"ext del", "session create", "session delete", "session delete-current",
+	"session roster", "write-current", "--no-teams", "vendor --from",
+	"run `ethos enable`", "run ethos enable",
 }
 
-const msgguardAllow = "msgguard: allow"
+// bannedExtraPatterns are banned shapes a plain term cannot express.
+var bannedExtraPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`git rm( -r)? --cached`),
+}
+
+// msgguardAllow marks a literal as a genuine user choice. A reason must
+// follow on the same line; a bare marker is a hit.
+var msgguardAllow = regexp.MustCompile(`msgguard: allow \S.+`)
 
 func repoRootFromTest(t *testing.T) string {
 	t.Helper()
@@ -34,12 +45,26 @@ func repoRootFromTest(t *testing.T) string {
 	return filepath.Dir(filepath.Dir(wd))
 }
 
+// isWordByte reports whether b is a regexp word character.
+func isWordByte(b byte) bool {
+	return b == '_' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
+}
+
 // bannedPatterns match each term on word boundaries, so "by hand" does not
-// fire on "by handle".
+// fire on "by handle". A term that starts or ends in punctuation ("--no-teams",
+// "hand-") has no word boundary there, so that edge is left open on the right
+// and anchored to a non-word character on the left.
 var bannedPatterns = func() []*regexp.Regexp {
 	out := make([]*regexp.Regexp, len(bannedMessageTerms))
 	for i, term := range bannedMessageTerms {
-		out[i] = regexp.MustCompile(`\b` + regexp.QuoteMeta(term) + `\b`)
+		left, right := `(?:^|\W)`, ``
+		if isWordByte(term[0]) {
+			left = `\b`
+		}
+		if isWordByte(term[len(term)-1]) {
+			right = `\b`
+		}
+		out[i] = regexp.MustCompile(left + regexp.QuoteMeta(term) + right)
 	}
 	return out
 }()
@@ -49,6 +74,11 @@ func bannedIn(s string) string {
 	for i, re := range bannedPatterns {
 		if re.MatchString(low) {
 			return bannedMessageTerms[i]
+		}
+	}
+	for _, re := range bannedExtraPatterns {
+		if re.MatchString(low) {
+			return re.String()
 		}
 	}
 	return ""
@@ -83,7 +113,7 @@ func goLiteralHits(t *testing.T, path, rel string) []string {
 			return true
 		}
 		line := fset.Position(lit.Pos()).Line
-		if strings.Contains(lines[line-1], "// "+msgguardAllow) {
+		if msgguardAllow.MatchString(lines[line-1]) {
 			return true
 		}
 		hits = append(hits, rel+":"+strconv.Itoa(line)+": "+term)
@@ -102,7 +132,7 @@ func shLineHits(t *testing.T, path, rel string) []string {
 	}
 	var hits []string
 	for i, line := range strings.Split(string(src), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "#") || strings.Contains(line, "# "+msgguardAllow) {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") || msgguardAllow.MatchString(line) {
 			continue
 		}
 		if term := bannedIn(line); term != "" {
@@ -157,11 +187,26 @@ func TestNoMessageTellsTheUserToRepair(t *testing.T) {
 
 func TestMessageGuardMatchesBannedTerms(t *testing.T) {
 	for _, s := range bannedMessageTerms {
-		if bannedIn("x "+strings.ToUpper(s)+" y") != s {
+		if bannedIn("x "+strings.ToUpper(s)+" y") == "" {
 			t.Errorf("%q is not detected", s)
 		}
 	}
-	for _, ok := range []string{"restart Claude Code to load new agents", "searching identities by handle"} {
+	for _, s := range []string{"git rm --cached x", "git rm -r --cached x", "hand-edit the file", "Run `ethos enable` now", "run ethos enable"} {
+		if bannedIn(s) == "" {
+			t.Errorf("%q is not detected", s)
+		}
+	}
+	for _, line := range []string{`"x" // msgguard: allow user choice`, `# msgguard: allow reason`} {
+		if !msgguardAllow.MatchString(line) {
+			t.Errorf("%q must be allowed", line)
+		}
+	}
+	for _, line := range []string{`"x" // msgguard: allow`, `"x" // msgguard: allow `} {
+		if msgguardAllow.MatchString(line) {
+			t.Errorf("%q has no reason and must not be allowed", line)
+		}
+	}
+	for _, ok := range []string{"restart Claude Code to load new agents", "searching identities by handle", "handheld", "handle-based"} {
 		if bannedIn(ok) != "" {
 			t.Errorf("%q must pass", ok)
 		}

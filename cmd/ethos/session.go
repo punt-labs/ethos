@@ -20,7 +20,7 @@ import (
 
 var sessionCmd = &cobra.Command{
 	Use:     "session",
-	Short:   "Manage session roster",
+	Short:   "Show and join the session's participants",
 	GroupID: "session",
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -113,7 +113,7 @@ var sessionListCmd = &cobra.Command{
 
 var sessionShowCmd = &cobra.Command{
 	Use:   "show [session-id]",
-	Short: "Show session roster",
+	Short: "Show the session's participants",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 1 {
