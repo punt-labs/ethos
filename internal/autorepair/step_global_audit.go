@@ -20,14 +20,13 @@ func init() {
 // belong to this repository into the local archive, redacted. A session
 // belongs here when its global roster names this checkout (every roster
 // since v4.13.0 records one) or when the repository holds a stream for it.
-// The global file is deleted only on the roster signal, once the archive
-// reads back equal: a stream alone does not prove no other repository holds
-// one, so that copy is kept and recorded as a residual. A session with
-// neither signal (every roster before v4.13.0 names no checkout) is imported
-// here too, so the repository that upgrades first gains the history it may
-// own; its global file is kept byte-identical and the session recorded as a
-// residual. Nothing is deleted on a weak signal and no owner is guessed. A
-// session that cannot be imported is a residual and its file stays. The
+// Every successful import deletes the global file once the archive reads
+// back equal: the redacted archive is the retained copy (operator ruling,
+// DES-084), whether the signal was a roster, a repository stream, or none
+// (every roster before v4.13.0 names no checkout), so the repository that
+// upgrades first takes the history. Only a roster naming another checkout
+// keeps its file. A session that cannot be imported is a residual and its
+// file stays. The
 // step prints nothing: every action goes to env.Log.
 // importHeadroom is how far ahead of the step's deadline the import stops, so
 // the step's outcome reaches the engine before it abandons the step. The

@@ -103,12 +103,12 @@ const ReasonNoAuditOwner = "no owner signal; global copy kept"
 // (<globalSessionsDir>/*.audit.jsonl, v3.0-v3.11) that may belong to this
 // repository into the shared local archive, redacted. A session's global
 // roster (<globalSessionsDir>/<id>.yaml) naming one of roots as its checkout
-// is the exclusive signal: the global file is deleted once the archive has
-// been read back equal to what was written. A repository stream for the
-// session, or no signal at all (every roster before v4.13.0 has no checkout
-// and the audit lines carry no repository), imports a copy and keeps the
-// global file untouched: the import is lossless and a later run finds the
-// copy. Only a roster naming another checkout is skipped. It prints nothing
+// is one signal; a repository stream for the session, or no signal at all
+// (every roster before v4.13.0 has no checkout and the audit lines carry no
+// repository), is imported too. Every successful import deletes the global
+// file once the archive has been read back equal to what was written: the
+// redacted archive is the retained copy (operator ruling, DES-084). Only a
+// roster naming another checkout is skipped. It prints nothing
 // and keeps going past a session it cannot import. When ctx is done it
 // returns after the file in progress and counts the rest in Remaining.
 func ImportGlobalAudit(ctx context.Context, p layout.Policy, globalSessionsDir string, roots ...string) (AuditImportResult, error) {

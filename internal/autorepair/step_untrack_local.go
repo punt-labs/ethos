@@ -32,6 +32,13 @@ func untrackLocal(ctx context.Context, env Env) (Outcome, error) {
 		return Outcome{}, nil
 	}
 	checkout := env.Roots.Checkout
+	if _, committing := os.LookupEnv("GIT_INDEX_FILE"); committing {
+		// A commit is in progress and git has named its index: anything
+		// staged now rides along in the user's commit. The deletions wait for
+		// the next run outside a hook.
+		logStep(env, "untrack-local", "deferred: a commit is in progress", nil, nil)
+		return Outcome{Deferred: true}, nil
+	}
 	paths, residuals, deferred, err := untrackCandidates(env, checkout)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("listing tracked local paths in %s: %w", checkout, err)

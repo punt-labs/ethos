@@ -255,3 +255,14 @@ func TestUntrackLocalKeepsLiteralNamedPathApartFromSibling(t *testing.T) {
 	runUntrack(t, untrackEnv(dir, &untrackLog{}))
 	assert.Equal(t, []string{star}, stagedDeletions(t, dir))
 }
+
+// A commit in progress names its index in GIT_INDEX_FILE; anything staged
+// then rides along in the user's commit. The step defers and touches nothing.
+func TestUntrackLocalDefersWhileACommitIsInProgress(t *testing.T) {
+	dir := damageRepo(t, "force-added-local-file")
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(dir, ".git", "index"))
+	out := runUntrack(t, untrackEnv(dir, &untrackLog{}))
+	assert.True(t, out.Deferred)
+	assert.Zero(t, out.Items)
+	assert.Empty(t, stagedDeletions(t, dir), "nothing was staged into the committing index")
+}

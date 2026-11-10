@@ -27,14 +27,16 @@ func MisplacedLocal(rel string) bool {
 		".punt-labs/ethos/missions/*/artifacts/**",
 		".punt-labs/ethos/missions/*/reflection-intent.yaml",
 		".punt-labs/ethos/missions/*/correction-intent.yaml",
-		".punt-labs/ethos/missions/*/log-*.quarantine",
 		".punt-labs/ethos/missions/*/log-*.jsonl.corrupt*",
 		".punt-labs/ethos/sessions/*/audit.jsonl",
 		".punt-labs/ethos/sessions/*.audit.jsonl",
-		".punt-labs/ethos/sessions/*/audit-*.quarantine",
 		".punt-labs/ethos/sessions/*/audit-*.jsonl.corrupt*",
 		".punt-labs/ethos/**/quarantine/**",
 	} {
+		// A .quarantine marker beside a published chunk is itself a
+		// publication (DES-058): the seal and the repair write it so a reader
+		// of the tracked tree learns the chunk's range is gone. It is class 3
+		// in Table and never misplaced.
 		if Match(pattern, rel) {
 			return true
 		}

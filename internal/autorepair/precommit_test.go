@@ -108,3 +108,18 @@ func TestPreCommitStepFailureLeavesALogLine(t *testing.T) {
 	assert.Contains(t, string(b), `"step":"live-tails"`)
 	assert.Contains(t, string(b), `"action":"failed"`)
 }
+
+// A panic in a pre-commit step is a logged failure, never an exit the shim
+// reads as a blocked commit.
+func TestPreCommitStepPanicDoesNotFail(t *testing.T) {
+	saved := Steps
+	t.Cleanup(func() { Steps = saved })
+	Steps = []Step{{Name: "live-tails", Scope: ScopeRepository, Run: func(context.Context, Env) (Outcome, error) {
+		panic("step bug")
+	}}}
+	l := &untrackLog{}
+	dir := damageRepo(t, "force-added-local-file")
+	_, err := PreCommit(context.Background(), untrackEnv(dir, l))
+	require.NoError(t, err)
+	assert.Contains(t, l.actions, "live-tails failed ")
+}

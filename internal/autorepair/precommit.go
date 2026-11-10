@@ -65,6 +65,14 @@ func runNamed(ctx context.Context, env Env, name string) {
 	}
 	sctx, cancel := context.WithTimeout(ctx, StepBudget)
 	defer cancel()
+	// A repair never fails its command: a panic in a step is logged like an
+	// error. Left to propagate it would exit the hook with code 2, which the
+	// shim reads as a blocked commit.
+	defer func() {
+		if r := recover(); r != nil {
+			logStep(env, name, "failed", nil, fmt.Errorf("step %s panicked: %v", name, r))
+		}
+	}()
 	if _, err := Steps[i].Run(sctx, env); err != nil {
 		logStep(env, name, "failed", nil, err)
 	}
