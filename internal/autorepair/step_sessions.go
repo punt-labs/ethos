@@ -13,7 +13,7 @@ import (
 
 const stepSessions = "sessions"
 
-func init() { Register(Step{Name: stepSessions, Scope: ScopeGlobal, Run: runSessions}) }
+func init() { Register(Step{Name: stepSessions, Scope: ScopeBoth, Run: runSessions}) }
 
 // SessionStart is the cheap pass the session-start hook runs on every start:
 // step 17 alone, outside the layout stamp. It returns the items converted.

@@ -179,6 +179,17 @@ func repairSessions(loc resolve.Located) func(ctx context.Context) (int, error) 
 			return 0, fmt.Errorf("locating the global store: %w", err)
 		}
 		global := filepath.Join(home, ".punt-labs", "ethos")
+		// The repair log's rotation and the session purge assume one writer: take
+		// the lock the engine holds. A busy lock means a repair is already
+		// running, so this start leaves the work to it.
+		release, ok, err := autorepair.TryGlobalLock(global, autorepair.LockWait)
+		if err != nil {
+			return 0, fmt.Errorf("locking the repair lock: %w", err)
+		}
+		if !ok {
+			return 0, nil
+		}
+		defer release()
 		env := autorepair.Env{
 			Roots:  loc,
 			Global: global,
