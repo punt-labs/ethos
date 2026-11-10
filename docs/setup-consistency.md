@@ -40,7 +40,7 @@ bundles path has no such layer.
 
 Acceptance criterion (from ethos-5zwn): under a fresh `HOME`, `ethos
 seed` + `ethos setup --bundle foundation` and `--bundle gstack` must
-yield **zero warnings** from `ethos show` on every identity, and `ethos
+yield **zero warnings** from `ethos identity get` on every identity, and `ethos
 doctor` must exit clean.
 
 ## Leader rulings (recorded for morning review)
@@ -279,7 +279,7 @@ repair:
    `personalities/` and `writing-styles/` dirs. This is benign — additive
    starter content, no-clobber — but it is a visible delta an operator
    will see on the machine.
-3. `ethos show` is now clean; identities need no rewrite because their
+3. `ethos identity get` is now clean; identities need no rewrite because their
    refs were always correct, merely unresolvable.
 
 Machines using the legacy submodule layout (`.punt-labs/ethos/` as a

@@ -74,7 +74,7 @@ Ethos provides two things:
 Tools integrate with ethos at whatever coupling level fits:
 
 - **Filesystem** — read YAML at known paths. Zero dependency on the ethos binary.
-- **CLI** — call `ethos whoami`, `ethos show`, etc. from hooks and scripts. Requires the binary.
+- **CLI** — call `ethos whoami`, `ethos identity get`, etc. from hooks and scripts. Requires the binary.
 - **MCP server** — connect to `ethos serve` for structured identity operations during a session.
 
 ## Repo Enablement
@@ -176,7 +176,7 @@ ethos identity create -f persona.yaml # Create from YAML file
 ethos identity list                   # List all identities
 ethos identity show mal               # Full identity
 ethos session iam mal                 # Declare active persona
-ethos show mal --json                 # JSON output
+ethos identity get mal --json         # JSON output
 ethos identity schema                 # Field reference for an identity YAML
 ethos identity schema --json          # Same reference as JSON
 ```
@@ -434,7 +434,7 @@ tracked base. Global overlays are unchanged.
 
 ### Merged View
 
-When you read an identity (via `ethos show`, `identity` method `get`, or `Load()`), extensions appear under the `ext` map:
+When you read an identity (via `ethos identity get`, `identity` method `get`, or `Load()`), extensions appear under the `ext` map:
 
 ```yaml
 name: Mal Reynolds
@@ -1290,7 +1290,7 @@ Talent slugs are listed but not expanded inline — full talent content is avail
 
 3. **Match the names.** The agent definition's `name:` in frontmatter must match the ethos identity's `handle:`. This is how SubagentStart finds the persona.
 
-4. **On spawn**, ethos hooks inject the personality and writing style content into the agent's context automatically. The agent .md file does not need to call `ethos show` — the identity is already present.
+4. **On spawn**, ethos hooks inject the personality and writing style content into the agent's context automatically. The agent .md file does not need to call `ethos identity get` — the identity is already present.
 
 ### What Goes Where
 

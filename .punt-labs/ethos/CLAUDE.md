@@ -14,7 +14,7 @@ Either way it's a one-time task and is deliberately not `@`-imported here.
 
 - `ethos whoami` — resolve your identity from the session, git config, or OS
   user.
-- `ethos iam <persona>` — declare a persona for the current session.
+- `ethos session iam <persona>` — declare a persona for the current session.
 
 Session hooks inject your persona into context at start and after
 compaction. Ethos generates `.claude/agents/<handle>.md` from team data at
@@ -48,7 +48,7 @@ an edit outside it fails the mission.
 - `ethos audit show --delegation <id>` — reconstruct a delegation's trail.
 - `ethos audit seal` runs at pre-commit when ethos is enabled here. DES-079
   requires local archives by default, not automatically committed chunks.
-- `ethos audit quarantine` — the recovery path for a corrupt chunk.
+- A corrupt chunk is set aside by ethos itself; no command is needed.
 
 ## Storage and sharing (DES-079; acceptance pending)
 
@@ -94,14 +94,13 @@ backstop: contracts and commands must not contain credentials.
   `S/.punt-labs/local/ethos/identities/<handle>.ext/<namespace>.local.yaml`;
   ordinary writes remain base-only. Overlays are not a vault and may reach
   model context. Global overlay layout is unchanged.
-  Legacy repository siblings are read-only: stop writers and explicitly
-  reconcile each into the local destination, preserving all credentials and
-  resolving an existing destination before removing the old copy. Unequal
-  copies refuse reads; local writes refuse while a legacy sibling remains.
+  Ethos relocates legacy repository siblings into the local destination
+  itself, preserving all credentials. Unequal copies refuse reads; local
+  writes refuse while a legacy sibling remains.
   Never serialize the merged identity into the base or print credentials.
 - Worker files, including `MISSION_ARTIFACTS_DIR`, target local scratch, not
   the tracked delegation directory. Ethos does not automatically move, export
-  or redact agent-owned files; legacy cleanup is operator-directed.
+  or redact agent-owned files.
 - `mission publish <id>...` (shipped in v4.21.0; release acceptance pending) snapshots complete selected blame records
   into C and its actual index. `provenance message <ref>` supplies the
   generated body for the head-pinned GitHub squash route; fetch and
@@ -120,40 +119,22 @@ backstop: contracts and commands must not contain credentials.
 - All repository staging stays local; `EXDEV` refuses
   with the old target intact, never an adjacent-temp/copy-over fallback.
 
-### Bounded legacy repair
+### Automatic storage upgrade
 
-`ethos repair --dry-run` inventories known obsolete trace/runtime files.
-Destructive `ethos repair` lists them, warns of permanent loss of old prompts,
-reflections, events/audit history and runtime residue, and asks
-`Are you sure? [y/N]` in a terminal. Empty input, no and EOF delete nothing.
-`--yes` explicitly consents for automation and asserts that all old/new writers,
-hooks and MCP servers are stopped. Busy locks refuse. Windows supports inventory
-but currently refuses destructive repair; deletion requires a Unix host with all
-writers stopped.
+Ethos upgrades its own storage. On the first run after an upgrade it relocates
+recognized legacy data into the shared local zone and records what it did in a
+repair log under `~/.punt-labs/ethos/`. No command is needed, and none exists.
 
-No backup, lossless migration, authority backfill, lifecycle change, Git
-staging/commit or configuration rewrite is performed. Cleanup excludes shared
-identities, contracts, results, corrections, provenance and ADRs, private
-credentials/overlays, configuration, global data, arbitrary/agent-owned files and
-canonical local history. Current publications and flat current exports
-(`missions/<id>.contract.yaml` / `<id>.result.yaml`, with associated trace) are
-retained, including incomplete/ambiguous exports. Other intentional publications
-and exports are not blanket deletion targets. Repair neither moves nor deletes
-private overlays; use the operator-directed handling above. Historical shipped
-`mission migrate` / `audit migrate` are not expanded; there is no storage-upgrade
-command.
-
-After interruption, inspect a fresh inventory and confirm again; incremental
-deletion has no rollback. Old missions may need manual retirement; repair never
-invents shared authority. Review tracked deletions and stage/commit normally.
-Then run `ethos enable` to refresh integration and reconnect long-lived MCP
-servers. Re-enable maintains the shared local-zone exclusion, not record-tree
-ignore exceptions; it does not prove final storage acceptance.
+Shared identities, contracts, results, corrections, provenance and ADRs,
+private credentials and overlays, configuration, global data and agent-owned
+files are never moved or deleted. Ethos performs no Git staging or commit;
+review tracked changes and commit normally. Reconnect long-lived MCP servers
+after an upgrade so they run the new binary.
 
 ## Session
 
-- `ethos session` — the current roster.
-- `ethos session purge` — clear stale sessions.
+- `ethos session` — the current roster. Stale sessions are cleared
+  automatically.
 
 ## Review agents
 

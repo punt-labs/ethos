@@ -30,9 +30,8 @@ make check                              # All quality gates (vet, staticcheck, s
 ./ethos whoami                          # Show caller's identity (iam/git/OS)
 ./ethos resolve-agent                   # Show default agent from repo config
 ./ethos serve                           # Start MCP server (stdio transport)
-./ethos iam <persona>                   # Declare persona in current session
+./ethos session iam <persona>           # Declare persona in current session
 ./ethos session                         # Show current session participants
-./ethos session purge                   # Clean up stale sessions
 ./ethos adr list                        # List architecture decision records
 ./ethos import --from soulspec <file>   # Import identity from SoulSpec
 ./ethos export --to soulspec <handle>   # Export identity to SoulSpec or claude-md
