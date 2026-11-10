@@ -255,6 +255,7 @@ var writerRegistry = map[string]writerEntry{
 	"internal/audit.salvageBytes":          checkpoint("recoverLines", "installRecovered", "writeSharedMarker", "ReplaceLocalFile"),
 	"internal/audit.RecoverHeldQuarantine": checkpoint("salvageBytes"),
 	"internal/audit.installRecovered":      sink(4, "writes the lines recoverLines returned, each already guarded; reads the result back through ReadChunkVerified"),
+	"internal/audit.installEachLine":       sink(4, "writes the lines recoverLines returned, each already guarded, one chunk per line; reads each back through ReadChunkVerified"),
 	"internal/audit.writeSharedMarker":     sink(4, "availability marker beside a published chunk; its Reason is the caller's redacted reason and it carries no payload"),
 	"internal/audit.RedactLive":            checkpoint("guard", "CanonicalPayload", "archivedPayloads", "ReplaceLocalFile"),
 	"internal/audit.TryLock":               exempt(reasonLock),
