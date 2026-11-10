@@ -127,7 +127,6 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	} else {
 		resolvedID, humanErr = resolveHumanIdentity(store, loc.Checkout)
 	}
-	purgeStale(ss)
 	repairNote := runSessionRepair(deps.Repair)
 
 	// Resolve agent persona from repo config. A non-nil error means
@@ -443,15 +442,6 @@ func runSessionRepair(repair func(ctx context.Context) (int, error)) string {
 		return ""
 	}
 	return fmt.Sprintf("ethos: upgraded storage (%d items; see ~/.punt-labs/ethos/logs/repair.log)", n)
-}
-
-// purgeStale cleans stale PID files from previous sessions (fire-and-forget).
-func purgeStale(ss *session.Store) {
-	if purged, err := ss.PurgeCurrent(); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: session-start: failed to purge stale PID files: %v\n", err)
-	} else if len(purged) > 0 {
-		fmt.Fprintf(os.Stderr, "ethos: session-start: cleaned %d stale PID file(s)\n", len(purged))
-	}
 }
 
 // createSessionRoster creates the session roster entry when a session ID

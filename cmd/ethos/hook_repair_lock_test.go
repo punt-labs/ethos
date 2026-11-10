@@ -50,3 +50,34 @@ func TestRepairSessionsTakesTheGlobalLock(t *testing.T) {
 	assert.True(t, ok)
 	again()
 }
+
+// While another process holds the repair lock, a session start purges nothing,
+// prints nothing on stderr, exits 0, and does not wait for the lock: the
+// session-start pass under the lock owns current/ purging.
+func TestCLI_SessionStartWithRepairLockHeldPurgesNothingAndDoesNotWait(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+	// The first start pays the cold-cache cost; the timed one measures the wait.
+	runHookIn(t, se, se.repo, "session-start", `{"session_id":"warm-s0","hook_event_name":"SessionStart"}`)
+	global := filepath.Join(se.home, ".punt-labs", "ethos")
+	current := filepath.Join(global, "sessions", "current")
+	require.NoError(t, os.MkdirAll(current, 0o700))
+	dead := filepath.Join(current, "2147483646")
+	require.NoError(t, os.WriteFile(dead, []byte("s\n"), 0o600))
+
+	release, ok, err := autorepair.TryGlobalLock(global, 0)
+	require.NoError(t, err)
+	require.True(t, ok)
+	defer release()
+
+	start := time.Now()
+	_, stderr, code := runHookIn(t, se, se.repo, "session-start", `{"session_id":"lock-s1","hook_event_name":"SessionStart"}`)
+	elapsed := time.Since(start)
+
+	assert.Equal(t, 0, code)
+	assert.FileExists(t, dead, "nothing is purged while another process repairs")
+	assert.NotContains(t, stderr, "stale PID", "no purge line on stderr")
+	assert.Less(t, elapsed, 500*time.Millisecond, "the pass does not wait on the lock")
+}
