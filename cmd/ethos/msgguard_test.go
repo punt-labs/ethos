@@ -23,7 +23,7 @@ var bannedMessageTerms = []string{
 	"by hand", "hand-", "reconcile",
 	"ethos show", "ethos list", "ethos iam", "ethos create", "resolve-agent",
 	"ext del", "session create", "session delete", "session delete-current",
-	"session roster", "write-current", "--no-teams", "vendor --from",
+	"ethos session roster", "`session roster`", "write-current", "--no-teams", "vendor --from",
 	"run `ethos enable`", "run ethos enable",
 }
 
@@ -206,7 +206,7 @@ func TestMessageGuardMatchesBannedTerms(t *testing.T) {
 			t.Errorf("%q has no reason and must not be allowed", line)
 		}
 	}
-	for _, ok := range []string{"restart Claude Code to load new agents", "searching identities by handle", "handheld", "handle-based"} {
+	for _, ok := range []string{"restart Claude Code to load new agents", "searching identities by handle", "handheld", "handle-based", "Manage session roster. Methods: roster, join", "show the session roster"} {
 		if bannedIn(ok) != "" {
 			t.Errorf("%q must pass", ok)
 		}

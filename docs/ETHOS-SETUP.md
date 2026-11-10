@@ -163,8 +163,8 @@ DOES add the `@`-import so daily-use guidance auto-injects.
 
 ## Troubleshooting for the agent
 
-- **`ethos doctor` reports "hook missing"** → run `ethos enable` (it
-  chains the audit-seal and trailer git hooks again).
+- **`ethos doctor` reports "hook missing"** → the storage upgrade
+  reinstalls the audit-seal and trailer git hooks on the next ethos run.
 - **`ethos doctor` reports "stale binary version"** → the binary on PATH
   is older than the plugin. Ask the human to run `make install` from a
   shell (agent sessions cannot overwrite their own running binary on
