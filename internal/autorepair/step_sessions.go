@@ -15,11 +15,24 @@ const stepSessions = "sessions"
 
 func init() { Register(Step{Name: stepSessions, Scope: ScopeBoth, Run: runSessions}) }
 
-// SessionStart is the cheap pass the session-start hook runs on every start:
-// step 17 alone, outside the layout stamp. It returns the items converted.
+// SessionStart is the cheap pass the session-start hook runs on every start,
+// outside the layout stamp: step 17 (dead session state), then step 7
+// (sealed chunks damaged since the stamp, which no later Ensure revisits).
+// It returns the items converted. A step 7 error is logged by the step and
+// never fails the start.
 func SessionStart(ctx context.Context, env Env) (int, error) {
 	out, err := runSessions(ctx, env)
-	return out.Items, err
+	if err != nil {
+		return out.Items, err
+	}
+	if env.InRepository() {
+		chunks, cerr := runCorruptChunks(ctx, env)
+		if cerr != nil {
+			env.Log.Logf(stepCorruptChunks, "session-start", nil, cerr)
+		}
+		out.Items += chunks.Items
+	}
+	return out.Items, nil
 }
 
 // logWriter turns each line a session store writes into one repair-log entry,

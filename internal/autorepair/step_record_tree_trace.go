@@ -286,7 +286,7 @@ type archiver struct {
 
 // relative returns path relative to the record root that holds it.
 func (a *archiver) relative(path string) (rel, root string, ok bool) {
-	for _, r := range []string{a.env.Policy.RecordRoot(), a.env.Policy.CheckoutRecordRoot()} {
+	for _, r := range []string{a.env.Policy.RecordRoot(), a.env.Policy.CheckoutRecordRoot(), repair.LegacyRecordRoot(a.env.Policy)} {
 		if r == "" {
 			continue
 		}

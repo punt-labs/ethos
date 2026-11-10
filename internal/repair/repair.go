@@ -52,6 +52,18 @@ type Plan struct {
 
 var capturedFull = regexp.MustCompile(`"record"\s*:\s*"full"`)
 
+// LegacyRecordRoot is the record tree releases before v4.0 kept at
+// <store>/.ethos, or "" when the store has none. Its trace has the shape of
+// the current record tree under its root and is inventoried the same way.
+func LegacyRecordRoot(p layout.Policy) string {
+	root := filepath.Join(filepath.Dir(filepath.Dir(p.RecordRoot())), ".ethos")
+	info, err := os.Stat(root)
+	if err != nil || !info.IsDir() {
+		return ""
+	}
+	return root
+}
+
 // Inventory is read-only, including when the local directory does not exist.
 // Canonical local data, overlays, arbitrary artifacts and global state are not
 // cleanup candidates. Unknown files are left alone, not guessed at.
@@ -63,6 +75,11 @@ func Inventory(ctx context.Context, p layout.Policy) (*Plan, error) {
 	roots := []string{p.RecordRoot()}
 	if p.CheckoutRecordRoot() != p.RecordRoot() {
 		roots = append(roots, p.CheckoutRecordRoot())
+	}
+	// Releases before v4.0 kept the record tree at <store>/.ethos; its trace
+	// has the same shape under the root and is archived the same way.
+	if legacy := LegacyRecordRoot(p); legacy != "" {
+		roots = append(roots, legacy)
 	}
 	for _, root := range roots {
 		tracked, err := trackedFiles(p, root)
@@ -360,7 +377,7 @@ func obsolete(p layout.Policy, root, rel string) (remove, lock bool, err error) 
 		}
 		if legacy || kind == audit.KindValid || diagnostic || kind == audit.KindTemp {
 			if a[0] == "missions" && (legacy || kind == audit.KindValid || diagnostic) {
-				retain, err := retainMissionTrace(p, root, a[1])
+				retain, err := retainMissionTrace(p, root, a[1], legacy)
 				return !retain, false, err
 			}
 			return true, false, nil
@@ -373,7 +390,7 @@ func obsolete(p layout.Policy, root, rel string) (remove, lock bool, err error) 
 	if !detail {
 		return false, false, nil
 	}
-	retain, err := retainMissionTrace(p, root, a[1])
+	retain, err := retainMissionTrace(p, root, a[1], false)
 	return !retain, false, err
 }
 
@@ -497,7 +514,12 @@ func HasExport(p layout.Policy, id string) (bool, error) {
 // owned by S. Explicit full exports instead use flat <id>.contract/result.yaml
 // files and keep the events' original blame eligibility. Neither missing local
 // authority nor the absence of record:full proves that a trace is obsolete.
-func retainMissionTrace(p layout.Policy, root, id string) (bool, error) {
+//
+// eventLog is a legacy missions/<id>/log.jsonl: the pre-v4.21 event trace.
+// It is never current authority (that is contract.yaml and corrections.yaml,
+// which round-decisions imports first), so a contract carrying round_decisions
+// does not retain it; only an explicit export does.
+func retainMissionTrace(p layout.Policy, root, id string, eventLog bool) (bool, error) {
 	roots := []string{p.RecordRoot()}
 	if root != p.RecordRoot() {
 		roots = append(roots, root)
@@ -514,6 +536,9 @@ func retainMissionTrace(p layout.Policy, root, id string) (bool, error) {
 				return true, fmt.Errorf("examining export record %s: %w", path, err)
 			}
 		}
+	}
+	if eventLog {
+		return false, nil
 	}
 	legacy := false
 	for _, dir := range roots {

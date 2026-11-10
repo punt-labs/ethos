@@ -887,12 +887,23 @@ def scan_for_leaks(scratch: Path, home: Path, repo: Path, restored_head: str) ->
     scan_files(scratch, home, repo)
 
 
+def added_lines_only(patch: bytes) -> bytes:
+    """`patch` with every removed hunk line dropped.
+
+    The upgrade untracks legacy record-tree trace, and the user's next commit
+    carries those deletions; a deletion patch reproduces the old content as
+    `-` lines. That content was already in history before the upgrade and is
+    leaving it, not entering, so the leak scan reads only what a commit adds."""
+    return b"\n".join(line for line in patch.split(b"\n")
+                      if not (line.startswith(b"-") and not line.startswith(b"---")))
+
+
 def scan_history(scratch: Path, repo: Path, restored_head: str, home: Path | None = None) -> None:
-    """Commits the upgrade created hold no token and no machine path outside scratch."""
+    """Commits the upgrade created add no token and no machine path outside scratch."""
     scratch_bytes = str(scratch).encode()
     # .git objects are zlib-compressed, so the raw-bytes scan below cannot see
     # committed history; git log -p decompresses it and is scanned separately.
-    history = f_git_history(repo, restored_head)
+    history = added_lines_only(f_git_history(repo, restored_head))
     require(not TOKEN.search(history), "credential-shaped token in committed history after upgrade")
     # The scratch prefix is stripped below, which would turn a leaked HOME path into /home/...
     # and catch it only because HOME is named "home". Forbid the full HOME path explicitly.
@@ -945,7 +956,10 @@ def upgrade(f: Fixture) -> None:
         write(repo / "upgrade-new-file.txt", "second change\n")
         entry("git", "add", "upgrade-new-file.txt")
         again = entry("git", "commit", "-m", "second work after upgrade")
-        chatter = [line for line in again.splitlines() if line.strip() and not GIT_SUMMARY.match(line)]
+        # The harness override every command here runs under announces itself
+        # on stderr; that line is this gate's own, not the upgrade's.
+        chatter = [line for line in again.splitlines()
+                   if line.strip() and not GIT_SUMMARY.match(line) and "ETHOS_TEST_NOT_UNDER_CLAUDE_CODE is set" not in line]
         require(not chatter, f"{label}: second commit printed output other than git's own summary: {chatter}")
         local = entry("git", "ls-files", ".punt-labs/local")
         require(not local.strip(), f"{label}: tracked machine-local files after upgrade: {local!r}")

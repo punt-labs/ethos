@@ -366,7 +366,10 @@ func TestRunAuditSeal_VacuumRunsAfterSealing(t *testing.T) {
 	_, stderr, err := execHandler(t, "audit", "seal")
 	require.NoError(t, err)
 	assert.Contains(t, stderr, "sess-lost", "vacuum warning must appear even when a chunk sealed")
-	assert.Contains(t, stderr, "has no shared live file")
+	// A stream that never held a line has no tail to have lost, so the
+	// no-live-file warning is not printed for it: every commit outside a
+	// Claude Code session would otherwise carry that line.
+	assert.NotContains(t, stderr, "has no shared live file")
 }
 
 // ---------------------------------------------------------------

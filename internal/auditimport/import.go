@@ -130,13 +130,16 @@ func ImportGlobalAudit(p layout.Policy, globalSessionsDir string, roots ...strin
 			continue
 		}
 		imp := AuditImport{Session: id, Lines: r.added, Noop: r.noop, NoSignal: !named && !streams[id]}
-		if named {
-			if err := removeGlobalAudit(file); err != nil {
-				res.Failed = append(res.Failed, AuditImportFailure{Session: id, Reason: err.Error()})
-				continue
-			}
-			imp.Deleted = true
+		// The import is the redacted archive of this file; a session another
+		// checkout owns never reaches here (Unowned above). Pre-redaction
+		// bytes are not kept once archived, whether or not a roster names
+		// this checkout: an unnamed session (no roster at all, as v3.11
+		// wrote) is still this repository's to retire.
+		if err := removeGlobalAudit(file); err != nil {
+			res.Failed = append(res.Failed, AuditImportFailure{Session: id, Reason: err.Error()})
+			continue
 		}
+		imp.Deleted = true
 		res.Done = append(res.Done, imp)
 	}
 	return res, nil

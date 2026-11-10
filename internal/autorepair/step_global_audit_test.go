@@ -111,20 +111,19 @@ func TestGlobalAudit(t *testing.T) {
 	assert.Equal(t, globalBefore, treeDigest(t, env.Global))
 }
 
-// TestGlobalAuditStreamOnlyImportsButKeepsGlobal: a repository stream alone
-// associates the session, so the file is imported, but a stream is not
-// proof that no other repository holds one too, so the global file stays
-// and the step says why.
-func TestGlobalAuditStreamOnlyImportsButKeepsGlobal(t *testing.T) {
-	env, _ := corpusEnvLogged(t, "v3.11.0")
+// TestGlobalAuditStreamOnlyImportsAndDeletes: a repository stream alone
+// associates the session, so the file is imported; the redacted archive is
+// the retained copy and the pre-redaction global file is deleted.
+func TestGlobalAuditStreamOnlyImportsAndDeletes(t *testing.T) {
+	env, log := corpusEnvLogged(t, "v3.11.0")
 	holdSession(t, env, corpusSession)
 	out, err := runGlobalAudit(context.Background(), env)
 	require.NoError(t, err)
 	assert.Equal(t, 1, out.Items, "the session is imported")
 	assert.NotEmpty(t, archivedAudit(t, env, corpusSession))
-	assert.FileExists(t, globalAuditFile(env), "the global copy is kept")
-	require.Len(t, out.Residuals, 1)
-	assert.Equal(t, Residual{Step: "global-audit", ID: corpusSession, Reason: "shared ownership; global copy kept"}, out.Residuals[0])
+	assert.NoFileExists(t, globalAuditFile(env), "the pre-redaction global copy is deleted once archived")
+	assert.Empty(t, out.Residuals)
+	assert.Contains(t, log.steps, "global-audit:import-and-delete")
 }
 
 // TestGlobalAuditOtherCheckoutStaysGlobal: a roster naming another checkout
@@ -144,10 +143,9 @@ func TestGlobalAuditOtherCheckoutStaysGlobal(t *testing.T) {
 // TestGlobalAuditNoSignalIsResidual: the v3.11.0 corpus as it is. Its roster
 // has no checkout field and its audit lines carry no repository, so nothing
 // says whose session this is. The repository that upgrades first gains a
-// redacted copy of the history it may own; the global file is kept
-// byte-identical for any other owner, and the session is recorded as a
-// residual. Nothing is deleted and nothing is guessed.
-func TestGlobalAuditNoSignalIsResidual(t *testing.T) {
+// redacted copy and retires the pre-redaction global file: once archived,
+// obsolete unredacted data is not kept (operator ruling, DES-084).
+func TestGlobalAuditNoSignalImportsAndDeletes(t *testing.T) {
 	env, log := corpusEnvLogged(t, "v3.11.0")
 	roster, err := os.ReadFile(filepath.Join(env.Global, "sessions", corpusSession+".yaml"))
 	require.NoError(t, err)
@@ -164,17 +162,15 @@ func TestGlobalAuditNoSignalIsResidual(t *testing.T) {
 	assert.Equal(t, 3, strings.Count(got, "\n"))
 	assert.NotContains(t, got, "ghp_FAKE")
 	assert.NotContains(t, got, home)
-	after, err := os.ReadFile(globalAuditFile(env))
-	require.NoError(t, err, "the global file is kept")
-	assert.Equal(t, before, after, "the global file is byte-identical")
-	require.Len(t, out.Residuals, 1)
-	assert.Equal(t, Residual{Step: "global-audit", ID: corpusSession, Reason: "no owner signal; global copy kept"}, out.Residuals[0])
-	assert.Contains(t, log.steps, "global-audit:import-keep-global")
+	assert.NotEmpty(t, before, "fixture: the global file held the pre-redaction lines")
+	assert.NoFileExists(t, globalAuditFile(env), "the pre-redaction global copy is deleted once archived")
+	assert.Empty(t, out.Residuals)
+	assert.Contains(t, log.steps, "global-audit:import-and-delete")
 
 	repoBefore, globalBefore := treeDigest(t, env.Roots.Store), treeDigest(t, env.Global)
 	out, err = runGlobalAudit(context.Background(), env)
 	require.NoError(t, err)
-	assert.Equal(t, 0, out.Items, "second run finds the copy")
+	assert.Equal(t, 0, out.Items, "second run finds nothing to import")
 	assert.Equal(t, repoBefore, treeDigest(t, env.Roots.Store))
 	assert.Equal(t, globalBefore, treeDigest(t, env.Global))
 }

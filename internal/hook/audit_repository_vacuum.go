@@ -68,6 +68,11 @@ func probeSharedLive(p layout.Policy, s audit.Stream, w io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if len(data.Lines) == 0 {
+		// A roster whose stream never held a line (a session started outside
+		// Claude Code, which writes no audit) has no tail to have lost.
+		return nil
+	}
 	fmt.Fprintf(w, "warning: stream %s has no shared live file; %d archived/published line(s) retained, but a deleted unarchived tail cannot be ruled out\n", s.Key(), len(data.Lines))
 	return nil
 }

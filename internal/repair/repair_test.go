@@ -291,7 +291,14 @@ func TestRetainCurrentExportAndAmbiguousMissionTrace(t *testing.T) {
 				put(t, filepath.Join(p.CheckoutRecordRoot(), filepath.FromSlash(rel)), "{\"record\":\"blame\"}\n")
 				remove, lock, err := obsolete(p, p.CheckoutRecordRoot(), rel)
 				require.NoError(t, err)
-				assert.False(t, remove, rel)
+				// The legacy event log is never authority: current round
+				// decisions in the contract do not retain it; only an explicit
+				// export does. Every other detail file follows the authority.
+				if name == "log.jsonl" && tc.exportSuffix == "" {
+					assert.True(t, remove, rel)
+				} else {
+					assert.False(t, remove, rel)
+				}
 				assert.False(t, lock, rel)
 			}
 		})

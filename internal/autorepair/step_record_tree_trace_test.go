@@ -28,9 +28,15 @@ const fakeToken = "ghp_FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE"
 func traceFiles(t *testing.T, env Env) []string {
 	t.Helper()
 	var out []string
-	for _, f := range listFiles(t, env.Policy.RecordRoot()) {
-		if _, ok := classifyTrace(f); ok {
-			out = append(out, f)
+	roots := []string{env.Policy.RecordRoot()}
+	if legacy := repair.LegacyRecordRoot(env.Policy); legacy != "" {
+		roots = append(roots, legacy)
+	}
+	for _, root := range roots {
+		for _, f := range listFiles(t, root) {
+			if _, ok := classifyTrace(f); ok {
+				out = append(out, f)
+			}
 		}
 	}
 	return out
@@ -47,7 +53,9 @@ func run5(t *testing.T, env Env) Outcome {
 // the only round authority and stays, as a residual naming step 3. Every
 // other trace is archived and deleted.
 func TestRecordTreeTraceOverCorpus(t *testing.T) {
-	withTrace := map[string]bool{"v4.0.0": true, "v4.8.0": true, "v4.13.0": true, "v4.17.0": true, "v4.20.4": true}
+	// v3.12.0 kept its record tree at .ethos/, the legacy root the inventory
+	// also walks; its one live audit tail is archived like any other trace.
+	withTrace := map[string]bool{"v3.12.0": true, "v4.0.0": true, "v4.8.0": true, "v4.13.0": true, "v4.17.0": true, "v4.20.4": true}
 	for _, v := range corpusVersions {
 		t.Run(v, func(t *testing.T) {
 			env := corpusEnv(t, v)
@@ -62,7 +70,11 @@ func TestRecordTreeTraceOverCorpus(t *testing.T) {
 			assert.False(t, out.Deferred)
 			if withTrace[v] {
 				require.NotEmpty(t, before, "corpus %s must hold trace in the record tree", v)
-				require.Len(t, reflections, 1, "corpus %s holds one legacy reflections.yaml", v)
+				if v == "v3.12.0" {
+					require.Empty(t, reflections, "corpus %s predates reflections.yaml", v)
+				} else {
+					require.Len(t, reflections, 1, "corpus %s holds one legacy reflections.yaml", v)
+				}
 			} else {
 				assert.Empty(t, before, "corpus %s holds no record-tree trace", v)
 			}

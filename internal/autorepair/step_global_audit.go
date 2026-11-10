@@ -10,10 +10,6 @@ import (
 
 const stepGlobalAudit = "global-audit"
 
-// reasonSharedOwnership is the residual reason for a session whose global
-// copy stays because this repository cannot prove it is the only owner.
-const reasonSharedOwnership = "shared ownership; global copy kept"
-
 func init() {
 	Register(Step{Name: stepGlobalAudit, Scope: ScopeBoth, Run: runGlobalAudit})
 }
@@ -61,16 +57,9 @@ func runGlobalAudit(ctx context.Context, env Env) (Outcome, error) {
 			continue
 		}
 		out.Items++
-		if d.Deleted {
-			env.Log.Logf(stepGlobalAudit, "import-and-delete", []string{file(d.Session)}, nil)
-			continue
-		}
-		env.Log.Logf(stepGlobalAudit, "import-keep-global", []string{file(d.Session)}, nil)
-		reason := reasonSharedOwnership
-		if d.NoSignal {
-			reason = auditimport.ReasonNoAuditOwner
-		}
-		out.Residuals = append(out.Residuals, Residual{Step: stepGlobalAudit, ID: d.Session, Reason: reason})
+		// Every successful import retires the pre-redaction global file: the
+		// redacted archive is the retained copy (operator ruling, DES-084).
+		env.Log.Logf(stepGlobalAudit, "import-and-delete", []string{file(d.Session)}, nil)
 	}
 	for _, id := range res.Unowned {
 		env.Log.Logf(stepGlobalAudit, "other-checkout", []string{file(id)}, nil)
