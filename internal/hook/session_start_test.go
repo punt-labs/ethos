@@ -905,7 +905,7 @@ func TestHandleSessionStart_RefreshHooks(t *testing.T) {
 			},
 			wantContext: []string{
 				"Ethos could not refresh stale git hook section(s): boom.",
-				"Commits may be blocked; run `ethos enable` or `ethos doctor`.",
+				"Commits may be blocked until the next session start refreshes the section(s).",
 			},
 		},
 		{
@@ -979,6 +979,7 @@ func TestHandleSessionStart_RefreshHooks(t *testing.T) {
 			for _, w := range tt.wantContext {
 				assert.Contains(t, out, w)
 			}
+			assert.NotContains(t, out, "ethos enable", "repair is automatic; the user is never told to act")
 		})
 	}
 }

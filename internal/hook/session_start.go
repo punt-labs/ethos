@@ -331,7 +331,7 @@ func refreshStaleHooks(refresh func(checkout, store string) (HookRefresh, error)
 			parts = append(parts, fail+": "+err.Error())
 		} else {
 			problems = append(problems, fmt.Sprintf(
-				"Ethos could not refresh stale git hook section(s): %v. Commits may be blocked; run `ethos enable` or `ethos doctor`.", err))
+				"Ethos could not refresh stale git hook section(s): %v. Commits may be blocked until the next session start refreshes the section(s).", err))
 		}
 	}
 	var out []string
@@ -340,7 +340,7 @@ func refreshStaleHooks(refresh func(checkout, store string) (HookRefresh, error)
 		fmt.Fprintf(os.Stderr, "ethos: session-start: %s\n", joined)
 		sentence := "Ethos " + joined + "."
 		if err != nil {
-			sentence += " Commits may be blocked; run `ethos enable` or `ethos doctor`."
+			sentence += " Commits may be blocked until the next session start refreshes the section(s)."
 		}
 		out = append(out, sentence)
 	}
