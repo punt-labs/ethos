@@ -930,7 +930,7 @@ func TestHandleSessionStart_RefreshHooks(t *testing.T) {
 			refresh: func(_, _ string) (HookRefresh, error) {
 				return HookRefresh{Malformed: []HookProblem{{Hook: "commit-msg", Cause: "it has a BEGIN with no matching END"}}}, nil
 			},
-			wantContext: []string{"Ethos could not refresh the commit-msg section: it has a BEGIN with no matching END; commits may be blocked."},
+			wantContext: []string{"Ethos could not refresh the commit-msg section: it has a BEGIN with no matching END; the seal section was not refreshed."},
 		},
 		{
 			name: "a tracked hook left stale is told to the session",

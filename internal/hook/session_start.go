@@ -335,7 +335,7 @@ func refreshStaleHooks(refresh func(checkout, store string) (HookRefresh, error)
 	}
 	for _, m := range r.Malformed {
 		problems = append(problems, fmt.Sprintf(
-			"Ethos could not refresh the %s section: %s; commits may be blocked.", m.Hook, m.Cause))
+			"Ethos could not refresh the %s section: %s; the seal section was not refreshed.", m.Hook, m.Cause))
 	}
 	for _, h := range r.TrackedMissing {
 		problems = append(problems, fmt.Sprintf(
