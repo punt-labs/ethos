@@ -1,6 +1,7 @@
 package autorepair
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -207,8 +208,12 @@ func TestScrubRecords_PrintsNothing(t *testing.T) {
 		t.Run(v, func(t *testing.T) {
 			env := stage34(t, v)
 			plantLeaks34(t, env)
-			stderr := captureStderr34(t, func() { run34(t, "scrub-records", env) })
+			t.Cleanup(mission.FailDirSyncForTest(errors.New("injected sync failure")))
+			var out Outcome
+			stderr := captureStderr34(t, func() { out = run34(t, "scrub-records", env) })
 			assert.Empty(t, stderr)
+			assert.NotZero(t, out.Items, "the rewrites installed despite the sync warning")
+			assert.Contains(t, strings.Join(env.Log.(*recLog34).lines, "\n"), "durability-unconfirmed", "the warning path ran")
 		})
 	}
 }

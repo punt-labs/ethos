@@ -114,6 +114,20 @@ func TestUpgradeLegacyAuthority_FenceKinds(t *testing.T) {
 		require.ErrorAs(t, err, &h)
 		assert.Equal(t, LegacyCorruptCorrections, h.Kind)
 	})
+	// A credential in a reflection's author would be copied into the shared
+	// decision; redaction would change that frozen value, so the import refuses.
+	t.Run("redaction refused", func(t *testing.T) {
+		s, c, root := legacyReflectionReader(t, true, 2)
+		b := "reflections:\n    - mission: " + c.MissionID + "\n      round: 1\n      created_at: \"2026-11-05T10:00:00Z\"\n" +
+			"      author: ghp_abcdefghijklmnopqrstuvwxyz0123456789abcd\n      converging: true\n      signals:\n        - ok\n" +
+			"      recommendation: continue\n      reason: r\n"
+		require.NoError(t, os.WriteFile(mustReflectionsPath(t, s, c.MissionID), []byte(b), 0o600))
+		_, _, err := s.UpgradeLegacyAuthority(c.MissionID)
+		var h *LegacyHistoryError
+		require.ErrorAs(t, err, &h)
+		assert.Equal(t, LegacyRedactionRefused, h.Kind)
+		assert.NoFileExists(t, filepath.Join(root, ".punt-labs", "ethos", "missions", c.MissionID, "corrections.yaml"))
+	})
 	t.Run("unloadable contract", func(t *testing.T) {
 		s, c, root := legacyReflectionReader(t, true, 1)
 		require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos", "missions", c.MissionID, "contract.yaml"), []byte("broken: [yaml"), 0o600))

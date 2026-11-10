@@ -1,8 +1,10 @@
 package autorepair
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/mission"
@@ -167,14 +169,20 @@ func TestRoundDecisions_SecondRunLeavesTheTreeUnchanged(t *testing.T) {
 	assert.Equal(t, before, snapshotTree34(t, dir))
 }
 
-// M2: the step prints nothing, even when a durability warning fires.
+// M2: the step prints nothing, even when a durability warning fires. The
+// directory sync is made to fail so the warning path runs.
 func TestRoundDecisions_PrintsNothing(t *testing.T) {
 	env := stage34(t, "v4.17.0")
-	stderr := captureStderr34(t, func() { run34(t, "round-decisions", env) })
+	t.Cleanup(mission.FailDirSyncForTest(errors.New("injected sync failure")))
+	var out Outcome
+	stderr := captureStderr34(t, func() { out = run34(t, "round-decisions", env) })
 	assert.Empty(t, stderr)
+	assert.Equal(t, 2, out.Items, "a sync warning still counts the mission imported")
+	assert.Contains(t, strings.Join(env.Log.(*recLog34).lines, "\n"), "durability-unconfirmed", "the warning path ran")
 }
 
-// M4: a busy lock defers and writes no residual; the free mission is imported.
+// A guard for the busy-lock path, not M4 evidence: a busy lock defers and writes
+// no residual; the free mission is imported.
 func TestRoundDecisions_BusyLockDefers(t *testing.T) {
 	env := stage34(t, "v4.17.0")
 	id := filepath.Base(missionDirs34(t, env)[0])
