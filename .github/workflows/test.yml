@@ -86,6 +86,9 @@ jobs:
       - name: Test
         run: go test -race -count=1 -coverprofile=coverage.out ./...
 
+      - name: Coverage gate (per-package baseline)
+        run: make coverage-check
+
       - name: Validate content
         run: go run ./cmd/validate-content
 

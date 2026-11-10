@@ -120,6 +120,14 @@ TEST_PARALLEL ?= 2
 test: ## Run tests with race detection and write coverage to coverage.out
 	go test -race -count=1 -timeout 30m -p $(TEST_PARALLEL) -coverprofile=coverage.out ./...
 
+.PHONY: coverage-check coverage-baseline
+
+coverage-check: ## Compare per-package coverage in coverage.out (from make test) with coverage-baseline.txt
+	go run ./cmd/coverage-check -profile coverage.out -baseline coverage-baseline.txt
+
+coverage-baseline: ## Regenerate coverage-baseline.txt from coverage.out (keeps overall-target and comments)
+	go run ./cmd/coverage-check -write -profile coverage.out -baseline coverage-baseline.txt
+
 validate-content: ## Validate all ethos content files
 	go run ./cmd/validate-content
 
@@ -248,7 +256,7 @@ check-storage: ## Exercise offline storage boundaries through the real CLI, wrap
 	python3 -B -m unittest discover -s scripts -p 'storage_acceptance_test.py'
 	python3 -B scripts/storage_acceptance.py
 
-check: lint docs test validate-content fuzz-check check-opencode check-storage ## Run all quality gates
+check: lint docs test coverage-check validate-content fuzz-check check-opencode check-storage ## Run all quality gates
 
 # The legacy corpus (internal/autorepair/testdata) is real on-disk state written
 # by nine released binaries. Regenerating it builds each from its git tag, so it
