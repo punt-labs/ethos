@@ -24,6 +24,7 @@ func cliLegacyUnknownFixture(t *testing.T, round int, detail string) (*cliSubpro
 	se := &cliSubprocessEnv{home: t.TempDir(), repo: t.TempDir()}
 	se.env = testGitEnv(se.home)
 	gitRunEnv(t, se.repo, se.env, "init", "-q")
+	stampFixture(t, se.home, se.repo)
 	id, stamp := "m-2026-11-05-162", "2026-11-05T10:00:00Z"
 	c := &mission.Contract{MissionID: id, Status: mission.StatusOpen, CreatedAt: stamp, UpdatedAt: stamp,
 		Leader: "claude", Worker: "bwk", Evaluator: mission.Evaluator{Handle: "djb", PinnedAt: stamp},

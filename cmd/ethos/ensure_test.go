@@ -117,6 +117,9 @@ func TestRootHookGuardDetectsShadowing(t *testing.T) {
 // runs for the leaf is root's.
 func TestExecutedCommandReachesEnsureOnce(t *testing.T) {
 	n := fakeEnsure(t, autorepair.Result{})
+	// doctor exits non-zero when any check fails, which it does outside a
+	// set-up repository; the fixture makes every check pass.
+	setInProcessEnv(t, setupCLISubprocessEnv(t))
 	_, _, err := execHandler(t, "doctor", "--json")
 	require.NoError(t, err)
 	assert.Equal(t, 1, *n, "doctor passed Ensure %d times", *n)

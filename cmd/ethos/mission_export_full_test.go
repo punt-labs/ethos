@@ -34,6 +34,7 @@ func fullExportFixture(t *testing.T) (*cliSubprocessEnv, *mission.Store, string)
 	cmd.Env = se.env
 	out, err = cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
+	stampFixture(t, se.home, se.repo)
 	p, err := layout.NewRepository(se.repo, se.repo, layout.RecordBlame)
 	require.NoError(t, err)
 	s := mission.NewRepositoryStore(p, filepath.Join(se.home, ".punt-labs", "ethos")).WithSessionID("export-session")
