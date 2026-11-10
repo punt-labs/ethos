@@ -222,8 +222,10 @@ func removeGlobalAudit(file string) error {
 	return nil
 }
 
-// sessionGuard builds the guard migrateAuditSession applies; a test replaces it.
-var sessionGuard = lineguard.SessionLineGuardFor
+// sessionGuard, when a test sets it, replaces the guard migrateAuditSession
+// applies. Production code leaves it nil and calls SessionLineGuardFor
+// directly, so the mission writer registry sees that call.
+var sessionGuard func(checkout string) lineguard.LineGuard
 
 // SetSessionGuard replaces the per-session guard for a test in another package
 // and returns the function that restores it.
@@ -270,7 +272,10 @@ func migrateAuditSession(ctx context.Context, p layout.Policy, checkout, id, fil
 		}
 		var existing []Line
 		payloads := map[string]string{}
-		guard := sessionGuard(checkout)
+		guard := lineguard.SessionLineGuardFor(checkout)
+		if sessionGuard != nil {
+			guard = sessionGuard(checkout)
+		}
 		for _, l := range data.Legacy {
 			if err := ctx.Err(); err != nil {
 				return err

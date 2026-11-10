@@ -35,7 +35,7 @@ func TestImportGlobalAuditStopsAtContext(t *testing.T) {
 		cancel() // the budget runs out while the first file is in progress
 		return lineguard.GuardAuditLineFull
 	}
-	t.Cleanup(func() { sessionGuard = lineguard.SessionLineGuardFor })
+	t.Cleanup(func() { sessionGuard = nil })
 
 	res, err := ImportGlobalAudit(ctx, p, dir, repo)
 	require.NoError(t, err)
@@ -49,7 +49,7 @@ func TestImportGlobalAuditStopsAtContext(t *testing.T) {
 	}
 	assert.Zero(t, res.Remaining)
 
-	sessionGuard = lineguard.SessionLineGuardFor
+	sessionGuard = nil
 	res, err = ImportGlobalAudit(context.Background(), p, dir, repo)
 	require.NoError(t, err)
 	assert.Len(t, res.Done, 3, "a live context imports every file, the cut-off one included")
@@ -87,7 +87,7 @@ func TestImportGlobalAuditGivesUpOnAFileItCannotFinish(t *testing.T) {
 			return lineguard.GuardAuditLineFull(line)
 		}
 	}
-	t.Cleanup(func() { sessionGuard = lineguard.SessionLineGuardFor })
+	t.Cleanup(func() { sessionGuard = nil })
 
 	res, err := ImportGlobalAudit(ctx, p, dir, repo)
 	require.NoError(t, err)

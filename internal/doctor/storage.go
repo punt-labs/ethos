@@ -50,7 +50,8 @@ func CheckStorage(loc resolve.Located, global string) Result {
 	}
 	if residual > 0 {
 		return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
-			"layout v%d with %d residual condition(s); see ~/.punt-labs/ethos/logs/repair.log", autorepair.LayoutVersion, residual)}
+			"layout v%d with %d residual condition(s), each listed under residual: in the layout stamp (%s and .punt-labs/local/ethos/%s) and logged in ~/.punt-labs/ethos/logs/repair.log",
+			autorepair.LayoutVersion, residual, "~/.punt-labs/ethos/"+autorepair.StampName, autorepair.StampName)}
 	}
 	return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf(
 		"layout v%d (upgraded %s, %d items)", autorepair.LayoutVersion, upgraded, items)}
