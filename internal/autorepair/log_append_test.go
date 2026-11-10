@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -17,6 +18,11 @@ import (
 // rotates.
 func TestAppendLogsSharingOneFileLoseNoLines(t *testing.T) {
 	global := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Dir(LogPath(global)), 0o700))
+	// Start past the rotation cap so a rotating log would move the file aside.
+	filler := strings.Repeat("filler ", 100) + "\n"
+	require.NoError(t, os.WriteFile(LogPath(global),
+		[]byte(strings.Repeat(filler, maxLogBytes/len(filler)+2)), 0o600))
 	a := NewAppendLog(global, "/s1", "/c1", "v")
 	b := NewAppendLog(global, "/s2", "/c2", "v")
 	const n = 200
@@ -37,7 +43,9 @@ func TestAppendLogsSharingOneFileLoseNoLines(t *testing.T) {
 	count := 0
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
-		count++
+		if strings.Contains(sc.Text(), "line-") {
+			count++
+		}
 	}
 	assert.Equal(t, 2*n, count)
 	_, err = os.Stat(filepath.Join(global, "logs", "repair.log.1"))
