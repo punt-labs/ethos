@@ -14,3 +14,7 @@ func flock(_ *os.File) error {
 func funlock(_ *os.File) error {
 	return nil
 }
+
+func tryFlock(_ *os.File) error {
+	return fmt.Errorf("file locking not supported on Windows")
+}

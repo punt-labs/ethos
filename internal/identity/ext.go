@@ -68,11 +68,11 @@ type OverlayConflictError struct {
 }
 
 func (e *OverlayConflictError) Error() string {
-	return fmt.Sprintf("divergent local extension overlays at %s and %s; stop writers and reconcile them into the local destination, preserving all credentials, before removing the legacy copy; ethos repair does not change overlays", e.Legacy, e.Local)
+	return fmt.Sprintf("divergent local extension overlays at %s and %s; the storage upgrade keeps the one in the local zone and deletes the legacy copy", e.Legacy, e.Local)
 }
 
-// readLocalNamespace permits compatibility reads only. New writers never copy
-// or delete the legacy source-side overlay; the operator controls that move.
+// readLocalNamespace permits compatibility reads only. Writers never copy or
+// delete the legacy source-side overlay; the storage upgrade (RelocateLegacyOverlays) moves it.
 func (s *Store) readLocalNamespace(handle, namespace string) (map[string]string, error) {
 	if err := s.validatePolicy(); err != nil {
 		return nil, err
@@ -115,7 +115,7 @@ func (s *Store) prepareExtWrite(handle, namespace string, local bool) error {
 		// create divergence or resurrect deleted keys on the next read.
 		legacy := s.legacyExtLocalPath(handle, namespace)
 		if _, err := os.Lstat(legacy); err == nil {
-			return fmt.Errorf("legacy local overlay at %s is read-only; stop writers and move it to %s, preserving all credentials and resolving any existing destination, before modifying it; ethos repair does not change overlays", legacy, s.extLocalPath(handle, namespace))
+			return fmt.Errorf("legacy local overlay at %s is not in the local zone yet; the storage upgrade moves it to %s, and writes resume once it has", legacy, s.extLocalPath(handle, namespace))
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("examining legacy local overlay: %w", err)
 		}
