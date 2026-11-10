@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,7 +31,7 @@ func TestUpgradeLegacyAuthority_ResumesAfterCrashBetweenRenames(t *testing.T) {
 		}
 		return nil
 	}
-	require.Panics(t, func() { _, _ = s.UpgradeLegacyAuthority(c.MissionID) })
+	require.Panics(t, func() { _, _, _ = s.UpgradeLegacyAuthority(c.MissionID) })
 	s.persistenceCheck = nil
 
 	corrections, err := os.ReadFile(filepath.Join(dir, "corrections.yaml"))
@@ -39,7 +40,7 @@ func TestUpgradeLegacyAuthority_ResumesAfterCrashBetweenRenames(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, loaded.RoundDecisions, "the crash happened before the contract rename")
 
-	upgraded, err := s.UpgradeLegacyAuthority(c.MissionID)
+	upgraded, _, err := s.UpgradeLegacyAuthority(c.MissionID)
 	require.NoError(t, err)
 	assert.True(t, upgraded)
 	loaded, err = s.Load(c.MissionID)
@@ -49,7 +50,7 @@ func TestUpgradeLegacyAuthority_ResumesAfterCrashBetweenRenames(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(corrections), string(after), "corrections kept as the crash left them")
 
-	upgraded, err = s.UpgradeLegacyAuthority(c.MissionID)
+	upgraded, _, err = s.UpgradeLegacyAuthority(c.MissionID)
 	require.NoError(t, err)
 	assert.False(t, upgraded, "second run is a no-op")
 }
@@ -75,4 +76,71 @@ func TestReplaceRecordFile_DurabilityFailureIsNotAnError(t *testing.T) {
 	got, err := os.ReadFile(dest)
 	require.NoError(t, err)
 	assert.Contains(t, string(got), "context: x")
+}
+
+// M2: the upgrade reports durability warnings in its outcome and prints nothing.
+func TestUpgradeLegacyAuthority_WarningsGoToTheOutcomeNotStderr(t *testing.T) {
+	s, c, _ := legacyReflectionReader(t, true, 1)
+	real := syncDir
+	t.Cleanup(func() { syncDir = real })
+	syncDir = func(string) error { return errors.New("injected sync failure") }
+
+	var upgraded bool
+	var out MutationOutcome
+	var err error
+	stderr := captureStderr(t, func() { upgraded, out, err = s.UpgradeLegacyAuthority(c.MissionID) })
+	require.NoError(t, err)
+	assert.True(t, upgraded)
+	assert.Empty(t, stderr)
+	require.NotEmpty(t, out.Warnings)
+	assert.Contains(t, out.Warnings[0], "injected sync failure")
+}
+
+// A fence names its kind, so a caller derives a reason without parsing text.
+func TestUpgradeLegacyAuthority_FenceKinds(t *testing.T) {
+	t.Run("incomplete history", func(t *testing.T) {
+		s, c, root := legacyReflectionReader(t, true, 2) // round 1 crossed, no reflection retained
+		_, _, err := s.UpgradeLegacyAuthority(c.MissionID)
+		var h *LegacyHistoryError
+		require.ErrorAs(t, err, &h)
+		assert.Equal(t, LegacyIncomplete, h.Kind)
+		assert.NoFileExists(t, filepath.Join(root, ".punt-labs", "ethos", "missions", c.MissionID, "corrections.yaml"))
+	})
+	t.Run("corrupt corrections", func(t *testing.T) {
+		s, c, root := legacyReflectionReader(t, true, 1)
+		require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos", "missions", c.MissionID, "corrections.yaml"), []byte("version: 7\n"), 0o600))
+		_, _, err := s.UpgradeLegacyAuthority(c.MissionID)
+		var h *LegacyHistoryError
+		require.ErrorAs(t, err, &h)
+		assert.Equal(t, LegacyCorruptCorrections, h.Kind)
+	})
+	t.Run("unloadable contract", func(t *testing.T) {
+		s, c, root := legacyReflectionReader(t, true, 1)
+		require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos", "missions", c.MissionID, "contract.yaml"), []byte("broken: [yaml"), 0o600))
+		_, _, err := s.UpgradeLegacyAuthority(c.MissionID)
+		var h *LegacyHistoryError
+		require.ErrorAs(t, err, &h)
+		assert.Equal(t, LegacyUnloadable, h.Kind)
+	})
+}
+
+// A fenced mission refuses lifecycle writes: Correct on a closed mission whose
+// crossed-round history is incomplete installs nothing.
+func TestCorrect_RefusesAFencedMission(t *testing.T) {
+	s, c, root := legacyReflectionReader(t, true, 2)
+	dir := filepath.Join(root, ".punt-labs", "ethos", "missions", c.MissionID)
+	contract := filepath.Join(dir, "contract.yaml")
+	data, err := os.ReadFile(contract)
+	require.NoError(t, err)
+	closed := strings.Replace(string(data), "status: open", "status: closed\nclosed_at: \"2026-11-05T10:00:00Z\"", 1)
+	require.NotEqual(t, string(data), closed)
+	require.NoError(t, os.WriteFile(contract, []byte(closed), 0o600))
+
+	err = s.Correct(c.MissionID, Correction{Mission: c.MissionID, Kind: CorrectionDecision, Author: "claude", Corrected: "decided"})
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "fenced from lifecycle writes")
+	assert.NoFileExists(t, filepath.Join(dir, "corrections.yaml"))
+	after, err := os.ReadFile(contract)
+	require.NoError(t, err)
+	assert.Equal(t, closed, string(after))
 }

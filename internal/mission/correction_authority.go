@@ -302,6 +302,14 @@ func (s *Store) persistCorrectionIntent(in correctionIntent) error {
 }
 
 func (s *Store) applySharedCorrection(c *Contract, correction Correction) error {
+	if c.RoundDecisions == nil {
+		// A mission whose crossed-round history cannot be imported is fenced:
+		// no lifecycle write may add authority beside history that is unknown.
+		probe := *c
+		if err := s.importLegacyDecisions(&probe); err != nil {
+			return fmt.Errorf("mission %q is fenced from lifecycle writes: %w", c.MissionID, err)
+		}
+	}
 	a, err := s.readCorrections(c)
 	if err != nil {
 		return err

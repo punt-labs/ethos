@@ -35,11 +35,15 @@ func runRoundDecisions(ctx context.Context, env Env) (Outcome, error) {
 			return out, nil
 		}
 		var upgraded bool
+		var outcome mission.MutationOutcome
 		err := mission.WithRecordLockTry(env.Policy, id, func() error {
 			var err error
-			upgraded, err = store.UpgradeLegacyAuthority(id)
+			upgraded, outcome, err = store.UpgradeLegacyAuthority(id)
 			return err
 		})
+		for _, w := range outcome.Warnings {
+			env.Log.Logf("round-decisions", "durability-unconfirmed", []string{missionPath(env, id)}, errors.New(w))
+		}
 		var history *mission.LegacyHistoryError
 		switch {
 		case errors.Is(err, mission.ErrLockBusy):
@@ -47,10 +51,10 @@ func runRoundDecisions(ctx context.Context, env Env) (Outcome, error) {
 			out.Deferred = true
 		case errors.As(err, &history):
 			env.Log.Logf("round-decisions", "fence", []string{missionPath(env, id)}, err)
-			out.Residuals = append(out.Residuals, Residual{Step: "round-decisions", ID: id, Reason: "incomplete legacy history, mission fenced from lifecycle writes: " + err.Error()})
+			out.Residuals = append(out.Residuals, Residual{Step: "round-decisions", ID: id, Reason: history.Kind.String() + ", mission fenced from lifecycle writes"})
 		case err != nil:
-			env.Log.Logf("round-decisions", "defer", []string{missionPath(env, id)}, err)
-			out.Deferred = true
+			env.Log.Logf("round-decisions", "refuse", []string{missionPath(env, id)}, err)
+			out.Residuals = append(out.Residuals, Residual{Step: "round-decisions", ID: id, Reason: "mission authority cannot be written, mission fenced from lifecycle writes"})
 		case upgraded:
 			env.Log.Logf("round-decisions", "import-authority", []string{
 				repositoryContractPath(env, id),

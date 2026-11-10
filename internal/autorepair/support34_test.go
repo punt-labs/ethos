@@ -168,3 +168,9 @@ func provenanceOK34(t *testing.T, version, step string) bool {
 	b := read34(t, filepath.Join("testdata", "corpus", version, "PROVENANCE.txt"))
 	return strings.Contains(b, step+": ok")
 }
+
+// captureStderr34 returns what fn wrote to os.Stderr.
+func captureStderr34(t *testing.T, fn func()) string {
+	t.Helper()
+	return testhelpers.CaptureStderr(t, fn)
+}

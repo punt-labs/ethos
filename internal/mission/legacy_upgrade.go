@@ -14,13 +14,51 @@ import (
 // lock. The caller retries later; it is not a failure.
 var ErrLockBusy = errors.New("mission lock is busy")
 
+// LegacyFence is the class of condition that leaves a legacy mission fenced.
+type LegacyFence int
+
+const (
+	// LegacyIncomplete: the crossed-round reflection or event history is
+	// incomplete or inconsistent.
+	LegacyIncomplete LegacyFence = iota + 1
+	// LegacyRedactionRefused: redaction or the write guard refused the evidence.
+	LegacyRedactionRefused
+	// LegacyCorruptCorrections: the existing corrections authority is unreadable
+	// or invalid.
+	LegacyCorruptCorrections
+	// LegacyUnloadable: the contract cannot be read or decoded.
+	LegacyUnloadable
+)
+
+// String is a reason a caller can record, derived from the class alone.
+func (f LegacyFence) String() string {
+	switch f {
+	case LegacyIncomplete:
+		return "incomplete legacy history"
+	case LegacyRedactionRefused:
+		return "legacy evidence refused by redaction"
+	case LegacyCorruptCorrections:
+		return "corrections authority is corrupt"
+	case LegacyUnloadable:
+		return "contract cannot be loaded"
+	}
+	return "legacy history cannot be imported"
+}
+
 // LegacyHistoryError reports a mission whose legacy round or correction
-// history cannot be imported as complete shared authority: the history is
-// incomplete, malformed, or refused by redaction. The mission stays as it is.
-type LegacyHistoryError struct{ Err error }
+// history cannot be imported as complete shared authority. Kind says why. The
+// mission stays as it is, fenced from lifecycle writes.
+type LegacyHistoryError struct {
+	Kind LegacyFence
+	Err  error
+}
 
 func (e *LegacyHistoryError) Error() string { return e.Err.Error() }
 func (e *LegacyHistoryError) Unwrap() error { return e.Err }
+
+func legacyFence(kind LegacyFence, err error) *LegacyHistoryError {
+	return &LegacyHistoryError{Kind: kind, Err: err}
+}
 
 // WithRecordLockTry runs fn holding the per-mission state lock that every
 // mission writer takes, or returns ErrLockBusy at once when another holder has
@@ -69,7 +107,16 @@ func WithRecordLockTry(p layout.Policy, id string, fn func() error) error {
 // round decisions, which the next call resumes: it validates the corrections,
 // imports the decisions and writes the contract. The caller holds the mission
 // lock.
-func (s *Store) UpgradeLegacyAuthority(id string) (bool, error) {
+//
+// It prints nothing: a post-install durability failure is a warning in the
+// returned outcome, and the mission counts as upgraded.
+func (s *Store) UpgradeLegacyAuthority(id string) (bool, MutationOutcome, error) {
+	var out MutationOutcome
+	upgraded, err := s.upgradeLegacyAuthority(id, &out)
+	return upgraded, out, err
+}
+
+func (s *Store) upgradeLegacyAuthority(id string, out *MutationOutcome) (bool, error) {
 	if !s.twoTreeStorage {
 		return false, fmt.Errorf("UpgradeLegacyAuthority requires repository storage")
 	}
@@ -82,25 +129,25 @@ func (s *Store) UpgradeLegacyAuthority(id string) (bool, error) {
 	}
 	c, _, err := s.loadLocked(id)
 	if err != nil {
-		return false, err
+		return false, legacyFence(LegacyUnloadable, err)
 	}
 	if c.RoundDecisions != nil {
 		a, err := s.readCorrections(c)
 		if err != nil {
-			return false, &LegacyHistoryError{fmt.Errorf("corrections authority unreadable: %w", err)}
+			return false, legacyFence(LegacyCorruptCorrections, fmt.Errorf("corrections authority unreadable: %w", err))
 		}
 		if a == nil {
-			return false, &LegacyHistoryError{fmt.Errorf("round decisions exist but corrections authority is missing; not inferring empty history")}
+			return false, legacyFence(LegacyIncomplete, fmt.Errorf("round decisions exist but corrections authority is missing; not inferring empty history"))
 		}
 		return false, nil
 	}
 	existing, err := s.readCorrections(c)
 	if err != nil {
-		return false, &LegacyHistoryError{fmt.Errorf("corrections authority unreadable: %w", err)}
+		return false, legacyFence(LegacyCorruptCorrections, fmt.Errorf("corrections authority unreadable: %w", err))
 	}
 	upgraded := *c
 	if err := s.importLegacyDecisions(&upgraded); err != nil {
-		return false, &LegacyHistoryError{err}
+		return false, legacyFence(LegacyIncomplete, err)
 	}
 	// Corrections without decisions are the state Correct leaves on a legacy
 	// closed mission, and the state a crash between the two renames below
@@ -110,15 +157,15 @@ func (s *Store) UpgradeLegacyAuthority(id string) (bool, error) {
 	if existing == nil {
 		corrections, err := s.importLegacyCorrections(&upgraded)
 		if err != nil {
-			return false, &LegacyHistoryError{err}
+			return false, legacyFence(LegacyIncomplete, err)
 		}
 		cb, _, err = RedactedYAMLNotify(s.repoRoot, *corrections)
 		if err != nil {
-			return false, &LegacyHistoryError{err}
+			return false, legacyFence(LegacyRedactionRefused, err)
 		}
 		cb, err = guardWrite(s.correctionsPath(id), cb)
 		if err != nil {
-			return false, &LegacyHistoryError{err}
+			return false, legacyFence(LegacyRedactionRefused, err)
 		}
 	}
 	contractBytes, _, err := RedactedYAMLNotify(s.repoRoot, upgraded, func(red Contract) error {
@@ -128,18 +175,18 @@ func (s *Store) UpgradeLegacyAuthority(id string) (bool, error) {
 		return s.validateContract(&red)
 	})
 	if err != nil {
-		return false, &LegacyHistoryError{err}
+		return false, legacyFence(LegacyRedactionRefused, err)
 	}
 	path, err := s.contractPath(id)
 	if err != nil {
 		return false, err
 	}
 	if cb != nil {
-		if err := s.writeBytes(s.correctionsPath(id), cb, false); err != nil {
+		if err := s.writeBytesWithOutcome(s.correctionsPath(id), cb, false, out); err != nil {
 			return false, err
 		}
 	}
-	if err := s.writeBytes(path, contractBytes, true); err != nil {
+	if err := s.writeBytesWithOutcome(path, contractBytes, true, out); err != nil {
 		return false, fmt.Errorf("installing upgraded contract: %w", err)
 	}
 	return true, nil

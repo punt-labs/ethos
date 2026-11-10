@@ -136,3 +136,80 @@ func TestRoundDecisions_CorrectionsWithoutDecisionsIsImported(t *testing.T) {
 	assert.Zero(t, again.Items)
 	assert.Empty(t, again.Residuals)
 }
+
+// snapshotTree34 returns every file under dir with its bytes, so a second run
+// can be shown to change neither the file list nor any byte.
+func snapshotTree34(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	require.NoError(t, filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		out[p] = string(b)
+		return nil
+	}))
+	return out
+}
+
+// L5: the second run changes neither the file list nor any byte.
+func TestRoundDecisions_SecondRunLeavesTheTreeUnchanged(t *testing.T) {
+	env := stage34(t, "v4.17.0")
+	run34(t, "round-decisions", env)
+	dir := filepath.Join(env.Roots.Store, ".punt-labs", "ethos")
+	before := snapshotTree34(t, dir)
+	run34(t, "round-decisions", env)
+	assert.Equal(t, before, snapshotTree34(t, dir))
+}
+
+// M2: the step prints nothing, even when a durability warning fires.
+func TestRoundDecisions_PrintsNothing(t *testing.T) {
+	env := stage34(t, "v4.17.0")
+	stderr := captureStderr34(t, func() { run34(t, "round-decisions", env) })
+	assert.Empty(t, stderr)
+}
+
+// M4: a busy lock defers and writes no residual; the free mission is imported.
+func TestRoundDecisions_BusyLockDefers(t *testing.T) {
+	env := stage34(t, "v4.17.0")
+	id := filepath.Base(missionDirs34(t, env)[0])
+	var out Outcome
+	require.NoError(t, mission.WithRecordLockTry(env.Policy, id, func() error {
+		out = run34(t, "round-decisions", env)
+		return nil
+	}))
+	assert.True(t, out.Deferred)
+	assert.Empty(t, out.Residuals)
+	assert.Equal(t, 1, out.Items)
+}
+
+// M4: a contract that cannot be decoded is a permanent condition, so it is a
+// residual and never defers; the reason names the class, not the user's action.
+func TestRoundDecisions_UnloadableContractIsResidual(t *testing.T) {
+	env := stage34(t, "v4.17.0")
+	dir := missionDirs34(t, env)[0]
+	write34(t, filepath.Join(dir, "contract.yaml"), "broken: [yaml")
+
+	out := run34(t, "round-decisions", env)
+	assert.False(t, out.Deferred)
+	require.Len(t, out.Residuals, 1)
+	assert.Equal(t, filepath.Base(dir), out.Residuals[0].ID)
+	assert.Contains(t, out.Residuals[0].Reason, "contract cannot be loaded")
+	assert.Equal(t, 1, out.Items, "the other mission is imported")
+}
+
+// L2: the reason names the class of fence.
+func TestRoundDecisions_ReasonNamesTheClass(t *testing.T) {
+	env := stage34(t, "v4.17.0")
+	dir := filepath.Join(env.Roots.Store, ".punt-labs", "ethos", "missions", "m-2026-11-09-001")
+	write34(t, filepath.Join(dir, "corrections.yaml"), "version: 7\n")
+
+	out := run34(t, "round-decisions", env)
+	require.Len(t, out.Residuals, 1)
+	assert.Contains(t, out.Residuals[0].Reason, "corrections authority is corrupt")
+	assert.NotContains(t, out.Residuals[0].Reason, "incomplete")
+}
