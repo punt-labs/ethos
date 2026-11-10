@@ -183,8 +183,8 @@ func enumerateMigrateCandidates(legacyDir, missionID string) ([]string, error) {
 // collectContractIDs), and a session directory whose chunk names fail
 // to classify is warned to stderr and skipped rather than failing the
 // whole scan — this result feeds Store.Create's admission control on
-// every call, and a single damaged historical chunk (the concern
-// `ethos audit quarantine` exists to fix, asynchronously) must not
+// every call, and a single damaged historical chunk (which the storage
+// upgrade's corrupt-chunks step recovers, asynchronously) must not
 // block every future mission create in the repo. The frozen legacy
 // file and the live tail keep their pre-existing, stricter contract: a
 // genuine read error there still propagates, since each is a single,

@@ -113,7 +113,7 @@ type OrphanCorruptError struct {
 }
 
 func (e *OrphanCorruptError) Error() string {
-	return fmt.Sprintf("orphan .corrupt for range [%d,%d] in %s: quarantine incomplete; the storage upgrade finishes it", e.First, e.Last, e.Dir)
+	return fmt.Sprintf("orphan .corrupt for range [%d,%d] in %s: quarantine incomplete", e.First, e.Last, e.Dir)
 }
 
 // coveredByMarker reports whether some marker of the SAME session contains the

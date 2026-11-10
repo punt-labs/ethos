@@ -95,8 +95,7 @@ func (e *ChunkReadError) Unwrap() error { return e.Err }
 
 // ReadChunkVerified reads a sealed chunk and verifies its content matches its
 // name: it must parse whole and its last line's ts must equal the <last> in
-// its filename. Corruption is surfaced as an error (exit 2), the escape being
-// ethos audit quarantine.
+// its filename. Corruption is surfaced as an error (exit 2).
 func ReadChunkVerified(path string, expectedLast int64) ([]Line, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

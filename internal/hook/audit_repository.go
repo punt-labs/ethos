@@ -117,7 +117,7 @@ func sealPolicyStreams(p layout.Policy, streams []audit.Stream, now time.Time, o
 		return res, nil
 	}
 	if err := audit.StagePublication(p, publish); err != nil {
-		return res, fmt.Errorf("full audit publication incomplete; local archive retained; retry in full mode: %w", err)
+		return res, fmt.Errorf("full audit publication incomplete; local archive retained: %w", err)
 	}
 	res.ChunksStaged = len(publish)
 	return res, nil

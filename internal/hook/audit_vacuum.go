@@ -120,7 +120,7 @@ func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []ActiveSessio
 	if unrecorded > 0 {
 		fmt.Fprintf(w,
 			"note: %d active session(s) predate the roster checkout field, so their live files "+
-				"cannot be located and are not checked; ethos retires dead sessions at session start\n",
+				"cannot be located and are not checked\n",
 			unrecorded)
 	}
 	return nil
