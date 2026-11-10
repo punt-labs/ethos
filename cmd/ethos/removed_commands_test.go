@@ -80,6 +80,33 @@ func TestRemovedCommandsFailInTheBinary(t *testing.T) {
 	}
 }
 
+// TestRemovedCommandsFailWithFlagsAndHelpInFront places --json and the help
+// word before or inside each removed command. Cobra reads those as a request
+// for the parent's help, so each must still be a usage error.
+func TestRemovedCommandsFailWithFlagsAndHelpInFront(t *testing.T) {
+	require.NotEmpty(t, ethosBinary, "the CLI binary must build; this test must not skip")
+	var cases [][]string
+	for _, removed := range removedCommands {
+		cases = append(cases,
+			append([]string{"--json"}, removed...),
+			append([]string{removed[0], "--json"}, removed[1:]...),
+			append([]string{"help"}, removed...),
+			append([]string{removed[0], "--help"}, removed[1:]...),
+			append([]string{removed[0], "-h"}, removed[1:]...),
+			append([]string{"--json", removed[0], "--help"}, removed[1:]...),
+		)
+	}
+	cases = append(cases, []string{"identity", "--json", "x"}, []string{"help", "repair"})
+	for _, args := range cases {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			stderr, code := runEthosStderr(t, args...)
+			assert.Equal(t, 2, code, "stderr: %s", stderr)
+			assert.True(t, strings.Contains(stderr, "unknown command") || strings.Contains(stderr, "unknown flag"),
+				"stderr must name an unknown command or flag: %q", stderr)
+		})
+	}
+}
+
 func TestRemovedVendorFlagsFailInTheBinary(t *testing.T) {
 	require.NotEmpty(t, ethosBinary, "the CLI binary must build; this test must not skip")
 	for _, args := range [][]string{{"vendor", "--no-teams"}, {"vendor", "--from", "x"}} {

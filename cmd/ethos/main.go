@@ -51,14 +51,42 @@ func (silentError) Error() string { return "" }
 // unknownGroupCommand reports a non-flag argument that lands on a command
 // group (a command with subcommands). Cobra turns that into a help request,
 // and --help beats argument validation, so a removed subcommand would print
-// the group's help and exit 0. Groups take no positional arguments, so any
-// such word is an unknown subcommand.
+// the group's help and exit 0. Groups take no positional arguments, and the
+// only persistent flag is the boolean --json, so skipping every flag and
+// reporting the first remaining word is safe. "help <topic>" is held to the
+// same rule: an unknown topic is a usage error.
 func unknownGroupCommand(args []string) error {
-	c, rest, err := rootCmd.Find(args)
-	if err != nil || !c.HasSubCommands() || len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
+	if i := firstWord(args); i >= 0 && args[i] == "help" {
+		args = append(append([]string{}, args[:i]...), args[i+1:]...)
+		if i := firstWord(args); i >= 0 {
+			c, rest, err := rootCmd.Find(args)
+			if err != nil {
+				return err // Find itself reports an unknown top-level word
+			}
+			if j := firstWord(rest); j >= 0 {
+				return fmt.Errorf("unknown command %q for %q", rest[j], c.CommandPath())
+			}
+		}
 		return nil
 	}
-	return fmt.Errorf("unknown command %q for %q", rest[0], c.CommandPath())
+	c, rest, err := rootCmd.Find(args)
+	if err != nil || !c.HasSubCommands() {
+		return nil
+	}
+	if i := firstWord(rest); i >= 0 {
+		return fmt.Errorf("unknown command %q for %q", rest[i], c.CommandPath())
+	}
+	return nil
+}
+
+// firstWord returns the index of the first argument that is not a flag, or -1.
+func firstWord(args []string) int {
+	for i, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			return i
+		}
+	}
+	return -1
 }
 
 func main() {
