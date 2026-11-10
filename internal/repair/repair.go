@@ -31,12 +31,14 @@ type Item struct {
 	sha     [32]byte
 }
 
-// Plan is an inventory snapshot. Apply refuses if the inventory changes while
-// the operator reads the warning. Construct it with Inventory, not manually.
+// Plan is an inventory snapshot. Apply refuses if the inventory changes
+// between Inventory and the moment its locks are held. Construct it with
+// Inventory, not manually. Skipped lists items a busy lock deferred.
 type Plan struct {
-	Items  []Item `json:"items"`
-	policy layout.Policy
-	locks  []string
+	Items   []Item   `json:"items"`
+	Skipped []string `json:"skipped,omitempty"`
+	policy  layout.Policy
+	locks   []string
 }
 
 var capturedFull = regexp.MustCompile(`"record"\s*:\s*"full"`)
@@ -101,52 +103,88 @@ func Inventory(ctx context.Context, p layout.Policy) (*Plan, error) {
 	return plan, nil
 }
 
-// Apply requires the caller's explicit permanent-loss confirmation AND assertion
-// that old/new writers, hooks and MCP servers are stopped. Advisory locks cannot
-// prevent a stopped old binary from being restarted. No locks are stolen.
-// Deletions are incremental: on interruption, rerun Inventory and confirm again.
-// removed reports actual deletions even on error; no rollback is promised.
+// Apply deletes the inventoried files. A lock held by a running process is
+// never stolen: the files it guards (and the lock itself) are skipped, listed
+// in Skipped, and left for a later run. The inventory is re-read under the
+// locks; if it changed, nothing is deleted. removed reports actual deletions
+// even on error.
 func (p *Plan) Apply(ctx context.Context) (removed []string, err error) {
-	if !supportsDeletion {
-		return nil, fmt.Errorf("repair deletion is unsupported on Windows; use a Unix host with all writers stopped")
-	}
 	var held []*os.File
 	defer func() {
 		for i := len(held) - 1; i >= 0; i-- {
 			err = errors.Join(err, held[i].Close())
 		}
 	}()
+	busy := map[string]bool{}
 	for _, path := range p.locks {
 		if err = safePath(path); err != nil {
 			return removed, err
 		}
 		var f *os.File
 		f, err = os.OpenFile(path, os.O_RDWR, 0)
+		if errors.Is(err, os.ErrNotExist) {
+			err = nil
+			continue
+		}
 		if err != nil {
-			return removed, fmt.Errorf("opening repair lock %s: %w", path, err)
+			return removed, fmt.Errorf("opening lock %s: %w", path, err)
 		}
 		held = append(held, f)
-		if err = tryLock(f); err != nil {
-			return removed, fmt.Errorf("busy or unavailable lock %s: %w; stop all writers and retry", path, err)
+		if lerr := tryLock(f); lerr != nil {
+			busy[path] = true
 		}
 	}
 	current, err := Inventory(ctx, p.policy)
 	if err != nil {
 		return removed, err
 	}
-	if !reflect.DeepEqual(p, current) {
-		return removed, fmt.Errorf("repair inventory changed; no files deleted; rerun and confirm the new inventory")
+	if !reflect.DeepEqual(p.Items, current.Items) {
+		return removed, fmt.Errorf("repair inventory changed while locks were taken; nothing deleted")
 	}
+	p.Skipped = nil
 	for _, item := range p.Items {
 		if err = ctx.Err(); err != nil {
 			return removed, err
 		}
-		if err = os.Remove(item.Path); err != nil {
-			return removed, fmt.Errorf("deleting %s: %w; rerun repair for remaining files", item.Path, err)
+		if p.guardedByBusyLock(item.Path, busy) {
+			p.Skipped = append(p.Skipped, item.Path)
+			continue
 		}
+		if err = os.Remove(item.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return removed, fmt.Errorf("deleting %s: %w", item.Path, err)
+		}
+		err = nil
 		removed = append(removed, item.Path)
 	}
 	return removed, nil
+}
+
+// guardedByBusyLock reports whether path is a busy lock, or belongs to a
+// mission whose old directory lock or current mission-state lock is busy.
+func (p *Plan) guardedByBusyLock(path string, busy map[string]bool) bool {
+	if len(busy) == 0 {
+		return false
+	}
+	if busy[path] {
+		return true
+	}
+	for _, root := range []string{p.policy.RecordRoot(), p.policy.CheckoutRecordRoot()} {
+		rel, err := filepath.Rel(root, path)
+		if err != nil || !filepath.IsLocal(rel) {
+			continue
+		}
+		a := strings.Split(filepath.ToSlash(rel), "/")
+		if len(a) < 3 || a[0] != "missions" {
+			continue
+		}
+		if busy[filepath.Join(root, "missions", a[1], ".lock")] {
+			return true
+		}
+		if lock, err := p.policy.LockPath("mission-state", a[1]); err == nil && busy[lock] {
+			return true
+		}
+	}
+	return false
 }
 
 func obsolete(p layout.Policy, root, rel string) (remove, lock bool, err error) {
@@ -249,11 +287,11 @@ func retainMissionTrace(p layout.Policy, root, id string) (bool, error) {
 		decoder := yaml.NewDecoder(strings.NewReader(string(b)))
 		var contract map[string]yaml.Node
 		if err := decoder.Decode(&contract); err != nil || contract == nil {
-			return true, fmt.Errorf("cannot distinguish current publication from legacy detail: inspect %s", path)
+			return true, fmt.Errorf("cannot distinguish current publication from legacy detail; left in place: %s", path)
 		}
 		var extra yaml.Node
 		if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-			return true, fmt.Errorf("cannot distinguish current publication from legacy detail: inspect %s", path)
+			return true, fmt.Errorf("cannot distinguish current publication from legacy detail; left in place: %s", path)
 		}
 		if _, current := contract["round_decisions"]; current {
 			return true, nil

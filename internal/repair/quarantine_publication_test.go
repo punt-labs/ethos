@@ -140,7 +140,7 @@ func TestQuarantineDiagnosticsRefuseMalformedMissionAuthority(t *testing.T) {
 			path := filepath.Join(dir, cn.MarkerFile())
 			put(t, path, "partial diagnostic\n")
 			_, err := Inventory(context.Background(), p)
-			require.ErrorContains(t, err, "inspect "+contract)
+			require.ErrorContains(t, err, "left in place: "+contract)
 			assert.FileExists(t, path)
 		})
 	}
