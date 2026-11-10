@@ -4,18 +4,28 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"runtime"
 
 	"github.com/punt-labs/ethos/v4/internal/autorepair"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
+// storageGOOS is runtime.GOOS, a variable so a test can drive the Windows
+// arm from any host.
+var storageGOOS = runtime.GOOS
+
 // CheckStorage is the "Storage" row (DES-084): PASS when the global stamp, and
 // the repository stamp inside a repository, are current and record no
 // residual; WARN when a stamp is missing or old, or a step recorded a
 // residual. Ensure runs before doctor, so a missing stamp means a repair that
-// could not finish, not one that has not started.
+// could not finish, not one that has not started. On Windows Ensure compiles
+// and does nothing (DES-084 Wiring), so the row says so instead of promising
+// a repair.
 func CheckStorage(loc resolve.Located, global string) Result {
 	const name = "Storage"
+	if storageGOOS == "windows" {
+		return Result{Name: name, Status: "WARN", Detail: "automatic storage repair is not supported on Windows (DES-084)"}
+	}
 	if global == "" {
 		return Result{Name: name, Status: "WARN", Detail: "no layout stamp: the home directory could not be determined"}
 	}

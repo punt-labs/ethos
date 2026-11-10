@@ -74,6 +74,23 @@ func locateServeStore() mcp.StoreLocation {
 	return loc
 }
 
+// locatedFrom is the located repository a StoreLocation describes, as the
+// stores and the repair gate consume it. A policy failure keeps the store:
+// its layer is used, without the policy.
+func locatedFrom(loc mcp.StoreLocation) resolve.Located {
+	var cfg *resolve.RepoConfig
+	if loc.HasConfig {
+		snapshot := loc.Config
+		cfg = &snapshot
+	}
+	located := resolve.Located{Store: loc.Root, Ethos: loc.EthosRoot, Checkout: loc.Checkout, Config: cfg, StoreErr: loc.Err}
+	var ce *resolve.ConfigError
+	if errors.As(loc.Err, &ce) && ce.Policy {
+		located.StoreErr = nil
+	}
+	return located
+}
+
 // buildServeHandler builds the MCP handler with every store built from loc,
 // the one location it was triggered with: nothing here locates again. A
 // non-nil loc.Err makes the guarded tools refuse writes; their reads carry a
@@ -85,16 +102,7 @@ func locateServeStore() mcp.StoreLocation {
 // relocated handler keeps them.
 func buildServeHandler(home string, loc mcp.StoreLocation, extra ...mcp.Option) *mcp.Handler {
 	storeErr := loc.Err
-	var cfg *resolve.RepoConfig
-	if loc.HasConfig {
-		snapshot := loc.Config
-		cfg = &snapshot
-	}
-	located := resolve.Located{Store: loc.Root, Ethos: loc.EthosRoot, Checkout: loc.Checkout, Config: cfg, StoreErr: loc.Err}
-	var ce *resolve.ConfigError
-	if errors.As(loc.Err, &ce) && ce.Policy {
-		located.StoreErr = nil // the store was read: its layer is used, without the policy
-	}
+	located := locatedFrom(loc)
 	cmdRoots.Store(&repoRoots{Located: located, Global: true})
 	is := identityStore()
 	talents := layeredAttributeStore(is, attribute.Talents)

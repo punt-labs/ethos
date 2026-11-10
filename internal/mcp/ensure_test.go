@@ -20,7 +20,7 @@ const ensureLine = "ethos: upgraded storage (2 items; see ~/.punt-labs/ethos/log
 // covered or the test fails (DES-084 Wiring).
 func TestEveryToolPassesEnsure(t *testing.T) {
 	var calls int
-	srv, _ := fullServer(t, WithEnsure(func(context.Context) string {
+	srv, _ := fullServer(t, WithEnsure(func(context.Context, StoreLocation) string {
 		calls++
 		return ensureLine
 	}), WithVendorRunner(func(vendor.Options) (*vendor.Plan, error) {
@@ -50,7 +50,7 @@ func resultTextAt(t *testing.T, result *mcplib.CallToolResult, i int) string {
 }
 
 func TestEnsureSilentAddsNoBlock(t *testing.T) {
-	srv, _ := fullServer(t, WithEnsure(func(context.Context) string { return "" }))
+	srv, _ := fullServer(t, WithEnsure(func(context.Context, StoreLocation) string { return "" }))
 	result := callRegistered(t, srv, "identity", "list")
 	for i := range result.Content {
 		assert.NotContains(t, resultTextAt(t, result, i), "upgraded storage")

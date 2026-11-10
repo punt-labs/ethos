@@ -109,12 +109,15 @@ func (h *Handler) RelocateStore(loc StoreLocation, locate func() StoreLocation, 
 	h.relocation = &storeRelocation{locate: locate, build: build, loc: loc, cur: h}
 }
 
-// current returns the handler a tool call runs on: h itself, or, with
-// RelocateStore, the handler for the store's location now.
-func (h *Handler) current() *Handler {
+// current returns the handler a tool call runs on, and the location it was
+// built for: h itself, or, with RelocateStore, the handler for the store's
+// location now. The location is located once per call and shared with the
+// repair gate.
+func (h *Handler) current() (*Handler, StoreLocation) {
 	r := h.relocation
 	if r == nil {
-		return h
+		// No recorded location: the repair gate runs its global pass only.
+		return h, StoreLocation{Err: h.storeErr}
 	}
 	loc := r.locate()
 	r.mu.Lock()
@@ -123,7 +126,7 @@ func (h *Handler) current() *Handler {
 		r.cur = r.build(loc)
 		r.loc = loc
 	}
-	return r.cur
+	return r.cur, loc
 }
 
 func errText(err error) string {
@@ -136,10 +139,12 @@ func errText(err error) string {
 // addTool registers every tool. A tool not declared unguarded is guarded.
 func (h *Handler) addTool(s *mcpserver.MCPServer, tool mcplib.Tool, fn toolMethod) {
 	s.AddTool(tool, func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-		// Repair runs before the store is located, so the tool answers from the
-		// converted layout (DES-084 Wiring).
-		line := h.ensureLine(ctx)
-		cur := h.current()
+		// One locate per call: the handler for the store's location now, and
+		// the repair gate for that same location, which runs before the tool
+		// reads storage so it answers from the converted layout (DES-084
+		// Wiring). A repair that moves the store is seen by the next call.
+		cur, loc := h.current()
+		line := h.ensureLine(ctx, loc)
 		call := func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 			return fn(cur, ctx, req)
 		}
@@ -159,19 +164,20 @@ func (h *Handler) addTool(s *mcpserver.MCPServer, tool mcplib.Tool, fn toolMetho
 }
 
 // WithEnsure installs the repair gate every tool call passes before it reads
-// storage. ensure returns the one-line report of a repair, "" when nothing was
-// repaired. It is a function, not an import of internal/autorepair, so the
-// engine can call back into packages this one imports.
-func WithEnsure(ensure func(context.Context) string) Option {
+// storage. ensure receives the store location the call found and returns the
+// one-line report of a repair, "" when nothing was repaired. It is a
+// function, not an import of internal/autorepair, so the engine can call back
+// into packages this one imports.
+func WithEnsure(ensure func(context.Context, StoreLocation) string) Option {
 	return func(h *Handler) { h.ensure = ensure }
 }
 
-// ensureLine runs the repair gate, if one is installed.
-func (h *Handler) ensureLine(ctx context.Context) string {
+// ensureLine runs the repair gate for loc, if one is installed.
+func (h *Handler) ensureLine(ctx context.Context, loc StoreLocation) string {
 	if h.ensure == nil {
 		return ""
 	}
-	return h.ensure(ctx)
+	return h.ensure(ctx, loc)
 }
 
 // guardStore wraps fn: when the store could not be located, a declared read

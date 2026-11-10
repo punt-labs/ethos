@@ -83,3 +83,17 @@ func TestCheckStorage(t *testing.T) {
 		assert.Contains(t, r.Detail, "3 items")
 	})
 }
+
+// Windows is not a shipped target: Ensure compiles and does nothing there, so
+// the row must not promise that the next command repairs anything.
+func TestCheckStorageOnWindowsSaysNotSupported(t *testing.T) {
+	old := storageGOOS
+	storageGOOS = "windows"
+	t.Cleanup(func() { storageGOOS = old })
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	r := CheckStorage(resolve.Located{}, filepath.Join(d, "g"))
+	assert.Equal(t, "WARN", r.Status)
+	assert.Contains(t, r.Detail, "not supported")
+	assert.NotContains(t, r.Detail, "repairs it")
+}
