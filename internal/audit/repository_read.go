@@ -200,11 +200,22 @@ func readCompleteLive(path, session string) ([]Line, error) {
 // compatibility inputs, but arbitrary unused files are not mission directories.
 var auditMissionDirName = regexp.MustCompile(`^m-\d{4}-\d{2}-\d{2}-\d{3}$`)
 
-// ListStreams discovers both live and historical streams by name. A missing
-// tree is empty; an unreadable directory is an error, never empty success. It
-// does not validate the artifacts inside a stream directory: a scan of that
-// directory does, and classifies what it finds.
+// ListStreams discovers both live and historical streams. A missing tree is
+// empty; an unreadable one is an error, never empty success. Every recognized
+// artifact in a stream directory must be a readable regular file.
 func ListStreams(p layout.Policy) ([]Stream, error) {
+	return listStreams(p, true)
+}
+
+// ListStreamsByName discovers streams from directory and file names alone. It
+// does not validate the artifacts inside a stream directory, so a caller that
+// classifies them itself (the repair steps, through ScanSealedDir) is not
+// stopped by one it is about to classify.
+func ListStreamsByName(p layout.Policy) ([]Stream, error) {
+	return listStreams(p, false)
+}
+
+func listStreams(p layout.Policy, validate bool) ([]Stream, error) {
 	if _, err := p.LockPath("audit-stream", "validate"); err != nil {
 		return nil, err
 	}
@@ -232,6 +243,11 @@ func ListStreams(p layout.Policy) ([]Stream, error) {
 				if !present {
 					continue
 				}
+				if validate {
+					if _, err := readAuditArtifactDir(filepath.Join(root, "sessions", e.Name()), SessionNS, ""); err != nil {
+						return nil, err
+					}
+				}
 				if err := add(Stream{Namespace: SessionNS, Session: e.Name()[prefix:]}); err != nil {
 					return nil, err
 				}
@@ -245,7 +261,13 @@ func ListStreams(p layout.Policy) ([]Stream, error) {
 			if !m.IsDir() && !auditMissionDirName.MatchString(m.Name()) {
 				continue
 			}
-			entries, err := readDirIfPresent(filepath.Join(root, "missions", m.Name()))
+			var entries []os.DirEntry
+			var err error
+			if validate {
+				entries, err = readAuditArtifactDir(filepath.Join(root, "missions", m.Name()), MissionNS, "")
+			} else {
+				entries, err = readDirIfPresent(filepath.Join(root, "missions", m.Name()))
+			}
 			if err != nil {
 				return nil, err
 			}

@@ -161,13 +161,9 @@ func testRepositoryLeafTypes(t *testing.T, kinds []string) {
 							target := badAuditLeaf(t, path, kind, store, raw)
 							beforeS, beforeC := leafSnapshot(t, store), leafSnapshot(t, checkout)
 							_, err := ListStreams(p)
-							if artifact == "live" {
-								assert.ErrorContains(t, err, path, "discovery must reject an unreadable live file")
-								if kind == "unreadable" {
-									assert.ErrorIs(t, err, os.ErrPermission)
-								}
-							} else {
-								assert.NoError(t, err, "discovery lists streams by name; the scan of the directory classifies its artifacts")
+							assert.ErrorContains(t, err, path, "discovery must reject recognized leaves before locks or filtering")
+							if kind == "unreadable" {
+								assert.ErrorIs(t, err, os.ErrPermission)
 							}
 							_, err = ReadStream(p, s)
 							assert.ErrorContains(t, err, path)
@@ -231,11 +227,7 @@ func TestRepositoryLeafSelectedSessionIgnoresOtherArtifacts(t *testing.T) {
 				assert.Empty(t, data.Lines)
 				assert.Empty(t, data.Gaps)
 				_, err = ListStreams(p)
-				if artifact == "live" {
-					assert.ErrorContains(t, err, path, "global discovery still validates the other session's live file")
-				} else {
-					assert.NoError(t, err, "global discovery lists by name")
-				}
+				assert.ErrorContains(t, err, path, "global discovery still validates the other session")
 				assert.Equal(t, before, leafSnapshot(t, filepath.Dir(filepath.Dir(p.RecordRoot()))))
 			})
 		}
@@ -308,4 +300,19 @@ func TestRepositoryLeafLegacyAndCountReaders(t *testing.T) {
 			assert.ErrorContains(t, err, path)
 		})
 	}
+}
+
+// ListStreamsByName names the streams without validating their artifacts: a
+// directory under a chunk's name leaves ListStreams failing and the name-only
+// listing intact.
+func TestListStreamsByNameIgnoresArtifactTypes(t *testing.T) {
+	p := repositoryPolicy(t, layout.RecordBlame)
+	s := Stream{Namespace: SessionNS, Session: "fixture"}
+	path, _ := leafArtifact(t, ArchiveRoot(p), s, "chunk")
+	require.NoError(t, os.MkdirAll(path, 0o700))
+	_, err := ListStreams(p)
+	assert.Error(t, err)
+	streams, err := ListStreamsByName(p)
+	require.NoError(t, err)
+	assert.Contains(t, streams, s)
 }

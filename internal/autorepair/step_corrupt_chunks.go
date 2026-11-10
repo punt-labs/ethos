@@ -42,7 +42,7 @@ func runCorruptChunks(ctx context.Context, env Env) (Outcome, error) {
 	if !env.InRepository() {
 		return out, nil
 	}
-	streams, err := audit.ListStreams(env.Policy)
+	streams, err := audit.ListStreamsByName(env.Policy)
 	if err != nil {
 		return out, fmt.Errorf("listing audit streams: %w", err)
 	}
