@@ -39,19 +39,9 @@ type Lookup struct {
 // create or write into it: it may be a guess.
 func (l Lookup) Display() string { return l.dir }
 
-// Explain returns Reason, followed by the advice for its cause when there is
-// one.
+// Explain states why the lookup is degraded and nothing else: no instruction
+// and no command. A cause it does not recognize is its Reason as given.
 func (l Lookup) Explain() string {
-	if r := l.Remedy(); r != "" {
-		return l.Reason + "; " + r
-	}
-	return l.Reason
-}
-
-// Remedy returns advice matched to why the lookup is degraded, or "" when the
-// cause is not one it recognizes: telling a user to install git when git is
-// installed sends them the wrong way.
-func (l Lookup) Remedy() string {
 	var mismatch *workTreeError
 	msg := ""
 	if l.cause != nil {
@@ -59,15 +49,15 @@ func (l Lookup) Remedy() string {
 	}
 	switch {
 	case errors.Is(l.cause, exec.ErrNotFound):
-		return "install git"
+		return "git not found on PATH"
 	case errors.Is(l.cause, gitenv.ErrTimeout):
-		return "find what blocks git there (a FIFO or a special file under .git, or a hung filesystem) and repair it"
+		return "git cannot run here: " + l.Reason
 	case strings.Contains(msg, "dubious ownership") || strings.Contains(msg, "safe.directory"):
-		return "fix safe.directory"
+		return "git refuses this directory (safe.directory)"
 	case errors.As(l.cause, &mismatch):
-		return "run from, or point ETHOS_REPO_ROOT at, the repository's top level"
+		return fmt.Sprintf("git's work tree is %s, not the repository root %s", mismatch.top, mismatch.root)
 	}
-	return ""
+	return l.Reason
 }
 
 // workTreeError says git reports a work tree other than the one asked about.
@@ -82,13 +72,13 @@ func (e *workTreeError) Error() string {
 // hooks git never runs, or miss the ones it does.
 func (l Lookup) Verified() (string, error) {
 	if l.Degraded {
-		return "", fmt.Errorf("hooks directory not verified: %w", &lookupRefusal{msg: l.Reason, cause: l.cause})
+		return "", fmt.Errorf("hooks directory not verified: %w", &lookupRefusal{msg: l.Explain(), cause: l.cause})
 	}
 	return l.dir, nil
 }
 
 // Refusal is the error for declining to act on a degraded lookup. Its text is
-// Explain (the reason and the remedy); it unwraps to the cause, so a caller can
+// Explain (the cause); it unwraps to the cause, so a caller can
 // ask errors.Is(err, gitenv.ErrTimeout) or errors.As a workTreeError.
 func (l Lookup) Refusal() error { return &lookupRefusal{msg: l.Explain(), cause: l.cause} }
 
@@ -261,7 +251,7 @@ func manualHooksDir(repoRoot string) (string, error) {
 // gitOut runs git in repoRoot and returns its trimmed stdout. A failing git's
 // stderr is part of the error: "not a git repository" and "dubious ownership"
 // are what the user needs to see, not "exit status 128". git runs in the C
-// locale, so Remedy can match those words, and without an exported GIT_DIR,
+// locale, so Explain can match those words, and without an exported GIT_DIR,
 // so it answers for repoRoot. A git that does not answer within
 // gitenv.Timeout is stopped and returned as gitenv.ErrTimeout (gitenv).
 func gitOut(repoRoot string, args ...string) (string, error) {

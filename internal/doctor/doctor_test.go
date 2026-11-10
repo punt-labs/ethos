@@ -662,7 +662,8 @@ func TestCheckSealHook(t *testing.T) {
 		// repo.
 		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
 		assert.True(t, strings.HasPrefix(r.Detail, "cannot verify hooks:"), r.Detail)
-		assert.Contains(t, r.Detail, "install git")
+		assertNoRemedy(t, r.Detail)
+		assert.Contains(t, r.Detail, "git not found on PATH")
 	})
 
 	// P5 superseded by qodo #5 (PR #515 review): P5 originally pinned PASS
@@ -2356,7 +2357,8 @@ func TestHookChecksOnADegradedLookup(t *testing.T) {
 	r := CheckSealHook(enabled)
 	assert.Equal(t, "FAIL", r.Status, r.Detail)
 	assert.Contains(t, r.Detail, "cannot verify hooks:")
-	assert.Contains(t, r.Detail, "install git")
+	assertNoRemedy(t, r.Detail)
+	assert.Contains(t, r.Detail, "git not found on PATH")
 
 	r = CheckTrailerHook(enabled)
 	assert.Equal(t, "FAIL", r.Status, r.Detail)
@@ -2364,18 +2366,28 @@ func TestHookChecksOnADegradedLookup(t *testing.T) {
 	r = CheckSealHook(dormant)
 	assert.Equal(t, "WARN", r.Status, r.Detail)
 	assert.True(t, strings.HasPrefix(r.Detail, "cannot verify hooks:"), r.Detail)
-	assert.Contains(t, r.Detail, "git rev-parse")
+	assert.Contains(t, r.Detail, "git not found on PATH")
 
 	for name, dir := range map[string]string{"enabled": enabled, "dormant": dormant} {
 		r := CheckHookCurrency(dir, currencyTestSpec)
 		assert.Equal(t, "WARN", r.Status, "%s: %s", name, r.Detail)
 		assert.Contains(t, r.Detail, "hooks directory not verified:", name)
-		assert.Contains(t, r.Detail, "install git", "currency: %s", name)
+		assertNoRemedy(t, r.Detail)
+		assert.Contains(t, r.Detail, "git not found on PATH", "currency: %s", name)
 
 		r = CheckUnclassifiedFiles(dir)
 		assert.Equal(t, "WARN", r.Status, "%s: %s", name, r.Detail)
 		assert.Contains(t, r.Detail, "hooks directory not verified:", name)
-		assert.Contains(t, r.Detail, "install git", "unclassified: %s", name)
+		assertNoRemedy(t, r.Detail)
+		assert.Contains(t, r.Detail, "git not found on PATH", "unclassified: %s", name)
+	}
+}
+
+// assertNoRemedy fails when a hook-check detail tells the user what to do.
+func assertNoRemedy(t *testing.T, detail string) {
+	t.Helper()
+	for _, s := range []string{"install git", "fix safe.directory", "point ETHOS_REPO_ROOT", "and repair it", "run from"} {
+		assert.NotContains(t, detail, s)
 	}
 }
 
@@ -2390,15 +2402,15 @@ func TestHookChecksAdviceFollowsCause(t *testing.T) {
 
 	r := CheckSealHook(sub)
 	assert.Equal(t, "FAIL", r.Status, r.Detail)
-	assert.Contains(t, r.Detail, "top level")
-	assert.NotContains(t, r.Detail, "install git")
+	assert.Contains(t, r.Detail, "not the repository root")
+	assertNoRemedy(t, r.Detail)
 
 	for name, r := range map[string]Result{
 		"currency":     CheckHookCurrency(sub, currencyTestSpec),
 		"unclassified": CheckUnclassifiedFiles(sub),
 	} {
-		assert.Contains(t, r.Detail, "top level", name)
-		assert.NotContains(t, r.Detail, "install git", name)
+		assert.Contains(t, r.Detail, "not the repository root", name)
+		assertNoRemedy(t, r.Detail)
 	}
 }
 

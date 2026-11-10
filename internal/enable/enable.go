@@ -422,11 +422,7 @@ func unchainTarget(repoRoot string, force bool) (githook.Lookup, string, error) 
 	case force:
 		return l, "", nil
 	}
-	msg := err.Error()
-	if r := l.Remedy(); r != "" {
-		msg += "; " + r
-	}
-	return l, "", fmt.Errorf("%s; or re-run with --force to remove the import and marker and leave hook sections in place", msg)
+	return l, "", fmt.Errorf("%s; or re-run with --force to remove the import and marker and leave hook sections in place", err.Error())
 }
 
 // unchainHooks strips the seal and trailer sections from the hooks in dir. An

@@ -30,6 +30,8 @@ var bannedMessageTerms = []string{
 	"ethos enable", "ethos seed", "ethos migrate",
 	// Instructions to the user, whatever the command.
 	"re-run", "rerun", "inspect before", "add it before", "file a bug", "check file",
+	// Remedies git lookups once appended to their cause.
+	"install git", "fix safe.directory", "point ETHOS_REPO_ROOT", "and repair it",
 }
 
 // bannedExtraPatterns are banned shapes a plain term cannot express.
