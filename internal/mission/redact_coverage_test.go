@@ -207,7 +207,8 @@ var writerRegistry = map[string]writerEntry{
 	"internal/hook.buildAuditEntry":             checkpoint("buildAuditEntryNote"),
 	"internal/hook.buildAuditEntryNote":         checkpoint("redactToolInputQuiet"),
 	"internal/lineguard.RedactToolInput":        checkpoint("RedactToolInputQuiet"),
-	"internal/lineguard.RedactToolInputQuiet":   checkpoint("NewPathRedactor", "RedactSensitiveContent"),
+	"internal/lineguard.RedactToolInputQuiet":   checkpoint("NewPathRedactor", "RedactToolInputWith"),
+	"internal/lineguard.RedactToolInputWith":    checkpoint("RedactSensitiveContent"),
 	"internal/lineguard.RedactSensitiveContent": checkpoint("SweepSecrets"),
 	"internal/lineguard.SweepSecrets":           checkpoint("SecretsValue"),
 	"internal/hook.HandleAuditLog":              checkpoint("handleAuditLog"),
@@ -226,7 +227,7 @@ var writerRegistry = map[string]writerEntry{
 	"internal/hook.appendRawAuditLines":       sink(1, "MigrateAudit's append; migrateOneSession redacts the lines first"),
 	"internal/hook.redactReason":              checkpoint("NewPathRedactor"),
 	"internal/hook.redactLegacyLines":         checkpoint("NewPathRedactor", "redactLegacyLine"),
-	"internal/lineguard.RedactLegacyLine":     checkpoint("RedactToolInputQuiet"),
+	"internal/lineguard.RedactLegacyLine":     checkpoint("RedactToolInputWith"),
 	// These identity writers now delegate installation rather than opening files.
 	"internal/hook.GenerateAgentFilesTo":    checkpoint("writeAgentFile"),
 	"internal/hook.InstallAgentDefinitions": checkpoint("writeAgentFile"),

@@ -58,7 +58,7 @@ func RedactLegacyLine(raw []byte, repoRoot string, r mission.PathRedactor) ([]by
 		// Compare the stored form, not RedactToolInput's bool: that bool
 		// reports content removed, a leak replaced or a key renamed, and
 		// ignores a value the path pass rewrote in place.
-		red, removed, _ := RedactToolInputQuiet(map[string]any{"tool_input": before}, tool, repoRoot)
+		red, removed, _ := RedactToolInputWith(r, map[string]any{"tool_input": before}, tool)
 		wasJSON, err := json.Marshal(before)
 		if err != nil {
 			return nil, false, fmt.Errorf("encoding tool_input: %w", err)

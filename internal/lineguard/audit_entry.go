@@ -214,6 +214,12 @@ func RedactToolInputQuiet(input map[string]any, toolName, repoRoot string) (out 
 			"ethos: audit-log: %v; storing tool=%s without its input\n", err, toolName)
 		return nil, true, false
 	}
+	return RedactToolInputWith(r, input, toolName)
+}
+
+// RedactToolInputWith is RedactToolInputQuiet with a redactor the caller has
+// already built. It writes nothing to stderr.
+func RedactToolInputWith(r mission.PathRedactor, input map[string]any, toolName string) (out map[string]any, changed, say bool) {
 	// r.Map knows this machine's home and repo; HomePathsValue adds any
 	// other user's home, as every mission record gets (redact.Prose).
 	raw := ExtractToolInput(input)
