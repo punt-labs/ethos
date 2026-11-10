@@ -6,11 +6,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 func init() {
 	Register(Step{Name: "config-file", Scope: ScopeRepository, Run: runConfigFile})
 }
+
+// syncConfigDirs confirms a rename or removal under .punt-labs: the entry's
+// directory and its ancestors up to the store root. A test replaces it.
+var syncConfigDirs = layout.SyncRepositoryDestination
 
 // runConfigFile renames .punt-labs/ethos/config.yaml (ethos v0.6 to v2.1) to
 // .punt-labs/ethos.yaml. When both exist the new file wins and the old one is
@@ -46,7 +52,7 @@ func runConfigFile(ctx context.Context, env Env) (Outcome, error) {
 			return Outcome{}, fmt.Errorf("renaming legacy config %s to %s: %w", oldPath, newPath, err)
 		}
 		env.Log.Logf("config-file", "rename", []string{oldPath, newPath}, nil)
-		return Outcome{Items: 1}, nil
+		return syncedOutcome(env, "rename", oldPath, newPath)
 	case err != nil:
 		return Outcome{}, fmt.Errorf("examining config %s: %w", newPath, err)
 	case !newInfo.Mode().IsRegular():
@@ -64,5 +70,16 @@ func runConfigFile(ctx context.Context, env Env) (Outcome, error) {
 		return Outcome{}, fmt.Errorf("deleting legacy config %s: %w", oldPath, err)
 	}
 	env.Log.Logf("config-file", "delete", []string{oldPath}, nil)
+	return syncedOutcome(env, "delete", oldPath)
+}
+
+// syncedOutcome reports the applied change and makes it durable. The change has
+// happened, so a failed sync is logged and does not fail the step.
+func syncedOutcome(env Env, action string, paths ...string) (Outcome, error) {
+	for _, p := range paths {
+		if err := syncConfigDirs(env.Policy, p); err != nil {
+			env.Log.Logf("config-file", action+"-sync", []string{p}, err)
+		}
+	}
 	return Outcome{Items: 1}, nil
 }

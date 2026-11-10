@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 func TestConfigFileStep(t *testing.T) {
@@ -69,8 +71,40 @@ func TestConfigFileStep(t *testing.T) {
 				assert.Empty(t, tr.Log.entries)
 			}
 
+			snap := s81113Snapshot(t, tr)
 			again := s81113Run(t, "config-file", tr.Env(t))
 			assert.Equal(t, 0, again.Items, "second run changes nothing")
+			assert.Equal(t, snap, s81113Snapshot(t, tr), "second run leaves the tree identical")
+		})
+	}
+}
+
+func TestConfigFileStepSyncsDirectories(t *testing.T) {
+	for _, newExists := range []bool{false, true} {
+		name := "rename"
+		if newExists {
+			name = "delete"
+		}
+		t.Run(name, func(t *testing.T) {
+			tr := s81113Copy(t, "damage/both-config-files")
+			newPath := filepath.Join(tr.Repo, ".punt-labs", "ethos.yaml")
+			if !newExists {
+				require.NoError(t, os.Remove(newPath))
+			}
+			var synced []string
+			orig := syncConfigDirs
+			syncConfigDirs = func(_ layout.Policy, p string) error {
+				synced = append(synced, filepath.Dir(p))
+				return nil
+			}
+			t.Cleanup(func() { syncConfigDirs = orig })
+
+			out := s81113Run(t, "config-file", tr.Env(t))
+			require.Equal(t, 1, out.Items)
+			assert.Contains(t, synced, filepath.Join(tr.Repo, ".punt-labs", "ethos"), "the directory that lost config.yaml is synced")
+			if !newExists {
+				assert.Contains(t, synced, filepath.Join(tr.Repo, ".punt-labs"), "the directory that gained ethos.yaml is synced")
+			}
 		})
 	}
 }
