@@ -1220,11 +1220,12 @@ with pending true. A valid shared decision with no admissible detail
 is unavailableHere, not never-submitted. Corrupt optional detail is
 detailUnreadable while authority stays decisionPresent. An I/O,
 permission, path/symlink or decoding failure is never converted into
-absence by falling back to a different layer. A legacy omission is
-legacyUnknown, not a silently initialized block.
+absence by falling back to a different layer. An omitted block that
+the automatic storage upgrade could not import from complete evidence
+is legacyUnknown, not a silently initialized block.
 
 Join complete detail per round across matching intent, archive,
-published and supported legacy sources. Equal copies deduplicate;
+and published sources. Equal copies deduplicate;
 unequal copies conflict. Local detail need not form a complete prefix:
 a clone may have published round 1 and local round 2. Do not synthesize
 an invalid empty Reflection or map unavailable detail to an empty
