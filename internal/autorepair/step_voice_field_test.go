@@ -1,0 +1,108 @@
+package autorepair
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
+
+	"github.com/punt-labs/ethos/v4/internal/identity"
+)
+
+func yamlMap(t *testing.T, data []byte) map[string]any {
+	t.Helper()
+	var m map[string]any
+	require.NoError(t, yaml.Unmarshal(data, &m))
+	return m
+}
+
+func TestVoiceFieldStepGlobalIdentity(t *testing.T) {
+	tr := s81113Copy(t, "damage/top-level-voice-field")
+	env := tr.Env(t)
+	path := filepath.Join(tr.Home, "identities", "vperson.yaml")
+	before := yamlMap(t, s81113Read(t, path))
+	require.Contains(t, before, "voice")
+
+	out := s81113Run(t, "voice-field", env)
+	assert.Equal(t, 1, out.Items)
+	assert.False(t, out.Deferred)
+	assert.Empty(t, out.Residuals)
+
+	after := yamlMap(t, s81113Read(t, path))
+	assert.NotContains(t, after, "voice", "no top-level voice remains")
+	delete(before, "voice")
+	assert.Equal(t, before, after, "other identity content is unchanged")
+
+	vox, err := identity.NewStore(tr.Home).ExtGet("vperson", "vox", "")
+	require.NoError(t, err)
+	assert.Equal(t, "say", vox["provider"])
+	assert.Equal(t, "Samantha", vox["voice"])
+
+	require.NotEmpty(t, tr.Log.entries)
+	for _, e := range tr.Log.entries {
+		assert.Equal(t, "voice-field", e.step)
+		assert.NoError(t, e.err)
+		for _, p := range e.paths {
+			assert.NotContains(t, p, "Samantha")
+		}
+	}
+	assert.Equal(t, 0, s81113Run(t, "voice-field", env).Items, "second run changes nothing")
+}
+
+func TestVoiceFieldStepRepositoryIdentity(t *testing.T) {
+	tr := s81113Copy(t, "damage/top-level-voice-field")
+	env := tr.Env(t)
+	src := s81113Read(t, filepath.Join(tr.Home, "identities", "vperson.yaml"))
+	repoPath := filepath.Join(tr.Repo, ".punt-labs", "ethos", "identities", "vperson.yaml")
+	s81113Write(t, repoPath, string(src))
+	require.NoError(t, os.Remove(filepath.Join(tr.Home, "identities", "vperson.yaml")))
+
+	out := s81113Run(t, "voice-field", env)
+	assert.Equal(t, 1, out.Items)
+	assert.NotContains(t, yamlMap(t, s81113Read(t, repoPath)), "voice")
+	// Layered resolution: extensions live in the global store.
+	vox, err := identity.NewStore(tr.Home).ExtGet("vperson", "vox", "")
+	require.NoError(t, err)
+	assert.Equal(t, "Samantha", vox["voice"])
+	assert.Equal(t, 0, s81113Run(t, "voice-field", env).Items)
+}
+
+func TestVoiceFieldStepKeepsExistingVoxValues(t *testing.T) {
+	tr := s81113Copy(t, "damage/top-level-voice-field")
+	s81113Write(t, filepath.Join(tr.Home, "identities", "vperson.ext", "vox.yaml"), "voice: Alex\n")
+	s81113Run(t, "voice-field", tr.Env(t))
+	vox, err := identity.NewStore(tr.Home).ExtGet("vperson", "vox", "")
+	require.NoError(t, err)
+	assert.Equal(t, "Alex", vox["voice"], "an extension value already set wins over the legacy field")
+	assert.Equal(t, "say", vox["provider"])
+}
+
+func TestVoiceFieldStepUnmigratableVoiceIsResidual(t *testing.T) {
+	tr := s81113Copy(t, "damage/top-level-voice-field")
+	path := filepath.Join(tr.Home, "identities", "vperson.yaml")
+	s81113Write(t, path, "name: V\nhandle: vperson\nkind: human\nvoice: elevenlabs\n")
+	want := s81113Read(t, path)
+
+	out := s81113Run(t, "voice-field", tr.Env(t))
+	assert.Equal(t, 0, out.Items)
+	assert.False(t, out.Deferred)
+	require.Len(t, out.Residuals, 1)
+	assert.Equal(t, "voice-field", out.Residuals[0].Step)
+	assert.Equal(t, want, s81113Read(t, path), "an identity that cannot be converted is left unchanged")
+}
+
+func TestVoiceFieldStepCurrentCorpora(t *testing.T) {
+	for _, fixture := range []string{"corpus/v3.11.0", "corpus/v4.8.0", "corpus/v4.17.0", "corpus/v4.22.1"} {
+		t.Run(fixture, func(t *testing.T) {
+			tr := s81113Copy(t, fixture)
+			out := s81113Run(t, "voice-field", tr.Env(t))
+			assert.Equal(t, 0, out.Items)
+			assert.False(t, out.Deferred)
+			assert.Empty(t, out.Residuals)
+			assert.Empty(t, tr.Log.entries)
+		})
+	}
+}

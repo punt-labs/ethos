@@ -158,7 +158,7 @@ func (s *Store) migrateVoiceUnlocked(handle, path string, data []byte) error {
 	if !ok {
 		// Non-map voice value (e.g. "voice: elevenlabs") — cannot migrate.
 		// Leave the YAML untouched; manual fix required.
-		return fmt.Errorf("voice field has unexpected type %T; manual migration required", v)
+		return fmt.Errorf("voice field has unexpected type %T; the identity file was left unchanged", v)
 	}
 	if len(vm) == 0 {
 		// Empty voice map — just strip the key and rewrite.

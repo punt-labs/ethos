@@ -222,7 +222,7 @@ func (ls *LayeredStore) relocateRepoVoiceUnlocked(handle string) error {
 	if !ok {
 		// Non-map voice value (e.g. "voice: elevenlabs") — cannot migrate.
 		// Leave the YAML untouched and surface the error.
-		return fmt.Errorf("voice field has unexpected type %T; manual migration required", v)
+		return fmt.Errorf("voice field has unexpected type %T; the identity file was left unchanged", v)
 	}
 	if len(vm) == 0 {
 		delete(raw, "voice")
