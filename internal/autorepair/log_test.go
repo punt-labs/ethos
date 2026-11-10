@@ -31,7 +31,7 @@ func readLog(t *testing.T, path string) []map[string]any {
 
 func TestFileLogWritesJSONLines(t *testing.T) {
 	global := physicalTemp(t)
-	l := NewFileLog(global, "/repo/store", "/repo/checkout", "v5.0.0")
+	l := newFileLog(global, "/repo/store", "/repo/checkout", "v5.0.0")
 	l.Logf("overlays", "move", []string{"/repo/store/.punt-labs/a", "/repo/store/.punt-labs/b"}, nil)
 	l.Logf("overlays", "move", nil, errors.New("boom"))
 
@@ -51,16 +51,34 @@ func TestFileLogWritesJSONLines(t *testing.T) {
 
 func TestFileLogRedactsHomePaths(t *testing.T) {
 	global := physicalTemp(t)
-	l := NewFileLog(global, "", "", "v5.0.0")
+	l := newFileLog(global, "", "", "v5.0.0")
 	l.Logf("s", "delete", []string{"/Users/alice/secret-project/x"}, errors.New("open /Users/alice/secret-project/x: denied"))
 	raw, err := os.ReadFile(LogPath(global))
 	require.NoError(t, err)
 	assert.NotContains(t, string(raw), "alice")
 }
 
+// A step error can quote file contents (a yaml decode error includes the
+// value), so the whole line goes through the DES-080 prose redactor: secrets
+// and addresses as well as home paths, in paths, store, checkout and error.
+func TestFileLogRedactsSecretsAndEmails(t *testing.T) {
+	global := physicalTemp(t)
+	l := newFileLog(global, "/Users/alice/repo", "/Users/alice/repo", "v5.0.0")
+	err := errors.New(`yaml: cannot decode "token: ghp_abcdefghijklmnopqrstuvwxyz0123456789" for alice@example.com in /Users/alice/repo/x`)
+	l.Logf("overlays", "move", []string{"/Users/alice/repo/ghp_abcdefghijklmnopqrstuvwxyz0123456789"}, err)
+	raw, rerr := os.ReadFile(LogPath(global))
+	require.NoError(t, rerr)
+	s := string(raw)
+	assert.NotContains(t, s, "ghp_abcdefghijklmnopqrstuvwxyz0123456789")
+	assert.NotContains(t, s, "alice@example.com")
+	assert.NotContains(t, s, "alice")
+	assert.Contains(t, s, "[redacted-secret]")
+	assert.Contains(t, s, "[redacted-email]")
+}
+
 func TestFileLogRotatesOnce(t *testing.T) {
 	global := physicalTemp(t)
-	l := NewFileLog(global, "", "", "v5.0.0")
+	l := newFileLog(global, "", "", "v5.0.0")
 	l.max = 400
 	pad := []string{strings.Repeat("p", 150)}
 	for range 20 {

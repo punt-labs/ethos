@@ -16,11 +16,16 @@ const StampName = "layout.yaml"
 // Stamp records that a store was converted to a layout. A missing stamp means
 // unknown, so every step runs. A higher version is current: a downgraded
 // binary never converts backward.
+//
+// Items is the count of conversions the repair applied to this store, which
+// the doctor Storage row shows. It is not in the DES-084 stamp schema
+// (`{version, ethos, repaired_at, residual}`); DESIGN.md is amended to add it
+// as an optional field, written only when the count is non-zero.
 type Stamp struct {
 	Version    int        `yaml:"version"`
 	Ethos      string     `yaml:"ethos,omitempty"`
 	RepairedAt string     `yaml:"repaired_at,omitempty"`
-	Items      int        `yaml:"items"`
+	Items      int        `yaml:"items,omitempty"`
 	Residual   []Residual `yaml:"residual,omitempty"`
 }
 

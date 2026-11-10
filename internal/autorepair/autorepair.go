@@ -58,7 +58,9 @@ type Residual struct {
 // stamp. Scope says whether the step touches the global store, the
 // repository, or both; the engine skips repository steps outside a
 // repository. Run must be idempotent by observed state and must respect
-// ctx, which carries the step budget.
+// ctx, which carries the step budget: a Run that outlives its deadline is
+// abandoned (its result is discarded and the stamp withheld) while it keeps
+// running in its goroutine, so it must not hold state the next Ensure needs.
 type Step struct {
 	Name  string
 	Scope Scope
@@ -76,7 +78,8 @@ const (
 
 // Logger appends one JSON line per action to the repair log. The engine
 // supplies it; steps call it for every file they change, move or delete.
-// Paths are redacted by the engine before writing; never pass file contents.
+// Every string passes through the DES-080 prose redactor (credentials,
+// addresses, home paths) before writing; still, never pass file contents.
 type Logger interface {
 	Logf(step, action string, paths []string, err error)
 }
@@ -86,8 +89,10 @@ type Logger interface {
 // not matter.
 var Steps []Step
 
-// StepOrder is the DES-084 order. A step not named here is a build error in
-// the engine's order test.
+// StepOrder is the DES-084 order. A registered step not named here fails the
+// engine's order test. A name here with no registered step is a step that has
+// not run: Ensure treats it as deferred and writes no stamp, so a binary
+// built before every step unit landed never stamps a store current.
 var StepOrder = []string{
 	"global-missions",   // 1
 	"global-audit",      // 2

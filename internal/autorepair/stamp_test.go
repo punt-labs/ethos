@@ -45,6 +45,21 @@ func TestStampRoundTrip(t *testing.T) {
 	assert.Len(t, entries, 1)
 }
 
+// items is not part of the DES-084 stamp schema; it is written only when a
+// repair counted something (DESIGN.md amendment pending).
+func TestStampItemsOmittedWhenZero(t *testing.T) {
+	dir := physicalTemp(t)
+	path := filepath.Join(dir, StampName)
+	require.NoError(t, WriteStamp(path, Stamp{Version: LayoutVersion, Ethos: "v5.0.0"}, func(d string) error { return os.MkdirAll(d, 0o700) }))
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "items")
+	require.NoError(t, WriteStamp(path, Stamp{Version: LayoutVersion, Items: 2}, func(d string) error { return os.MkdirAll(d, 0o700) }))
+	raw, err = os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "items: 2")
+}
+
 func TestReadStamp(t *testing.T) {
 	dir := t.TempDir()
 	tests := []struct {

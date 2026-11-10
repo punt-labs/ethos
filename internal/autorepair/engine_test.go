@@ -27,12 +27,15 @@ type rig struct {
 	mu     sync.Mutex
 }
 
+// newRig builds a rig. inRepo adds a repository that has used ethos (it has a
+// .punt-labs directory); newPlainRepoRig adds one that never has.
 func newRig(t *testing.T, inRepo bool) *rig {
 	t.Helper()
 	r := &rig{t: t, global: filepath.Join(physicalTemp(t), "global")}
 	if inRepo {
 		r.store = physicalTemp(t)
 		r.roots = resolve.Located{Store: r.store, Checkout: r.store}
+		require.NoError(t, os.MkdirAll(filepath.Join(r.store, ".punt-labs"), 0o755))
 	}
 	r.opts = options{
 		ethos:        "v5.0.0",
@@ -98,7 +101,14 @@ func TestEnsureWritesStampsAndIsIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, rs.Current())
 
+	repoStampPath := filepath.Join(r.store, ".punt-labs", "local", "ethos", StampName)
 	gi, err := os.Stat(GlobalStampPath(r.global))
+	require.NoError(t, err)
+	ri, err := os.Stat(repoStampPath)
+	require.NoError(t, err)
+	gBytes, err := os.ReadFile(GlobalStampPath(r.global))
+	require.NoError(t, err)
+	rBytes, err := os.ReadFile(repoStampPath)
 	require.NoError(t, err)
 	logBefore, err := os.ReadFile(LogPath(r.global))
 	require.NoError(t, err)
@@ -108,26 +118,164 @@ func TestEnsureWritesStampsAndIsIdempotent(t *testing.T) {
 	assert.Equal(t, []string{"one"}, r.ran, "a current stamp runs no step")
 	gi2, err := os.Stat(GlobalStampPath(r.global))
 	require.NoError(t, err)
-	assert.Equal(t, gi.ModTime(), gi2.ModTime(), "stamp untouched")
+	assert.Equal(t, gi.ModTime(), gi2.ModTime(), "global stamp untouched")
+	ri2, err := os.Stat(repoStampPath)
+	require.NoError(t, err)
+	assert.Equal(t, ri.ModTime(), ri2.ModTime(), "repository stamp untouched")
+	gBytes2, err := os.ReadFile(GlobalStampPath(r.global))
+	require.NoError(t, err)
+	assert.Equal(t, string(gBytes), string(gBytes2), "global stamp bytes unchanged")
+	rBytes2, err := os.ReadFile(repoStampPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(rBytes), string(rBytes2), "repository stamp bytes unchanged")
 	logAfter, err := os.ReadFile(LogPath(r.global))
 	require.NoError(t, err)
 	assert.Equal(t, string(logBefore), string(logAfter), "no log line on the fast path")
 }
 
-func TestEnsureZeroStepsWritesStamp(t *testing.T) {
-	r := newRig(t, false)
+// With no step registered nothing has been converted, so nothing may be
+// stamped current: a stamp written now would make Ensure take the fast path
+// forever once the real steps land. Two runs write no stamp and print nothing.
+func TestEnsureZeroStepsWritesNoStamp(t *testing.T) {
+	r := newRig(t, true)
+	r.opts.order = []string{"a", "b"}
+	for range 2 {
+		res := r.ensure()
+		assert.Equal(t, "", res.Line())
+		assert.False(t, res.Repaired)
+		_, err := r.globalStamp()
+		assert.ErrorIs(t, err, os.ErrNotExist, "global stamp")
+		_, err = r.repoStamp()
+		assert.ErrorIs(t, err, os.ErrNotExist, "repository stamp")
+	}
+}
+
+// A StepOrder name with no registration is a step that has not run: it
+// blocks the stamps it would serve. The engine cannot know its scope, so it
+// blocks both. Registered steps still run.
+func TestEnsureUnregisteredOrderNameBlocksStamps(t *testing.T) {
+	r := newRig(t, true)
+	r.step("present", ScopeBoth, Outcome{Items: 1}, nil)
+	r.opts.order = append(r.opts.order, "absent")
 	res := r.ensure()
-	assert.Equal(t, "", res.Line())
+	assert.Equal(t, []string{"present"}, r.ran)
+	assert.Equal(t, 1, res.Items)
+	_, err := r.globalStamp()
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	_, err = r.repoStamp()
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	raw, err := os.ReadFile(LogPath(r.global))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"step":"absent"`)
+	assert.Contains(t, string(raw), `"action":"defer"`)
+}
+
+// A git repository that never used ethos has no .punt-labs directory. Ensure
+// leaves it byte-identical: no stamp, no lock, no local zone, so `git add -A`
+// there has nothing of ours to commit.
+func TestEnsurePlainRepositoryIsLeftUntouched(t *testing.T) {
+	r := newRig(t, false)
+	r.store = physicalTemp(t)
+	r.roots = resolve.Located{Store: r.store, Checkout: r.store}
+	require.NoError(t, os.WriteFile(filepath.Join(r.store, "README"), []byte("x"), 0o644))
+	r.step("both", ScopeBoth, Outcome{Items: 1}, nil)
+	r.step("repo", ScopeRepository, Outcome{Items: 1}, nil)
+
+	r.ensure()
+	entries, err := os.ReadDir(r.store)
+	require.NoError(t, err)
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	assert.Equal(t, []string{"README"}, names, "nothing was created in the repository")
+	assert.Equal(t, []string{"both"}, r.ran, "the repository scope was not served")
 	g, err := r.globalStamp()
 	require.NoError(t, err)
-	assert.True(t, g.Current())
+	assert.True(t, g.Current(), "the global pass still runs")
+}
+
+// A step that ignores its deadline is abandoned at the budget: Ensure returns,
+// the stamp is blocked, and the step's late result is discarded.
+func TestEnsureStepIgnoringDeadlineIsAbandoned(t *testing.T) {
+	r := newRig(t, false)
+	r.opts.stepBudget = 50 * time.Millisecond
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	r.opts.steps = []Step{{Name: "hang", Scope: ScopeGlobal,
+		Run: func(context.Context, Env) (Outcome, error) {
+			<-release // ignores ctx entirely
+			close(finished)
+			return Outcome{Items: 7}, nil
+		}}}
+	r.opts.order = []string{"hang"}
+	r.step("after", ScopeGlobal, Outcome{}, nil)
+
+	done := make(chan Result, 1)
+	go func() { done <- r.ensure() }()
+	select {
+	case res := <-done:
+		assert.Equal(t, 0, res.Items, "the abandoned step's items are discarded")
+		assert.False(t, res.Repaired)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Ensure hung on a step that ignores its deadline")
+	}
+	assert.Equal(t, []string{"after"}, r.ran, "later steps still run")
+	_, err := r.globalStamp()
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	raw, err := os.ReadFile(LogPath(r.global))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"step":"hang"`)
+	assert.Contains(t, string(raw), "budget")
+	close(release)
+	<-finished // the step may finish later; its result went nowhere
+}
+
+// Items from a step that errored or deferred are not conversions: they do not
+// set Repaired, do not count, and the step is not logged as "ran".
+func TestEnsureCountsOnlyFinishedSteps(t *testing.T) {
+	r := newRig(t, false)
+	r.step("errored", ScopeGlobal, Outcome{Items: 3}, errors.New("boom"))
+	r.step("deferred", ScopeGlobal, Outcome{Items: 2, Deferred: true}, nil)
+	r.step("ok", ScopeGlobal, Outcome{Items: 1}, nil)
+	res := r.ensure()
+	assert.Equal(t, 1, res.Items)
+	assert.True(t, res.Repaired)
+
+	lines := readLog(t, LogPath(r.global))
+	ran := map[string]bool{}
+	for _, l := range lines {
+		if l["action"] == "ran" {
+			ran[l["step"].(string)] = true
+		}
+	}
+	assert.Equal(t, map[string]bool{"ok": true}, ran, `"ran" is logged only on success`)
+
+	r2 := newRig(t, false)
+	r2.step("deferred", ScopeGlobal, Outcome{Items: 2, Deferred: true}, nil)
+	res = r2.ensure()
+	assert.Equal(t, Result{}, res, "a deferred step alone repairs nothing")
+}
+
+// A panic outside any step (in the engine itself) never fails the caller.
+func TestEnsureRecoversFromEnginePanic(t *testing.T) {
+	r := newRig(t, false)
+	r.step("s", ScopeGlobal, Outcome{Items: 1}, nil)
+	r.opts.now = func() time.Time { panic("clock") }
+	var res Result
+	var err error
+	assert.NotPanics(t, func() { res, err = ensure(context.Background(), r.roots, r.global, r.opts) })
+	assert.NoError(t, err)
+	assert.Equal(t, Result{}, res)
+	_, serr := r.globalStamp()
+	assert.ErrorIs(t, serr, os.ErrNotExist)
 }
 
 func TestEnsureDeferredStepLeavesNoStamp(t *testing.T) {
 	r := newRig(t, false)
 	r.step("busy", ScopeGlobal, Outcome{Deferred: true, Items: 1}, nil)
 	res := r.ensure()
-	assert.Equal(t, 1, res.Items)
+	assert.Equal(t, 0, res.Items, "a deferred step's count is not a conversion")
 	_, err := r.globalStamp()
 	assert.ErrorIs(t, err, os.ErrNotExist)
 
@@ -169,7 +317,7 @@ func TestEnsureStepPastBudgetIsLoggedAndLeavesNoStamp(t *testing.T) {
 		}}}
 	r.opts.order = []string{"slow"}
 	res := r.ensure()
-	assert.Equal(t, 2, res.Items)
+	assert.Equal(t, 0, res.Items, "work past the budget is not known complete")
 	_, err := r.globalStamp()
 	assert.ErrorIs(t, err, os.ErrNotExist)
 	raw, err := os.ReadFile(LogPath(r.global))
