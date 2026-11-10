@@ -369,6 +369,9 @@ func (s *Store) ApplyReflection(id string, r *Reflection) (OperationResult, erro
 			return fmt.Errorf("round %d already decided; full reflection detail unavailable here, cannot certify equality or accept replacement", staged.Round)
 		}
 		if c.RoundDecisions == nil {
+			if err := s.requireImportableAuthority(c); err != nil {
+				return err
+			}
 			if err := s.importLegacyDecisions(c); err != nil {
 				return err
 			}

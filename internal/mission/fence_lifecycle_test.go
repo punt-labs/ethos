@@ -16,7 +16,20 @@ import (
 // a mission now in round 3, and round 2 is missing.
 func fencedMission(t *testing.T) (*Store, *Contract, string) {
 	t.Helper()
+	return fencedMissionBudget(t, 3)
+}
+
+// fencedMissionBudget is fencedMission with a round budget of rounds, so a
+// mission in round 3 can still be asked to advance.
+func fencedMissionBudget(t *testing.T, rounds int) (*Store, *Contract, string) {
+	t.Helper()
 	s, c, root := legacyReflectionReader(t, true, 3)
+	if rounds != c.Budget.Rounds {
+		c.Budget.Rounds = rounds
+		data, err := yaml.Marshal(c)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(mustContractPath(t, s, c.MissionID), data, 0o600))
+	}
 	var rs []Reflection
 	for _, r := range []int{1, 3} {
 		x := *reflectionFor(c.MissionID, r, RecommendationContinue)
@@ -33,6 +46,14 @@ func fencedMission(t *testing.T) (*Store, *Contract, string) {
 // mission directory exactly as it was.
 func TestFence_RefusesEveryLifecycleWrite(t *testing.T) {
 	writes := map[string]func(s *Store, c *Contract) error{
+		"AdvanceRound": func(s *Store, c *Contract) error {
+			_, err := s.AdvanceRound(c.MissionID, "claude")
+			return err
+		},
+		"ApplyReflection": func(s *Store, c *Contract) error {
+			_, err := s.ApplyReflection(c.MissionID, reflectionFor(c.MissionID, 3, RecommendationContinue))
+			return err
+		},
 		"AppendResult": func(s *Store, c *Contract) error {
 			return s.AppendResult(c.MissionID, resultFor(c, VerdictPass))
 		},
@@ -63,7 +84,11 @@ func TestFence_RefusesEveryLifecycleWrite(t *testing.T) {
 	}
 	for name, write := range writes {
 		t.Run(name, func(t *testing.T) {
-			s, c, root := fencedMission(t)
+			budget := 3
+			if name == "AdvanceRound" {
+				budget = 4
+			}
+			s, c, root := fencedMissionBudget(t, budget)
 			before := recordFiles(t, root)
 			err := write(s, c)
 			require.Error(t, err)

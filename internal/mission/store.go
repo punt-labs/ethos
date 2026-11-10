@@ -3370,6 +3370,9 @@ func (s *Store) advanceRound(missionID, actor string, out *MutationOutcome) (int
 		var current *Reflection
 		if s.twoTreeStorage {
 			if c.RoundDecisions == nil {
+				if err := s.requireImportableAuthority(c); err != nil {
+					return err
+				}
 				if err := s.importLegacyDecisions(c); err != nil {
 					return err
 				}
