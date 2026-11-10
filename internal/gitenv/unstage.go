@@ -25,8 +25,7 @@ func UnstageUnder(dir string, env []string, prefix string) (int, error) {
 	if len(paths) == 0 {
 		return 0, nil
 	}
-	args := append([]string{"rm", "--cached", "-q", "--"}, paths...)
-	if _, _, err := Read(Spec{Git: "git", Dir: dir, Env: env, Args: args}, 0); err != nil {
+	if err := removeCached(dir, env, paths); err != nil {
 		return 0, fmt.Errorf("unstaging %d path(s) under %s: %w", len(paths), prefix, err)
 	}
 	return len(paths), nil
