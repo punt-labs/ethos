@@ -239,10 +239,17 @@ func TestTeamBundleDiagnosticPhysicalPlacement(t *testing.T) {
 					local := filepath.Join(store, ".punt-labs", "local", "ethos")
 					allowed = allowed || p == filepath.Dir(local) || p == local || p == filepath.Join(local, "tmp")
 					// The storage upgrade every command runs first owns the
-					// local zone's lock and trace directories (DES-084); they
-					// are not add-bundle's placement.
+					// local zone's lock and trace directories and the global
+					// store's locks and log under HOME (DES-084); none is
+					// add-bundle's placement.
 					for _, owned := range []string{"locks", "trace"} {
 						dir := filepath.Join(local, owned)
+						allowed = allowed || p == dir || strings.HasPrefix(p, dir+string(filepath.Separator))
+					}
+					global := filepath.Join(base, ".punt-labs", "ethos")
+					allowed = allowed || p == filepath.Dir(global) || p == global
+					for _, owned := range []string{"locks", "logs"} {
+						dir := filepath.Join(global, owned)
 						allowed = allowed || p == dir || strings.HasPrefix(p, dir+string(filepath.Separator))
 					}
 					neutral := filepath.Dir(p) == filepath.Join(local, "tmp") && strings.HasPrefix(filepath.Base(p), "ethos-git-") && strings.HasSuffix(p, ".ethos-tmp")
