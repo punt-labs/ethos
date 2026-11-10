@@ -24,10 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `ethos repair`, `ethos audit quarantine`, `ethos audit migrate`,
   `ethos mission scrub`, `ethos mission migrate`, `ethos adr migrate`,
-  `ethos session purge`, `ethos hook commit-trailers`,
-  `ethos hook commit-message` and their hidden aliases. The storage upgrade
-  does their work automatically. Each removed command exits with a usage
-  error that names what replaced it.
+  `ethos session purge` and the hidden aliases `show`, `list`,
+  `resolve-agent`, `iam`, `create`, `ext del`, `session create|delete|
+  write-current|delete-current|roster` and `vendor --no-teams|--from`. The
+  storage upgrade does their work automatically. Each removed command exits
+  with git's usage error (`unknown command`). `identity get`,
+  `hook commit-trailers`, `hook commit-message` and `audit seal` stay,
+  hidden, because scripts and installed hook sections call them.
 - Legacy layout readers and the dead code behind them.
 
 ## [4.22.1] - 2026-11-09
