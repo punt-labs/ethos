@@ -414,17 +414,23 @@ def audit_recovery(f: Fixture) -> None:
             "historical trace corruption blocked unrelated source commit")
     before = index.read_bytes()
     # Recovery is automatic: the user runs nothing. Two session starts must
-    # leave the index byte-identical; the corrupt bytes must then be preserved
-    # in the quarantine directory (not the live trace path); a further commit
+    # leave the index byte-identical; the corrupt bytes must then be gone from
+    # disk and replaced by a recovered chunk or a gap marker; a further commit
     # through the installed hook must succeed.
     f.wrapper("session-start.sh", {"session_id": "acceptance-recovery"})
     f.wrapper("session-start.sh", {"session_id": "acceptance-recovery"})
     require(index.read_bytes() == before, "automatic recovery changed index")
-    quarantine = f.repo / LOCAL / "quarantine"
-    require(quarantine.is_dir() and any(p.read_bytes() == corrupt for p in quarantine.rglob("*") if p.is_file()),
-            f"automatic recovery did not preserve the corrupt bytes under {quarantine}")
-    require(not chunk.exists() or chunk.read_bytes() != corrupt,
-            f"corrupt bytes still sit at the live trace path {chunk}")
+    # The damaged bytes may hold text redaction never saw, so recovery deletes
+    # them once it completes: no file under LOCAL may still contain them.
+    holders = [p for p in (f.repo / LOCAL).rglob("*") if p.is_file() and corrupt in p.read_bytes()]
+    require(not holders, f"automatic recovery left the corrupt bytes on disk: {holders}")
+    # The range must be accounted for: a replacement chunk with recovered lines
+    # or a <stem>.quarantine marker (carrying the unrecovered interval on loss).
+    sessions = f.repo / LOCAL / "trace/sessions"
+    replacements = [p for p in sessions.rglob("audit-*.jsonl") if p.is_file() and p.read_bytes() != corrupt]
+    markers = [p for p in sessions.rglob("*.quarantine") if p.is_file()]
+    require(replacements or markers,
+            f"automatic recovery left neither a replacement chunk nor a gap marker under {sessions}")
     write(f.repo / "source.txt", "source-after-automatic-recovery\n")
     f.git("add", "source.txt")
     f.git("commit", "-m", "commit after automatic recovery")
@@ -835,11 +841,13 @@ USER_PATH = re.compile(rb"/(?:Users|home)/[A-Za-z][A-Za-z0-9._-]*")
 
 # The only lines a quiet `git commit` prints: "[main <sha>] msg", the
 # "N file(s) changed" stat line, and create/delete/rename mode lines.
-GIT_SUMMARY = re.compile(r"^(\[[^\]]+\] .*|\s*\d+ files? changed.*|\s*(create|delete) mode \d+ .*|\s*rename .*)$")
+GIT_SUMMARY = re.compile(r"^(\[[^\]]+\] .*|\s*\d+ files? changed.*|\s*(create|delete) mode \d+ .*|\s*rename .*|\s*mode change \d+ => \d+ .*)$")
 
 
-def restore_corpus_repo(f: Fixture, snapshot: Path, repo: Path, env: dict[str, str]) -> None:
-    """Rebuild a corpus snapshot's repository: files, commit, index and the old release's hooks."""
+def restore_corpus_repo(f: Fixture, snapshot: Path, repo: Path, env: dict[str, str]) -> str:
+    """Rebuild a corpus snapshot's repository: files, commit, index and the old release's hooks.
+
+    Returns the restored head SHA: the history the upgrade did not write and cannot rewrite."""
     shutil.copytree(snapshot / "repo", repo, symlinks=True)
     # Fetch from a copy inside scratch: git records the bundle's absolute path in
     # .git/FETCH_HEAD, and that path must not be a machine path outside scratch.
@@ -860,24 +868,39 @@ def restore_corpus_repo(f: Fixture, snapshot: Path, repo: Path, env: dict[str, s
         target = repo / ".git/hooks" / hook.name
         shutil.copy2(hook, target)
         target.chmod(0o755)
+    return run("rev-parse", "HEAD").stdout.decode().strip()
 
 
-def f_git_history(repo: Path) -> bytes:
-    """Every patch on every ref of the scratch repository, decompressed."""
-    return subprocess.run(["git", "log", "-p", "--all"], cwd=repo, check=True, capture_output=True,
+def f_git_history(repo: Path, since: str) -> bytes:
+    """Every patch committed after `since` on any ref of the scratch repository, decompressed."""
+    return subprocess.run(["git", "log", "-p", "--all", f"^{since}"], cwd=repo, check=True, capture_output=True,
                           env={"PATH": os.environ.get("PATH", os.defpath), "GIT_CONFIG_NOSYSTEM": "1",
                                "HOME": str(repo.parent)}).stdout
 
 
-def scan_for_leaks(scratch: Path, home: Path, repo: Path) -> None:
-    """No credential-shaped token and no machine path other than the scratch tree itself."""
+def scan_for_leaks(scratch: Path, home: Path, repo: Path, restored_head: str) -> None:
+    """No credential-shaped token and no machine path other than the scratch tree itself.
+
+    The restored snapshot's own history carries the corpus's fake token by design and an
+    upgrade cannot rewrite it, so the history scan covers only commits after `restored_head`."""
+    scan_history(scratch, repo, restored_head)
+    scan_files(scratch, home, repo)
+
+
+def scan_history(scratch: Path, repo: Path, restored_head: str) -> None:
+    """Commits the upgrade created hold no token and no machine path outside scratch."""
     scratch_bytes = str(scratch).encode()
     # .git objects are zlib-compressed, so the raw-bytes scan below cannot see
     # committed history; git log -p decompresses it and is scanned separately.
-    history = f_git_history(repo)
+    history = f_git_history(repo, restored_head)
     require(not TOKEN.search(history), "credential-shaped token in committed history after upgrade")
     leaked = USER_PATH.search(history.replace(scratch_bytes, b""))
     require(not leaked, f"machine path {leaked.group(0).decode() if leaked else ''} in committed history")
+
+
+def scan_files(scratch: Path, home: Path, repo: Path) -> None:
+    """The working tree and HOME hold no token and no machine path outside scratch."""
+    scratch_bytes = str(scratch).encode()
     for root in (repo, home):
         for path in sorted(p for p in root.rglob("*") if p.is_file() and not p.is_symlink()):
             data = path.read_bytes()
@@ -900,7 +923,7 @@ def upgrade(f: Fixture) -> None:
         (bindir / "ethos").symlink_to(f.binary)
         env = clean_env(home, tmp, str(bindir) + os.pathsep + os.environ.get("PATH", os.defpath))
         env["GIT_CEILING_DIRECTORIES"] = str(scratch)
-        restore_corpus_repo(f, snapshot, repo, env)
+        restored_head = restore_corpus_repo(f, snapshot, repo, env)
 
         def entry(*args: str, data: str | None = None) -> str:
             result = f.run.run(list(args), repo, env, data=data)
@@ -926,7 +949,7 @@ def upgrade(f: Fixture) -> None:
         doctor_env["ETHOS_SESSION"] = "upgrade-" + label
         doctor = (f.run.run([str(f.binary), "doctor"], repo, doctor_env).stdout).decode(errors="replace")
         require(re.search(r"^\s*Storage\b", doctor, re.MULTILINE), f"{label}: ethos doctor has no Storage row:\n{doctor}")
-        scan_for_leaks(scratch, home, repo)
+        scan_for_leaks(scratch, home, repo, restored_head)
 
 
 CASES = (default_seal, modes, audit_recovery, lifecycle, required_event_failure, worktree_retention,

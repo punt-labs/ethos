@@ -159,16 +159,23 @@ class BoundaryTests(unittest.TestCase):
         tmp.mkdir()
         env = gate.clean_env(home, tmp, gate.os.environ.get("PATH", gate.os.defpath))
         fixture = type("F", (), {"run": gate.Runner(self.repo / "commands")})()
-        gate.restore_corpus_repo(fixture, snapshot, repo, env)
-        return home, repo
+        head = gate.restore_corpus_repo(fixture, snapshot, repo, env)
+        return home, repo, head
 
     def test_restored_corpus_repo_has_no_machine_path_outside_scratch(self):
-        home, repo = self.restored_snapshot()
-        home.mkdir()
-        gate.scan_for_leaks(self.repo, home, repo)  # would raise on FETCH_HEAD naming ROOT
+        # Every snapshot, before any upgrade: restoring must not by itself trip
+        # the scan. Old bundles carry the fake token by design.
+        for snapshot in sorted(p for p in gate.CORPUS.iterdir() if p.is_dir()):
+            with self.subTest(snapshot=snapshot.name):
+                if self.repo.exists():
+                    gate.shutil.rmtree(self.repo)
+                self.repo.mkdir()
+                home, repo, head = self.restored_snapshot(snapshot.name)
+                home.mkdir()
+                gate.scan_history(self.repo, repo, head)
 
     def test_history_scan_sees_a_token_committed_to_the_scratch_repo(self):
-        home, repo = self.restored_snapshot()
+        home, repo, head = self.restored_snapshot()
         home.mkdir()
         env = gate.clean_env(home, self.repo / "tmp", gate.os.environ.get("PATH", gate.os.defpath))
         token = "ghp_" + "A" * 36
@@ -177,11 +184,11 @@ class BoundaryTests(unittest.TestCase):
                      ["git", "rm", "-q", "t.txt"], ["git", "commit", "-q", "-m", "rm", "--no-verify"]):
             gate.subprocess.run(argv, cwd=repo, env=env, check=True, capture_output=True)
         with self.assertRaisesRegex(gate.Failure, "committed history"):
-            gate.scan_for_leaks(self.repo, home, repo)
+            gate.scan_for_leaks(self.repo, home, repo, head)
 
     def test_git_summary_matches_only_git_output(self):
         for line in ("[main abc1234] second work after upgrade", " 1 file changed, 1 insertion(+), 1 deletion(-)",
-                     " create mode 100644 x.txt", " delete mode 100644 x.txt"):
+                     " create mode 100644 x.txt", " delete mode 100644 x.txt", " mode change 100644 => 100755 x.sh"):
             self.assertTrue(gate.GIT_SUMMARY.match(line), line)
         for line in ("ethos: upgraded storage", "note: something", "warning: x"):
             self.assertFalse(gate.GIT_SUMMARY.match(line), line)
