@@ -466,3 +466,82 @@ func TestShimEnabledUnstagesLocalPaths(t *testing.T) {
 	require.NoError(t, err, out)
 	assert.NotContains(t, out, "unstaged", "a commit with no local path prints nothing")
 }
+
+// A trace chunk HEAD tracks under the record tree (a v3.12-v4.20 layout) is
+// not touched by the commit-time pass: record-tree untracking belongs to the
+// full repair pass, never to a user's commit.
+func TestShimEnabledLeavesRecordTreeTraceToTheFullPass(t *testing.T) {
+	r := newShimRepo(t, true)
+	env := r.withPath(ethosBinDir(t))
+	chunk := filepath.Join(r.dir, ".punt-labs", "ethos", "sessions", "2026-11-09-sid", "audit-0000000000000000001-0000000000000000002.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(chunk), 0o755))
+	require.NoError(t, os.WriteFile(chunk, []byte(`{"record":"blame"}`+"\n"), 0o644))
+	rel := ".punt-labs/ethos/sessions/2026-11-09-sid/audit-0000000000000000001-0000000000000000002.jsonl"
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := testhelpers.GitCommand(append([]string{"-C", r.dir}, args...)...)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+		return string(out)
+	}
+	git("add", "-f", rel)
+	git("-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m", "plant")
+	require.Contains(t, git("ls-tree", "-r", "--name-only", "HEAD"), rel)
+
+	out, err := r.commit(t, env, "next")
+	require.NoError(t, err, out)
+	assert.Contains(t, git("ls-tree", "-r", "--name-only", "HEAD"), rel, "the commit does not stage a record-tree deletion")
+	assert.FileExists(t, chunk, "the file stays on disk")
+	assert.NotContains(t, out, "unstaged", "record-tree trace prints no line")
+}
+
+// A partly staged local file (staged, then edited) must not make the commit
+// fail with git's "use -f" instruction; a published quarantine marker and a
+// real chunk stay tracked beside a literally named audit-*.jsonl; the commit
+// pass only unstages the local file, record-tree paths are the full pass's.
+func TestShimEnabledUnstageIsLiteralAndKeepsDiagnostics(t *testing.T) {
+	r := newShimRepo(t, true)
+	env := r.withPath(ethosBinDir(t))
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := testhelpers.GitCommand(append([]string{"-C", r.dir}, args...)...)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+		return string(out)
+	}
+	put := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(r.dir, filepath.FromSlash(rel))
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
+	}
+	const sess = ".punt-labs/ethos/sessions/2026-11-09-sid/"
+	const chunk = sess + "audit-0000000000000000001-0000000000000000002.jsonl"
+	const star = ".punt-labs/ethos/missions/m-1/*.lock"
+	const guarded = ".punt-labs/ethos/missions/m-1/artifacts/out.lock"
+	const marker = sess + "audit-0000000000000000003-0000000000000000004.quarantine"
+	const part = ".punt-labs/local/ethos/part.txt"
+	put(chunk, `{"record":"full"}`+"\n")
+	put(star, "x\n")
+	put(guarded, "y\n")
+	put(marker, "{}\n")
+	put(part, "staged\n")
+	git("add", "-f", "--", chunk, star, guarded, marker, part)
+	git("-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m", "plant")
+	put(part, "staged\n")
+	git("add", "-f", "--", part)
+	put(part, "edited after staging\n")
+
+	out, err := r.commit(t, env, "next")
+	require.NoError(t, err, out)
+	assert.NotContains(t, out, "-f", "git's instruction never reaches the user")
+	tree := git("ls-tree", "-r", "--name-only", "HEAD")
+	assert.Contains(t, tree, chunk)
+	assert.Contains(t, tree, marker)
+	assert.Contains(t, tree, guarded, "a glob in a path name does not reach its siblings")
+	assert.Contains(t, tree, star, "record-tree untracking is not part of the commit pass")
+	assert.NotContains(t, tree, part)
+	assert.FileExists(t, filepath.Join(r.dir, filepath.FromSlash(star)))
+}
