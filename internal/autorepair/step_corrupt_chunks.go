@@ -44,6 +44,15 @@ func runCorruptChunks(ctx context.Context, env Env) (Outcome, error) {
 	}
 	streams, err := audit.ListStreamsByName(env.Policy)
 	if err != nil {
+		// A directory whose contents cannot be listed as streams (a file
+		// named like a chunk that is not one) is a permanent condition of
+		// the tree: recorded once, so the stamp can land, never retried on
+		// every command.
+		if reason, ok := permanentScanReason(err); ok {
+			logf(env, stepCorruptChunks, "scan-streams", nil, err)
+			out.Residuals = append(out.Residuals, Residual{Step: stepCorruptChunks, ID: "streams", Reason: reason})
+			return out, nil
+		}
 		return out, fmt.Errorf("listing audit streams: %w", err)
 	}
 	for _, s := range streams {

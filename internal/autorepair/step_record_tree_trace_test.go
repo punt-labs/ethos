@@ -545,3 +545,30 @@ func TestRecordTreeTraceReflectionsRejectsLiveDecisionAtDeletion(t *testing.T) {
 	require.ErrorIs(t, err, errPublishedEnvelope)
 	assert.NoFileExists(t, filepath.Join(env.Policy.TraceArchiveRoot(), "missions", id, "reflection-1.yaml"))
 }
+
+// A legacy record-tree session file archives under its own date, even when
+// an earlier import gave the session an archive directory under another
+// date. Routing it to that other directory refused it as a collision with a
+// different day's audit and left it in the record tree on every run
+// (operator QA, xboing).
+func TestRecordTreeTraceArchivesLegacySessionUnderItsOwnDate(t *testing.T) {
+	env := corpusEnv(t, "v4.20.4")
+	const legacyDir = "2026-11-09-sess-corpus-0001"
+	src := filepath.Join(env.Policy.RecordRoot(), "sessions", legacyDir)
+	entries, err := os.ReadDir(src)
+	require.NoError(t, err)
+	require.NotEmpty(t, entries, "corpus holds a legacy session chunk")
+	chunk := entries[0].Name()
+
+	// An earlier run archived another day of this session.
+	other := filepath.Join(audit.ArchiveRoot(env.Policy), "sessions", "2026-10-01-sess-corpus-0001")
+	require.NoError(t, os.MkdirAll(other, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(other, chunk), []byte(`{"ts":"2026-10-01T00:00:00Z","session":"sess-corpus-0001","tool":"Read"}`+"\n"), 0o600))
+
+	out := run5(t, env)
+	for _, r := range out.Residuals {
+		assert.NotContains(t, r.Reason, "already holds different content", "no false collision: %+v", r)
+	}
+	assert.FileExists(t, filepath.Join(audit.ArchiveRoot(env.Policy), "sessions", legacyDir, chunk), "archived under its own date")
+	assert.NoFileExists(t, filepath.Join(src, chunk), "cleared from the record tree")
+}

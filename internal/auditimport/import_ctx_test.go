@@ -142,3 +142,74 @@ func TestEnumerateLegacyFilesSmallestFirst(t *testing.T) {
 	}
 	assert.Equal(t, []string{"b.audit.jsonl", "c.audit.jsonl", "a.audit.jsonl"}, names)
 }
+
+// A file that fails fast on every run (an identity conflict) must not count
+// as having used the budget: the large file after it then had the whole
+// budget to itself and is a residual, not a file left remaining forever.
+func TestImportGlobalAuditFastFailureDoesNotShieldTheNextFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	p, err := layout.NewRepository(repo, repo, layout.RecordBlame)
+	require.NoError(t, err)
+	dir := filepath.Join(t.TempDir(), "sessions")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	// aaaa fails fast on every run: two lines share an identity (ts, tool,
+	// tool_input_hash) with different payloads, which the import refuses as
+	// a legacy identity conflict.
+	bad := `{"ts":"2026-11-09T23:02:12Z","session":"aaaa","tool":"Read","tool_input_hash":"deadbeef","tool_input":{"file_path":"a"}}` + "\n" +
+		`{"ts":"2026-11-09T23:02:12Z","session":"aaaa","tool":"Read","tool_input_hash":"deadbeef","tool_input":{"file_path":"b"}}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "aaaa.audit.jsonl"), []byte(bad), 0o600))
+	var big []byte
+	for i := 0; i < 50; i++ {
+		big = append(big, []byte(`{"ts":"2026-11-09T23:02:12Z","session":"zzzz","tool":"Read","n":`+itoa(i)+`}`+"\n")...)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "zzzz.audit.jsonl"), big, 0o600))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	sessionGuard = func(string) lineguard.LineGuard {
+		return func(line []byte) ([]byte, string, bool) {
+			calls++
+			if calls == 10 {
+				cancel() // the budget runs out inside the big file
+			}
+			return lineguard.GuardAuditLineFull(line)
+		}
+	}
+	t.Cleanup(func() { sessionGuard = nil })
+
+	res, err := ImportGlobalAudit(ctx, p, dir, repo)
+	require.NoError(t, err)
+	assert.Zero(t, res.Remaining, "the big file had the whole budget; nothing is left for a retry")
+	var ids []string
+	for _, f := range res.Failed {
+		ids = append(ids, f.Session)
+	}
+	assert.ElementsMatch(t, []string{"aaaa", "zzzz"}, ids, "both are residuals")
+}
+
+// A roster that exists but cannot be read is not "no owner": it is the one
+// signal that could name another repository. The file is kept and recorded,
+// never imported here and deleted.
+func TestImportGlobalAuditKeepsAFileWhoseRosterIsUnreadable(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	p, err := layout.NewRepository(repo, repo, layout.RecordBlame)
+	require.NoError(t, err)
+	dir := filepath.Join(t.TempDir(), "sessions")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "s1.audit.jsonl"),
+		[]byte(`{"ts":"2026-11-09T23:02:12Z","session":"s1","tool":"Read"}`+"\n"), 0o600))
+	// A directory where the roster file belongs: the read fails on every
+	// platform, unlike a parse miss, which an old roster shape also produces
+	// and which must count as no signal.
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "s1.yaml"), 0o700))
+
+	res, err := ImportGlobalAudit(context.Background(), p, dir, repo)
+	require.NoError(t, err)
+	assert.Empty(t, res.Done)
+	require.Len(t, res.Failed, 1)
+	assert.Equal(t, ReasonRosterUnreadable, res.Failed[0].Reason)
+	assert.FileExists(t, filepath.Join(dir, "s1.audit.jsonl"), "the global copy stays")
+}

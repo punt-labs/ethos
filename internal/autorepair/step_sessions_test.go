@@ -198,3 +198,20 @@ func TestSessionStartMatchesStep(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, n, 0)
 }
+
+// Session start runs the sessions pass outside the engine, and the hook
+// discards its error: the error is recorded in the repair log or nowhere.
+func TestSessionStartLogsASessionsFailure(t *testing.T) {
+	env := fixtureEnv(t, "corpus/v4.20.4")
+	log := &recLog{}
+	env.Log = log
+	// A file where the current-session directory belongs makes PurgeCurrent
+	// fail on every start.
+	current := filepath.Join(env.Global, "sessions", "current")
+	require.NoError(t, os.RemoveAll(current))
+	require.NoError(t, os.WriteFile(current, []byte("not a directory\n"), 0o600))
+
+	_, err := SessionStart(context.Background(), env)
+	require.Error(t, err)
+	assert.Contains(t, log.text(), "sessions:session-start", "the failure reaches the repair log")
+}

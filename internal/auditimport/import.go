@@ -3,8 +3,10 @@ package auditimport
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -132,16 +134,22 @@ func ImportGlobalAudit(ctx context.Context, p layout.Policy, globalSessionsDir s
 			break
 		}
 		id := strings.TrimSuffix(filepath.Base(file), ".audit.jsonl")
-		owner, named := rosterCheckout(globalSessionsDir, id)
+		owner, named, unreadable := rosterCheckout(globalSessionsDir, id)
+		if unreadable {
+			res.Failed = append(res.Failed, AuditImportFailure{Session: id, Reason: ReasonRosterUnreadable})
+			continue
+		}
 		if named && !namesAny(owner, roots) {
 			res.Unowned = append(res.Unowned, id)
 			continue
 		}
-		attempted++
 		r, err := migrateAuditSession(ctx, p, checkout, id, file, false, true)
 		if err != nil {
 			if ctx.Err() != nil {
-				if attempted > 1 {
+				// attempted counts files that finished and so used the
+				// budget; a file that failed fast did not, and must not
+				// shield the one after it from being recorded.
+				if attempted > 0 {
 					// Earlier files used the budget; this one gets a fresh
 					// budget next run, as do the files after it.
 					res.Remaining = len(files) - i
@@ -160,6 +168,7 @@ func ImportGlobalAudit(ctx context.Context, p layout.Policy, globalSessionsDir s
 			res.Failed = append(res.Failed, AuditImportFailure{Session: id, Reason: err.Error(), Err: err})
 			continue
 		}
+		attempted++
 		imp := AuditImport{Session: id, Lines: r.added, Noop: r.noop, NoSignal: !named && !streams[id]}
 		// The import is the redacted archive of this file; a session another
 		// checkout owns never reaches here (Unowned above). Pre-redaction
@@ -176,14 +185,28 @@ func ImportGlobalAudit(ctx context.Context, p layout.Policy, globalSessionsDir s
 	return res, nil
 }
 
+// ReasonRosterUnreadable is the residual reason for a global audit file
+// whose roster exists but cannot be read: the one signal that could name
+// another repository as owner is unavailable, so the file is kept.
+const ReasonRosterUnreadable = "roster unreadable; global copy kept"
+
 // rosterCheckout reads the checkout the global roster of session id names.
 // named is false when there is no roster or it carries no checkout.
-func rosterCheckout(globalSessionsDir, id string) (checkout string, named bool) {
+// unreadable is true when a roster file exists but cannot be loaded: the
+// caller must not treat that as no signal, since the roster is what stops
+// one repository from taking another's session.
+func rosterCheckout(globalSessionsDir, id string) (checkout string, named, unreadable bool) {
+	// A roster the filesystem will not hand over is unreadable. A roster
+	// that reads but does not parse is an older shape (every roster before
+	// v4.13.0 names no checkout) and counts as no signal, as the design says.
+	if _, err := os.ReadFile(filepath.Join(globalSessionsDir, id+".yaml")); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", false, true
+	}
 	roster, err := session.NewStore(filepath.Dir(globalSessionsDir)).Load(id)
 	if err != nil || roster.Checkout == "" {
-		return "", false
+		return "", false, false
 	}
-	return filepath.Clean(roster.Checkout), true
+	return filepath.Clean(roster.Checkout), true, false
 }
 
 // namesAny reports whether checkout is one of roots under the path rule.
@@ -261,6 +284,9 @@ func migrateAuditSession(ctx context.Context, p layout.Policy, checkout, id, fil
 		if err != nil {
 			return err
 		}
+		// A global file merges into the session's existing archive, whatever
+		// its date (ArchiveDir prefers an existing directory); only a
+		// session with no archive yet gets one dated today.
 		dir, err := audit.ArchiveDir(p, s, time.Now().UTC().Format(audit.SessionDateFormat))
 		if err != nil {
 			return err

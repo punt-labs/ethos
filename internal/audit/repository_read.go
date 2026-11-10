@@ -279,7 +279,7 @@ func listStreams(p layout.Policy, validate bool) ([]Stream, error) {
 				}
 				cn, kind := Classify(e.Name(), MissionNS)
 				if kind == KindNearMiss {
-					return nil, fmt.Errorf("malformed chunk name %q in mission %s", e.Name(), m.Name())
+					return nil, &MalformedChunkNameError{Name: e.Name(), Dir: filepath.Join("missions", m.Name())}
 				}
 				if cn.Session != "" {
 					if err := add(Stream{Namespace: MissionNS, Mission: m.Name(), Session: cn.Session}); err != nil {

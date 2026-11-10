@@ -38,11 +38,17 @@ func TestFirstCommitAfterUpgradeDoesNotCarryRepairDeletions(t *testing.T) {
 		}
 	}
 
-	commit(t, se.repo, se.env, "work.txt", "the user's change\n", "user work")
-
-	cmd := testhelpers.GitCommand("-C", se.repo, "ls-tree", "-r", "--name-only", "HEAD")
+	require.NoError(t, os.WriteFile(filepath.Join(se.repo, "work.txt"), []byte("the user's change\n"), 0o644))
+	gitRunEnv(t, se.repo, se.env, "add", "work.txt")
+	cmd := testhelpers.GitCommand("-C", se.repo, "commit", "-q", "-m", "user work")
 	cmd.Env = se.env
-	out, err := cmd.Output()
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit through the installed hook: %v\n%s", err, out)
+	}
+
+	ls := testhelpers.GitCommand("-C", se.repo, "ls-tree", "-r", "--name-only", "HEAD")
+	ls.Env = se.env
+	out, err := ls.Output()
 	require.NoError(t, err)
 	tree := string(out)
 	assert.Contains(t, tree, "work.txt")

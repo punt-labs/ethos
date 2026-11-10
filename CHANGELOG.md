@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Product messages state what ethos found or did. None tells the user to
   run a command or promises what a later run will do; a guard test keeps it
   that way.
+- A mission contract loads by the rules its type carried when it was
+  created, on any host: the archetypes ethos ships are the last layer of
+  archetype resolution, so a closed report mission with no write set no
+  longer fails validation where the repository and global trees never
+  seeded that archetype.
+- A legacy session audit file archives under its own date. An earlier
+  import that gave the session an archive directory under another date no
+  longer causes the file to be refused as a collision and left in the
+  record tree.
 
 ### Removed
 

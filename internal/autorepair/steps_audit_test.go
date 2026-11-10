@@ -521,3 +521,48 @@ func TestCorruptChunksCompletesOrphanCorrupt(t *testing.T) {
 	assert.Contains(t, log.text(), "complete-orphan-corrupt")
 	assertSecondRunChangesNothing(t, runCorruptChunks, env)
 }
+
+// A complete live line that cannot be decoded is a property of the file no
+// later run changes. The step records a residual naming the stream, never
+// the content, and does not defer the stamp on every command.
+func TestLiveTailsUndecodableLineIsAResidual(t *testing.T) {
+	env, log := damageEnv(t, "live-audit-pre-redaction")
+	s := audit.Stream{Namespace: audit.SessionNS, Session: damageSession}
+	live := s.LivePath(env.Policy)
+	before, err := os.ReadFile(live)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(live, append(before, []byte("{not json}\n")...), 0o600))
+
+	out := runStepT(t, runLiveTails, env)
+	assert.False(t, out.Deferred, "an undecodable line is not retried on every command")
+	require.Len(t, out.Residuals, 1)
+	assert.Equal(t, stepLiveTails, out.Residuals[0].Step)
+	assert.Contains(t, out.Residuals[0].Reason, "cannot be decoded")
+	assert.NotContains(t, log.text(), "not json", "the log never carries content")
+	after, err := os.ReadFile(live)
+	require.NoError(t, err)
+	assert.Equal(t, string(before)+"{not json}\n", string(after), "the file is left in place")
+}
+
+// A file named like a chunk that is not one, under a mission directory, is a
+// permanent condition of the tree: both audit steps record it once instead
+// of erroring on every command.
+func TestMalformedChunkNameIsAResidualNotAnError(t *testing.T) {
+	for _, step := range []struct {
+		name string
+		run  func(context.Context, Env) (Outcome, error)
+	}{{"live-tails", runLiveTails}, {"corrupt-chunks", runCorruptChunks}} {
+		t.Run(step.name, func(t *testing.T) {
+			env, log := damageEnv(t, "live-audit-pre-redaction")
+			dir := filepath.Join(env.Policy.RecordRoot(), "missions", "m-2026-09-01-001")
+			require.NoError(t, os.MkdirAll(dir, 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "log-notes.jsonl"), []byte("{}\n"), 0o600))
+			out, err := step.run(context.Background(), env)
+			require.NoError(t, err, "a malformed chunk name is not an error that blocks the stamp")
+			assert.False(t, out.Deferred)
+			require.NotEmpty(t, out.Residuals)
+			assert.Contains(t, out.Residuals[0].Reason, "malformed chunk name")
+			assert.Contains(t, log.text(), "scan-streams")
+		})
+	}
+}

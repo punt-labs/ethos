@@ -281,12 +281,18 @@ func (s *Store) CheckoutRoot() string { return s.checkoutRoot }
 // (if an archetype store is wired) and runs ValidateWithArchetype.
 // When no archetype store is set, falls back to Validate() (all rules).
 func (s *Store) validateContract(c *Contract) error {
-	if s.archetypes != nil && c.Type != "" {
-		arch, err := s.archetypes.Load(c.Type)
-		if err != nil {
-			// Unknown type — fall back to base validation.
-			return c.Validate()
+	if c.Type == "" {
+		return c.Validate()
+	}
+	if s.archetypes != nil {
+		if arch, err := s.archetypes.Load(c.Type); err == nil {
+			return c.ValidateWithArchetype(arch)
 		}
+	}
+	// No archetype store, or none of its layers knows the type: the
+	// archetypes ethos ships still apply, so a contract keeps the rules its
+	// type carried when it was created (a report mission has no write_set).
+	if arch, err := loadEmbeddedArchetype(c.Type); err == nil {
 		return c.ValidateWithArchetype(arch)
 	}
 	return c.Validate()

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/layout"
@@ -30,6 +31,15 @@ func runLiveTails(ctx context.Context, env Env) (Outcome, error) {
 	}
 	streams, err := audit.ListStreamsByName(env.Policy)
 	if err != nil {
+		// A directory whose contents cannot be listed as streams (a file
+		// named like a chunk that is not one) is a permanent condition of
+		// the tree: recorded once, so the stamp can land, never retried on
+		// every command.
+		if reason, ok := permanentScanReason(err); ok {
+			logf(env, stepLiveTails, "scan-streams", nil, err)
+			out.Residuals = append(out.Residuals, Residual{Step: stepLiveTails, ID: "streams", Reason: reason})
+			return out, nil
+		}
 		return out, fmt.Errorf("listing audit streams: %w", err)
 	}
 	for _, s := range streams {
@@ -79,10 +89,17 @@ func runLiveTails(ctx context.Context, env Env) (Outcome, error) {
 			logf(env, stepLiveTails, "defer-busy-stream", []string{live}, nil)
 			continue
 		case err != nil:
-			// Anything RedactLive refuses is a condition of the archive or the
-			// filesystem at this moment, not a property of the live file that
-			// another run cannot change; it is retried, never left permanent.
 			logf(env, stepLiveTails, "redact-live", []string{live}, err)
+			if isLiveLineError(err) {
+				// A complete line the file holds that cannot be decoded, or
+				// whose ts cannot be parsed, is a property of the file no
+				// later run changes: a residual naming the stream, never
+				// the content.
+				out.Residuals = append(out.Residuals, Residual{Step: stepLiveTails, ID: filepath.Base(live), Reason: "a live line cannot be decoded; file left in place"})
+				continue
+			}
+			// Anything else RedactLive refuses is a condition of the archive
+			// or the filesystem at this moment; it is retried.
 			out.Deferred = true
 			continue
 		}
@@ -160,4 +177,11 @@ func archiveScansClean(env Env, s audit.Stream) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// isLiveLineError reports whether err is a complete live line the reader
+// could not decode or whose ts it could not parse: readCompleteLive wraps
+// both as "live audit <path> line <n>: ...".
+func isLiveLineError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "live audit ") && strings.Contains(err.Error(), " line ")
 }

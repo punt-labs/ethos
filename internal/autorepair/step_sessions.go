@@ -23,6 +23,12 @@ func init() { Register(Step{Name: stepSessions, Scope: ScopeBoth, Run: runSessio
 func SessionStart(ctx context.Context, env Env) (int, error) {
 	out, err := runSessions(ctx, env)
 	if err != nil {
+		// Session start runs this pass outside the engine, which is what
+		// normally logs a step error; the hook discards the error, so it
+		// is recorded here or nowhere.
+		if env.Log != nil {
+			env.Log.Logf("sessions", "session-start", nil, err)
+		}
 		return out.Items, err
 	}
 	if env.InRepository() {

@@ -374,9 +374,21 @@ func (a *archiver) archive(kind traceKind, rel string, data []byte) error {
 	return nil
 }
 
+// sessionArchiveDir is the archive directory for a legacy record-tree
+// session directory. The legacy name carries the file's own date, and the
+// archive keeps it: audit.ArchiveDir would route the file to the session's
+// first existing archive directory, which an earlier import may have dated
+// differently, and refuse the file there as a collision with another day's
+// audit.jsonl.
 func (a *archiver) sessionArchiveDir(dir string) (string, error) {
 	s := audit.Stream{Namespace: audit.SessionNS, Session: sessionOfDir(dir)}
-	return audit.ArchiveDir(a.env.Policy, s, dir[:len(audit.SessionDateFormat)])
+	if err := s.Validate(); err != nil {
+		return "", err
+	}
+	if !audit.SessionDirMatches(dir, s.Session) {
+		return "", fmt.Errorf("invalid legacy session directory %q", dir)
+	}
+	return filepath.Join(audit.ArchiveRoot(a.env.Policy), "sessions", dir), nil
 }
 
 func sessionOfDir(dir string) string {

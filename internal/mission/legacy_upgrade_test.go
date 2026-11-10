@@ -2,6 +2,7 @@ package mission
 
 import (
 	"errors"
+	"gopkg.in/yaml.v3"
 	"os"
 	"path/filepath"
 	"strings"
@@ -157,4 +158,30 @@ func TestCorrect_RefusesAFencedMission(t *testing.T) {
 	after, err := os.ReadFile(contract)
 	require.NoError(t, err)
 	assert.Equal(t, closed, string(after))
+}
+
+// A closed report mission has no write_set: the report archetype allows
+// that. On a host whose repository and global trees never seeded the
+// archetype, the contract still loads by the rules its type carried when
+// it was created, so the storage upgrade does not fence it on every run.
+func TestLoadReportContractWithoutWriteSetOnAHostWithoutTheArchetype(t *testing.T) {
+	root := t.TempDir()
+	p, err := layout.NewRepository(root, root, layout.RecordBlame)
+	require.NoError(t, err)
+	s := NewRepositoryStore(p, t.TempDir()) // no archetypes dir in either tree
+	c := newContract("m-2026-09-06-009")
+	c.Type = "report"
+	c.WriteSet = nil
+	c.Status = StatusClosed
+	c.ClosedAt = "2026-09-06T12:00:00Z"
+	data, err := yaml.Marshal(c)
+	require.NoError(t, err)
+	path := RepoStatePath(root, "missions", c.MissionID, "contract.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+
+	loaded, err := s.Load(c.MissionID)
+	require.NoError(t, err, "a report contract with no write_set loads")
+	assert.Equal(t, "report", loaded.Type)
+	assert.Empty(t, loaded.WriteSet)
 }
