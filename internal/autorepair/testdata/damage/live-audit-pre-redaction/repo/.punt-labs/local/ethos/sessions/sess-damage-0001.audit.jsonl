@@ -1,0 +1,2 @@
+{"session":"sess-damage-0001","tool":"Bash","tool_input":{"command":"cat @HOME@/.netrc; echo ghp_FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE"},"ts":"2026-11-04T09:00:00.000001Z"}
+{"path_format":2,"record":"blame","redacted":true,"session":"sess-damage-0001","tool":"Bash","tool_input":{"command":"echo one"},"ts":"2026-11-04T10:00:00.000001Z"}

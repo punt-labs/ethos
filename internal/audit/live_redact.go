@@ -129,7 +129,9 @@ func archivedPayloads(p layout.Policy, s Stream) (map[int64][]byte, error) {
 		for _, c := range scan.Chunks {
 			lines, err := ReadChunkVerified(filepath.Join(dir, c.ChunkFile()), c.Last)
 			if err != nil {
-				return nil, err
+				// A chunk that does not decode is not evidence; salvaging it is
+				// the corrupt-chunk step's job, and a later read still reports it.
+				continue
 			}
 			for _, l := range lines {
 				b, err := CanonicalPayload(l.Raw)
