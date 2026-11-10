@@ -20,7 +20,7 @@ import (
 
 var auditCmd = &cobra.Command{
 	Use:     "audit",
-	Short:   "Inspect and migrate session audit logs",
+	Short:   "Inspect session audit logs",
 	GroupID: "admin",
 	Args:    cobra.NoArgs,
 }
