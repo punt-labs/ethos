@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"sort"
 	"strings"
 
@@ -26,18 +27,19 @@ func untrackLocal(ctx context.Context, env Env) (Outcome, error) {
 		return Outcome{}, nil
 	}
 	checkout := env.Roots.Checkout
-	paths, residuals, err := untrackCandidates(env)
+	paths, residuals, deferred, err := untrackCandidates(env)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("listing tracked local paths in %s: %w", checkout, err)
 	}
-	out := Outcome{Residuals: residuals}
+	out := Outcome{Residuals: residuals, Deferred: deferred}
 	if len(paths) == 0 {
 		return out, nil
 	}
 	err = gitenv.UntrackPaths(ctx, checkout, paths)
 	if errors.Is(err, gitenv.ErrIndexBusy) {
 		logStep(env, "untrack-local", "deferred: index busy", nil, err)
-		return Outcome{Deferred: true}, nil
+		out.Deferred = true
+		return out, nil
 	}
 	if err != nil {
 		return Outcome{}, fmt.Errorf("untracking local paths in %s: %w", checkout, err)
@@ -54,28 +56,39 @@ func logStep(env Env, step, action string, paths []string, err error) {
 }
 
 // untrackCandidates lists the indexed paths under .punt-labs/ that belong off
-// the index, sorted, and a Residual for each path whose publication status
-// could not be read: nothing proves those obsolete, so they stay tracked.
-func untrackCandidates(env Env) ([]string, []Residual, error) {
+// the index, sorted. A path whose content could be read from neither the disk
+// nor the index is a temporary condition: nothing proves it obsolete, so it
+// stays tracked and the step reports deferred. A path whose publication status
+// is permanently undecidable is a Residual; its reason carries only the
+// repo-relative path and a fixed cause, the error goes to the redacting log.
+func untrackCandidates(env Env) (paths []string, residuals []Residual, deferred bool, err error) {
 	checkout := env.Roots.Checkout
 	genv, err := gitenv.ActualIndexEnv()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	out, _, err := gitenv.Read(gitenv.Spec{Git: "git", Dir: checkout, Env: genv,
 		Args: []string{"ls-files", "-z", "--", ".punt-labs/"}}, 0)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
-	var paths []string
-	var residuals []Residual
 	for _, rel := range strings.Split(string(out), "\x00") {
 		if rel == "" {
 			continue
 		}
-		untrack, err := shouldUntrack(env.Policy, rel)
+		blob := func() ([]byte, error) {
+			b, _, err := gitenv.Read(gitenv.Spec{Git: "git", Dir: checkout, Env: genv,
+				Args: []string{"cat-file", "blob", ":0:" + rel}}, 0)
+			return b, err
+		}
+		untrack, err := shouldUntrack(env.Policy, rel, blob)
 		if err != nil {
-			residuals = append(residuals, Residual{Step: "untrack-local", ID: rel, Reason: err.Error()})
+			logStep(env, "untrack-local", "undecided", []string{rel}, err)
+			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, errUnreadable) {
+				deferred = true
+				continue
+			}
+			residuals = append(residuals, Residual{Step: "untrack-local", ID: rel, Reason: "publication status unreadable: " + rel})
 			continue
 		}
 		if untrack {
@@ -83,14 +96,18 @@ func untrackCandidates(env Env) ([]string, []Residual, error) {
 		}
 	}
 	sort.Strings(paths)
-	return paths, residuals, nil
+	return paths, residuals, deferred, nil
 }
 
+// errUnreadable marks a tracked file readable from neither the disk nor the
+// index: possibly a transient condition, so the step defers.
+var errUnreadable = errors.New("content unreadable from disk and index")
+
 // shouldUntrack decides for one tracked path. Record-tree trace is untracked
-// exactly when repair.Inventory would call it obsolete, so a published
-// reflections aggregate, a session diagnostic and a current mission's chunks
-// stay tracked.
-func shouldUntrack(p layout.Policy, rel string) (bool, error) {
+// exactly when repair.Obsolete says so; the answer is returned unchanged, so a
+// published reflections aggregate, a session diagnostic, a full-consent log and
+// a current mission's chunks stay tracked.
+func shouldUntrack(p layout.Policy, rel string, blob func() ([]byte, error)) (bool, error) {
 	if layout.Match(".punt-labs/ethos/missions/*/artifacts/**", rel) {
 		return false, nil // agent-owned; no ethos code moves or exports them
 	}
@@ -105,13 +122,14 @@ func shouldUntrack(p layout.Policy, rel string) (bool, error) {
 	}
 	class, _, classified := layout.Classify(rel)
 	if classified && class == layout.Trace {
-		obsolete, err := repair.Obsolete(p, p.CheckoutRecordRoot(), strings.TrimPrefix(rel, recordTree))
-		if err != nil || obsolete {
-			return obsolete, err
-		}
-		// A live session stream is never a publication, even in a directory
-		// whose name repair cannot match to a session.
-		return layout.Match(".punt-labs/ethos/sessions/*/audit.jsonl", rel), nil
+		obsolete, err := repair.Obsolete(p, p.CheckoutRecordRoot(), strings.TrimPrefix(rel, recordTree), func() ([]byte, error) {
+			b, err := blob()
+			if err != nil {
+				return nil, fmt.Errorf("%w: %w", errUnreadable, err)
+			}
+			return b, nil
+		})
+		return obsolete, err
 	}
 	return layout.MisplacedLocal(rel), nil
 }

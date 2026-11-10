@@ -310,3 +310,32 @@ func TestAmbiguousAuthorityCannotLicenseDeletion(t *testing.T) {
 		})
 	}
 }
+
+// A live audit.jsonl in a directory that matches no session is legacy, yet a
+// copy carrying visible full consent is retained; Obsolete and Inventory agree.
+func TestObsoleteAndInventoryAgreeOnUnmatchedSessionAudit(t *testing.T) {
+	p := fixture(t)
+	root := p.RecordRoot()
+	put(t, filepath.Join(root, "sessions", "sess-a", "audit.jsonl"), "{\"record\":\"full\"}\n")
+	put(t, filepath.Join(root, "sessions", "sess-b", "audit.jsonl"), "{\"record\":\"blame\"}\n")
+
+	full, err := Obsolete(p, root, "sessions/sess-a/audit.jsonl", nil)
+	require.NoError(t, err)
+	assert.False(t, full)
+	blame, err := Obsolete(p, root, "sessions/sess-b/audit.jsonl", nil)
+	require.NoError(t, err)
+	assert.True(t, blame)
+
+	plan, err := Inventory(context.Background(), p)
+	require.NoError(t, err)
+	var paths []string
+	for _, it := range plan.Items {
+		paths = append(paths, filepath.ToSlash(strings.TrimPrefix(it.Path, root+"/")))
+	}
+	assert.Equal(t, []string{"sessions/sess-b/audit.jsonl"}, paths)
+
+	// Working file gone: the fallback bytes decide.
+	gone, err := Obsolete(p, root, "sessions/sess-c/audit.jsonl", func() ([]byte, error) { return []byte("{\"record\":\"full\"}\n"), nil })
+	require.NoError(t, err)
+	assert.False(t, gone)
+}

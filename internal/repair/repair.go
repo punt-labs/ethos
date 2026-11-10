@@ -149,6 +149,34 @@ func (p *Plan) Apply(ctx context.Context) (removed []string, err error) {
 	return removed, nil
 }
 
+// retainedByContent reports whether a published log's bytes keep it out of
+// cleanup: even damaged logs with visible full consent are retained. Inventory
+// and Obsolete share this one rule.
+func retainedByContent(b []byte, rel string) bool {
+	return strings.Contains(filepath.Base(rel), ".jsonl") && capturedFull.Match(b)
+}
+
+// Obsolete reports whether Inventory would list the file at rel, a path relative
+// to root (a record root of p), as obsolete. Callers that remove files from
+// another place, such as the index, use it so both agree on what is retained.
+// When the working file is gone (ErrNotExist) and fallback is non-nil, the
+// retain test runs on the bytes fallback returns, typically the indexed blob;
+// fallback's error is returned as is. Any other read error is returned wrapped.
+func Obsolete(p layout.Policy, root, rel string, fallback func() ([]byte, error)) (bool, error) {
+	remove, _, err := obsolete(p, root, rel)
+	if err != nil || !remove {
+		return false, err
+	}
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+	if errors.Is(err, os.ErrNotExist) && fallback != nil {
+		b, err = fallback()
+	}
+	if err != nil {
+		return false, err
+	}
+	return !retainedByContent(b, rel), nil
+}
+
 func obsolete(p layout.Policy, root, rel string) (remove, lock bool, err error) {
 	a := strings.Split(rel, "/")
 	base := a[len(a)-1]
@@ -157,6 +185,12 @@ func obsolete(p layout.Policy, root, rel string) (remove, lock bool, err error) 
 	}
 	if len(a) < 2 || a[0] != "missions" && a[0] != "sessions" {
 		return false, false, nil
+	}
+	// A live session stream is never a publication, even in a directory whose
+	// name cannot be matched to a session. Whether it is retained for visible
+	// full consent is decided by content, as for every other published log.
+	if len(a) == 3 && a[0] == "sessions" && base == "audit.jsonl" && (len(a[1]) <= 11 || !audit.SessionDirMatches(a[1], a[1][11:])) {
+		return true, false, nil
 	}
 	if rel == "missions/.create.lock" {
 		return true, true, nil
@@ -332,22 +366,4 @@ func trackedFiles(p layout.Policy, root string) (map[string]bool, error) {
 		}
 	}
 	return tracked, nil
-}
-
-// Obsolete reports whether Inventory would list the file at rel, a path relative
-// to root (a record root of p), as obsolete. Callers that remove files from
-// another place, such as the index, use it so both agree on what is retained.
-func Obsolete(p layout.Policy, root, rel string) (bool, error) {
-	remove, _, err := obsolete(p, root, rel)
-	if err != nil || !remove {
-		return false, err
-	}
-	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
-	if err != nil {
-		return false, err
-	}
-	if strings.Contains(filepath.Base(rel), ".jsonl") && capturedFull.Match(b) {
-		return false, nil
-	}
-	return true, nil
 }

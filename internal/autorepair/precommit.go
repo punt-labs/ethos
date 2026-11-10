@@ -10,8 +10,10 @@ import (
 )
 
 // preCommitSteps are the registered steps the commit-time pass runs, in order.
-// Every name must be in StepOrder.
-var preCommitSteps = []string{"live-tails", "untrack-local", "hook-sections"}
+// Every name must be in StepOrder. untrack-local is not here: it stages
+// record-tree deletions, which must never ride along in the user's commit;
+// UnstageUnder below already guards the index for .punt-labs/local/.
+var preCommitSteps = []string{"live-tails", "hook-sections"}
 
 // PreCommit is the cheap pass the git pre-commit hook runs before sealing. It
 // removes every path under .punt-labs/local/ from the committing index (the

@@ -36,19 +36,6 @@ func TestPreCommitUnstagesLocalAndRunsNamedSteps(t *testing.T) {
 	assert.Empty(t, line, "nothing to unstage prints nothing")
 }
 
-func TestPreCommitUntracksRecordTreeTrace(t *testing.T) {
-	dir := damageRepo(t, "tracked-trace-under-sessions")
-	saved := Steps
-	t.Cleanup(func() { Steps = saved })
-	Steps = nil
-	Register(Step{Name: "untrack-local", Scope: ScopeRepository, Run: untrackLocal})
-
-	line, err := PreCommit(context.Background(), untrackEnv(dir, &recLog{}))
-	require.NoError(t, err)
-	assert.Empty(t, line, "record-tree trace is untracked without a line")
-	assert.Len(t, stagedDeletions(t, dir), 2)
-}
-
 func TestPreCommitOutsideRepository(t *testing.T) {
 	line, err := PreCommit(context.Background(), Env{})
 	require.NoError(t, err)
