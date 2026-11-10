@@ -1,7 +1,6 @@
 package audit
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -184,15 +183,7 @@ func QuarantineLocal(p layout.Policy, s Stream, source, dir string, cn ChunkName
 		}
 	}
 	if published {
-		shared := Marker{Chunk: cn.Stem(), VerifiedLast: verifiedLast, UnrecoveredFirst: lo, UnrecoveredLast: hi, Reason: reason}
-		body, err := json.Marshal(shared)
-		if err != nil {
-			return Marker{}, err
-		}
-		if err := ensureDestinationDir(p, filepath.Dir(sharedPath)); err != nil {
-			return Marker{}, err
-		}
-		if err := replaceAuditFile(p, sharedPath, append(body, '\n')); err != nil {
+		if err := writeSharedMarker(p, source, cn, Marker{Chunk: cn.Stem(), VerifiedLast: verifiedLast, UnrecoveredFirst: lo, UnrecoveredLast: hi, Reason: reason}); err != nil {
 			return Marker{}, err
 		}
 	}
@@ -219,70 +210,38 @@ func QuarantineLocal(p layout.Policy, s Stream, source, dir string, cn ChunkName
 			return Marker{}, err
 		}
 	}
-	live, err := readRepositoryLive(p, s)
+	// Recover from the damaged bytes themselves (when they are still held) and
+	// the live lines of the range, the same way SalvageChunk does. With the raw
+	// bytes gone, recovery can only draw on the live file.
+	r, err := recoverLines(p, s, raw, ChunkName{Namespace: cn.Namespace, Session: cn.Session, First: lo, Last: hi}, source, guard)
 	if err != nil {
 		return Marker{}, err
 	}
-	var lines []Line
-	for _, l := range live {
-		if l.TS < lo || l.TS > hi {
-			continue
-		}
-		out, _, _ := guard(l.Raw)
-		if _, err := CanonicalPayload(out); err != nil {
-			return Marker{}, fmt.Errorf("guarded audit payload at ts %d is not a valid line: %w", l.TS, err)
-		}
-		l.Raw = out
-		lines = append(lines, l)
+	lo, hi = r.lo, r.hi
+	if r.verifiedLast > verifiedLast {
+		verifiedLast = r.verifiedLast
 	}
-	// A recovered line must not contradict evidence that survives in another
-	// chunk of the stream: the surviving copy wins and the line is not installed.
-	evidence, err := chunkEvidence(p, s, source)
-	if err != nil {
-		return Marker{}, err
-	}
-	kept := lines[:0]
-	for _, l := range lines {
-		got, err := CanonicalPayload(l.Raw)
+	lines := r.keep
+	m := Marker{Chunk: cn.Stem(), VerifiedLast: verifiedLast, Reason: reason, RetiredSHA256: rec.SHA256}
+	// With the raw bytes already deleted, the retired content can be vouched
+	// for only by a replacement an earlier run installed for this range; the
+	// live file cannot say which interior lines the damaged bytes held.
+	installedBefore := false
+	if raw == nil && rec.Size > 0 {
+		installedBefore, err = replacementInstalled(dir, cn, lo, hi)
 		if err != nil {
 			return Marker{}, err
 		}
-		if want, ok := evidence[l.TS]; ok && !bytes.Equal(want, got) {
-			continue
-		}
-		kept = append(kept, l)
 	}
-	lines = kept
-	m := Marker{Chunk: cn.Stem(), VerifiedLast: verifiedLast, Reason: reason, RetiredSHA256: rec.SHA256}
-	if len(lines) > 0 {
-		first, last := lines[0].TS, lines[len(lines)-1].TS
-		if last > m.VerifiedLast {
-			m.VerifiedLast = last
-		}
-		re := ChunkName{Namespace: cn.Namespace, Session: cn.Session, First: first, Last: last}
-		var body []byte
-		for _, l := range lines {
-			body = append(body, l.Raw...)
-			body = append(body, '\n')
-		}
-		if err := WriteLocalAtomic(p, filepath.Join(dir, re.ChunkFile()), body); err != nil {
-			return Marker{}, err
-		}
+	if _, err := installRecovered(p, dir, cn, lines, source); err != nil {
+		return Marker{}, err
 	}
-	recovered := map[int64]bool{}
-	for _, l := range lines {
-		recovered[l.TS] = true
-	}
-	missingContent := false
-	for _, raw := range SplitLines(raw) {
-		var h tsHolder
-		if json.Unmarshal(raw, &h) == nil {
-			if ts, err := ParseLineTS(h.TS); err == nil && !recovered[ts] {
-				missingContent = true
-			}
-		}
-	}
-	if missingContent || len(lines) == 0 || lines[0].TS > lo || lines[len(lines)-1].TS < hi || markerErr == nil && prior.HasGap() {
+	// Loss is recorded whenever the recovered lines do not account for the
+	// retired range (a recovered line was refused, a bound is held nowhere,
+	// or the raw bytes are gone with no earlier replacement to vouch for
+	// them), or a prior marker already recorded a gap. A clean completion is
+	// never written over unaccounted content.
+	if r.lost || raw == nil && rec.Size > 0 && !installedBefore || markerErr == nil && prior.HasGap() {
 		// One interval cannot encode disjoint losses. Include content-derived
 		// endpoints, rather than declaring recovery based on an untrusted name.
 		m.UnrecoveredFirst, m.UnrecoveredLast = lo, hi
@@ -302,4 +261,28 @@ func QuarantineLocal(p layout.Policy, s Stream, source, dir string, cn ChunkName
 		}
 	}
 	return m, nil
+}
+
+// replacementInstalled reports whether dir holds a readable chunk whose range
+// lies within [lo, hi]: the replacement an earlier recovery of this retirement
+// installed. The damaged source itself never reads, so it never qualifies,
+// even under the same name.
+func replacementInstalled(dir string, cn ChunkName, lo, hi int64) (bool, error) {
+	entries, err := readDirIfPresent(dir)
+	if err != nil {
+		return false, err
+	}
+	for _, e := range entries {
+		other, kind := Classify(e.Name(), cn.Namespace)
+		if kind != KindValid || other.Session != cn.Session || other.First < lo || other.Last > hi {
+			continue
+		}
+		if info, err := os.Lstat(filepath.Join(dir, e.Name())); err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if _, err := ReadChunkVerified(filepath.Join(dir, e.Name()), other.Last); err == nil {
+			return true, nil
+		}
+	}
+	return false, nil
 }

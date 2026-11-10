@@ -353,8 +353,8 @@ func TestCorruptChunksInvalidEscapeLines(t *testing.T) {
 	assert.Equal(t, 1, out.Items)
 	data, err := audit.ReadStream(env.Policy, s)
 	require.NoError(t, err)
-	assert.Len(t, data.Lines, 2, "the two decodable lines survive; the invalid-escape line is a gap")
-	assert.Len(t, data.Gaps, 1)
+	assert.Len(t, data.Lines, 2, "the two decodable lines survive")
+	assert.Empty(t, data.Gaps, "the invalid-escape line sits between recovered bounds; no range is lost")
 	assert.Empty(t, walkContains(t, env.Roots.Store, home, fakeToken), "the pre-redaction token and path are gone")
 	assert.Empty(t, corruptFiles(t, env.Roots.Store))
 	assert.Equal(t, 0, runStep(t, runCorruptChunks, env).Items)
@@ -469,8 +469,9 @@ func TestAuditStepsOverCorpusAreIdempotent(t *testing.T) {
 // A corpus live tail whose lines the record tree already holds unredacted
 // (v4.8.0 through v4.17.0 archived into the tracked tree) is left alone by
 // step 6, because rewriting it would contradict the archived copy; once step 5
-// has replaced those tracked chunks with redacted local copies, step 6 drops
-// the stale live duplicates, and the token survives nowhere under local/.
+// has replaced those tracked chunks with redacted local copies, step 6 brings
+// the stale live duplicates to the archived form, and the token survives
+// nowhere under local/.
 func TestLiveTailsAfterRecordTreeRedactionDropsStaleCorpusLines(t *testing.T) {
 	const v = "v4.17.0"
 	env, log := corpusAuditEnv(t, v)
@@ -501,9 +502,12 @@ func TestLiveTailsAfterRecordTreeRedactionDropsStaleCorpusLines(t *testing.T) {
 	_, err = audit.ReadStream(env.Policy, s)
 	require.ErrorContains(t, err, "identity conflict", "fixture: the stale live lines now contradict the redacted archive")
 
+	// Each stale live line redacts to exactly what the archive now holds, so
+	// it is brought to that form rather than dropped as a conflict.
 	out := runStep(t, runLiveTails, env)
-	assert.Equal(t, 3, out.Items, "every stale live line is dropped")
-	assert.Contains(t, log.text(), "drop-live-line")
+	assert.Equal(t, 3, out.Items, "every stale live line is rewritten")
+	assert.Contains(t, log.text(), "redact-live lines=3")
+	assert.NotContains(t, log.text(), "drop-live-line")
 	_, err = audit.ReadStream(env.Policy, s)
 	require.NoError(t, err)
 	assert.Empty(t, walkContains(t, env.Policy.LocalRoot(), fakeToken), "the token survives nowhere under local/")

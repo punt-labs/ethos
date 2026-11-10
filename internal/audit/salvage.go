@@ -1,12 +1,10 @@
 package audit
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 
 	"github.com/punt-labs/ethos/v4/internal/layout"
 )
@@ -26,9 +24,10 @@ type SalvageResult struct {
 // the chunk's range, redacts each through guard, drops a line whose ts is
 // already held by another chunk with a different payload (the surviving
 // evidence wins; both digests are returned), installs the rest as a
-// replacement chunk in the local archive, writes a gap marker when anything
-// was lost, and deletes the damaged bytes. Nothing of the original is kept.
-// A chunk that reads cleanly is left alone.
+// replacement chunk in the local archive and reads it back, writes a gap
+// marker when anything was lost, writes the shared availability marker beside
+// a published source, and only then deletes the damaged bytes. Nothing of the
+// original is kept. A chunk that reads cleanly is left alone.
 func SalvageChunk(p layout.Policy, s Stream, source string, cn ChunkName, guard LineGuard) (SalvageResult, error) {
 	var res SalvageResult
 	if err := s.Validate(); err != nil {
@@ -44,63 +43,11 @@ func SalvageChunk(p layout.Policy, s Stream, source string, cn ChunkName, guard 
 	if _, err := ReadChunkVerified(source, cn.Last); err == nil {
 		return res, nil
 	}
-	evidence, err := chunkEvidence(p, s, source)
+	r, err := recoverLines(p, s, data, cn, source, guard)
 	if err != nil {
 		return res, err
 	}
-	lo, hi := cn.First, cn.Last
-	byTS := map[int64]Line{}
-	lines := 0
-	for _, raw := range SplitLines(data) {
-		lines++
-		l, ok := decodeSalvageLine(raw, guard)
-		if !ok {
-			continue
-		}
-		if l.TS < lo {
-			lo = l.TS
-		}
-		if l.TS > hi {
-			hi = l.TS
-		}
-		byTS[l.TS] = l
-	}
-	salvagedFromChunk := len(byTS)
-	live, err := ReadLiveLines(p, s)
-	if err != nil {
-		return res, err
-	}
-	for _, raw := range live {
-		if raw.TS < lo || raw.TS > hi {
-			continue
-		}
-		l, ok := decodeSalvageLine(raw.Raw, guard)
-		if !ok {
-			continue
-		}
-		if _, held := byTS[l.TS]; !held {
-			byTS[l.TS] = l
-		}
-	}
-	var keep []Line
-	for _, l := range byTS {
-		got, err := CanonicalPayload(l.Raw)
-		if err != nil {
-			return res, err
-		}
-		if want, ok := evidence[l.TS]; ok {
-			if !bytes.Equal(want, got) {
-				res.Conflicts = append(res.Conflicts, LiveConflict{TS: l.TS, ArchiveDigest: digest(want), LiveDigest: digest(got)})
-			}
-			continue
-		}
-		keep = append(keep, l)
-	}
-	sort.Slice(keep, func(i, j int) bool { return keep[i].TS < keep[j].TS })
-	sort.Slice(res.Conflicts, func(i, j int) bool { return res.Conflicts[i].TS < res.Conflicts[j].TS })
-	res.Salvaged = len(keep)
-	res.Lost = lines != salvagedFromChunk || len(res.Conflicts) > 0 || len(keep) == 0 ||
-		keep[0].TS > lo || keep[len(keep)-1].TS < hi
+	res.Conflicts, res.Salvaged, res.Lost = r.conflicts, len(r.keep), r.lost
 
 	date := filepath.Base(filepath.Dir(source))
 	if len(date) > len(SessionDateFormat) {
@@ -110,30 +57,14 @@ func SalvageChunk(p layout.Policy, s Stream, source string, cn ChunkName, guard 
 	if err != nil {
 		return res, err
 	}
-	var body bytes.Buffer
-	for _, l := range keep {
-		body.Write(l.Raw)
-		body.WriteByte('\n')
+	dest, err := installRecovered(p, dir, cn, r.keep, source)
+	if err != nil {
+		return res, err
 	}
-	var dest string
-	if len(keep) > 0 {
-		re := ChunkName{Namespace: cn.Namespace, Session: cn.Session, First: keep[0].TS, Last: keep[len(keep)-1].TS}
-		dest = filepath.Join(dir, re.ChunkFile())
-		res.Replacement = dest
-		if dest == source {
-			err = ReplaceLocalFile(p, dest, body.Bytes())
-		} else {
-			err = WriteLocalAtomic(p, dest, body.Bytes())
-		}
-		if err != nil {
-			return res, fmt.Errorf("installing replacement for chunk %s: %w", source, err)
-		}
-	}
+	res.Replacement = dest
+	m := Marker{Chunk: cn.Stem(), Reason: "chunk bytes were damaged; surviving lines were recovered", VerifiedLast: r.verifiedLast}
 	if res.Lost {
-		m := Marker{Chunk: cn.Stem(), Reason: "chunk bytes were damaged; surviving lines were recovered", UnrecoveredFirst: lo, UnrecoveredLast: hi}
-		if len(keep) > 0 {
-			m.VerifiedLast = keep[len(keep)-1].TS
-		}
+		m.UnrecoveredFirst, m.UnrecoveredLast = r.lo, r.hi
 		mb, err := MarshalMarker(m)
 		if err != nil {
 			return res, err
@@ -142,12 +73,18 @@ func SalvageChunk(p layout.Policy, s Stream, source string, cn ChunkName, guard 
 			return res, fmt.Errorf("writing gap marker for chunk %s: %w", source, err)
 		}
 	}
-	if dest != source {
-		if err := os.Remove(source); err != nil {
-			return res, fmt.Errorf("removing damaged chunk %s: %w", source, err)
+	if publishedSource(p, source) {
+		// The published copy loses the whole named range whatever was
+		// recovered locally; a reader of that copy alone sees the hole.
+		shared := m
+		shared.UnrecoveredFirst, shared.UnrecoveredLast = r.lo, r.hi
+		if err := writeSharedMarker(p, source, cn, shared); err != nil {
+			return res, fmt.Errorf("writing shared marker for chunk %s: %w", source, err)
 		}
-		if err := syncAuditDirectory(filepath.Dir(source)); err != nil {
-			return res, fmt.Errorf("confirming removal of %s: %w", source, err)
+	}
+	if dest != source {
+		if err := removeSource(source); err != nil {
+			return res, err
 		}
 	}
 	res.Replaced = true
@@ -176,7 +113,8 @@ func decodeSalvageLine(raw []byte, guard LineGuard) (Line, bool) {
 }
 
 // chunkEvidence maps each ts held by the stream's other readable chunks to
-// its canonical payload. A chunk that does not read is not evidence.
+// its canonical payload. A chunk that does not read is not evidence, and
+// neither is the chunk being recovered (except).
 func chunkEvidence(p layout.Policy, s Stream, except string) (map[int64][]byte, error) {
 	dirs, err := StreamDirs(p, s)
 	if err != nil {
@@ -193,12 +131,17 @@ func chunkEvidence(p layout.Policy, s Stream, except string) (map[int64][]byte, 
 			return nil, err
 		}
 		for _, e := range entries {
-			cn, kind := Classify(e.Name(), s.Namespace)
+			other, kind := Classify(e.Name(), s.Namespace)
 			path := filepath.Join(dir, e.Name())
-			if kind != KindValid || path == except || s.Namespace == MissionNS && cn.Session != session {
+			if kind != KindValid || path == except || s.Namespace == MissionNS && other.Session != session {
 				continue
 			}
-			lines, err := ReadChunkVerified(path, cn.Last)
+			// A symlink, directory or FIFO under a chunk's name is not
+			// evidence, and opening a FIFO would block; it is left alone.
+			if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
+				continue
+			}
+			lines, err := ReadChunkVerified(path, other.Last)
 			if err != nil {
 				continue
 			}

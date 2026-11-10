@@ -175,12 +175,14 @@ func TestRepositoryQuarantineResumesEveryPersistenceBoundary(t *testing.T) {
 				t.Fatal("injected persistence failure hidden")
 			}
 			fsyncFile = old
+			// The decodable ts-300 line of the damaged bytes is recovered, so
+			// nothing is lost: no gap, three lines.
 			m, err := QuarantineLocal(p, s, source, dir, cn, "fixture", guard)
-			if err != nil || !m.HasGap() || m.UnrecoveredLast < 300 || m.VerifiedLast != 300 {
+			if err != nil || m.HasGap() || m.VerifiedLast != 300 {
 				t.Fatalf("retry=%+v %v", m, err)
 			}
 			data, err := ReadStream(p, s)
-			if err != nil || len(data.Lines) != 2 || data.Floor != 300 {
+			if err != nil || len(data.Lines) != 3 {
 				t.Fatalf("recovery=%+v %v", data, err)
 			}
 			if _, err := QuarantineLocal(p, s, source, dir, cn, "fixture", guard); err != nil {

@@ -62,17 +62,24 @@ func RedactLive(p layout.Policy, s Stream, guard LineGuard) (LiveRepair, error) 
 		if err != nil {
 			return res, err
 		}
-		if want, ok := archived[l.TS]; ok {
-			if !bytes.Equal(want, got) {
-				res.Dropped = append(res.Dropped, LiveConflict{TS: l.TS, ArchiveDigest: digest(want), LiveDigest: digest(got)})
-				replace[string(l.Raw)] = nil
-			}
-			continue
-		}
 		out, _, _ := guard(l.Raw)
 		after, err := CanonicalPayload(out)
 		if err != nil {
 			return res, fmt.Errorf("guarded audit payload at ts %d is not a valid line: %w", l.TS, err)
+		}
+		if want, ok := archived[l.TS]; ok {
+			// Compare the guarded form: a live line whose redaction is what
+			// the archive holds is already archived, not a conflict.
+			switch {
+			case bytes.Equal(want, got):
+			case bytes.Equal(want, after):
+				replace[string(l.Raw)] = out
+				res.Rewritten++
+			default:
+				res.Dropped = append(res.Dropped, LiveConflict{TS: l.TS, ArchiveDigest: digest(want), LiveDigest: digest(after)})
+				replace[string(l.Raw)] = nil
+			}
+			continue
 		}
 		if !bytes.Equal(got, after) {
 			replace[string(l.Raw)] = out

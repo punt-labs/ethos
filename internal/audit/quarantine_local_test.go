@@ -198,15 +198,15 @@ func TestRepositoryQuarantineRepeatedRetirementResumesAfterOldCompletion(t *test
 					require.ErrorContains(t, err, "quarantine incomplete", "old completion cannot cover new retirement metadata")
 					_, err = ReadStream(p, s)
 					require.ErrorContains(t, err, "quarantine incomplete", "readers must not accept the old floor")
+					// The decodable ts-300 line of the second damage is recovered
+					// alongside the live 100 and 200: no gap, three lines.
 					m, err := QuarantineLocal(p, s, source, dir, cn, "second", guard)
 					require.NoError(t, err)
 					require.Equal(t, int64(300), m.VerifiedLast)
-					require.True(t, m.HasGap())
-					require.Equal(t, int64(300), m.UnrecoveredLast)
+					require.False(t, m.HasGap())
 					data, err := ReadStream(p, s)
 					require.NoError(t, err)
-					require.Equal(t, int64(300), data.Floor)
-					require.Len(t, data.Lines, 2)
+					require.Len(t, data.Lines, 3)
 					files, err := filepath.Glob(filepath.Join(p.LocalRoot(), "quarantine", "*", "*"))
 					require.NoError(t, err)
 					require.Empty(t, files, "the damaged bytes are deleted once recovery completes")
@@ -299,7 +299,7 @@ func TestQuarantineLocalRedactsRecoveredLine(t *testing.T) {
 
 	m, err := QuarantineLocal(p, s, source, dir, cn, "fixture", maskGuard)
 	require.NoError(t, err, "a line the guard changes no longer refuses the recovery")
-	assert.False(t, m.HasGap())
+	assert.False(t, m.HasGap(), "the named range is recovered whole from the live file")
 	b, err := os.ReadFile(source)
 	require.NoError(t, err)
 	assert.Contains(t, string(b), `"tool":"Masked"`)
