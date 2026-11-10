@@ -171,11 +171,11 @@ the full walkthrough and [DESIGN.md](../DESIGN.md) DES-057 for rationale.
 ```bash
 # Shortcuts — canonical forms in parentheses.
 ethos whoami                          # Show active identity   (ethos identity whoami)
-ethos iam mal                         # Declare active persona (ethos session iam)
-ethos create                          # Interactive identity creation
-ethos create -f persona.yaml          # Create from YAML file
-ethos list                            # List all identities   (ethos identity list)
-ethos show mal                        # Full identity          (ethos identity show)
+ethos identity create                 # Interactive identity creation
+ethos identity create -f persona.yaml # Create from YAML file
+ethos identity list                   # List all identities
+ethos identity show mal               # Full identity
+ethos session iam mal                 # Declare active persona
 ethos show mal --json                 # JSON output
 ethos identity schema                 # Field reference for an identity YAML
 ethos identity schema --json          # Same reference as JSON
@@ -275,10 +275,9 @@ auto-resolution is wrong; a bogus override (missing dir, or no
 
 ```bash
 ethos session start                   # Open a session (prints the export line)
-ethos iam archie                      # Declare "I am archie" in this session
+ethos session iam archie              # Declare "I am archie" in this session
 ethos session                         # Show current session roster
 ethos session end                     # Delete the current session roster
-ethos session purge                   # Clean up stale rosters
 ```
 
 ### MCP Tools
@@ -346,15 +345,15 @@ The tree structure encodes authority: root → primary agent → subagents. Any 
 
 ### Persona Auto-Matching
 
-When a subagent starts, the hook does a case-sensitive `ethos show "$AGENT_TYPE"` to check if an ethos identity exists with that exact handle. Identity handles are restricted to lowercase alphanumeric plus hyphens, so auto-matching only works for lowercase `agent_type` values.
+When a subagent starts, the hook does a case-sensitive `ethos identity show "$AGENT_TYPE"` to check if an ethos identity exists with that exact handle. Identity handles are restricted to lowercase alphanumeric plus hyphens, so auto-matching only works for lowercase `agent_type` values.
 
 ```bash
 # Create personas for common agent types
-ethos create -f code-reviewer.yaml    # auto-matches agent_type "code-reviewer"
-ethos create -f explore.yaml          # auto-matches agent_type "explore"
+ethos identity create -f code-reviewer.yaml   # auto-matches agent_type "code-reviewer"
+ethos identity create -f explore.yaml         # auto-matches agent_type "explore"
 ```
 
-A subagent can override the default via `ethos iam <different-persona>`.
+A subagent can override the default via `ethos session iam <different-persona>`.
 
 ## Extending Identities
 
@@ -418,13 +417,11 @@ selection and read-only bundle behavior remain unchanged. Vendor never copies
 overlays. This is Git exclusion, not a vault: merged values can reach model
 context (DES-057).
 
-Legacy repository sibling `<namespace>.local.yaml` overlays are read-only
-compatibility inputs. Before modifying one, stop writers and explicitly reconcile
-it into S's local destination above, preserving every credential and resolving
-any existing destination before removing the old copy. Unequal copies refuse
-reads; local writes refuse while a legacy sibling remains. Do not print values
-or put the merged identity into the tracked base. `ethos repair` excludes overlays
-and credentials; there is no storage-upgrade command. Global overlays are unchanged.
+Legacy repository sibling `<namespace>.local.yaml` overlays are moved into S's
+local destination above automatically, preserving every credential. When an
+overlay exists in both the old and the new location, the new one is kept and the
+old one is deleted. Do not print values or put the merged identity into the
+tracked base. Global overlays are unchanged.
 
 ### MCP Tools
 
@@ -897,56 +894,6 @@ Three views: dashboard (mission list with counts), mission detail
 `html/template` with `go:embed`, Tailwind via CDN. No npm, no build
 step. Ctrl-C stops the server.
 
-### Migration from v3.11
-
-These historical one-time relocation commands move legacy global artifacts into
-the DES-054 per-repo tree. Both are idempotent, both honour
-`--dry-run`, and both refuse to touch artifacts that belong to a
-different repo's work tree.
-
-```bash
-ethos audit migrate                    # legacy global session audit logs
-ethos audit migrate --dry-run --verbose
-ethos mission migrate                  # all migratable missions
-ethos mission migrate <mission-id>     # a single mission
-ethos mission migrate --to-repo --dry-run
-```
-
-Cross-repo policy: a session whose id has no matching repo-tree
-session directory, or a mission whose `contract_id` is not referenced
-by any audit entry in `<repo>/.punt-labs/ethos/sessions/`, stays where it is —
-it belongs to another checkout.
-
-These historical shipped commands are not expanded into a DES-079 migration or
-backfill workflow and do not prove its acceptance.
-
-### Bounded legacy repair (DES-079; final acceptance pending)
-
-`ethos repair --dry-run` shows known obsolete trace/runtime files. Destructive
-`ethos repair` lists the paths, warns of permanent loss of old prompts,
-reflections, events/audit history and runtime residue, then asks
-`Are you sure? [y/N]` in a terminal. Empty input, no and EOF delete nothing.
-`ethos repair --yes` explicitly consents for automation; it also asserts that all
-old/new writers, hooks and MCP servers have stopped. Busy locks refuse cleanup.
-Deletion currently refuses on Windows: inventory is available, but destructive
-repair requires a Unix host with all writers stopped.
-
-There is no backup, lossless migration or authority backfill. Cleanup excludes
-shared identities, contracts, results, corrections, provenance and ADRs, private
-credentials/overlays, configuration, global data, arbitrary/agent-owned files and
-canonical local history. Current publications and flat current exports
-(`missions/<id>.contract.yaml` / `<id>.result.yaml`, with associated trace) are
-retained, including incomplete/ambiguous exports. Other intentional publications
-and exports are not blanket deletion targets. Private legacy overlays require
-the explicit credential-preserving handling described above, not repair.
-
-Deletion is incremental; if interrupted, inspect the new inventory and confirm
-again, without assuming rollback. Historical missions may need manual retirement;
-repair does not invent decisions, corrections or lifecycle transitions. Afterward,
-review tracked deletions and stage/commit normally, run `ethos enable` to refresh
-integration, then reconnect long-lived MCP servers. Re-enable maintains the shared
-local-zone exclusion, not record-tree ignore exceptions; it is not migration proof.
-
 ## Audited Delegation
 
 Every `Agent` tool call is allocated a `delegation_id` and the spawn's
@@ -1047,11 +994,6 @@ regex (`^(?:<pattern>)$`); a malformed pattern is rejected at
 ethos audit show --delegation <id>             # forensic query across sessions
 ethos audit show --delegation <id> --format text
 ethos audit seal [--dry-run]                   # immutable archive; DES-079 defaults to local, not staged
-ethos audit quarantine <chunk>                 # retire a corrupt sealed chunk, recover the live tail
-ethos audit migrate                            # historical legacy → repo-tree audit logs
-ethos audit migrate --dry-run --verbose
-ethos mission migrate --to-repo                # historical legacy → repo-tree missions
-ethos mission migrate <mission-id> --to-repo
 ```
 
 DES-079 requires live lines and immutable archives at S in **both** modes.

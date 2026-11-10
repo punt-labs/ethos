@@ -201,7 +201,7 @@ Essentials below. Every command accepts `--json`. Full reference in
 | `ethos whoami` | Show your resolved identity |
 | `ethos identity schema` | Show the field reference for an entity (also `role schema`, `team schema`) |
 | `ethos session start` / `end` | Open/close a session from any harness — `eval "$(ethos session start)"` |
-| `ethos iam <persona>` | Declare your persona in the active session |
+| `ethos session iam <persona>` | Declare your persona in the active session |
 | `ethos doctor` | Check installation health |
 | `ethos vendor [handle...]` | Snapshot a complete, self-standing identity set into this repo (see below) |
 | `ethos mission create` / `dispatch` | Create a mission contract |
@@ -209,8 +209,6 @@ Essentials below. Every command accepts `--json`. Full reference in
 | `ethos mission show <id>` | Show contract, results, reflections |
 | `ethos audit show --delegation <id>` | Full tool-call trace for a delegation |
 | `ethos audit seal [--dry-run]` | Seal pending lines into immutable chunks; DES-079 requires local archives by default (acceptance pending) |
-| `ethos audit quarantine <chunk>` | Retire a corrupt sealed chunk and recover what the live file holds |
-| `ethos session purge [--force] [--ack <id>]` | Clean up stale sessions; guard/acknowledge unsealed audit lines |
 | `ethos find missions` | Query closed missions by date, worker, status |
 | `ethos ui` | Open traceability dashboard in browser |
 

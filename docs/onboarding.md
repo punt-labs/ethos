@@ -694,7 +694,7 @@ The installer must not run `ethos setup` automatically. Reasons:
 The final message in `install.sh` changes from:
 
 ```text
-Run "ethos create" to create your first identity.
+Run "ethos identity create" to create your first identity.
 ```
 
 to:
