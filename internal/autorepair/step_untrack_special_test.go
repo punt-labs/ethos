@@ -63,3 +63,60 @@ func TestUntrackLocalGitlinkIsResidualNotDeferred(t *testing.T) {
 		assert.Empty(t, stagedDeletions(t, dir))
 	}
 }
+
+// The record tree is replaced by a link to a tree outside the repository. The
+// index holds a full-consent chunk; the file behind the link says blame. The
+// untrack decision must not read through the link, so the chunk stays tracked,
+// the step reports one Residual, and the outside file is never opened (mode 0
+// makes any open fail, which would surface as Deferred or a different Residual).
+func TestUntrackLocalRecordTreeLinkIsResidualAndUnread(t *testing.T) {
+	recordTreeLinkCases(t, true)
+}
+
+// The same links with a readable blame-mode file behind them: the verifier's
+// reproduction, where the full-consent indexed chunk was staged for deletion.
+func TestUntrackLocalRecordTreeLinkKeepsFullConsentChunk(t *testing.T) {
+	recordTreeLinkCases(t, false)
+}
+
+func recordTreeLinkCases(t *testing.T, unreadable bool) {
+	t.Helper()
+	cases := []struct {
+		name   string
+		linkAt string // path of the link, relative to the checkout
+		behind string // chunk's directory inside the link target
+	}{
+		{"ethos is a link", ".punt-labs/ethos", "sessions/2026-11-09-sess-z-0001"},
+		{".punt-labs is a link", ".punt-labs", "ethos/sessions/2026-11-09-sess-z-0001"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			gitIn(t, dir, "init", "-q", "-b", "main")
+			rel := legacyChunk("2026-11-09-sess-z-0001")
+			writeTracked(t, dir, map[string]string{rel: fullBody})
+
+			outside := t.TempDir()
+			sub := filepath.Join(outside, filepath.FromSlash(tc.behind))
+			require.NoError(t, os.MkdirAll(sub, 0o755))
+			target := filepath.Join(sub, filepath.Base(rel))
+			require.NoError(t, os.WriteFile(target, []byte(blameBody), 0o600))
+			if unreadable {
+				require.NoError(t, os.Chmod(target, 0))
+				t.Cleanup(func() { _ = os.Chmod(target, 0o600) })
+			}
+
+			link := filepath.Join(dir, filepath.FromSlash(tc.linkAt))
+			require.NoError(t, os.RemoveAll(link))
+			require.NoError(t, os.Symlink(outside, link))
+
+			o := runUntrack(t, untrackEnv(dir, &recLog{}))
+			assert.Empty(t, stagedDeletions(t, dir))
+			assert.False(t, o.Deferred)
+			require.Len(t, o.Residuals, 1)
+			assert.Equal(t, "record tree is a symlink: "+tc.linkAt, o.Residuals[0].Reason)
+			assert.Zero(t, o.Items)
+			assert.Contains(t, trackedPaths(t, dir), rel)
+		})
+	}
+}

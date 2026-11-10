@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -74,8 +76,22 @@ func untrackCandidates(env Env, checkout string) (paths []string, residuals []Re
 	if err != nil {
 		return nil, nil, false, err
 	}
+	// repair.Obsolete trusts its root and checks only components below it, so a
+	// link at .punt-labs or .punt-labs/ethos would let it read bytes outside the
+	// repository. One fixed Residual; the .punt-labs/local/ paths need no read.
+	linkedAt := ""
+	for _, c := range []string{".punt-labs", ".punt-labs/ethos"} {
+		if fi, lerr := os.Lstat(filepath.Join(checkout, filepath.FromSlash(c))); lerr == nil && fi.Mode()&fs.ModeSymlink != 0 {
+			linkedAt = c
+			residuals = append(residuals, Residual{Step: "untrack-local", ID: c, Reason: "record tree is a symlink: " + c})
+			break
+		}
+	}
 	for _, rel := range strings.Split(string(out), "\x00") {
 		if rel == "" {
+			continue
+		}
+		if linkedAt != "" && strings.HasPrefix(rel, recordTree) {
 			continue
 		}
 		blob := func() ([]byte, error) {
