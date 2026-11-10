@@ -125,7 +125,7 @@ func TestCheckGuideSync(t *testing.T) {
 			name:     "one byte of drift",
 			deposit:  append(bytes.Clone(enable.Guide), '!'),
 			wantPass: false,
-			wantWord: "run `ethos enable`",
+			wantWord: "drifted",
 		},
 		{
 			name:     "never deposited",
