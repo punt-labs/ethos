@@ -509,3 +509,30 @@ func TestArtifactTypeIsClassifiedByTheStep(t *testing.T) {
 		})
 	}
 }
+
+// A permission failure while repairing is transient: the step defers, records
+// no residual, and the next run completes once the directory is writable.
+func TestReadOnlyArchiveDirDefersThenCompletes(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission denial requires a non-root process")
+	}
+	env, _, s, dir, _ := fixEnv(t)
+	cn := audit.ChunkName{Namespace: audit.SessionNS, First: fixT0, Last: fixT0 + 2000}
+	c := filepath.Join(dir, audit.CorruptName(cn.Stem()))
+	require.NoError(t, os.WriteFile(c, nil, 0o600))
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	out := runStep(t, runCorruptChunks, env)
+	t.Logf("run1=%+v", out)
+	assert.True(t, out.Deferred, "a permission failure is transient")
+	assert.Empty(t, out.Residuals)
+	require.NoError(t, os.Chmod(dir, 0o700))
+	out = runStep(t, runCorruptChunks, env)
+	t.Logf("run2=%+v", out)
+	assert.False(t, out.Deferred)
+	assert.Empty(t, out.Residuals)
+	assert.NoFileExists(t, c)
+	_, err := audit.ReadStream(env.Policy, s)
+	require.NoError(t, err)
+	fixSecondRun(t, env)
+}

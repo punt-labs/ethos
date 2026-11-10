@@ -264,20 +264,20 @@ func repairOrphan(env Env, out *Outcome, s audit.Stream, e *audit.OrphanCorruptE
 	sourceInfo, sourceErr := os.Lstat(e.Chunk)
 	sourcePresent := sourceErr == nil
 	if sourceErr != nil && !errors.Is(sourceErr, os.ErrNotExist) {
-		return residual(env, out, e.Chunk, "source chunk cannot be examined", sourceErr)
+		return failed(env, out, e.Chunk, "source chunk cannot be examined", sourceErr)
 	}
 	if sourcePresent && !sourceInfo.Mode().IsRegular() {
 		return residual(env, out, e.Chunk, "source chunk is not a regular file", nil)
 	}
 	b, err := os.ReadFile(corrupt)
 	if err != nil {
-		return residual(env, out, corrupt, "retired bytes cannot be read", err)
+		return failed(env, out, corrupt, "retired bytes cannot be read", err)
 	}
 	if _, ok := audit.RetirementRecordSHA(b); ok {
 		// An interrupted QuarantineLocal (pending or missing marker): resume it.
 		_, err := audit.QuarantineLocal(env.Policy, s, e.Chunk, e.Dir, cn, orphanReason, guard)
 		if err != nil {
-			return residual(env, out, corrupt, "interrupted quarantine could not be completed", err)
+			return failed(env, out, corrupt, "interrupted quarantine could not be completed", err)
 		}
 		logf(env, stepCorruptChunks, "complete-orphan-corrupt", []string{corrupt}, nil)
 		out.Items++
@@ -302,7 +302,7 @@ func repairOrphan(env Env, out *Outcome, s audit.Stream, e *audit.OrphanCorruptE
 func salvage(env Env, out *Outcome, s audit.Stream, source string, cn audit.ChunkName, guard audit.LineGuard) bool {
 	res, err := audit.SalvageChunk(env.Policy, s, source, cn, guard)
 	if err != nil {
-		return residual(env, out, source, "chunk could not be salvaged", err)
+		return failed(env, out, source, "chunk could not be salvaged", err)
 	}
 	for _, c := range res.Conflicts {
 		logf(env, stepCorruptChunks, fmt.Sprintf("refuse-conflicting-line ts=%d surviving-sha256=%s recovered-sha256=%s", c.TS, c.ArchiveDigest, c.LiveDigest), []string{source}, nil)
@@ -312,6 +312,19 @@ func salvage(env Env, out *Outcome, s audit.Stream, source string, cn audit.Chun
 		out.Items++
 	}
 	return true
+}
+
+// failed records a repair error by its class. A malformed name or a
+// non-regular file no later run can change: a residual. Anything else
+// (permission, ENOSPC, EXDEV, EIO, a conflict a later pass resolves) may pass:
+// deferred. It stops work on the directory either way.
+func failed(env Env, out *Outcome, path, reason string, err error) bool {
+	if _, ok := permanentScanReason(err); !ok {
+		logf(env, stepCorruptChunks, "defer-transient", []string{path}, err)
+		out.Deferred = true
+		return false
+	}
+	return residual(env, out, path, reason, err)
 }
 
 // residual records a permanent condition and stops work on its directory.
