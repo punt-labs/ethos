@@ -146,8 +146,11 @@ The baseline records the GOOS it was generated on in one `# os:` line. Statement
 To regenerate the linux baseline from a CI run on the branch:
 
 ```bash
-make coverage-baseline-from-ci   # gh run download --name coverage-out, then -write -os linux
+make coverage-baseline-from-ci           # latest successful test.yml run on the current branch
+make coverage-baseline-from-ci RUN=<id>  # a specific run
 ```
+
+The target downloads that run's `coverage-out` artifact, then runs `-write -os linux`. It refuses when the branch has no successful run and `RUN` is not given: the artifact upload runs even when the Test step fails, so an unqualified download could take a partial profile from any branch.
 
 The CI Test job uploads `coverage.out` as the `coverage-out` artifact (7-day retention). `-write` prints a `WARN` for any package that has profile data but a stale `# unmeasured:` comment; delete that comment and rerun to baseline the package.
 

@@ -128,10 +128,18 @@ coverage-check: ## Compare per-package coverage in coverage.out (from make test)
 coverage-baseline: ## Regenerate coverage-baseline.txt from coverage.out (keeps overall-target and comments)
 	go run ./cmd/coverage-check -write -profile coverage.out -baseline coverage-baseline.txt
 
-coverage-baseline-from-ci: ## Regenerate the linux coverage-baseline.txt from the latest CI coverage-out artifact
-	rm -rf .tmp/coverage-ci
-	mkdir -p .tmp/coverage-ci
-	gh run download --name coverage-out --dir .tmp/coverage-ci
+coverage-baseline-from-ci: ## Regenerate the linux coverage-baseline.txt from one successful CI run's coverage-out artifact (RUN=<id>; default: latest successful test.yml run on this branch)
+	@run="$(RUN)"; \
+	if [ -z "$$run" ]; then \
+		run=$$(gh run list --workflow test.yml --branch $$(git branch --show-current) --status success --limit 1 --json databaseId --jq '.[0].databaseId'); \
+	fi; \
+	if [ -z "$$run" ]; then \
+		echo "coverage-baseline-from-ci: no successful test.yml run on branch $$(git branch --show-current); pass RUN=<id>" >&2; \
+		exit 1; \
+	fi; \
+	rm -rf .tmp/coverage-ci; \
+	mkdir -p .tmp/coverage-ci; \
+	gh run download "$$run" --name coverage-out --dir .tmp/coverage-ci
 	go run ./cmd/coverage-check -write -os linux -profile .tmp/coverage-ci/coverage.out -baseline coverage-baseline.txt
 
 validate-content: ## Validate all ethos content files
