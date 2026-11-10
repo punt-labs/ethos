@@ -216,7 +216,8 @@ var writerRegistry = map[string]writerEntry{
 	"internal/hook.writeAuditEntryReport": downstream("handleAuditLog",
 		"legacy path used only when there is no repo root; appends the entry buildAuditEntryNote redacted"),
 	"internal/hook.appendPolicyAudit":         checkpoint("guardAuditLineFull", "StampEligibility", "AppendMonotonic"),
-	"internal/hook.sealPolicyStream":          checkpoint("sessionLineGuard", "missionLineGuard", "guard", "CanonicalPayload", "WriteLocalAtomic", "ReplaceLocalFile"),
+	"internal/hook.sealPolicyStream":          checkpoint("LiveLineGuard", "RedactLive", "guard", "CanonicalPayload", "WriteLocalAtomic"),
+	"internal/hook.LiveLineGuard":             checkpoint("sessionLineGuard", "missionLineGuard"),
 	"internal/hook.QuarantineChunkWithPolicy": checkpoint("NewPathRedactor", "quarantineReason", "sessionLineGuard", "missionLineGuard", "QuarantineLocal"),
 	"internal/hook.quarantineReason":          checkpoint("Content", "LeakRule", "Leaks"),
 	"internal/hook.sessionLineGuard":          checkpoint("credentialPassLine", "redactLegacyLine", "guardAuditLineFull"),
@@ -245,8 +246,19 @@ var writerRegistry = map[string]writerEntry{
 	// WriteLocalAtomic installs via a function-valued os.Link, invisible to the
 	// primitive matcher. Pin its implementation AND discover every payload caller.
 	"internal/audit.WriteLocalAtomic": payloadCheckpoint(2, "CreateLocalTemp", "writeFile", "installLocalFile"),
-	"internal/audit.QuarantineLocal":  checkpoint("guard", "CanonicalPayload", "WriteLocalAtomic", "ReplaceLocalFile", "replaceAuditFile"),
-	"internal/audit.StagePublication": exempt("copies Git index bytes to a local candidate and installs that index; no record payload is written by this helper; sealPolicyStream checks the selected record files separately"),
+	"internal/audit.QuarantineLocal":  checkpoint("recoverLines", "installRecovered", "writeSharedMarker", "WriteLocalAtomic", "ReplaceLocalFile"),
+	// The one recovery shared by QuarantineLocal and SalvageChunk: every line it
+	// returns went through the caller's guard inside decodeSalvageLine.
+	"internal/audit.recoverLines":           checkpoint("decodeSalvageLine", "ReadLiveLines", "chunkEvidence", "CanonicalPayload"),
+	"internal/audit.decodeSalvageLine":      checkpoint("guard", "CanonicalPayload"),
+	"internal/audit.SalvageChunk":           checkpoint("recoverLines", "installRecovered", "writeSharedMarker", "ReplaceLocalFile"),
+	"internal/audit.installRecovered":       sink(4, "writes the lines recoverLines returned, each already guarded; reads the result back through ReadChunkVerified"),
+	"internal/audit.writeSharedMarker":      sink(4, "availability marker beside a published chunk; its Reason is the caller's redacted reason and it carries no payload"),
+	"internal/audit.RedactLive":             checkpoint("guard", "CanonicalPayload", "archivedPayloads", "ReplaceLocalFile"),
+	"internal/audit.TryLock":                exempt(reasonLock),
+	"internal/autorepair.coverStaleCorrupt": sink(4, "no-gap marker beside a valid chunk; a fixed reason string and the chunk's own name, no payload"),
+	"internal/autorepair.repairOrphan":      checkpoint("QuarantineLocal", "salvage", "coverStaleCorrupt"),
+	"internal/audit.StagePublication":       exempt("copies Git index bytes to a local candidate and installs that index; no record payload is written by this helper; sealPolicyStream checks the selected record files separately"),
 
 	// Repository ADRs are in scope; standalone global ADRs share these helpers.
 	"internal/adr.Store.withLock": exempt(reasonLock),
