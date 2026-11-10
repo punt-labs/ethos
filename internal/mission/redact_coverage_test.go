@@ -221,7 +221,7 @@ var writerRegistry = map[string]writerEntry{
 	"internal/hook.quarantineReason":          checkpoint("Content", "LeakRule", "Leaks"),
 	"internal/hook.sessionLineGuard":          checkpoint("credentialPassLine", "redactLegacyLine", "guardAuditLineFull"),
 	"internal/hook.missionLineGuard":          checkpoint("guardMissionEvent", "credentialPassLine", "guardAuditLineFull"),
-	"internal/hook.MigrateAuditWithPolicy":    checkpoint("sessionLineGuard", "guard", "CanonicalPayload", "CheckLegacyIdentity", "ReplaceLocalFile"),
+	"internal/hook.migrateAuditSession":       checkpoint("sessionLineGuard", "guard", "CanonicalPayload", "CheckLegacyIdentity", "ReplaceLocalFile"),
 	"internal/hook.guardMissionEvent":         checkpoint("RedactRecord", "CheckBytes"),
 	"internal/hook.appendRawAuditLines":       sink(1, "MigrateAudit's append; migrateOneSession redacts the lines first"),
 	"internal/hook.redactReason":              checkpoint("NewPathRedactor"),
