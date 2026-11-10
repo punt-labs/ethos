@@ -84,7 +84,9 @@ jobs:
           strace --version
 
       - name: Test
-        run: go test -race -count=1 -coverprofile=coverage.out ./...
+        # -timeout matches the Makefile's: cmd/ethos under -race runs past
+        # go test's 10-minute per-package default on a loaded runner.
+        run: go test -race -count=1 -timeout 30m -coverprofile=coverage.out ./...
 
       - name: Upload coverage profile (source for make coverage-baseline-from-ci)
         if: always()
