@@ -120,13 +120,19 @@ TEST_PARALLEL ?= 2
 test: ## Run tests with race detection and write coverage to coverage.out
 	go test -race -count=1 -timeout 30m -p $(TEST_PARALLEL) -coverprofile=coverage.out ./...
 
-.PHONY: coverage-check coverage-baseline
+.PHONY: coverage-check coverage-baseline coverage-baseline-from-ci
 
 coverage-check: ## Compare per-package coverage in coverage.out (from make test) with coverage-baseline.txt
 	go run ./cmd/coverage-check -profile coverage.out -baseline coverage-baseline.txt
 
 coverage-baseline: ## Regenerate coverage-baseline.txt from coverage.out (keeps overall-target and comments)
 	go run ./cmd/coverage-check -write -profile coverage.out -baseline coverage-baseline.txt
+
+coverage-baseline-from-ci: ## Regenerate the linux coverage-baseline.txt from the latest CI coverage-out artifact
+	rm -rf .tmp/coverage-ci
+	mkdir -p .tmp/coverage-ci
+	gh run download --name coverage-out --dir .tmp/coverage-ci
+	go run ./cmd/coverage-check -write -os linux -profile .tmp/coverage-ci/coverage.out -baseline coverage-baseline.txt
 
 validate-content: ## Validate all ethos content files
 	go run ./cmd/validate-content

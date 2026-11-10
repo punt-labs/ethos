@@ -17,11 +17,11 @@
 // from the profile, or when internal/autorepair (once it has test files) is
 // below 95.0. internal/autorepair cannot be listed as unmeasured.
 //
-// Platform tolerance: a package with _<goos> or _unix source files compiles
-// different code per OS, so its percentage differs between the host that wrote
-// the baseline and CI. When the baseline's "# os:" line differs from the
-// runtime GOOS, check warns and allows 2.0 points for those packages instead of
-// 0.1. Regenerate the baseline on the OS that runs the gate to restore 0.1.
+// OS: statement counts differ per GOOS (platform files, build tags, runtime.GOOS
+// branches), so no tolerance can be both sound and tight. -write records the
+// GOOS it ran for as exactly one "# os:" line; check fails when that differs
+// from the host's GOOS. Regenerate the baseline on the OS that runs the gate
+// (make coverage-baseline-from-ci for linux).
 package main
 
 import (
@@ -42,8 +42,7 @@ import (
 const (
 	modulePrefix     = "github.com/punt-labs/ethos/v4/"
 	tolerance        = 0.1
-	osTolerance      = 2.0
-	osPrefix         = "# os: "
+	osPrefix         = "# os:"
 	autorepairPkg    = "internal/autorepair"
 	autorepairFloor  = 95.0
 	overallTargetKey = "overall-target"
@@ -66,6 +65,7 @@ type baseline struct {
 	hasTgt   bool
 	pkgs     map[string]float64
 	os       string // GOOS the baseline was measured on; empty when unrecorded
+	sawOS    bool
 }
 
 func main() {
@@ -84,6 +84,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	if *write && !knownGOOS[*goos] {
+		fmt.Fprintf(stderr, "coverage-check: -os %q is not a known GOOS\n", *goos)
+		return 2
+	}
 	pkgs, overall, err := readProfile(*profilePath)
 	if err != nil {
 		fmt.Fprintf(stderr, "coverage-check: %v\n", err)
@@ -99,7 +103,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if prev, err := readBaseline(*basePath); err == nil {
 			// Existing unmeasured comments are an implicit exclude list, so a
 			// regeneration without -exclude never writes a line for them.
-			skipped = append(skipped, prev.unmeasured()...)
+			for _, u := range prev.unmeasured() {
+				if _, ok := pkgs[u]; ok {
+					fmt.Fprintf(stderr, "WARN %s has coverage data but is listed unmeasured; remove its comment to baseline it\n", u)
+				}
+				skipped = append(skipped, u)
+			}
 		}
 		pkgs, overall = withoutPackages(pkgs, skipped)
 		if err := writeBaseline(*basePath, pkgs, overall, skipped, *goos); err != nil {
@@ -140,9 +149,13 @@ func check(out io.Writer, pkgs map[string]tally, overall tally, base baseline, a
 			return 1
 		}
 	}
-	osMismatch := base.os != "" && base.os != goos
-	if osMismatch {
-		fmt.Fprintf(out, "WARN baseline measured on %s, running on %s: packages with per-OS source files get a %.1f-point tolerance\n", base.os, goos, osTolerance)
+	if base.os == "" {
+		fmt.Fprintln(out, "FAIL baseline records no \"# os:\" line; regenerate it with -write")
+		return 1
+	}
+	if base.os != goos {
+		fmt.Fprintf(out, "FAIL baseline was generated on %s; this host is %s; regenerate the baseline on %s\n", base.os, goos, base.os)
+		return 1
 	}
 	if len(skipped) > 0 {
 		pkgs, overall = withoutPackages(pkgs, skipped)
@@ -176,13 +189,9 @@ func check(out io.Writer, pkgs map[string]tally, overall tally, base baseline, a
 			fmt.Fprintf(out, "WARN %s is not in the baseline and is ungated until the next baseline\n", p)
 		default:
 			mark := ""
-			tol := tolerance
-			if osMismatch && hasPlatformFiles(filepath.Join(root, p)) {
-				tol = osTolerance
-			}
-			if cur.pct() < want-tol-epsilon {
+			if cur.pct() < want-tolerance-epsilon {
 				mark = "  BELOW BASELINE"
-				failures = append(failures, fmt.Sprintf("%s: %.1f%% is below baseline %.1f%% minus %.1f", p, cur.pct(), want, tol))
+				failures = append(failures, fmt.Sprintf("%s: %.1f%% is below baseline %.1f%% minus %.1f", p, cur.pct(), want, tolerance))
 			}
 			fmt.Fprintf(out, "%-45s %7.1f%% %7.1f%%%s\n", p, cur.pct(), want, mark)
 		}
@@ -241,7 +250,7 @@ func readProfile(p string) (map[string]tally, tally, error) {
 		}
 		n, err1 := strconv.Atoi(sp[1])
 		c, err2 := strconv.Atoi(sp[2])
-		if err1 != nil || err2 != nil {
+		if err1 != nil || err2 != nil || n < 0 || c < 0 {
 			return nil, tally{}, fmt.Errorf("%s: malformed counts in %q", p, line)
 		}
 		b := blocks[sp[0]]
@@ -289,7 +298,13 @@ func readBaseline(p string) (baseline, error) {
 		}
 		if strings.HasPrefix(line, "#") {
 			if rest, ok := strings.CutPrefix(line, osPrefix); ok {
-				b.os = strings.TrimSpace(rest)
+				if b.os != "" || b.sawOS {
+					return b, fmt.Errorf("%s: duplicate %q line %q", p, osPrefix, line)
+				}
+				b.os, b.sawOS = strings.TrimSpace(rest), true
+				if !knownGOOS[b.os] {
+					return b, fmt.Errorf("%s: %q names %q, not a known GOOS", p, line, b.os)
+				}
 			}
 			b.comments = append(b.comments, line)
 			continue
@@ -345,9 +360,13 @@ func writeBaseline(p string, pkgs map[string]tally, overall tally, skipped []str
 	for _, c := range prev.comments {
 		have[c] = true
 	}
+	declared := map[string]bool{}
+	for _, u := range prev.unmeasured() {
+		declared[u] = true
+	}
 	for _, s := range skipped {
 		c := "# unmeasured: " + s + " (tests fail on the host that generated this baseline; no floor enforced)"
-		if !have[c] {
+		if !have[c] && !declared[s] {
 			prev.comments = append(prev.comments, c)
 			have[c] = true
 		}
@@ -367,7 +386,7 @@ func writeBaseline(p string, pkgs map[string]tally, overall tally, skipped []str
 		}
 		b.WriteString(c + "\n")
 	}
-	b.WriteString(osPrefix + goos + "\n")
+	b.WriteString(osPrefix + " " + goos + "\n")
 	fmt.Fprintf(&b, "%s %.1f\n%s %.1f\n", overallTargetKey, target, overallCurrent, overall.pct())
 	names := make([]string, 0, len(pkgs))
 	for n := range pkgs {
@@ -401,20 +420,4 @@ var knownGOOS = map[string]bool{
 	"hurd": true, "illumos": true, "ios": true, "js": true, "linux": true, "nacl": true,
 	"netbsd": true, "openbsd": true, "plan9": true, "solaris": true, "wasip1": true,
 	"windows": true, "zos": true, "unix": true,
-}
-
-// hasPlatformFiles reports whether dir holds a non-test source file named
-// *_<goos>.go or *_unix.go, so its statement count differs per OS.
-func hasPlatformFiles(dir string) bool {
-	m, _ := filepath.Glob(filepath.Join(dir, "*.go"))
-	for _, f := range m {
-		name := strings.TrimSuffix(filepath.Base(f), ".go")
-		if strings.HasSuffix(name, "_test") {
-			continue
-		}
-		if i := strings.LastIndex(name, "_"); i >= 0 && knownGOOS[name[i+1:]] {
-			return true
-		}
-	}
-	return false
 }
