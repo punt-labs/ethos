@@ -127,7 +127,7 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	} else {
 		resolvedID, humanErr = resolveHumanIdentity(store, loc.Checkout)
 	}
-	repairNote := runSessionRepair(deps.Repair)
+	repairItems := runSessionRepair(deps.Repair)
 
 	// Resolve agent persona from repo config. A non-nil error means
 	// the config file exists but cannot be read or parsed — a loud
@@ -148,8 +148,11 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: %s\n", note)
 	}
 	// The repair line is for the session's note only; the repair log holds the
-	// detail, so stderr does not repeat it.
-	if repairNote != "" {
+	// detail, so stderr does not repeat it. The line is built here, from the
+	// count alone: the merge with the engine sums Ensure's item count (the
+	// notice it returns) and the cheap pass's count into this one "upgraded
+	// storage" line, so a session never hears two.
+	if repairNote := upgradedStorageLine(repairItems); repairNote != "" {
 		if note != "" {
 			note = repairNote + " " + note
 		} else {
@@ -426,18 +429,24 @@ func resolveHumanIdentity(store identity.IdentityStore, checkout string) (*ident
 	return id, nil
 }
 
-// runSessionRepair runs the DES-084 session-start pass and returns the one
-// line it earns, or "" when nothing was converted or the pass failed. The line
-// goes in the session's note because this hook's stderr is never read.
-func runSessionRepair(repair func(ctx context.Context) (int, error)) string {
+// runSessionRepair runs the DES-084 session-start pass and returns the items it
+// converted, 0 when nothing was converted or the pass failed.
+func runSessionRepair(repair func(ctx context.Context) (int, error)) int {
 	if repair == nil {
-		return ""
+		return 0
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), autorepair.StepBudget)
 	defer cancel()
 	// A repair error is recorded by the pass in the repair log; it never
 	// reaches stderr.
 	n, _ := repair(ctx)
+	return n
+}
+
+// upgradedStorageLine is the one line the session's note carries for n
+// converted items, "" for none. This hook's stderr is never read, so the line
+// goes in the note.
+func upgradedStorageLine(n int) string {
 	if n == 0 {
 		return ""
 	}

@@ -203,3 +203,43 @@ func readFixture(t *testing.T, path string) string {
 	require.NoError(t, err)
 	return string(b)
 }
+
+// A residual names a file relative to its repository: the machine's directory
+// layout goes to the repair log, never into a stamp.
+func TestResidualsNameNoAbsolutePath(t *testing.T) {
+	env := fixtureEnv(t, "corpus/v4.20.4")
+	repo := env.Roots.Checkout
+	for _, p := range []string{
+		filepath.Join(repo, ".punt-labs", "vox", "vox.local.md"),
+		filepath.Join(repo, ".punt-labs", "biff", "local", "state.json"),
+	} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte("secret\n"), 0o600))
+	}
+	shared := filepath.Join(t.TempDir(), "shared-hooks")
+	require.NoError(t, os.MkdirAll(shared, 0o755))
+	for _, name := range []string{"pre-commit", "commit-msg"} {
+		b, err := os.ReadFile(filepath.Join(repo, ".git", "hooks", name))
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(shared, name), b, 0o755))
+	}
+	f, err := os.OpenFile(filepath.Join(repo, ".git", "config"), os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, err = f.WriteString("[core]\n\thooksPath = " + shared + "\n")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"),
+		[]byte(readFixture(t, filepath.Join(repo, ".gitignore"))+".punt-labs/ethos/sessions/\n"), 0o644))
+
+	out, err := runGitignore(context.Background(), env)
+	require.NoError(t, err)
+	require.NotEmpty(t, out.Residuals)
+	home := os.Getenv("HOME")
+	for _, r := range out.Residuals {
+		for _, s := range []string{r.ID, r.Reason} {
+			assert.NotContains(t, s, repo, "residual %q", r.ID)
+			assert.NotContains(t, s, shared, "residual %q", r.ID)
+			assert.NotContains(t, s, home, "residual %q", r.ID)
+		}
+	}
+}
