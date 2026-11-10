@@ -144,9 +144,14 @@ func (s *Store) UpgradeLegacyAuthority(id string) (bool, error) {
 func IsMissionID(name string) bool { return missionIDPattern.MatchString(name) }
 
 // ReplaceRecordFile atomically replaces dest, a file in the canonical store or
-// checkout of p, with data, staging in the policy's local temp directory. It
-// does not canonicalize data: the caller has already decided the exact bytes.
+// checkout of p, with data, staging in the policy's local temp directory. The
+// bytes pass guardWrite like every other record writer: they are canonicalized,
+// and refused when they still leak a path or credential.
 func ReplaceRecordFile(p layout.Policy, dest string, data []byte) error {
+	data, err := guardWrite(dest, data)
+	if err != nil {
+		return err
+	}
 	w, err := localReplace(p, dest, data)
 	return errors.Join(err, w.DurabilityError)
 }

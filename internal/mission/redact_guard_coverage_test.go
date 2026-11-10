@@ -16,6 +16,7 @@ import (
 // is the check that holds whatever they missed.
 var guardedSinks = map[string]string{
 	"internal/mission.writeContractFile":                       "guardWrite",
+	"internal/mission.ReplaceRecordFile":                       "guardWrite",
 	"internal/mission.writeAtomicFileWithWarning":              "guardWrite",
 	"internal/mission.writeSyncedFile":                         "guardWrite",
 	"internal/mission.WriteTrackedFiles":                       "writeTrackedFiles",
