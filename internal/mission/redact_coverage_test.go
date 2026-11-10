@@ -277,6 +277,19 @@ var writerRegistry = map[string]writerEntry{
 
 	"internal/repair.Plan.Apply": exempt("opens existing lock files with O_RDWR to tryLock, then deletes explicitly selected obsolete files; writes no new record content"),
 
+	// Self-repair (DES-084). Step 5 archives record-tree trace into the local
+	// archive: every payload reaches archiver.install already redacted, by
+	// the shared record redactor, the path redactor's Body pass, or the
+	// seal's own line guards.
+	"internal/autorepair.lockHeld":                    exempt(reasonLock),
+	"internal/autorepair.archiver.archiveAndDelete":   exempt("opens the mission-state or audit stream lock to TryLock, then deletes the inventoried original; the archive copy is written by archiver.install"),
+	"internal/autorepair.archiver.archiveReflections": exempt("opens the mission-state lock to TryLock, then deletes the legacy aggregate; the envelopes are written by archiver.install"),
+	"internal/autorepair.archiver.install":            sink(1, "installs payload argument 1 via ReplaceLocalFile after proving an existing destination is byte-equal; reflections, prompt, jsonl and diagnostic redact and leak-check the bytes first"),
+	"internal/autorepair.archiver.reflections":        checkpoint("RedactReflection", "LegacyReflectionEnvelope", "LeakRule", "install"),
+	"internal/autorepair.archiver.prompt":             checkpoint("Body", "LeakRule", "install"),
+	"internal/autorepair.archiver.jsonl":              checkpoint("guard", "install"),
+	"internal/autorepair.archiver.diagnostic":         checkpoint("Body", "LeakRule", "install"),
+
 	// cmd/ethos.
 	"cmd/ethos.editContent":           exempt("identity graph: operator edits an attribute file by hand"),
 	"cmd/ethos.ensureLocalExtIgnored": checkpoint("EnsureLocalIgnored"),
