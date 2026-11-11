@@ -30,3 +30,12 @@ spawn the worker — turning a delegation conversation into a typed,
 enforced contract.
 
 See [mission/SKILL.md](mission/SKILL.md) for the full content.
+
+## optimize-team
+
+Right-size a team roster to one repo's actual tooling at the lowest
+per-session context cost — interview, decision table, context-budget
+estimate, and a propose-then-ratify-then-write flow.
+
+See [optimize-team/SKILL.md](optimize-team/SKILL.md) for the full
+content.

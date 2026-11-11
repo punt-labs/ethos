@@ -26,7 +26,7 @@ var Agents embed.FS
 //go:embed all:sidecar/bundles
 var Bundles embed.FS
 
-//go:embed sidecar/skills/baseline-ops/SKILL.md sidecar/skills/mission/SKILL.md sidecar/skills/create-from-project/SKILL.md
+//go:embed sidecar/skills/baseline-ops/SKILL.md sidecar/skills/mission/SKILL.md sidecar/skills/create-from-project/SKILL.md sidecar/skills/optimize-team/SKILL.md
 var Skills embed.FS
 
 //go:embed sidecar/identities/README.md sidecar/talents/README.md sidecar/personalities/README.md sidecar/writing-styles/README.md sidecar/roles/README.md sidecar/teams/README.md sidecar/skills/README.md sidecar/agents/README.md sidecar/README.md

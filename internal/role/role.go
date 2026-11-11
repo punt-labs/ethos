@@ -38,7 +38,7 @@ type Role struct {
 // ModelAliases are the short model names ValidateModel accepts, apart from
 // any full claude-* identifier. The schema registry reads this slice for the
 // alias half of the model enum, so the aliases have a single source.
-var ModelAliases = []string{"opus", "sonnet", "haiku", "inherit"}
+var ModelAliases = []string{"opus", "sonnet", "haiku", "fable", "inherit"}
 
 // ValidateName checks that a role name follows the same slug rules as attributes.
 func ValidateName(name string) error {
@@ -59,5 +59,5 @@ func ValidateModel(model string) error {
 	if strings.HasPrefix(model, "claude-") && len(model) > len("claude-") {
 		return nil
 	}
-	return fmt.Errorf("unrecognized model %q: must be opus, sonnet, haiku, inherit, or a full claude-* model ID", model)
+	return fmt.Errorf("unrecognized model %q: must be %s, or a full claude-* model ID", model, strings.Join(ModelAliases, ", "))
 }

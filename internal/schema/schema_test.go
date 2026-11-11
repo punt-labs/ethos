@@ -241,7 +241,7 @@ func TestJSONSchemaNestedObjectArray(t *testing.T) {
 // claude-* id, and the empty string (inherit) — the drift-match promise
 // the registry makes to its consumers.
 func TestRoleModelSchemaMatchesValidator(t *testing.T) {
-	accepted := []string{"", "opus", "sonnet", "haiku", "inherit", "claude-opus-4-8"}
+	accepted := []string{"", "opus", "sonnet", "haiku", "fable", "inherit", "claude-opus-4-8"}
 	for _, v := range accepted {
 		if err := role.ValidateModel(v); err != nil {
 			t.Fatalf("ValidateModel(%q) unexpectedly rejected: %v", v, err)

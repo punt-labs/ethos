@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `/ethos:optimize-team` skill — interviews a repo and composes the smallest
+  team that covers what the repo dispatches, at the lowest per-session
+  `.claude/agents` context cost. Ships as a seed-sidecar skill (deployed by
+  `ethos seed` to `~/.claude/skills/optimize-team/`, so it reaches any repo)
+  plus the `/ethos:optimize-team` slash-command launcher pair. The skill is
+  propose-then-ratify: it shows a context-budget estimate for the proposed
+  roster and writes no YAML until the operator confirms (ethos-qffs).
+- `fable` accepted as a fourth role model alias (`model: fable`), so a role
+  can target the top reviewer tier the optimize-team decision table assigns
+  to its hardest-to-review work.
+
 ## [5.0.1] - 2026-11-10
 
 ### Changed
