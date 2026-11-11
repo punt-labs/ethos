@@ -606,3 +606,38 @@ func TestRegisteredStepsAreInStepOrder(t *testing.T) {
 		}
 	}
 }
+
+// EnsureUnbounded lifts both budgets and changes nothing else: a step that
+// outlives Ensure's step budget is abandoned there and runs to completion
+// here, with the stamp landing in one pass.
+func TestEnsureUnboundedFinishesAStepEnsureAbandons(t *testing.T) {
+	r := newRig(t, true)
+	r.opts.stepBudget = 50 * time.Millisecond
+	r.opts.ensureBudget = 200 * time.Millisecond
+	r.opts.steps = append(r.opts.steps, Step{Name: "slow", Scope: ScopeBoth,
+		Run: func(ctx context.Context, _ Env) (Outcome, error) {
+			select {
+			case <-time.After(150 * time.Millisecond):
+				return Outcome{Items: 1}, nil
+			case <-ctx.Done():
+				return Outcome{}, ctx.Err()
+			}
+		}})
+	r.opts.order = append(r.opts.order, "slow")
+
+	res, err := ensure(context.Background(), r.roots, r.global, r.opts)
+	require.NoError(t, err)
+	assert.False(t, res.Repaired, "under the step budget the slow step is abandoned")
+	assert.NoFileExists(t, filepath.Join(r.global, "layout.yaml"), "no stamp after an abandoned step")
+
+	bounded := defaultOptions()
+	unboundedOpts := r.opts
+	unboundedOpts.stepBudget, unboundedOpts.ensureBudget = unbounded, unbounded
+	assert.Equal(t, StepBudget, bounded.stepBudget, "Ensure keeps the step budget")
+	assert.Equal(t, EnsureBudget, bounded.ensureBudget, "Ensure keeps the pass budget")
+	res, err = ensure(context.Background(), r.roots, r.global, unboundedOpts)
+	require.NoError(t, err)
+	assert.True(t, res.Repaired, "with no budget the slow step finishes")
+	assert.Equal(t, 1, res.Items)
+	assert.FileExists(t, filepath.Join(r.global, "layout.yaml"), "the stamp lands in one pass")
+}

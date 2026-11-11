@@ -84,6 +84,20 @@ func Ensure(ctx context.Context, roots resolve.Located, global string) (Result, 
 	return ensure(ctx, roots, global, defaultOptions())
 }
 
+// EnsureUnbounded is Ensure with no step or pass budget: every step runs to
+// completion, so one call finishes a conversion that Ensure would spread over
+// many runs. Only `ethos doctor` calls it (operator ruling 2026-11-11).
+func EnsureUnbounded(ctx context.Context, roots resolve.Located, global string) (Result, error) {
+	o := defaultOptions()
+	o.stepBudget = unbounded
+	o.ensureBudget = unbounded
+	return ensure(ctx, roots, global, o)
+}
+
+// unbounded stands in for "no budget": context.WithTimeout accepts it and the
+// deadline never arrives in practice.
+const unbounded = 100 * 365 * 24 * time.Hour
+
 // CheapPass runs the named steps now, whatever the stamps say, and never
 // writes a stamp. It is the only supported entry for the per-event
 // conversions DES-084 names; a hook does not build its own pass, Env, log or
