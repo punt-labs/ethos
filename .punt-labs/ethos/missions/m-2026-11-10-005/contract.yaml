@@ -1,0 +1,41 @@
+mission_id: m-2026-11-10-005
+status: closed
+type: task
+created_at: "2026-11-10T20:19:29Z"
+updated_at: "2026-11-10T20:38:56Z"
+closed_at: "2026-11-10T20:38:56Z"
+leader: claude
+worker: mdm
+evaluator:
+    handle: rop
+    pinned_at: "2026-11-10T20:19:29Z"
+    hash: 20189642facff1b82f8ffacc47f3b7a939d5cf355ef6322e1df534a55f0e2808
+inputs:
+    ticket: ethos-ftey
+write_set:
+    - docs/storage-layout.md
+    - docs/agent-guide.md
+    - docs/ETHOS-SETUP.md
+    - internal/enable/setup/ETHOS-SETUP.md
+    - internal/enable/guide/CLAUDE.md
+    - docs/audit-seal.md
+    - docs/enable-disable.md
+    - docs/spec-mission-lifecycle.tex
+    - prfaq.tex
+success_criteria:
+    - 'docs/storage-layout.md: the Status paragraph (lines 1-10) says the DES-079 layout is the shipped layout and ethos converts any older layout itself (DES-084); the ''Automatic storage upgrade'' section (line ~379) names the stamp files, the repair log, the one-line notice, that a busy lock defers and the next run resumes, and that losses are logged, never fatal; the ''Promise to implementation to acceptance'' table (line ~414) is rewritten so every row names the test or acceptance case that proves it (scripts/storage_acceptance.py case names: default_seal, modes, audit_recovery, lifecycle, required_event_failure, worktree_retention, full_export, publish_squash, mcp_modes, upgrade; plus Go test names where a row has one) and no cell says ''Pending''; every mention of ethos repair, audit quarantine, audit migrate, mission migrate, mission scrub, adr migrate or session purge as a command the user runs is removed or rewritten as the automatic step that replaced it; ''Legacy, read-only'' rows describe what the upgrade does with that data, not a read-only fallback.'
+    - 'docs/agent-guide.md and internal/enable/guide/CLAUDE.md: the ''Storage status'' and ''Storage and sharing (DES-079; acceptance pending)'' headings and paragraphs state the shipped behavior with no ''pending''; the ''Bounded legacy repair'' section of the guide (ethos repair --dry-run, --yes, Are you sure) is replaced by a short ''Automatic storage upgrade'' section matching the design (stamp, log, one line, no command); the removed commands do not appear as things to run; ''Readers union local, published and supported legacy evidence'' is rewritten to the current reader (local plus published, no legacy source); the legacy-sibling overlay paragraph becomes the step-8 rule (old sibling moved under S/.punt-labs/local/ethos/identities/<handle>.ext/<ns>.local.yaml; when both exist the new one is kept and the old one deleted).'
+    - 'docs/ETHOS-SETUP.md: the line ''The separately confirmed legacy repair is destructive, not a migration.'' and the ''Storage policy (DES-079; acceptance pending)'' heading and paragraph are rewritten to the shipped behavior; then `make sync-embed` is run so internal/enable/setup/ETHOS-SETUP.md is byte-identical (diff -q exits 0) and that file is committed with it.'
+    - 'docs/audit-seal.md and docs/enable-disable.md: every sentence naming `ethos audit quarantine` as the escape or recovery for a corrupt chunk says instead that the next ethos run salvages the chunk automatically (DES-084 step 7: decodable lines are redacted into a replacement chunk, raw bytes deleted, digests logged); the ''DES-079 supersession (acceptance pending)'' heading loses ''(acceptance pending)'' and its paragraph states shipped behavior; the audit-seal pseudocode comments ''escape is ethos audit quarantine'' are updated the same way. Do not restructure either document; change only the sentences that are now false.'
+    - 'prfaq.tex: the ''Repair status.'' paragraph (line ~275), the ''Shipped in v4.21.0, release acceptance pending:'' paragraph (line ~416), the ''(acceptance pending)'' qualifiers at lines ~434-437 and the feature items at ~563-566 are rewritten in the prfaq''s future-vision voice: ethos upgrades its own storage at every entry point, the user runs nothing and sees at most one line, and no repair command exists; every ''acceptance pending'' and ''bounded repair command requires a deletion warning and explicit consent'' is gone. `make docs-pdf` compiles prfaq.pdf with zero LaTeX errors (paste the tail of the output in the result).'
+    - 'docs/spec-mission-lifecycle.tex: grep it for every read state or guard the deleted legacy readers provided (legacy_unknown, unmigrated, legacy fallback). If one is named, amend the spec to the current reader and run `make fuzz-check` (zero errors, paste the output). If none is named, say so in the result with the grep output; the PR description will carry that sentence.'
+    - Every changed .md file passes `npx markdownlint-cli2 <file>` with zero findings; `make validate-content` passes; `GOTOOLCHAIN=go1.26.5 go test -count=1 ./internal/enable/...` passes (the guide and setup embeds have tests). Paste each command's final lines in the result.
+    - 'Micro-commits: one commit per file group (storage-layout; agent-guide + guide; ETHOS-SETUP + embed; audit-seal + enable-disable; prfaq; spec), each with the commands above green for the files it touches.'
+budget:
+    rounds: 1
+    reflection_after_each: true
+current_round: 1
+round_decisions:
+    version: 1
+    entries: []
+context: 'Docs wave of epic ethos-ftey (DES-084, ethos repairs itself). Worktree <repo>/.claude/worktrees/sr-docs, branch docs/self-repair-wave2, based on fix/self-repair-integration at 945cacb. The code is done and green: internal/autorepair runs 17 steps (autorepair.go StepOrder) before every CLI command, MCP call and git hook; stamps at S/.punt-labs/local/ethos/layout.yaml and ~/.punt-labs/ethos/layout.yaml; log at ~/.punt-labs/ethos/logs/repair.log; the only user-visible output is one line ''ethos: upgraded storage (N items; see ~/.punt-labs/ethos/logs/repair.log)''. Removed commands: ethos repair, audit quarantine, audit migrate, mission scrub, mission migrate, adr migrate, session purge (cmd/ethos/removed_commands_test.go lists them and the kept ones: identity get, hook commit-trailers, hook commit-message, audit seal, session iam). Legacy readers are deleted. Read DESIGN.md section ''## DES-084'' first, then CHANGELOG.md [Unreleased]. Documents are written to be correct now: no ''acceptance pending'', no ''shipped in v4.21.0; acceptance pending'', no ''requires''/''must'' phrasing for behavior that exists, no past references, no meta-commentary (the exception: prfaq.tex is written in the future tense as a product vision, and the DESIGN.md ADRs, which you do not touch). The leader is editing DESIGN.md, README.md and CHANGELOG.md in a separate worktree; do not touch those files. Time box: budget.minutes 90; first commit within 30 minutes. Commit on your branch; do not push, do not touch PRs or merge, no attribution lines; git add only the files you changed.'
