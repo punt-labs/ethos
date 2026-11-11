@@ -68,8 +68,9 @@ Ask every question whose answer changes the team shape — never guess a
 | 1 | Primary language(s)? | Go | add `go-implementer` (worker) | sonnet |
 | 1 | — | Python | add `python-implementer` (worker) | sonnet |
 | 1 | — | both | add both implementers | sonnet each |
-| 1 | — | other/none | no language implementer seat | — |
-| 2 | Who reviews the implementation code? | same repo, needs a reviewer | add `go-reviewer` / `python-reviewer` (distinct handle) | opus |
+| 1 | — | other language (e.g. Swift, Rust, TypeScript) | add `<lang>-implementer` (worker) | sonnet |
+| 1 | — | none (no implementation surface) | no language implementer seat | — |
+| 2 | Who reviews the implementation code? | same repo, needs a reviewer | add `<lang>-reviewer` (distinct handle from the implementer, for whichever language(s) row 1 added) | opus |
 | 2 | — | no second-party review wanted | implementer only; note the author-grades-own-work risk | — |
 | 3 | Testing approach? | TDD / dedicated test+QA | add `qa` seat distinct from the implementer | sonnet |
 | 3 | — | implementer writes own tests | no QA seat; implementer carries tests | — |
@@ -90,6 +91,14 @@ Ask every question whose answer changes the team shape — never guess a
 | 9 | — | — | its reviewer | opus (hard-to-review domain) |
 | 9 | — | none | prune | — |
 
+Row 1/2 are not Go/Python-only: any repo whose primary language is
+something else (Swift, Rust, TypeScript, ...) still gets an
+implementer+distinct-reviewer pair proposed for that language — "none"
+is reserved for a repo with no implementation surface to speak of
+(pure docs, pure config), not for "a language other than Go or
+Python." Pruning a real specialist pair because the table only listed
+two languages is exactly the gap this row exists to close.
+
 The reference rosters to read for "what seat maps to what work" are
 `.punt-labs/ethos/teams/engineering.yaml` (the full 20-seat team) and
 the `gstack` bundle's role-based pipeline. These are the superset this
@@ -104,9 +113,15 @@ skill prunes **down** from, never a floor it adds **up** to.
 - **A reviewer out-tiers its work, strictly.** Every reviewer row is
   one rung above the worker it reviews. Validate this over the
   proposed collaboration edges **before** writing the team YAML:
-  every edge is `worker -> reviewer` with `tier(reviewer) >
-  tier(worker)`. Refuse to write a team whose review edges are not a
-  strict ordering by tier.
+  every edge is `from: <worker-role>`, `to: <reviewer-role>`, `type:
+  reports_to`, with `tier(reviewer) > tier(worker)`. A `Collaboration`
+  has no valid default for `type` — `internal/team/team.go:22-25`
+  requires it on every edge, and `validCollabType` (team.go:44,
+  `CollaborationTypes`) accepts only `reports_to`,
+  `collaborates_with`, or `delegates_to`; an edge missing `type`, or
+  carrying any other string, fails team load. Refuse to write a team
+  whose review edges are not a strict ordering by tier, or whose edges
+  omit `type`.
 - **The ladder is acyclic by construction.** The table only ever adds
   a *dedicated* reviewer seat for a worker seat, never a
   worker-reviews-worker edge — a reciprocal pair never arises to
@@ -153,6 +168,24 @@ list, description + talents lines. The dominant terms are the
 persona/writing-style prose and the output-format body, not the tools
 list.
 
+Two corrections the estimate must apply, both verified against
+`internal/hook/generate_agents.go`:
+
+- **Exclude the configured main agent.** The agent planner skips
+  `cfg.Agent` (the repo's main-session identity) entirely — it never
+  generates a `.claude/agents/<handle>.md` for it (the `m.Identity ==
+  mainAgent` continue). Counting the main agent's seat in the budget
+  overstates both the current-cost baseline and the savings from
+  pruning it; it was never going to produce a file either way.
+- **Include the per-seat generated hook/scaffolding block.** Any role
+  whose `tools:` includes `Write` or `Edit` (`hasWriteTool`) gets an
+  extra generated block appended to its agent file — a `hooks:`
+  section wiring `PostToolUse` on the `Write|Edit` matcher. This is
+  bytes the generator adds on top of the persona/writing-style/output
+  terms above, not covered by reading only the source `.md` files.
+  Add it to every write-enabled seat's estimate, or state plainly that
+  the number is a lower bound that omits it.
+
 **Estimating a not-yet-written seat.** A greenfield seat has no
 personality, writing-style, or talent `.md` on disk yet, so its prose
 bytes cannot be read from an existing file. Estimate them from the
@@ -193,9 +226,10 @@ Strictly propose-first. Writing is gated on an explicit ratification.
 2. **Interview** via `AskUserQuestion`, one question per decision-table
    axis.
 3. **Compose** the proposed roster from the answers, applying the
-   decision table. Validate the review edges — every edge is
-   `worker -> reviewer` with `tier(reviewer) > tier(worker)`, strictly.
-   Refuse to proceed if any edge fails this check.
+   decision table. Validate the review edges — every edge is `from:
+   <worker-role>`, `to: <reviewer-role>`, `type: reports_to`, with
+   `tier(reviewer) > tier(worker)`, strictly. Refuse to proceed if any
+   edge fails this check or omits `type`.
 4. **Present** the proposed team plus the context-budget table above.
 5. **Ratify the YAML writes** via a final `AskUserQuestion`: "Write
    this team?" with choices ratify / adjust / cancel. On "adjust,"
@@ -215,51 +249,122 @@ Strictly propose-first. Writing is gated on an explicit ratification.
    - `identities/<handle>.yaml` — one per agent seat: `name`,
      `handle`, `kind: agent`, `writing_style`, `personality`,
      `talents`, `skills`. No `model`, no `tools` — those live on the
-     role (`internal/identity/identity.go`).
+     role (`internal/identity/identity.go`). Writing a `personality:`
+     or `writing_style:` slug does not create that content — it is a
+     reference the agent-file generator resolves against
+     `personalities/<slug>.md` / `writing-styles/<slug>.md`
+     (`internal/attribute/`). If the slug does not resolve, generation
+     skips that member silently rather than erroring loudly on the
+     team write, so every slug used here must either already resolve
+     (an existing repo/bundle/global attribute) or be staged in the
+     same closure: write the matching
+     `personalities/<slug>.md` / `writing-styles/<slug>.md` file
+     alongside the identity, using one of the starter templates `ethos
+     setup` scaffolds as the base.
    - `teams/<name>.yaml` — members (identity+role) and
-     `collaborations`. Each review edge is written with explicit
-     direction `from: <worker-role>`, `to: <reviewer-role>` — never a
-     bidirectional edge.
+     `collaborations`. Every edge is a 3-field `Collaboration` —
+     `from`, `to`, and `type` — never direction alone; `type` is
+     mandatory (`internal/team/team.go:22-25`) and must be one of
+     `reports_to` / `collaborates_with` / `delegates_to`
+     (`CollaborationTypes`, team.go:44). A review edge is written as
+     the worker reporting to its reviewer, e.g.:
+
+     ```yaml
+     collaborations:
+       - from: go-implementer
+         to: go-reviewer
+         type: reports_to
+     ```
+
+     Never a bidirectional edge, and never an edge with `from`/`to`
+     only.
    - `ethos.yaml` — `agent`, `team`, and `resolution` keys.
-7. **Validate the staged set, then swap.** Run `ethos doctor` against
-   the staged closure. On a clean result, swap the staged files into
-   place as the last step — an all-or-nothing cutover. On any
-   `doctor` failure, leave the working tree untouched, restore from
-   the backup if a partial write already happened, report the
-   failure, and stop. The operator's existing working team survives a
-   mid-write error — there is no window where the team references
-   files that do not exist.
+7. **Validate the staged set with the checks this skill can run, then
+   swap, then confirm with `ethos doctor`.** `ethos doctor` checks the
+   *live* repo — it takes no staged-root argument (`cmd/ethos/main.go`
+   `doctorCmd`/`runDoctor`) — so it cannot be pointed at the temp
+   staging directory from step 6. Before swapping, validate the staged
+   closure with the checks this skill owns: every `model:` value
+   passes `ValidateModel` (`internal/role/role.go`); every
+   collaboration edge has a `type` from `CollaborationTypes` and a
+   strict tier ordering (above); every worker/evaluator pair is a
+   distinct handle; and every proposed member's `personality` and
+   `writing_style` slug resolves against a staged or existing
+   `.md` file (the gap named in step 6 above) — an identity whose slug
+   does not resolve is silently dropped from agent generation rather
+   than erroring, so this skill must catch it before cutover, not
+   discover it after. On a clean result, swap the staged files into
+   place as the last step — an all-or-nothing cutover — then run
+   `ethos doctor` against the now-live result to confirm it resolves
+   end-to-end (identity/role/team cross-references, orphaned files,
+   hook currency). If `doctor` reports a FAIL on the live result,
+   restore the backup from step 6 immediately, report the failure, and
+   stop. The backup-and-restore is the real safety net here, not a
+   pre-write doctor run: the operator's existing working team survives
+   a bad write because the backup is restored the moment `doctor`
+   catches it, not because `doctor` ever saw the staged files first.
 8. **Destructive reconcile — a SEPARATE, explicitly-consented step.**
-   `ethos vendor --team <t> --apply --prune` removes files from the
-   vendored closure. This is destructive and is NOT covered by the
-   step-5 ratification. Run it **without `--yes`**, so the user sees
-   and answers its own prompt, AND ask a separate `AskUserQuestion`
-   first ("Reconcile now? This deletes obsolete trace and prunes
-   vendored files") before invoking it. Run this only when re-shaping
-   left obsolete residue, and the prune only in a
-   `resolution: repo-only` repo. On "no," leave it to the user.
+   `ethos vendor` has no `--yes` flag and prompts for nothing itself
+   (`cmd/ethos/vendor.go`); its own safety model is `--dry-run`
+   (the default — plan only, no write) versus `--apply` (write the
+   snapshot). Drive that model explicitly instead of relying on a
+   vendor-provided prompt that does not exist:
+   1. Run `ethos vendor --team <t> --prune` with no `--apply` — this
+      plans only and prints what would be removed from the vendored
+      closure.
+   2. Present that plan verbatim in a separate `AskUserQuestion`
+      ("Reconcile now? This deletes obsolete trace and prunes these
+      vendored files: `<plan output>`") before invoking anything
+      destructive.
+   3. On explicit consent, run `ethos vendor --team <t> --apply
+      --prune` to write the deletions. On "no," leave it to the user
+      and stop here.
+
+   This reconcile is destructive and is NOT covered by the step-5
+   ratification — that one covers only the non-destructive YAML writes
+   in step 6. Run it only when re-shaping left obsolete residue, and
+   the prune only in a `resolution: repo-only` repo.
 9. **Regenerate is not this skill's job.** Tell the user to restart
    Claude Code; SessionStart regenerates `.claude/agents/` from the
    YAML just written. Never touch the generated files directly.
 
 ## Greenfield vs optimize-in-place
 
-**Greenfield (no team yet).** Offer to run `ethos setup` first to lay
-down the starter scaffold, then run the full interview and write a
-fresh roster. All seats are additions; the budget table shows the full
-proposed cost against zero.
+**Greenfield (no team yet).** `ethos setup` persists immediately —
+`store.Save` runs as each identity is created and the repo config is
+written to disk in the same pass (`cmd/ethos/setup.go`), with no
+dry-run or staging step of its own. Running it "first" would therefore
+write starter identities and a starter team before this skill's
+ratification gate ever fires, breaking the "canceling writes nothing"
+promise this skill makes everywhere else. Gather the full proposal
+WITHOUT running `ethos setup`: run the interview, compose the roster
+from the decision table, and present the budget table exactly as in
+optimize-in-place, but against a starting state of zero existing
+seats. Only after the user ratifies, write the full closure directly
+(roles, identities, team, `ethos.yaml`) in one step 6 — there is no
+separate "run setup, then trim" pass. All seats are additions; the
+budget table shows the full proposed cost against zero.
 
 **Optimize-in-place (existing team).** Read the current team and
 roles, run the interview, and produce a **diff**: seats to keep, seats
 to add, seats to prune, and model-tier changes. The budget table shows
 current cost, proposed cost, and the delta. Pruning removes the member
 from the team YAML (and optionally the role/identity files, on an
-explicit confirm); the agent file disappears on the next SessionStart
-regeneration. Never delete a generated `.claude/agents/` file
-directly — removing the source and regenerating is the only path.
-After any prune in a `resolution: repo-only` repo, `ethos vendor
---apply --prune` reconciles the vendored closure so no orphaned role
-or identity remains (step 8 above).
+explicit confirm). This does NOT delete the pruned member's generated
+`.claude/agents/<handle>.md` file — the agent-file generator
+(`internal/hook/agent_plan.go`) only ever writes or renames into that
+directory, never removes a file for a member no longer on the team.
+The file is left behind as an orphan; `ethos doctor`'s "Orphaned agent
+files" check (`internal/doctor/doctor.go`) flags it, and the user
+removes it by hand (or leaves it, inert, since nothing regenerates or
+reads it once its identity is off the team). Never delete a generated
+`.claude/agents/` file directly as part of *writing* the new roster —
+removing the source YAML is this skill's job; removing the resulting
+orphaned file is the user's, flagged by `doctor`, not automatic.
+After any prune in a `resolution: repo-only` repo, step 8's plan-then-
+consent-then-apply reconcile (`ethos vendor --team <t> --prune`, then
+`--apply --prune` on consent) cleans the vendored closure so no
+orphaned role or identity remains there.
 
 ## What this skill does NOT do
 
@@ -276,5 +381,8 @@ or identity remains (step 8 above).
 - `internal/role/role.go` — `ModelAliases`, `ValidateModel`.
 - `internal/hook/generate_agents.go` — `buildAgentFile`, the generated
   agent-file composition this skill's budget estimate mirrors.
-- `ethos doctor`, `ethos vendor --team <t> --apply --prune` — the
-  validation and reconcile commands this flow drives.
+- `ethos doctor` — the live-repo confirmation check this flow runs
+  after cutover (step 7).
+- `cmd/ethos/vendor.go` — `ethos vendor --team <t> --prune` (plan) and
+  `ethos vendor --team <t> --apply --prune` (write) — the reconcile
+  commands step 8 drives, in that order.
