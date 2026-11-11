@@ -79,9 +79,15 @@ func TestSeedEmptyDir(t *testing.T) {
 	assert.FileExists(t, filepath.Join(dest, "personalities", "README.md"))
 	assert.FileExists(t, filepath.Join(dest, "writing-styles", "README.md"))
 
-	// Should have deployed skills
+	// Should have deployed every top-level sidecar skill — this is the
+	// regression guard for the deploy loop in seedSkills: deleting the
+	// loop (or dropping a slug from it) leaves TestTopLevelSkillSlugs
+	// green, since that test only reads the embed directive, but these
+	// assertions fail because the file never lands on disk.
 	assert.FileExists(t, filepath.Join(skills, "baseline-ops", "SKILL.md"))
 	assert.FileExists(t, filepath.Join(skills, "mission", "SKILL.md"))
+	assert.FileExists(t, filepath.Join(skills, "create-from-project", "SKILL.md"))
+	assert.FileExists(t, filepath.Join(skills, "optimize-team", "SKILL.md"))
 
 	// Should have deployed all 8 generic pipeline files at the top
 	// level. The 5 gstack-* pipelines now ship inside the gstack

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -164,15 +165,10 @@ func SeedVersionWithBundleDir(destRoot, skillsRoot, agentsRoot, activeBundle, ac
 		s.seedAgents()
 	}
 
-	// Skills
-	s.seedFile(Skills, "sidecar/skills/baseline-ops/SKILL.md",
-		filepath.Join(skillsRoot, "baseline-ops", "SKILL.md"))
-	s.seedFile(Skills, "sidecar/skills/mission/SKILL.md",
-		filepath.Join(skillsRoot, "mission", "SKILL.md"))
-	s.seedFile(Skills, "sidecar/skills/create-from-project/SKILL.md",
-		filepath.Join(skillsRoot, "create-from-project", "SKILL.md"))
-	s.seedFile(Skills, "sidecar/skills/optimize-team/SKILL.md",
-		filepath.Join(skillsRoot, "optimize-team", "SKILL.md"))
+	// Skills — every slug under the embedded sidecar/skills/ tree, so a
+	// new skill deploys as soon as its directory is embedded, with no
+	// further change here.
+	s.seedSkills(skillsRoot)
 
 	// Bundle-scoped skills (DES-073): deployed after the sidecar top-level
 	// skills above, so a slug collision resolves bundle-wins per the ADR.
@@ -249,6 +245,24 @@ func (s *seeder) seedFile(fsys embed.FS, src, dest string) {
 		return
 	}
 	s.place(scopeSkills, dest, data, notRepairCandidate)
+}
+
+// seedSkills deploys every top-level sidecar skill to skillsRoot. Slugs come
+// from topLevelSkillSlugs, which enumerates the embedded Skills FS, so the
+// //go:embed directive is the single source of what deploys — no hardcoded
+// list to fall out of sync. Slugs are sorted for a deterministic deploy
+// order (and so Result's slices are deterministic for tests).
+func (s *seeder) seedSkills(skillsRoot string) {
+	topLevel := topLevelSkillSlugs()
+	slugs := make([]string, 0, len(topLevel))
+	for slug := range topLevel {
+		slugs = append(slugs, slug)
+	}
+	sort.Strings(slugs)
+	for _, slug := range slugs {
+		s.seedFile(Skills, "sidecar/skills/"+slug+"/SKILL.md",
+			filepath.Join(skillsRoot, slug, "SKILL.md"))
+	}
 }
 
 func (s *seeder) seedReadmes(fsys embed.FS, destRoot string) {
