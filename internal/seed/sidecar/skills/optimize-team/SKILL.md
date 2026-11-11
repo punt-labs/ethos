@@ -253,10 +253,16 @@ Strictly propose-first. Writing is gated on an explicit ratification.
      or `writing_style:` slug does not create that content — it is a
      reference the agent-file generator resolves against
      `personalities/<slug>.md` / `writing-styles/<slug>.md`
-     (`internal/attribute/`). If the slug does not resolve, generation
-     skips that member silently rather than erroring loudly on the
-     team write, so every slug used here must either already resolve
-     (an existing repo/bundle/global attribute) or be staged in the
+     (`internal/attribute/`). In a `resolution: repo-only` repo — this
+     skill's usual target — a slug that does not resolve is a hard
+     error at identity load (`ErrIncompleteRepoSet`,
+     `internal/identity/layered.go`), and agent generation then reports
+     the member as a failure by name rather than quietly producing
+     fewer files than the team has (`generate_agents.go`, DES-057).
+     (In a layered repo with a global tail the same miss is only a
+     warning and the member is soft-skipped.) Either way the slug must
+     resolve, so every slug used here must either already resolve (an
+     existing repo/bundle/global attribute) or be staged in the
      same closure: write the matching
      `personalities/<slug>.md` / `writing-styles/<slug>.md` file
      alongside the identity, using one of the starter templates `ethos
@@ -290,10 +296,9 @@ Strictly propose-first. Writing is gated on an explicit ratification.
    strict tier ordering (above); every worker/evaluator pair is a
    distinct handle; and every proposed member's `personality` and
    `writing_style` slug resolves against a staged or existing
-   `.md` file (the gap named in step 6 above) — an identity whose slug
-   does not resolve is silently dropped from agent generation rather
-   than erroring, so this skill must catch it before cutover, not
-   discover it after. On a clean result, swap the staged files into
+   `.md` file (the gap named in step 6 above) — in a repo-only repo an
+   unresolved slug makes agent generation fail and name the member, so
+   catch it here to fail fast before the write rather than after. On a clean result, swap the staged files into
    place as the last step — an all-or-nothing cutover — then run
    `ethos doctor` against the now-live result to confirm it resolves
    end-to-end (identity/role/team cross-references, orphaned files,
