@@ -1,6 +1,8 @@
 package schema
 
 import (
+	"strings"
+
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/team"
@@ -30,7 +32,7 @@ var Identity = Entity{
 }
 
 // Role overlays the persisted role fields. model is a partial enum: the
-// four aliases plus any claude-* identifier, so Enum holds the aliases and
+// named aliases plus any claude-* identifier, so Enum holds the aliases and
 // Pattern holds the claude-* half.
 var Role = Entity{
 	Name:   "Role",
@@ -38,7 +40,7 @@ var Role = Entity{
 	Struct: role.Role{},
 	Overlay: map[string]Overlay{
 		"name":             {Type: "string (slug)", Pattern: slugPattern, Description: "Role name; lowercase alphanumeric with hyphens."},
-		"model":            {Type: "enum + pattern", Enum: role.ModelAliases, Pattern: "^claude-.+", AllowEmpty: true, Description: "Claude model: opus, sonnet, haiku, fable, inherit, or any claude-* ID. Empty inherits."},
+		"model":            {Type: "enum + pattern", Enum: role.ModelAliases, Pattern: "^claude-.+", AllowEmpty: true, Description: "Claude model: " + strings.Join(role.ModelAliases, ", ") + ", or any claude-* ID. Empty inherits."},
 		"responsibilities": {Type: "list of string", Description: "What the role is accountable for."},
 		"permissions":      {Type: "list of string", Description: "Permission grants for the role."},
 		"tools":            {Type: "list of string", Description: "Tool names available to the role."},

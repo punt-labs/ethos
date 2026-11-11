@@ -59,5 +59,5 @@ func ValidateModel(model string) error {
 	if strings.HasPrefix(model, "claude-") && len(model) > len("claude-") {
 		return nil
 	}
-	return fmt.Errorf("unrecognized model %q: must be opus, sonnet, haiku, fable, inherit, or a full claude-* model ID", model)
+	return fmt.Errorf("unrecognized model %q: must be %s, or a full claude-* model ID", model, strings.Join(ModelAliases, ", "))
 }
