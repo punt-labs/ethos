@@ -1,3 +1,8 @@
+---
+name: gstack-debug
+description: Systematic root-cause debugging workflow. Use when investigating a bug, a regression, or a failure whose cause is not yet known — to reproduce, isolate, and prove the root cause before fixing.
+---
+
 # GStack Debug
 
 Systematic root-cause debugging workflow, distilled from

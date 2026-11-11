@@ -1,3 +1,8 @@
+---
+name: gstack-ship
+description: Ship-readiness checklist — merge the base branch, run tests, verify the plan was actually implemented, and land cleanly. Use when finishing a change and getting it ready to merge or ship.
+---
+
 # GStack Ship
 
 Ship-readiness checklist: merge the base branch, run tests, verify the

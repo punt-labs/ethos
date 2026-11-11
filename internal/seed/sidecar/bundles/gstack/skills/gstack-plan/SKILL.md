@@ -1,3 +1,8 @@
+---
+name: gstack-plan
+description: Discovery-and-planning workflow — turn a rough idea into a reviewed plan before any code changes. Use when scoping a feature, drafting an implementation plan, or seeking engineering/design review of an approach ahead of writing code.
+---
+
 # GStack Plan
 
 Discovery-and-planning workflow: turn a rough idea into a reviewed plan

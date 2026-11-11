@@ -1,3 +1,8 @@
+---
+name: gstack-qa
+description: Manual and exploratory QA workflow with a scored health rubric. Use when testing a user flow by hand, reproducing a bug with evidence, or judging whether a feature is healthy enough to ship.
+---
+
 # GStack QA
 
 Manual/exploratory QA workflow with a scored health rubric, distilled

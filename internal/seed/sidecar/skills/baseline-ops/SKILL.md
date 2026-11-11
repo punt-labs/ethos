@@ -1,3 +1,8 @@
+---
+name: baseline-ops
+description: Operational discipline for sub-agents that lose Claude Code's default system prompt when an agent definition replaces it. Covers dedicated tool usage, verification before claiming done, scope discipline, incremental commits, security, and output formatting. Preloaded into ethos-generated agents via their skills frontmatter.
+---
+
 # Baseline Operations
 
 Operational discipline for sub-agents. This skill replaces the

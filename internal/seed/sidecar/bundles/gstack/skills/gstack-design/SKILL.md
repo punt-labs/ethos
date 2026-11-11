@@ -1,3 +1,8 @@
+---
+name: gstack-design
+description: Design-quality workflow — bring a designer's eye to a plan, mockup, or shipped UI. Use when reviewing visual design, critiquing a UI, generating HTML design options, or raising the design bar on a feature.
+---
+
 # GStack Design
 
 Design-quality workflow: a designer's eye for a plan, mockup, or shipped

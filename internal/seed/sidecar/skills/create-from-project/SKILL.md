@@ -1,3 +1,8 @@
+---
+name: create-from-project
+description: Create an ethos identity by fine-tuning starter content from your existing project files — CLAUDE.md, .claude/agents/, and git config. Use when setting up your first ethos identity and you want batteries-included defaults personalized from what the repo already shows about your preferences.
+---
+
 # Create Identity from Project Context
 
 Create an ethos identity by fine-tuning starter content from your

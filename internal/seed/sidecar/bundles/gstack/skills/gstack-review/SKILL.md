@@ -1,3 +1,8 @@
+---
+name: gstack-review
+description: Code review workflow with calibrated confidence scoring and specialist dispatch. Use when reviewing a diff or PR for correctness, security, and quality — surfacing only high-confidence findings that matter.
+---
+
 # GStack Review
 
 Code review workflow with calibrated confidence scoring, distilled from
