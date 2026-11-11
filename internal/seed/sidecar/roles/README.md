@@ -28,7 +28,7 @@ validate-content. Edit `internal/schema` and rebuild — do not hand-edit.
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
 | `name` | yes | string (slug) | Role name; lowercase alphanumeric with hyphens. |
-| `model` | no | enum + pattern | Claude model: opus, sonnet, haiku, inherit, or any claude-* ID. Empty inherits. |
+| `model` | no | enum + pattern | Claude model: opus, sonnet, haiku, fable, inherit, or any claude-* ID. Empty inherits. |
 | `responsibilities` | no | list of string | What the role is accountable for. |
 | `permissions` | no | list of string | Permission grants for the role. |
 | `tools` | no | list of string | Tool names available to the role. |

@@ -20,6 +20,7 @@ func TestValidateModel(t *testing.T) {
 		{"sonnet", "sonnet", true},
 		{"haiku", "haiku", true},
 		{"inherit", "inherit", true},
+		{"fable", "fable", true},
 		{"claude prefix opus", "claude-opus-4-6", true},
 		{"claude prefix sonnet", "claude-sonnet-4-6", true},
 		{"claude prefix haiku", "claude-haiku-4-5-20251001", true},
