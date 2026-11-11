@@ -248,10 +248,13 @@ func (s *seeder) seedFile(fsys embed.FS, src, dest string) {
 }
 
 // seedSkills deploys every top-level sidecar skill to skillsRoot. Slugs come
-// from topLevelSkillSlugs, which enumerates the embedded Skills FS, so the
-// //go:embed directive is the single source of what deploys — no hardcoded
-// list to fall out of sync. Slugs are sorted for a deterministic deploy
-// order (and so Result's slices are deterministic for tests).
+// from topLevelSkillSlugs, which enumerates the embedded Skills FS, so deploy
+// and bundle-collision detection read the same list and cannot disagree: the
+// //go:embed directive in embed.go is the one list that decides what deploys.
+// (That directive is still a hand-written per-file list, so a new skill needs
+// its line added there — it is not auto-discovered from disk.) Slugs are
+// sorted for a deterministic deploy order (and so Result's slices are
+// deterministic for tests).
 func (s *seeder) seedSkills(skillsRoot string) {
 	topLevel := topLevelSkillSlugs()
 	slugs := make([]string, 0, len(topLevel))
@@ -331,9 +334,11 @@ func (s *seeder) seedBundles(fsys embed.FS, destBundlesRoot string) {
 }
 
 // topLevelSkillSlugs returns every sidecar top-level skill directory name,
-// enumerated from the embedded Skills FS rather than hardcoded — a new
-// skill added under sidecar/skills/ is picked up with no change here.
-// seedBundleSkills checks a bundle-scoped slug against this set to detect
+// enumerated from the embedded Skills FS rather than from a hardcoded slug
+// list here — so once a skill is embedded, this function needs no change.
+// (Embedding it still means adding its SKILL.md to the //go:embed directive
+// in embed.go.) seedBundleSkills checks a bundle-scoped slug against this set
+// to detect
 // a collision. A read error yields an empty set: seedBundleSkills then
 // treats every bundle slug as non-colliding, which is the same behavior
 // (deploy via the normal no-clobber path) as before this set existed.
