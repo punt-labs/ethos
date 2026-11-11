@@ -729,3 +729,70 @@ func TestSeedAgents_CommittedCopyMatchesShippedSource(t *testing.T) {
 		})
 	}
 }
+
+// TestShippedSkillsHaveFrontmatter guards PL-11: every SKILL.md ethos ships
+// must carry Claude Code frontmatter (name + description), or Claude Code's
+// skill resolver cannot register it by name and a subagent's skills: preload
+// of it dangles. The shipped set is derived from the embedded FSes (not a
+// hardcoded list) so a skill added later — including a gstack bundle skill,
+// which ships via the `all:sidecar/bundles` glob with no embed-line edit —
+// is covered automatically. Adding a frontmatter-less SKILL.md fails here.
+func TestShippedSkillsHaveFrontmatter(t *testing.T) {
+	type frontmatter struct {
+		Name        string `yaml:"name"`
+		Description string `yaml:"description"`
+	}
+
+	// check asserts one embedded SKILL.md has valid frontmatter whose name
+	// equals wantSlug and whose description is non-empty.
+	check := func(t *testing.T, data []byte, path, wantSlug string) {
+		t.Helper()
+		s := string(data)
+		if !strings.HasPrefix(s, "---\n") {
+			t.Fatalf("%s: no opening frontmatter delimiter (must start with \"---\"); "+
+				"Claude Code will not register it as a named skill", path)
+		}
+		rest := s[len("---\n"):]
+		end := strings.Index(rest, "\n---")
+		if end < 0 {
+			t.Fatalf("%s: no closing frontmatter delimiter (\"---\")", path)
+		}
+		var fm frontmatter
+		if err := yaml.Unmarshal([]byte(rest[:end]), &fm); err != nil {
+			t.Fatalf("%s: frontmatter is not valid YAML: %v", path, err)
+		}
+		assert.Equal(t, wantSlug, fm.Name,
+			"%s: frontmatter name must equal the skill directory slug", path)
+		assert.NotEmpty(t, fm.Description,
+			"%s: frontmatter description must be non-empty (it is the skill's trigger text)", path)
+	}
+
+	// Top-level sidecar skills: sidecar/skills/<slug>/SKILL.md.
+	topLevel := topLevelSkillSlugs()
+	require.NotEmpty(t, topLevel, "expected at least one top-level sidecar skill")
+	for slug := range topLevel {
+		path := "sidecar/skills/" + slug + "/SKILL.md"
+		data, err := fs.ReadFile(Skills, path)
+		require.NoError(t, err, "reading embedded %s", path)
+		check(t, data, path, slug)
+	}
+
+	// Bundle skills: sidecar/bundles/<bundle>/skills/<slug>/SKILL.md. Walk
+	// the embedded Bundles FS so every bundle's skills are covered, not just
+	// the active one.
+	err := fs.WalkDir(Bundles, "sidecar/bundles", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || d.Name() != "SKILL.md" {
+			return nil
+		}
+		// .../skills/<slug>/SKILL.md — the slug is the parent directory.
+		slug := filepath.Base(filepath.Dir(path))
+		data, readErr := fs.ReadFile(Bundles, path)
+		require.NoError(t, readErr, "reading embedded %s", path)
+		check(t, data, path, slug)
+		return nil
+	})
+	require.NoError(t, err, "walking embedded bundles for SKILL.md files")
+}
