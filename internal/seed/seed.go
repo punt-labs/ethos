@@ -171,6 +171,8 @@ func SeedVersionWithBundleDir(destRoot, skillsRoot, agentsRoot, activeBundle, ac
 		filepath.Join(skillsRoot, "mission", "SKILL.md"))
 	s.seedFile(Skills, "sidecar/skills/create-from-project/SKILL.md",
 		filepath.Join(skillsRoot, "create-from-project", "SKILL.md"))
+	s.seedFile(Skills, "sidecar/skills/optimize-team/SKILL.md",
+		filepath.Join(skillsRoot, "optimize-team", "SKILL.md"))
 
 	// Bundle-scoped skills (DES-073): deployed after the sidecar top-level
 	// skills above, so a slug collision resolves bundle-wins per the ADR.

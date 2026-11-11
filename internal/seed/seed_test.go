@@ -492,6 +492,7 @@ func TestTopLevelSkillSlugs_DerivedFromEmbeddedFS(t *testing.T) {
 		"baseline-ops":        true,
 		"mission":             true,
 		"create-from-project": true,
+		"optimize-team":       true,
 	}, got)
 }
 
