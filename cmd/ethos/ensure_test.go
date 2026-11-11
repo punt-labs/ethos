@@ -16,17 +16,39 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
-// fakeEnsure replaces ensureStorage for one test and returns the call count.
+// fakeEnsure replaces both repair gates for one test and returns the call
+// count across them: a command reaches exactly one of the two.
 func fakeEnsure(t *testing.T, res autorepair.Result) *int {
 	t.Helper()
-	old := ensureStorage
-	n := 0
-	ensureStorage = func(context.Context, resolve.Located, string) (autorepair.Result, error) {
-		n++
+	fakeEnsureGates(t, res) // installs the restore
+	n := new(int)
+	count := func(context.Context, resolve.Located, string) (autorepair.Result, error) {
+		*n++
 		return res, nil
 	}
-	t.Cleanup(func() { ensureStorage = old; repairNotice.Store(nil) })
-	return &n
+	ensureStorage, ensureStorageUnbounded = count, count
+	return n
+}
+
+// fakeEnsureGates replaces the bounded and the unbounded gate with counters
+// of their own, so a test can tell which one a command reached.
+func fakeEnsureGates(t *testing.T, res autorepair.Result) (bounded, unbounded *int) {
+	t.Helper()
+	oldB, oldU := ensureStorage, ensureStorageUnbounded
+	bounded, unbounded = new(int), new(int)
+	ensureStorage = func(context.Context, resolve.Located, string) (autorepair.Result, error) {
+		*bounded++
+		return res, nil
+	}
+	ensureStorageUnbounded = func(context.Context, resolve.Located, string) (autorepair.Result, error) {
+		*unbounded++
+		return res, nil
+	}
+	t.Cleanup(func() {
+		ensureStorage, ensureStorageUnbounded = oldB, oldU
+		repairNotice.Store(nil)
+	})
+	return bounded, unbounded
 }
 
 // topLevel is the name of the command directly under the root that cmd is, or
@@ -123,6 +145,36 @@ func TestExecutedCommandReachesEnsureOnce(t *testing.T) {
 	_, _, err := execHandler(t, "doctor", "--json")
 	require.NoError(t, err)
 	assert.Equal(t, 1, *n, "doctor passed Ensure %d times", *n)
+}
+
+// doctor is the one command whose repair has no budget (operator ruling
+// 2026-11-11): it reaches the unbounded gate and no other; every other
+// command reaches the bounded gate and never the unbounded one.
+func TestOnlyDoctorRepairsUnbounded(t *testing.T) {
+	rootCmd.InitDefaultHelpCmd()
+	rootCmd.SetErr(&bytes.Buffer{})
+	t.Cleanup(func() { rootCmd.SetErr(nil) })
+	bounded, unbounded := fakeEnsureGates(t, autorepair.Result{})
+	exempt := map[string]bool{"version": true, "completion": true, "help": true, "uninstall": true}
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		if c != rootCmd && !exempt[topLevel(c)] {
+			b0, u0 := *bounded, *unbounded
+			_ = establishRoots(c, nil)
+			cmdRoots.Store(nil)
+			if c.CommandPath() == "ethos doctor" {
+				assert.Equal(t, u0+1, *unbounded, "doctor must reach the unbounded gate")
+				assert.Equal(t, b0, *bounded, "doctor must not reach the bounded gate")
+			} else {
+				assert.Equal(t, b0+1, *bounded, "%s must reach the bounded gate", c.CommandPath())
+				assert.Equal(t, u0, *unbounded, "%s must not reach the unbounded gate", c.CommandPath())
+			}
+		}
+		for _, sub := range c.Commands() {
+			walk(sub)
+		}
+	}
+	walk(rootCmd)
 }
 
 func TestEnsureLineGoesToStderr(t *testing.T) {

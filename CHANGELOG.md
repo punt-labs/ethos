@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `ethos doctor` runs the storage upgrade with no time budget, so one run
+  finishes a conversion that other commands spread over many runs at 5 s a
+  step. Every other command, hook and MCP call keeps the 5 s step and 30 s
+  pass budgets. On a repository with a 5.4 MB live audit file the first
+  `ethos doctor` took 43 s and stamped; the next took 2 s (ethos-2bu9).
+
 ## [5.0.0] - 2026-11-10
 
 ### Changed

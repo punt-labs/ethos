@@ -17,6 +17,10 @@ import (
 // ensureStorage is the repair gate. A variable so the tests can count calls.
 var ensureStorage = autorepair.Ensure
 
+// ensureStorageUnbounded is the gate `ethos doctor` uses: the same repair
+// with no step or pass budget.
+var ensureStorageUnbounded = autorepair.EnsureUnbounded
+
 func init() {
 	// Recorded in every stamp and log line. Set once, before any command or
 	// tool call runs: the MCP server answers calls on several goroutines, and
@@ -73,7 +77,13 @@ func ensureForCommand(cmd *cobra.Command, r *repoRoots) *repoRoots {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	res, _ := ensureStorage(ctx, r.Located, defaultGlobalRoot())
+	ensure := ensureStorage
+	if cmd.CommandPath() == "ethos doctor" {
+		// doctor is the one command whose repair has no budget: it finishes
+		// the conversion in one run (operator ruling 2026-11-11).
+		ensure = ensureStorageUnbounded
+	}
+	res, _ := ensure(ctx, r.Located, defaultGlobalRoot())
 	line := res.Line()
 	if line == "" {
 		return r
