@@ -84,10 +84,12 @@ func TestSeedEmptyDir(t *testing.T) {
 	// loop (or dropping a slug from it) leaves TestTopLevelSkillSlugs
 	// green, since that test only reads the embed directive, but these
 	// assertions fail because the file never lands on disk.
+	// baseline-ops is the only top-level sidecar skill still seeded to the
+	// global skills dir: it is preloaded into every generated agent by bare
+	// slug. The discoverable skills (optimize-team, mission,
+	// create-from-project) now ship through the plugin as ethos:<skill>
+	// (plugin/skills/), not seeded here.
 	assert.FileExists(t, filepath.Join(skills, "baseline-ops", "SKILL.md"))
-	assert.FileExists(t, filepath.Join(skills, "mission", "SKILL.md"))
-	assert.FileExists(t, filepath.Join(skills, "create-from-project", "SKILL.md"))
-	assert.FileExists(t, filepath.Join(skills, "optimize-team", "SKILL.md"))
 
 	// Should have deployed all 8 generic pipeline files at the top
 	// level. The 5 gstack-* pipelines now ship inside the gstack
@@ -377,18 +379,15 @@ func TestSeedSkillsPath(t *testing.T) {
 	assert.Contains(t, string(data), "## Verification")
 }
 
-// TestSeedMissionSkill checks that the mission skill is deployed
-// to the right path with the Phase 3 schema content. The skill is
-// the only user-facing surface for driving the mission primitive
-// and its absence would silently degrade the leader workflow.
-func TestSeedMissionSkill(t *testing.T) {
-	dest := t.TempDir()
-	skills := t.TempDir()
-
-	_, err := Seed(dest, skills, false)
-	require.NoError(t, err)
-
-	skillPath := filepath.Join(skills, "mission", "SKILL.md")
+// TestMissionSkillContent checks the mission skill ships with the Phase 3
+// schema content. The skill is the user-facing surface for driving the
+// mission primitive; its drift would silently teach the wrong shape. The
+// mission skill now ships through the plugin (plugin/skills/mission/SKILL.md)
+// as ethos:mission rather than being seeded to the global skills dir, so this
+// reads the plugin file directly. `go test` runs with the package dir as cwd,
+// so the repo root is two levels up from internal/seed.
+func TestMissionSkillContent(t *testing.T) {
+	skillPath := filepath.Join("..", "..", "plugin", "skills", "mission", "SKILL.md")
 	assert.FileExists(t, skillPath)
 
 	data, err := os.ReadFile(skillPath)
@@ -495,10 +494,7 @@ func TestSeedBundleNoClobber(t *testing.T) {
 func TestTopLevelSkillSlugs_DerivedFromEmbeddedFS(t *testing.T) {
 	got := topLevelSkillSlugs()
 	assert.Equal(t, map[string]bool{
-		"baseline-ops":        true,
-		"mission":             true,
-		"create-from-project": true,
-		"optimize-team":       true,
+		"baseline-ops": true,
 	}, got)
 }
 

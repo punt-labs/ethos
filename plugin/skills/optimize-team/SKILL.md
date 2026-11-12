@@ -1,3 +1,8 @@
+---
+name: optimize-team
+description: Right-size an ethos team roster to one repo's actual tooling, at the lowest per-session .claude/agents context cost. Use when asked to optimize, shrink, right-size, or trim a team, compose a minimal team for a repo, or reduce agent/session context cost. Interviews the repo, proposes the smallest covering team with a context-budget estimate, and writes team YAML only after ratification.
+---
+
 # Optimize Team
 
 Right-size an ethos team roster to one repo's actual tooling, at the

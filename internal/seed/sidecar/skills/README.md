@@ -1,9 +1,15 @@
-# Skills
+# Seeded skills
 
-Claude Code skills shipped in this directory. To make them available
-to Claude Code, copy the desired skill folders into ~/.claude/skills/.
-Skills provide preloaded content injected into sub-agent context at
-startup via the `skills` frontmatter field.
+This directory holds the one skill `ethos seed` deposits to the global
+`~/.claude/skills/` namespace: `baseline-ops`. It is preloaded into every
+generated agent by bare slug (`skills: [baseline-ops]`), so it must resolve
+under that bare name rather than a plugin prefix.
+
+The **discoverable** skills a human or agent invokes by name
+(`optimize-team`, `mission`, `create-from-project`) ship through the plugin
+instead, under `plugin/skills/<name>/`, so they resolve as `ethos:<skill>`
+per `standards/plugins.md` §"Namespace scope" — not in the flat global
+namespace. They are not seeded here.
 
 ## baseline-ops
 
@@ -14,28 +20,3 @@ discipline, commits, security, and output formatting.
 Referenced in agent frontmatter as `skills: [baseline-ops]`.
 
 See [baseline-ops/SKILL.md](baseline-ops/SKILL.md) for the full content.
-
-## create-from-project
-
-Create an ethos identity by fine-tuning starter content from your
-existing project files — CLAUDE.md, `.claude/agents/`, and git config.
-
-See [create-from-project/SKILL.md](create-from-project/SKILL.md) for
-the full content.
-
-## mission
-
-Scaffold a Phase 3 mission contract, register it in the store, and
-spawn the worker — turning a delegation conversation into a typed,
-enforced contract.
-
-See [mission/SKILL.md](mission/SKILL.md) for the full content.
-
-## optimize-team
-
-Right-size a team roster to one repo's actual tooling at the lowest
-per-session context cost — interview, decision table, context-budget
-estimate, and a propose-then-ratify-then-write flow.
-
-See [optimize-team/SKILL.md](optimize-team/SKILL.md) for the full
-content.
