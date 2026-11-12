@@ -725,3 +725,76 @@ func TestSeedAgents_CommittedCopyMatchesShippedSource(t *testing.T) {
 		})
 	}
 }
+
+// TestSeedRetiresMovedSkills guards PL-319's upgrade path: the three
+// discoverable skills (mission, create-from-project, optimize-team) moved to
+// plugin/skills/ and are no longer seeded, so a re-seed on an existing install
+// must remove their previously-seeded ~/.claude/skills/<slug>/ copies — but
+// only the unmodified shipped copies seed itself wrote, never a user edit, and
+// never baseline-ops.
+func TestSeedRetiresMovedSkills(t *testing.T) {
+	dest := t.TempDir()
+	skills := t.TempDir()
+
+	// Simulate an existing install that an older ethos seeded: the three
+	// retired skills plus baseline-ops on disk under the skills root.
+	writeSkill := func(slug, body string) string {
+		dir := filepath.Join(skills, slug)
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		p := filepath.Join(dir, "SKILL.md")
+		require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
+		return p
+	}
+	unmodified := "---\nname: mission\n---\n\n# old seeded body\n"
+	missionPath := writeSkill("mission", unmodified)
+	cfpPath := writeSkill("create-from-project", "---\nname: create-from-project\n---\n\n# old\n")
+	// optimize-team is present but USER-MODIFIED relative to what the
+	// manifest will record, so it must be left untouched.
+	optPath := writeSkill("optimize-team", "---\nname: optimize-team\n---\n\n# MY LOCAL EDIT\n")
+	baselinePath := writeSkill("baseline-ops", "---\nname: baseline-ops\n---\n\n# baseline\n")
+
+	// A manifest recording what seed "last wrote": mission and
+	// create-from-project at their current (unmodified) hashes, and
+	// optimize-team at a DIFFERENT hash (so the on-disk file reads as a user
+	// edit). baseline-ops is also tracked — it must still never be retired.
+	key := func(slug string) string { return "skills/" + slug + "/SKILL.md" }
+	mf := &Manifest{Schema: manifestSchema, Entries: map[string]Entry{
+		key("mission"):             {Scope: scopeSkills, Hash: hashBytes([]byte(unmodified))},
+		key("create-from-project"): {Scope: scopeSkills, Hash: hashBytes([]byte("---\nname: create-from-project\n---\n\n# old\n"))},
+		key("optimize-team"):       {Scope: scopeSkills, Hash: hashBytes([]byte("different shipped content"))},
+		key("baseline-ops"):        {Scope: scopeSkills, Hash: hashBytes([]byte("---\nname: baseline-ops\n---\n\n# baseline\n"))},
+	}}
+	require.NoError(t, mf.save(dest))
+
+	result, err := Seed(dest, skills, false)
+	require.NoError(t, err)
+
+	// (a) unmodified retired skills are removed, and (b) their manifest
+	// entries are dropped.
+	assert.NoFileExists(t, missionPath, "unmodified retired mission skill should be removed")
+	assert.NoFileExists(t, cfpPath, "unmodified retired create-from-project skill should be removed")
+	assert.Contains(t, result.Retired, missionPath)
+	assert.Contains(t, result.Retired, cfpPath)
+
+	// (c) a USER-MODIFIED retired skill is left in place.
+	assert.FileExists(t, optPath, "user-modified optimize-team skill must not be removed")
+	assert.NotContains(t, result.Retired, optPath)
+
+	// (d) baseline-ops is never a retirement target — it stays seeded.
+	assert.FileExists(t, baselinePath, "baseline-ops must never be retired")
+	assert.NotContains(t, result.Retired, baselinePath)
+
+	// The manifest on disk reflects the drops: mission and
+	// create-from-project gone, optimize-team and baseline-ops kept.
+	after, err := loadManifest(dest)
+	require.NoError(t, err)
+	assert.NotContains(t, after.Entries, key("mission"))
+	assert.NotContains(t, after.Entries, key("create-from-project"))
+	assert.Contains(t, after.Entries, key("optimize-team"))
+
+	// (e) a second seed does not resurrect the removed skills.
+	_, err = Seed(dest, skills, false)
+	require.NoError(t, err)
+	assert.NoFileExists(t, missionPath)
+	assert.NoFileExists(t, cfpPath)
+}
