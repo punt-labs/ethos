@@ -1,0 +1,35 @@
+mission_id: m-2026-11-11-005
+status: closed
+type: implement
+created_at: "2026-11-11T17:11:03Z"
+updated_at: "2026-11-11T17:44:56Z"
+closed_at: "2026-11-11T17:44:56Z"
+leader: claude
+worker: adb
+evaluator:
+    handle: mdm
+    pinned_at: "2026-11-11T17:11:03Z"
+    hash: a532fcdb152c76185524a96d4ff9a1860ed24808a9e998bfb0a949ebb732c173
+inputs:
+    ticket: ethos-qffs
+write_set:
+    - plugin/commands
+    - internal/seed/embed.go
+    - internal/seed/seed.go
+    - internal/seed/sidecar/skills/README.md
+extract_into:
+    - internal/seed/sidecar/skills/optimize-team
+success_criteria:
+    - 'Create internal/seed/sidecar/skills/optimize-team/SKILL.md carrying the full interview procedure, decision table, context-budget estimate, and propose-then-ratify-then-write flow from docs/optimize-team.md. It emits model: fable for top reviewer rungs (now valid). Match the existing sidecar SKILL.md style (no YAML frontmatter, like baseline-ops/create-from-project).'
+    - 'Create plugin/commands/optimize-team.md and plugin/commands/optimize-team-dev.md as a required pair. Each is a thin launcher whose body tells the model to run the optimize-team skill passing $ARGUMENTS. Frontmatter: description, argument-hint, allowed-tools. The .md uses mcp__plugin_ethos_self__team/role/identity plus AskUserQuestion, Read, Glob, Bash; the -dev twin uses mcp__plugin_ethos-dev_self__* names. Follow the frontmatter pattern of plugin/commands/role.md and role-dev.md exactly.'
+    - 'Wire the seed: add sidecar/skills/optimize-team/SKILL.md to the //go:embed Skills directive in internal/seed/embed.go (~line 29), and add a 4th s.seedFile(Skills, ...) call in internal/seed/seed.go (~line 174) deploying it to filepath.Join(skillsRoot, "optimize-team", "SKILL.md"). Both edits required.'
+    - Add the optimize-team catalog row to internal/seed/sidecar/skills/README.md matching the existing entries' format.
+    - 'Verify (NOT make check — [REDACTED:hostname] gitenv flake): go build ./... clean; go test ./internal/seed/ passes; go run ./cmd/validate-content passes; markdownlint on changed .md files is zero findings. If a seed test asserts the deployed skill set, update it to include optimize-team.'
+budget:
+    rounds: 3
+    reflection_after_each: true
+current_round: 1
+round_decisions:
+    version: 1
+    entries: []
+context: 'Branch feat/optimize-team-skill in worktree <repo>/.worktrees/optimize-team off main. Commit 7d3c73a3 already added the fable model alias (the prerequisite). Now implement the /ethos:optimize-team skill per the MERGED design in docs/optimize-team.md (PR #581) — read that doc first and in full; it is the authoritative spec. IMPORTANT ENV NOTE: on this [REDACTED:hostname] host, ''make check'' fails deterministically in internal/gitenv (TestNetworkGitCannotPrompt) for an environment reason unrelated to your change (tracked ethos-fay2, main CI is green). Do NOT try to fix gitenv and do NOT treat that failure as yours. Verify your change with targeted checks: ''go build ./...'', ''go test ./internal/seed/'', ''go run ./cmd/validate-content'', and ''npx markdownlint-cli2 <your changed .md files>''. The design doc line numbers for generate_agents.go have DRIFTED (buildAgentFile is now ~line 621, not 760) — locate code by symbol, not by the doc''s line numbers. Commit on this branch only; DO NOT push, open PRs, or merge — the leader does that. Commit only files you changed (git add <explicit paths>, never -A). The seed embed/deploy enumerations are hardcoded lists, not directory walks — both MUST be edited or the skill silently never deploys.'

@@ -16,13 +16,14 @@ claude_invocation:
   prompt: "reply with the single word pong"
   max_turns: 1
 expect:
-  # Observed baseline: ~357,400 bytes (dropped from the original
-  # ~388,800 baseline after the repo-only vendoring fix trimmed the
-  # bundle-layer identities, personalities, talents, and writing
-  # styles out of this repo's vendored footprint). Ceiling stays at
-  # 470000, still comfortably above the new baseline — see PR
-  # description for the full attribution breakdown this ceiling was
-  # calibrated from.
+  # Observed baseline: ~317,300 bytes (dropped from ~357,400 after
+  # PR #615 retired the five teamless vendored identities — ach, adt,
+  # edt, ghr, gvr — and their roles/personalities/writing-styles/
+  # talents from this repo's closure, realizing #611's roster cut;
+  # earlier the repo-only vendoring fix had trimmed it from ~388,800).
+  # Ceiling stays at 470000, still comfortably above the new baseline —
+  # see PR description for the full attribution breakdown this ceiling
+  # was calibrated from.
   max_bytes: 470000
   no_secret_patterns: true
 smoke: false

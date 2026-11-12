@@ -1,0 +1,35 @@
+mission_id: m-2026-11-12-002
+status: failed
+type: implement
+created_at: "2026-11-12T06:06:14Z"
+updated_at: "2026-11-12T07:13:44Z"
+closed_at: "2026-11-12T07:13:44Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-11-12T06:06:14Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: PL-532
+write_set:
+    - internal/hook/generate_agents.go
+    - internal/hook/generate_agents_test.go
+    - internal/seed/seed.go
+    - internal/seed/seed_test.go
+    - internal/seed/embed.go
+    - plugin/skills
+success_criteria:
+    - 'Move all 7 flat ethos skills to plugin/skills/<name>/SKILL.md: baseline-ops (from internal/seed/sidecar/skills/) and the six gstack skills gstack-plan/design/debug/qa/review/ship (from internal/seed/sidecar/bundles/gstack/skills/). Give each proper frontmatter: name (= dir slug), display-name (a clean human name e.g. ''Baseline Operations'', ''GStack: Plan''), and a description that says WHAT it does and WHEN to use it (the ''Use when...'' form, like the merged optimize-team/mission skills) — NOT the license-attribution first line. Preserve each skill''s body content verbatim (the gstack SPDX/origin attribution stays in the body). Keep the exact same markdown body; only prepend frontmatter and relocate.'
+    - 'Make the agent-file generator emit the NAMESPACED skill name. In internal/hook/generate_agents.go, mergeSkills (~599) builds the skills: list as bare slugs (hardcoded ''baseline-ops'' + identity Skills + bundle default_skills); the emit is at ~638 (fmt.Fprintf b ''  - %s'' yamlQuote(s)). Namespace every ethos-owned skill slug to ''ethos:<slug>'' on emit so a generated agent gets skills: [''ethos:baseline-ops'', ''ethos:gstack-plan'', ...]. Use the plugin name the repo ships (ethos in prod / ethos-dev in dev — check how other code resolves the prod-vs-dev plugin prefix, e.g. how plugin command MCP names are chosen; match that mechanism, do not hardcode one). Do NOT namespace a slug that is not an ethos-shipped skill (if identity Skills can contain a non-ethos skill, leave those bare — scope the namespacing to the known ethos skill set).'
+    - Stop seeding the 7 to ~/.claude/skills/ and add retirement, exactly like class A did for the first 3. Remove baseline-ops from the //go:embed Skills directive in embed.go (the Skills FS then embeds nothing, or restructure as needed); remove the 7 sidecar skill source dirs; add the 7 slugs to the retiredTopLevelSkills list in seed.go so seedRetiredSkills removes previously-seeded flat copies on upgrade (manifest-gated, same safe logic class A shipped). Note gstack skills live under a bundle path, not sidecar/skills/ — handle their retirement from the bundle skills deploy path too if they were deployed there.
+    - 'TDD, two parts. (a) generator: a test asserting mergeSkills/buildAgentFile emits ''ethos:baseline-ops'' (namespaced), not bare ''baseline-ops'', and that a gstack bundle default_skill emits namespaced. Confirm it fails before the change. (b) seed: extend the existing retirement test to cover the 7 (unmodified-removed, user-modified-kept). Keep internal/seed and internal/hook coverage at/above baseline (class A tripped the 0.1 coverage gate — cover new branches).'
+    - 'Verify (targeted, NOT full make check — [REDACTED:hostname] flake): go build ./... clean; go test ./internal/hook/ ./internal/seed/ green; go run ./cmd/validate-content passes; npx markdownlint-cli2 on the 7 new plugin/skills/*/SKILL.md zero findings. Report the exact before/after of one generated agent''s skills: block as evidence (bare -> namespaced).'
+budget:
+    rounds: 3
+    reflection_after_each: true
+current_round: 1
+round_decisions:
+    version: 1
+    entries: []
+context: 'Branch fix/skills-namespace-classb in worktree <repo>/.worktrees/skills-classb. This is PL-532 class B, following the merged class A (PR #612) pattern. GATING FACT ALREADY PROVEN by the leader: a generated agent''s skills: list CAN resolve a plugin-namespaced skill (probe: agent with skills:[ethos-dev:baseline-ops] loaded the plugin skill). So the full fix is viable. OKINOS NOTE: make check fails in internal/gitenv for unrelated env reasons (PL-318, PL-331 flake); the pre-commit hook runs make check and will block your commit — commit with --no-verify and verify via targeted go build/test instead. Commit on this branch only; no push/PR/merge; git add explicit paths. IMPORTANT: this worktree has untracked .claude/agents/{ach,adt,edt,ghr,gvr,rmh}.md that the SessionStart hook regenerated — do NOT add them, they are not part of this change.'

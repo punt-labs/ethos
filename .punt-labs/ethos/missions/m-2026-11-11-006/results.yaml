@@ -1,0 +1,31 @@
+results:
+    - mission: m-2026-11-11-006
+      round: 1
+      created_at: "2026-11-11T18:16:49Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.92
+      files_changed:
+        - path: internal/seed/seed.go
+          added: 23
+          removed: 9
+        - path: internal/seed/seed_test.go
+          added: 7
+          removed: 1
+        - path: internal/role/role.go
+          added: 1
+          removed: 1
+        - path: internal/schema/registry.go
+          added: 4
+          removed: 2
+      evidence:
+        - name: 'HIGH fixed: SeedVersionWithBundleDir now deploys by iterating sorted topLevelSkillSlugs() (embed-derived), replacing the four hardcoded seedFile calls; the //go:embed directive is the single source'
+          status: pass
+        - name: 'Guard added: seed_test.go FileExists for all four deployed skills on disk (baseline-ops, mission, create-from-project, optimize-team). TDD-confirmed: all four assertions FAIL when the deploy loop is reverted, PASS with it'
+          status: pass
+        - name: 'MEDIUM fixed: ValidateModel error string (role.go:62) and schema Description (registry.go:41) now build the alias list from strings.Join(role.ModelAliases, ...); stale registry comment (four->named aliases) corrected'
+          status: pass
+        - name: go build ./... clean; go test ./internal/seed/ ./internal/role/ ./internal/schema/ => ok (TestValidateModel incl. fable, TestTopLevelSkillSlugs); go run ./cmd/validate-content => all checks passed (README role table matches derived Description)
+          status: pass
+      prose: |
+        Fixes the two local-review findings on the optimize-team seed wiring. The deployment loop now reads the embedded FS so the embed directive is the one source of truth and the existing slug test plus new on-disk FileExists assertions guard deployment; the model-alias prose is derived from ModelAliases so it cannot drift from the validator and enum. The leader landed the commits after the worker's TDD falsification confirmed the guard, and re-verified independently.

@@ -33,7 +33,6 @@ From Don Norman's *The Design of Everyday Things*:
 - Review CLI flag surfaces, error messages, and confirmation flows
 - Review plugin command surfaces and discoverability
 - Review dashboard and Lux applet layouts for affordance clarity
-- Pair with edt (ux-designer) on visual / information-design work
 
 ## What You Don't Do
 

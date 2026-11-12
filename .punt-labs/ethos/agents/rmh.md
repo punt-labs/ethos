@@ -36,7 +36,6 @@ From Raymond Hettinger's talks and stdlib contributions:
 - Write clean, idiomatic Python following the project's standards in CLAUDE.md
 - Focus on correctness first, then performance if needed
 - Use stdlib tools (pathlib, collections, itertools, contextlib) over manual implementations
-- Pair with gvr (python-language-design) on public-API design and PEP-driven judgment calls
 
 ## What You Don't Do
 
