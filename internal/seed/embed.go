@@ -33,7 +33,8 @@ var Bundles embed.FS
 // them by that namespaced name. The Skills FS embeds only the README so the
 // directive stays valid; topLevelSkillSlugs filters to directories, so it
 // yields no deployable skill and seedSkills deploys nothing. The former
-// flat copies are cleaned up on upgrade via retiredTopLevelSkills.
+// flat copies are cleaned up on upgrade via seedRetiredSkills
+// (pluginskill.Slugs).
 //
 //go:embed sidecar/skills/README.md
 var Skills embed.FS

@@ -216,10 +216,37 @@ func TestMergeSkills_NamespacesEveryEthosSkill(t *testing.T) {
 		"ethos:gstack-plan", "ethos-dev:gstack-plan",
 		"ethos:gstack-ship", "ethos-dev:gstack-ship",
 	}, got)
-	for _, s := range got {
-		assert.True(t, strings.HasPrefix(s, "ethos:") || strings.HasPrefix(s, "ethos-dev:"),
-			"every emitted skill must be plugin-namespaced, got bare %q", s)
-	}
+}
+
+// TestMergeSkills_PassesThroughNonEthosSkills pins the Qodo HIGH finding on
+// PR #614: only skills ethos ships through its plugin (pluginskill.Is) are
+// namespaced. A user's own skill, a third-party bundle skill under its bare
+// slug, or an already-namespaced slug such as lux:scene must pass through
+// verbatim — prefixing it with ethos: would name a skill ethos does not ship,
+// which Claude Code then silently skips.
+func TestMergeSkills_PassesThroughNonEthosSkills(t *testing.T) {
+	got := mergeSkills([]string{"my-skill", "lux:scene"}, []string{"custom-bundle-skill"})
+	assert.Equal(t, []string{
+		// baseline-ops is an ethos-plugin skill: dual-namespaced.
+		"ethos:baseline-ops", "ethos-dev:baseline-ops",
+		// None of these are ethos-plugin skills: emitted verbatim.
+		"my-skill",
+		"lux:scene",
+		"custom-bundle-skill",
+	}, got)
+}
+
+// TestMergeSkills_NamespacesOnlyEthosSkillsInMixedList proves the two classes
+// coexist: an ethos-plugin skill is dual-namespaced while a bare user skill
+// in the same list is untouched, each deduped once.
+func TestMergeSkills_NamespacesOnlyEthosSkillsInMixedList(t *testing.T) {
+	got := mergeSkills([]string{"gstack-plan", "my-skill"}, []string{"my-skill", "gstack-ship"})
+	assert.Equal(t, []string{
+		"ethos:baseline-ops", "ethos-dev:baseline-ops",
+		"ethos:gstack-plan", "ethos-dev:gstack-plan",
+		"my-skill",
+		"ethos:gstack-ship", "ethos-dev:gstack-ship",
+	}, got)
 }
 
 // TestGenerateAgentFile_SkillSlugYAMLSafe pins the Copilot HIGH finding on
@@ -256,11 +283,14 @@ func TestGenerateAgentFile_SkillSlugYAMLSafe(t *testing.T) {
 		Skills []string `yaml:"skills"`
 	}
 	require.NoError(t, yaml.Unmarshal([]byte(parts[1]), &fm), "frontmatter must remain valid YAML")
+	// The malicious slug is not an ethos-plugin skill, so it is emitted
+	// verbatim (not namespaced), but still yamlQuote-escaped so it cannot
+	// inject extra YAML structure — the property this test guards.
 	assert.Equal(t, []string{
 		"ethos:baseline-ops", "ethos-dev:baseline-ops",
-		"ethos:" + maliciousSlug, "ethos-dev:" + maliciousSlug,
+		maliciousSlug,
 	}, fm.Skills,
-		"the malicious slug must round-trip verbatim (namespaced), not be split into extra YAML structure")
+		"the malicious slug must round-trip verbatim (bare, non-ethos), not be split into extra YAML structure")
 }
 
 // TestGenerateAgentFile_MergesIdentityAndBundleSkills pins DES-073's

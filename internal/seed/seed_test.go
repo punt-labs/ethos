@@ -548,6 +548,39 @@ func TestSeedDeploysRepoLocalBundleSkills(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(skills, "gstack-plan", "SKILL.md"))
 }
 
+// TestSeedBundleSkillsSkipsEthosPluginSlugs pins the Qodo HIGH finding on
+// PR #614: an older seed left a gstack bundle on disk whose skills/ subtree
+// still carries gstack-plan/SKILL.md (a skill that now ships through the
+// plugin). With that bundle active, seedBundleSkills must NOT re-deploy
+// gstack-plan flat under ~/.claude/skills/ — doing so would undo
+// seedRetiredSkills and bring the duplicate bare /gstack-plan entry back on
+// every run. A genuinely-bundle-only skill (foo) in the same bundle still
+// deploys flat.
+func TestSeedBundleSkillsSkipsEthosPluginSlugs(t *testing.T) {
+	dest := t.TempDir()
+	skills := t.TempDir()
+
+	bundleDir := t.TempDir()
+	// An ethos-plugin skill left behind in an old on-disk bundle copy.
+	require.NoError(t, os.MkdirAll(filepath.Join(bundleDir, "skills", "gstack-plan"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(bundleDir, "skills", "gstack-plan", "SKILL.md"),
+		[]byte("# Stale gstack-plan\n\nLeft behind by an older seed.\n"), 0o644))
+	// A genuinely bundle-only skill that is NOT an ethos-plugin skill.
+	require.NoError(t, os.MkdirAll(filepath.Join(bundleDir, "skills", "foo"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(bundleDir, "skills", "foo", "SKILL.md"),
+		[]byte("# Foo\n\nA real bundle-only skill.\n"), 0o644))
+
+	_, err := SeedVersionWithBundleDir(dest, skills, "", "my-bundle", bundleDir, "", false)
+	require.NoError(t, err)
+
+	// gstack-plan ships through the plugin now; it must never land flat,
+	// even though the on-disk bundle still carries a copy.
+	assert.NoFileExists(t, filepath.Join(skills, "gstack-plan", "SKILL.md"),
+		"an ethos-plugin skill in a stale on-disk bundle must not be re-seeded flat")
+	// foo is bundle-only; it still deploys flat.
+	assert.FileExists(t, filepath.Join(skills, "foo", "SKILL.md"))
+}
+
 func TestSeedIdempotent(t *testing.T) {
 	dest := t.TempDir()
 	skills := t.TempDir()
@@ -755,7 +788,7 @@ func TestSeedRetiresMovedSkills(t *testing.T) {
 	// manifest records, so it must be left untouched.
 	optPath := writeSkill("optimize-team", "---\nname: optimize-team\n---\n\n# MY LOCAL EDIT\n")
 	// my-custom-skill is a skill ethos never shipped (not in
-	// retiredTopLevelSkills), so it must never be touched even if present.
+	// pluginskill.Slugs), so it must never be touched even if present.
 	customBody := "---\nname: my-custom-skill\n---\n\n# mine\n"
 	customPath := writeSkill("my-custom-skill", customBody)
 

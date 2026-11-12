@@ -19,7 +19,9 @@ This holds for all three kinds:
 
 All of them live under `plugin/skills/<name>/SKILL.md`.
 
-Flat copies deposited by an older `ethos seed` are cleaned up on upgrade via
-`retiredTopLevelSkills` (`seed.go`). This `README.md` remains only to keep the
-`Skills` embed directive (`embed.go`) matching at least one file; the seed
-deploys nothing from it.
+Flat copies deposited by an older `ethos seed` are cleaned up on upgrade by
+`seedRetiredSkills` (`seed.go`), which retires every skill in
+`pluginskill.Slugs()` — the single source of truth for the skills ethos ships
+through its plugin. This `README.md` remains only to keep the `Skills` embed
+directive (`embed.go`) matching at least one file; the seed deploys nothing
+from it.

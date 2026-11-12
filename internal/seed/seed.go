@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/layout"
+	"github.com/punt-labs/ethos/v4/internal/pluginskill"
 )
 
 // scope names the destination root a seeded path resolves against. It is
@@ -54,9 +55,10 @@ type Result struct {
 	SkipReasons map[string]string
 	Errors      []string // files that failed
 	// Retired lists previously-seeded files removed by seedRetiredSkills —
-	// a former top-level skill (see retiredTopLevelSkills) whose on-disk
-	// content still matched the manifest's recorded hash, so it was safe
-	// to delete rather than leave as an orphaned duplicate.
+	// a flat copy of a skill ethos now ships through its plugin
+	// (pluginskill.Slugs) whose on-disk content still matched the manifest's
+	// recorded hash, so it was safe to delete rather than leave as an
+	// orphaned duplicate.
 	Retired []string
 }
 
@@ -175,9 +177,9 @@ func SeedVersionWithBundleDir(destRoot, skillsRoot, agentsRoot, activeBundle, ac
 	// further change here.
 	s.seedSkills(skillsRoot)
 
-	// Retire the top-level skills PL-319 moved to plugin/skills/: a stale
+	// Retire the flat copies of skills that moved to plugin/skills/: a stale
 	// shipped copy left behind after upgrade would duplicate the new
-	// plugin-namespaced ethos:<skill> version. See retiredTopLevelSkills.
+	// plugin-namespaced ethos:<skill> version. See seedRetiredSkills.
 	s.seedRetiredSkills(skillsRoot)
 
 	// Bundle-scoped skills (DES-073): deployed after the sidecar top-level
@@ -278,35 +280,19 @@ func (s *seeder) seedSkills(skillsRoot string) {
 	}
 }
 
-// retiredTopLevelSkills names top-level sidecar skills seed no longer
-// deploys because they moved to plugin/skills/ in PL-319, shipping instead
-// as ethos:<skill> through the Claude Code plugin. seedRetiredSkills uses
-// this list to clean up an unmodified shipped copy left behind by an
-// earlier seed, so an upgrading user does not end up with the skill
-// duplicated under both its old bare slug and its new ethos:<skill> name.
-// Every ethos skill now ships through the plugin, so every one that an
-// older binary could have deposited flat is retired here.
-var retiredTopLevelSkills = []string{
-	// PL-319 / PR #612: the discoverable skills.
-	"mission", "create-from-project", "optimize-team",
-	// PL-532: baseline-ops (formerly preloaded by bare slug) and the gstack
-	// bundle skills also moved to the plugin (plugin/skills/) and are
-	// referenced as ethos:<slug> in generated agents; retire their old flat
-	// ~/.claude/skills/ copies.
-	"baseline-ops",
-	"gstack-plan", "gstack-design", "gstack-debug",
-	"gstack-qa", "gstack-review", "gstack-ship",
-}
-
-// seedRetiredSkills removes a previously-seeded copy of each retired
-// top-level skill (see retiredTopLevelSkills) from skillsRoot, but only
-// when seed's own manifest entry for it still matches the file's on-disk
-// content — proof the file is the unmodified shipped copy, not a user
-// edit. A file with no manifest entry, or one whose content has since
-// diverged from the recorded hash, is left untouched; the no-clobber
-// contract applies to removal exactly as it applies to overwriting.
+// seedRetiredSkills removes a previously-seeded flat copy of each skill ethos
+// now ships through its plugin (pluginskill.Slugs — the single source of
+// truth, so this cannot drift from what the plugin actually ships or what the
+// generator namespaces). An older seed deposited some of these flat under
+// ~/.claude/skills/<slug>/; retiring the unmodified shipped copy stops the
+// skill appearing under both its old bare slug and its new ethos:<slug> name.
+//
+// Removal honors the same no-clobber contract as a write: retireSkill only
+// deletes when seed's manifest entry for the path still matches the file's
+// on-disk content. A file with no manifest entry, or one a user has since
+// edited, is left untouched.
 func (s *seeder) seedRetiredSkills(skillsRoot string) {
-	for _, slug := range retiredTopLevelSkills {
+	for _, slug := range pluginskill.Slugs() {
 		s.retireSkill(skillsRoot, slug)
 	}
 }
@@ -468,6 +454,21 @@ func (s *seeder) seedBundleSkills(fsys embed.FS, bundleName, bundleDir string) {
 	}
 	topLevel := topLevelSkillSlugs()
 	for _, slug := range slugs {
+		// An ethos-plugin skill (pluginskill.Is) ships through the plugin
+		// now, never flat — even when a stale on-disk copy of an older
+		// bundle still carries it under skills/<slug>/. Deploying it flat
+		// here would undo seedRetiredSkills on every run (the duplicate bare
+		// /gstack-* entry Qodo caught on this PR). Skip it; the retire pass
+		// owns its old flat copy, and the plugin owns its live one. Say so
+		// on stderr, mirroring the sidecar-collision branch below, so a
+		// bundle author who ships a skill under one of ethos's reserved slugs
+		// learns why it did not deploy rather than finding it silently gone.
+		if pluginskill.Is(slug) {
+			fmt.Fprintf(os.Stderr,
+				"ethos: seed: bundle %q skill %q is an ethos-plugin skill; it ships through the plugin, flat copy skipped\n",
+				bundleName, slug)
+			continue
+		}
 		data, readErr := read(slug)
 		if readErr != nil {
 			s.r.Errors = append(s.r.Errors, readErr.Error())
