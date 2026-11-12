@@ -63,12 +63,12 @@ design, implementation, review, documentation. Not just code.
 ```bash
 ethos mission pipeline instantiate product \
   --var feature=<name> --var target=<path> \
-  --leader claude --worker ghr --evaluator adt
+  --leader claude --worker mcg --evaluator dna
 ```
 
 The `--worker` flag sets the default for all stages. The leader
-reassigns workers per stage at delegation time: Stage 1 (prfaq) → ghr,
-Stage 2 (design) → edt + mdm, Stages 3-6 → bwk. Design is reviewed
+reassigns workers per stage at delegation time: Stage 1 (prfaq) → mcg,
+Stage 2 (design) → dna + mdm, Stages 3-6 → bwk. Design is reviewed
 before code starts.
 
 **Engineering work** uses `standard` or `quick` pipelines. Two specialists per domain — within each row, the worker and evaluator must be distinct handles. Across rows, `bwk` and `rsc` trade worker/evaluator on Go internals vs. module/dependency work — bringing complementary perspectives without ever putting a handle in conflict with itself on a single task.

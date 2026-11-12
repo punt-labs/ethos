@@ -33,9 +33,6 @@ members:
   # Go
   - identity: bwk
     role: go-specialist
-  # Python
-  - identity: rmh
-    role: python-specialist
   # CLI
   - identity: mdm
     role: cli-specialist
@@ -70,27 +67,11 @@ members:
   # Formal methods — Event-B (evaluator on Z spec design)
   - identity: jra
     role: b-specialist
-  # Product pipeline (design → prfaq → schema stages)
-  - identity: adt
-    role: pm-grounding
-  - identity: ghr
-    role: pm-building-blocks
-  - identity: edt
-    role: ux-designer
-  # Finance / operations
-  - identity: ach
-    role: finance-ops
-  # Python language design
-  - identity: gvr
-    role: python-language-design
 collaborations:
   - from: coo
     to: ceo
     type: reports_to
   - from: go-specialist
-    to: coo
-    type: reports_to
-  - from: python-specialist
     to: coo
     type: reports_to
   - from: cli-specialist
@@ -124,20 +105,5 @@ collaborations:
     to: coo
     type: reports_to
   - from: b-specialist
-    to: coo
-    type: reports_to
-  - from: pm-grounding
-    to: coo
-    type: reports_to
-  - from: pm-building-blocks
-    to: coo
-    type: reports_to
-  - from: ux-designer
-    to: coo
-    type: reports_to
-  - from: finance-ops
-    to: coo
-    type: reports_to
-  - from: python-language-design
     to: coo
     type: reports_to
