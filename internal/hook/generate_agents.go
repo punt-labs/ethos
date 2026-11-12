@@ -594,10 +594,23 @@ func activeBundleDefaultSkills(configRoot string) []string {
 // mergeSkills computes the deduplicated skill slug list for a generated
 // agent: baseline-ops always first, then the identity's own Skills, then
 // the active bundle's default_skills — in that order, first occurrence
-// wins (DES-073).
+// wins (DES-073). Each ethos-shipped skill is emitted under the plugin
+// namespace (ethos:<slug>) because ethos ships its skills through the
+// plugin (plugin/skills/), not the flat ~/.claude/skills/ namespace, so a
+// generated agent must reference them by their plugin-namespaced name for
+// Claude Code to resolve them (per standards/plugins.md §Namespace scope).
+// ethosSkill returns a skill slug under the ethos plugin namespace. ethos
+// ships every one of its skills through the plugin (plugin/skills/), so a
+// generated agent references them as ethos:<slug>. The prefix is the
+// released plugin name; the -dev plugin build swaps it the same way it
+// swaps the command and MCP-tool prefixes (release-plugin.sh).
+func ethosSkill(slug string) string {
+	return "ethos:" + slug
+}
+
 func mergeSkills(identitySkills, bundleDefaultSkills []string) []string {
 	seen := map[string]bool{"baseline-ops": true}
-	out := []string{"baseline-ops"}
+	out := []string{ethosSkill("baseline-ops")}
 	for _, lists := range [][]string{identitySkills, bundleDefaultSkills} {
 		for _, s := range lists {
 			s = strings.TrimSpace(s)
@@ -605,7 +618,7 @@ func mergeSkills(identitySkills, bundleDefaultSkills []string) []string {
 				continue
 			}
 			seen[s] = true
-			out = append(out, s)
+			out = append(out, ethosSkill(s))
 		}
 	}
 	return out

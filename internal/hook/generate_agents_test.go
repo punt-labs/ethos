@@ -195,7 +195,21 @@ func TestGeneratedAgentHandles(t *testing.T) {
 // entry in generated agent frontmatter.
 func TestMergeSkills_TrimsAndSkipsEmpty(t *testing.T) {
 	got := mergeSkills([]string{"", " ", "gstack-plan", "  \t"}, nil)
-	assert.Equal(t, []string{"baseline-ops", "gstack-plan"}, got)
+	assert.Equal(t, []string{"ethos:baseline-ops", "ethos:gstack-plan"}, got)
+}
+
+// TestMergeSkills_NamespacesEveryEthosSkill pins PL-532: ethos ships its
+// skills through the plugin (plugin/skills/), so every slug a generated
+// agent references must be emitted under the ethos plugin namespace
+// (ethos:<slug>). A bare slug would not resolve once the flat
+// ~/.claude/skills/ copies are retired.
+func TestMergeSkills_NamespacesEveryEthosSkill(t *testing.T) {
+	got := mergeSkills([]string{"gstack-plan"}, []string{"gstack-ship"})
+	assert.Equal(t, []string{"ethos:baseline-ops", "ethos:gstack-plan", "ethos:gstack-ship"}, got)
+	for _, s := range got {
+		assert.True(t, strings.HasPrefix(s, "ethos:"),
+			"every emitted skill must be plugin-namespaced, got bare %q", s)
+	}
 }
 
 // TestGenerateAgentFile_SkillSlugYAMLSafe pins the Copilot HIGH finding on
