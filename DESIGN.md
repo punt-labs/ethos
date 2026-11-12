@@ -7906,6 +7906,15 @@ schema will state.
 
 ## DES-073: Skills as a first-class ethos primitive — per-identity, per-bundle skill declarations (IMPLEMENTED)
 
+> **Amended (PL-319).** The Context below describes the seed-to-global
+> delivery as of this ADR. The *discoverable* top-level skills
+> (`optimize-team`, `mission`, `create-from-project`) have since moved to
+> `plugin/skills/`, resolving under the plugin namespace as `ethos:<skill>`
+> per `standards/plugins.md`; only `baseline-ops` is still seeded to
+> `~/.claude/skills/`, because it is preloaded into agents by bare slug. The
+> per-identity / per-bundle `skills:` declaration mechanism this ADR
+> establishes is unchanged.
+
 **Context.** Ethos partially uses Claude Code's skill mechanism today:
 `internal/seed/sidecar/skills/` ships three skills (`baseline-ops`,
 `create-from-project`, `mission`), `ethos seed` deploys them to

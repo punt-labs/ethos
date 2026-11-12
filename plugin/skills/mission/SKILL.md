@@ -1,3 +1,8 @@
+---
+name: mission
+description: Scaffold a Phase 3 mission contract, register it in the ethos store, and spawn the worker. Use when turning a delegation conversation about who does what into a typed, enforced mission — admitting the write set, freezing the evaluator, bounding rounds, and logging every transition.
+---
+
 # Mission
 
 Scaffold a Phase 3 mission contract, register it in the store, and

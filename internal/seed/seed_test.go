@@ -84,10 +84,12 @@ func TestSeedEmptyDir(t *testing.T) {
 	// loop (or dropping a slug from it) leaves TestTopLevelSkillSlugs
 	// green, since that test only reads the embed directive, but these
 	// assertions fail because the file never lands on disk.
+	// baseline-ops is the only top-level sidecar skill still seeded to the
+	// global skills dir: it is preloaded into every generated agent by bare
+	// slug. The discoverable skills (optimize-team, mission,
+	// create-from-project) now ship through the plugin as ethos:<skill>
+	// (plugin/skills/), not seeded here.
 	assert.FileExists(t, filepath.Join(skills, "baseline-ops", "SKILL.md"))
-	assert.FileExists(t, filepath.Join(skills, "mission", "SKILL.md"))
-	assert.FileExists(t, filepath.Join(skills, "create-from-project", "SKILL.md"))
-	assert.FileExists(t, filepath.Join(skills, "optimize-team", "SKILL.md"))
 
 	// Should have deployed all 8 generic pipeline files at the top
 	// level. The 5 gstack-* pipelines now ship inside the gstack
@@ -377,18 +379,15 @@ func TestSeedSkillsPath(t *testing.T) {
 	assert.Contains(t, string(data), "## Verification")
 }
 
-// TestSeedMissionSkill checks that the mission skill is deployed
-// to the right path with the Phase 3 schema content. The skill is
-// the only user-facing surface for driving the mission primitive
-// and its absence would silently degrade the leader workflow.
-func TestSeedMissionSkill(t *testing.T) {
-	dest := t.TempDir()
-	skills := t.TempDir()
-
-	_, err := Seed(dest, skills, false)
-	require.NoError(t, err)
-
-	skillPath := filepath.Join(skills, "mission", "SKILL.md")
+// TestMissionSkillContent checks the mission skill ships with the Phase 3
+// schema content. The skill is the user-facing surface for driving the
+// mission primitive; its drift would silently teach the wrong shape. The
+// mission skill now ships through the plugin (plugin/skills/mission/SKILL.md)
+// as ethos:mission rather than being seeded to the global skills dir, so this
+// reads the plugin file directly. `go test` runs with the package dir as cwd,
+// so the repo root is two levels up from internal/seed.
+func TestMissionSkillContent(t *testing.T) {
+	skillPath := filepath.Join("..", "..", "plugin", "skills", "mission", "SKILL.md")
 	assert.FileExists(t, skillPath)
 
 	data, err := os.ReadFile(skillPath)
@@ -495,10 +494,7 @@ func TestSeedBundleNoClobber(t *testing.T) {
 func TestTopLevelSkillSlugs_DerivedFromEmbeddedFS(t *testing.T) {
 	got := topLevelSkillSlugs()
 	assert.Equal(t, map[string]bool{
-		"baseline-ops":        true,
-		"mission":             true,
-		"create-from-project": true,
-		"optimize-team":       true,
+		"baseline-ops": true,
 	}, got)
 }
 
@@ -728,4 +724,114 @@ func TestSeedAgents_CommittedCopyMatchesShippedSource(t *testing.T) {
 					"re-run `ethos seed --force` in this repo and commit the result", name, committedPath)
 		})
 	}
+}
+
+// TestSeedRetiresMovedSkills guards PL-319's upgrade path: the three
+// discoverable skills (mission, create-from-project, optimize-team) moved to
+// plugin/skills/ and are no longer seeded, so a re-seed on an existing install
+// must remove their previously-seeded ~/.claude/skills/<slug>/ copies — but
+// only the unmodified shipped copies seed itself wrote, never a user edit, and
+// never baseline-ops.
+func TestSeedRetiresMovedSkills(t *testing.T) {
+	dest := t.TempDir()
+	skills := t.TempDir()
+
+	// Simulate an existing install that an older ethos seeded: the three
+	// retired skills plus baseline-ops on disk under the skills root.
+	writeSkill := func(slug, body string) string {
+		dir := filepath.Join(skills, slug)
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		p := filepath.Join(dir, "SKILL.md")
+		require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
+		return p
+	}
+	unmodified := "---\nname: mission\n---\n\n# old seeded body\n"
+	missionPath := writeSkill("mission", unmodified)
+	cfpPath := writeSkill("create-from-project", "---\nname: create-from-project\n---\n\n# old\n")
+	// optimize-team is present but USER-MODIFIED relative to what the
+	// manifest will record, so it must be left untouched.
+	optPath := writeSkill("optimize-team", "---\nname: optimize-team\n---\n\n# MY LOCAL EDIT\n")
+	baselinePath := writeSkill("baseline-ops", "---\nname: baseline-ops\n---\n\n# baseline\n")
+
+	// A manifest recording what seed "last wrote": mission and
+	// create-from-project at their current (unmodified) hashes, and
+	// optimize-team at a DIFFERENT hash (so the on-disk file reads as a user
+	// edit). baseline-ops is also tracked — it must still never be retired.
+	key := func(slug string) string { return "skills/" + slug + "/SKILL.md" }
+	mf := &Manifest{Schema: manifestSchema, Entries: map[string]Entry{
+		key("mission"):             {Scope: scopeSkills, Hash: hashBytes([]byte(unmodified))},
+		key("create-from-project"): {Scope: scopeSkills, Hash: hashBytes([]byte("---\nname: create-from-project\n---\n\n# old\n"))},
+		key("optimize-team"):       {Scope: scopeSkills, Hash: hashBytes([]byte("different shipped content"))},
+		key("baseline-ops"):        {Scope: scopeSkills, Hash: hashBytes([]byte("---\nname: baseline-ops\n---\n\n# baseline\n"))},
+	}}
+	require.NoError(t, mf.save(dest))
+
+	result, err := Seed(dest, skills, false)
+	require.NoError(t, err)
+
+	// (a) unmodified retired skills are removed, and (b) their manifest
+	// entries are dropped.
+	assert.NoFileExists(t, missionPath, "unmodified retired mission skill should be removed")
+	assert.NoFileExists(t, cfpPath, "unmodified retired create-from-project skill should be removed")
+	assert.Contains(t, result.Retired, missionPath)
+	assert.Contains(t, result.Retired, cfpPath)
+
+	// (c) a USER-MODIFIED retired skill is left in place.
+	assert.FileExists(t, optPath, "user-modified optimize-team skill must not be removed")
+	assert.NotContains(t, result.Retired, optPath)
+
+	// (d) baseline-ops is never a retirement target — it stays seeded.
+	assert.FileExists(t, baselinePath, "baseline-ops must never be retired")
+	assert.NotContains(t, result.Retired, baselinePath)
+
+	// The manifest on disk reflects the drops: mission and
+	// create-from-project gone, optimize-team and baseline-ops kept.
+	after, err := loadManifest(dest)
+	require.NoError(t, err)
+	assert.NotContains(t, after.Entries, key("mission"))
+	assert.NotContains(t, after.Entries, key("create-from-project"))
+	assert.Contains(t, after.Entries, key("optimize-team"))
+
+	// (e) a second seed does not resurrect the removed skills.
+	_, err = Seed(dest, skills, false)
+	require.NoError(t, err)
+	assert.NoFileExists(t, missionPath)
+	assert.NoFileExists(t, cfpPath)
+}
+
+// TestRetireSkillBranches covers retireSkill's error and edge paths directly:
+// a tracked-but-already-gone file (no error, nothing to do), and a read error
+// that is not os.IsNotExist (recorded, not fatal). The happy path and the
+// user-modified/untracked skips are covered by TestSeedRetiresMovedSkills.
+func TestRetireSkillBranches(t *testing.T) {
+	t.Run("tracked but already gone on disk", func(t *testing.T) {
+		skills := t.TempDir()
+		s := testSeeder(t.TempDir(), skills, false)
+		key := "skills/mission/SKILL.md"
+		s.mf.Entries[key] = Entry{Scope: scopeSkills, Hash: "sha256:whatever"}
+
+		s.retireSkill(skills, "mission") // file never created
+
+		assert.Empty(t, s.r.Errors, "a missing tracked file is not an error")
+		assert.Empty(t, s.r.Retired, "nothing was removed")
+		assert.Contains(t, s.mf.Entries, key, "manifest entry left intact when the file was already gone")
+	})
+
+	t.Run("read error that is not NotExist is recorded", func(t *testing.T) {
+		skills := t.TempDir()
+		s := testSeeder(t.TempDir(), skills, false)
+		key := "skills/mission/SKILL.md"
+		s.mf.Entries[key] = Entry{Scope: scopeSkills, Hash: "sha256:whatever"}
+
+		// Put a directory where retireSkill expects the SKILL.md file, so
+		// os.ReadFile returns EISDIR — an error, but not os.IsNotExist.
+		require.NoError(t, os.MkdirAll(filepath.Join(skills, "mission", "SKILL.md"), 0o755))
+
+		s.retireSkill(skills, "mission")
+
+		require.Len(t, s.r.Errors, 1, "a non-NotExist read error must be recorded")
+		assert.Contains(t, s.r.Errors[0], "for retirement")
+		assert.Empty(t, s.r.Retired)
+		assert.Contains(t, s.mf.Entries, key, "manifest entry left intact on a read error")
+	})
 }

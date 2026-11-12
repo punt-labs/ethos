@@ -314,4 +314,6 @@ at scaffold time.
 - `internal/mission/mission.go` — Contract schema (source of truth)
 - `cmd/ethos/mission.go` — CLI handlers
 - `internal/mcp/mission_tools.go` — MCP tool dispatch
-- `internal/seed/sidecar/skills/mission/SKILL.md` — the skill body
+- `plugin/skills/mission/SKILL.md` — the skill body (shipped through the
+  plugin as `ethos:mission` per standards/plugins.md; formerly seeded from
+  `internal/seed/sidecar/skills/mission/`, moved in PL-319)

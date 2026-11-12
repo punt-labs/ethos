@@ -2,21 +2,26 @@
 
 ## What this skill is
 
-The `/ethos:optimize-team` skill is three files working together:
+The `ethos:optimize-team` skill is a single plugin-shipped skill:
 
-1. `plugin/commands/optimize-team.md` — the released slash command,
-   `/ethos:optimize-team`, with `allowed-tools` naming the released ethos
-   MCP tools (`mcp__plugin_ethos_self__team`, `...__role`,
-   `...__identity`), `AskUserQuestion`, `Read`, `Glob`, and `Bash`.
-2. `plugin/commands/optimize-team-dev.md` — its `-dev` twin,
-   `/ethos-dev:optimize-team-dev`, identical except the MCP tool names
-   carry the `-dev` plugin prefix (`mcp__plugin_ethos-dev_self__team`).
-   Both files are required; `docs/development.md` mandates the
-   `name.md` + `name-dev.md` pair for every plugin slash command.
-3. `internal/seed/sidecar/skills/optimize-team/SKILL.md` — the seed-sidecar
-   skill holding the actual procedure. `ethos seed` deploys it to
-   `~/.claude/skills/optimize-team/SKILL.md`, alongside `baseline-ops`,
-   `mission`, and `create-from-project`.
+`plugin/skills/optimize-team/SKILL.md` — the skill holding the whole
+procedure (the interview, the decision table, the budget estimate, the
+propose-then-ratify-then-write flow), with `name`/`description` frontmatter.
+Claude Code discovers it under the plugin namespace as `ethos:optimize-team`
+(`ethos-dev:optimize-team` in dev), the same way lux ships `lux:scene.*`.
+This is the standards-compliant delivery per `standards/plugins.md`
+§"Namespace scope": the plugin name prefixes skills, so a skill never lands
+in the flat global namespace.
+
+There is **no** slash-command launcher pair. An earlier revision shipped the
+procedure as a seed-sidecar skill (deployed by `ethos seed` to
+`~/.claude/skills/optimize-team/`) with a `plugin/commands/optimize-team.md`
+launcher that told the model to run the skill. Once the skill became
+plugin-native, that command collided with it on the name `optimize-team` and
+shadowed it, so the launcher was removed (PL-319): the skill is invoked
+directly. `ethos seed` still deposits `baseline-ops` to the global namespace,
+because that one is preloaded into every generated agent by bare slug and
+must resolve under its bare name.
 
 The command file is a thin launcher: it tells the model to run the
 `optimize-team` skill, passing `$ARGUMENTS` through. The skill carries the
@@ -352,38 +357,22 @@ and regenerating is the only path (principle 9). After any prune in a
 `resolution: repo-only` repo, `ethos vendor --apply --prune` reconciles the
 vendored closure so no orphaned role or identity remains.
 
-## How the slash command reaches the skill
+## How Claude Code reaches the skill
 
-`/ethos:optimize-team` is a `plugin/commands/optimize-team.md` file whose
-body instructs the model to invoke the `optimize-team` skill. Claude Code
-loads the skill from `~/.claude/skills/optimize-team/SKILL.md`, where
-`ethos seed` placed it from `internal/seed/sidecar/skills/optimize-team/`.
-Shipping the skill in the seed sidecar — rather than only inside the plugin —
-is what lets it reach **any** repo: `ethos seed` deploys the sidecar skills
-globally, so a repo that has never installed the ethos plugin still gets the
-skill once `ethos seed` has run. The command pair is the convenience launcher;
-the sidecar skill is the portable payload.
+`ethos:optimize-team` is discovered from `plugin/skills/optimize-team/SKILL.md`
+by convention — Claude Code auto-indexes any `skills/<name>/SKILL.md` under a
+plugin root and resolves it under the plugin namespace (`ethos:optimize-team`,
+or `ethos-dev:optimize-team` in dev). No manifest declaration is needed; lux
+ships `lux:scene.*` the same way. The skill's `name`/`description` frontmatter
+is what the resolver indexes on.
 
-### Implementation blast radius (deployment is not automatic)
-
-A new sidecar skill does **not** deploy just by adding its directory. Two
-hardcoded enumerations gate it, and both must be edited or `ethos seed`
-silently never deploys the skill and the "any repo" claim is false:
-
-1. `internal/seed/embed.go:29` — the `//go:embed` directive for the `Skills`
-   FS is an explicit, by-name list (`baseline-ops`, `mission`,
-   `create-from-project` SKILL.md). Add
-   `sidecar/skills/optimize-team/SKILL.md` to it, or the file is not embedded
-   in the binary at all.
-2. `internal/seed/seed.go:168-173` — deployment is three hardcoded
-   `s.seedFile(Skills, ...)` calls, not a directory walk. Add a fourth call
-   near line 174 that deploys `sidecar/skills/optimize-team/SKILL.md` to
-   `filepath.Join(skillsRoot, "optimize-team", "SKILL.md")`.
-
-These two edits (plus the `README.md` catalog row under
-`internal/seed/sidecar/skills/`) are part of the implementation mission's
-write-set, alongside the three skill/command files and the `fable`
-`ModelAliases` prerequisite named above.
+Adding another discoverable skill is just a matter of creating
+`plugin/skills/<name>/SKILL.md` with frontmatter — there is no embed directive
+or seed enumeration to edit, because the plugin ships its own `skills/` tree
+directly. (Contrast `baseline-ops`, which is still seeded to the global
+`~/.claude/skills/` namespace by `ethos seed`, because it is preloaded into
+every generated agent by bare slug and must resolve under its bare name; that
+one is gated by the `//go:embed` directive in `internal/seed/embed.go`.)
 
 ## What this skill does not do
 

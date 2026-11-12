@@ -53,6 +53,11 @@ type Result struct {
 	// (e.g. non-YAML content).
 	SkipReasons map[string]string
 	Errors      []string // files that failed
+	// Retired lists previously-seeded files removed by seedRetiredSkills —
+	// a former top-level skill (see retiredTopLevelSkills) whose on-disk
+	// content still matched the manifest's recorded hash, so it was safe
+	// to delete rather than leave as an orphaned duplicate.
+	Retired []string
 }
 
 // Seed deploys embedded sidecar content to the destination root, recording no
@@ -170,6 +175,11 @@ func SeedVersionWithBundleDir(destRoot, skillsRoot, agentsRoot, activeBundle, ac
 	// further change here.
 	s.seedSkills(skillsRoot)
 
+	// Retire the top-level skills PL-319 moved to plugin/skills/: a stale
+	// shipped copy left behind after upgrade would duplicate the new
+	// plugin-namespaced ethos:<skill> version. See retiredTopLevelSkills.
+	s.seedRetiredSkills(skillsRoot)
+
 	// Bundle-scoped skills (DES-073): deployed after the sidecar top-level
 	// skills above, so a slug collision resolves bundle-wins per the ADR.
 	s.seedBundleSkills(Bundles, s.activeBundle, s.activeBundleDir)
@@ -266,6 +276,61 @@ func (s *seeder) seedSkills(skillsRoot string) {
 		s.seedFile(Skills, "sidecar/skills/"+slug+"/SKILL.md",
 			filepath.Join(skillsRoot, slug, "SKILL.md"))
 	}
+}
+
+// retiredTopLevelSkills names top-level sidecar skills seed no longer
+// deploys because they moved to plugin/skills/ in PL-319, shipping instead
+// as ethos:<skill> through the Claude Code plugin. seedRetiredSkills uses
+// this list to clean up an unmodified shipped copy left behind by an
+// earlier seed, so an upgrading user does not end up with the skill
+// duplicated under both its old bare slug and its new ethos:<skill> name.
+// baseline-ops is deliberately NOT here: it still seeds to the global
+// skills root, since every generated agent preloads it by bare slug.
+var retiredTopLevelSkills = []string{"mission", "create-from-project", "optimize-team"}
+
+// seedRetiredSkills removes a previously-seeded copy of each retired
+// top-level skill (see retiredTopLevelSkills) from skillsRoot, but only
+// when seed's own manifest entry for it still matches the file's on-disk
+// content — proof the file is the unmodified shipped copy, not a user
+// edit. A file with no manifest entry, or one whose content has since
+// diverged from the recorded hash, is left untouched; the no-clobber
+// contract applies to removal exactly as it applies to overwriting.
+func (s *seeder) seedRetiredSkills(skillsRoot string) {
+	for _, slug := range retiredTopLevelSkills {
+		s.retireSkill(skillsRoot, slug)
+	}
+}
+
+// retireSkill deletes slug's directory under skillsRoot and drops its
+// manifest entry, but only when the manifest tracks it AND its on-disk
+// SKILL.md content hash still matches the recorded hash.
+func (s *seeder) retireSkill(skillsRoot, slug string) {
+	dest := filepath.Join(skillsRoot, slug, "SKILL.md")
+	key := s.key(scopeSkills, dest)
+	entry, tracked := s.mf.Entries[key]
+	if !tracked {
+		return
+	}
+
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return // already gone — nothing to retire
+		}
+		s.r.Errors = append(s.r.Errors, fmt.Sprintf("reading %s for retirement: %v", dest, err))
+		return
+	}
+	if hashBytes(data) != entry.Hash {
+		return // user-modified since seed last wrote it; leave it
+	}
+
+	dir := filepath.Join(skillsRoot, slug)
+	if err := os.RemoveAll(dir); err != nil {
+		s.r.Errors = append(s.r.Errors, fmt.Sprintf("removing retired skill %s: %v", dir, err))
+		return
+	}
+	delete(s.mf.Entries, key)
+	s.r.Retired = append(s.r.Retired, dest)
 }
 
 func (s *seeder) seedReadmes(fsys embed.FS, destRoot string) {
