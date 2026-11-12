@@ -798,3 +798,40 @@ func TestSeedRetiresMovedSkills(t *testing.T) {
 	assert.NoFileExists(t, missionPath)
 	assert.NoFileExists(t, cfpPath)
 }
+
+// TestRetireSkillBranches covers retireSkill's error and edge paths directly:
+// a tracked-but-already-gone file (no error, nothing to do), and a read error
+// that is not os.IsNotExist (recorded, not fatal). The happy path and the
+// user-modified/untracked skips are covered by TestSeedRetiresMovedSkills.
+func TestRetireSkillBranches(t *testing.T) {
+	t.Run("tracked but already gone on disk", func(t *testing.T) {
+		skills := t.TempDir()
+		s := testSeeder(t.TempDir(), skills, false)
+		key := "skills/mission/SKILL.md"
+		s.mf.Entries[key] = Entry{Scope: scopeSkills, Hash: "sha256:whatever"}
+
+		s.retireSkill(skills, "mission") // file never created
+
+		assert.Empty(t, s.r.Errors, "a missing tracked file is not an error")
+		assert.Empty(t, s.r.Retired, "nothing was removed")
+		assert.Contains(t, s.mf.Entries, key, "manifest entry left intact when the file was already gone")
+	})
+
+	t.Run("read error that is not NotExist is recorded", func(t *testing.T) {
+		skills := t.TempDir()
+		s := testSeeder(t.TempDir(), skills, false)
+		key := "skills/mission/SKILL.md"
+		s.mf.Entries[key] = Entry{Scope: scopeSkills, Hash: "sha256:whatever"}
+
+		// Put a directory where retireSkill expects the SKILL.md file, so
+		// os.ReadFile returns EISDIR — an error, but not os.IsNotExist.
+		require.NoError(t, os.MkdirAll(filepath.Join(skills, "mission", "SKILL.md"), 0o755))
+
+		s.retireSkill(skills, "mission")
+
+		require.Len(t, s.r.Errors, 1, "a non-NotExist read error must be recorded")
+		assert.Contains(t, s.r.Errors[0], "for retirement")
+		assert.Empty(t, s.r.Retired)
+		assert.Contains(t, s.mf.Entries, key, "manifest entry left intact on a read error")
+	})
+}
