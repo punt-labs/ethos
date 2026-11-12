@@ -1,0 +1,35 @@
+mission: m-2026-11-11-005
+round: 1
+created_at: "2026-11-11T17:44:31Z"
+author: adb
+verdict: pass
+confidence: 0.9
+files_changed:
+    - path: plugin/commands/optimize-team.md
+      added: 13
+      removed: 0
+    - path: plugin/commands/optimize-team-dev.md
+      added: 13
+      removed: 0
+    - path: internal/seed/embed.go
+      added: 1
+      removed: 1
+    - path: internal/seed/seed.go
+      added: 2
+      removed: 0
+    - path: internal/seed/sidecar/skills/README.md
+      added: 9
+      removed: 0
+evidence:
+    - name: 'SKILL.md (280 lines) carries the interview, 9-row decision table, context-budget estimate, propose-then-ratify-then-write flow; emits model: fable for top reviewer rungs'
+      status: pass
+    - name: Command pair optimize-team.md + optimize-team-dev.md follow role.md frontmatter; -dev twin uses mcp__plugin_ethos-dev_self__* names
+      status: pass
+    - name: 'Seed wired: embed.go //go:embed Skills includes optimize-team/SKILL.md; seed.go adds the 4th seedFile deploy call; seed_test.go skill-set assertion updated'
+      status: pass
+    - name: go build ./... clean; go test ./internal/seed/ ./internal/role/ ./internal/schema/ => ok; go run ./cmd/validate-content => all checks passed; markdownlint 0 issues on 4 changed docs
+      status: pass
+    - name: Leader verified independently across commits 22449062, 7acd099f, c72183b2, 79c26a0e; [REDACTED:hostname] gitenv flake (ethos-fay2) excluded per main-CI-green
+      status: pass
+prose: |
+    Implements the /ethos:optimize-team skill per the merged design in docs/optimize-team.md: a seed-sidecar SKILL.md procedure, a slash-command launcher pair, and the two hardcoded seed enumerations plus the catalog row. Verified via targeted checks (build, seed/role/schema tests, validate-content, markdownlint) since the [REDACTED:hostname] host's unrelated gitenv make-check failure (ethos-fay2) masks a clean full run; main CI is the authority there.

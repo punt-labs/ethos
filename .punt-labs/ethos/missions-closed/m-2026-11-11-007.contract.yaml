@@ -1,0 +1,33 @@
+mission_id: m-2026-11-11-007
+status: closed
+type: implement
+created_at: "2026-11-11T18:41:37Z"
+updated_at: "2026-11-11T18:47:47Z"
+closed_at: "2026-11-11T18:47:47Z"
+leader: claude
+worker: adb
+evaluator:
+    handle: mdm
+    pinned_at: "2026-11-11T18:41:37Z"
+    hash: a532fcdb152c76185524a96d4ff9a1860ed24808a9e998bfb0a949ebb732c173
+inputs:
+    ticket: ethos-qffs
+write_set:
+    - internal/seed/sidecar/skills/optimize-team/SKILL.md
+success_criteria:
+    - 'F7 (team edge type) VERIFIED: internal/team/team.go:22-25 Collaboration requires a Type field, and validCollabType accepts only reports_to|collaborates_with|delegates_to (CollaborationTypes, team.go:44). The SKILL (lines ~104-109 and the write-flow ~219-222) tells the model to write review edges with only from/to — that produces a team ethos REJECTS at load. Fix: every review edge must specify type (use ''reports_to'' from worker-role to reviewer-role, matching the gstack team''s convention — verify against internal/seed/sidecar/bundles or the engineering team YAML). Show a complete, valid 3-field YAML edge example.'
+    - 'F9 (vendor --yes is fiction) VERIFIED: cmd/ethos/vendor.go has NO --yes flag and no confirm prompt. Its real safety model is: --dry-run is the default (plan only), --apply writes. The SKILL step 8 (~lines 232-240) says ''run without --yes so the user sees the prompt'' — false. Fix: the procedure runs ''ethos vendor --team <t> --prune'' (no --apply) FIRST to show the deletion plan, presents that plan to the user via AskUserQuestion, and only on explicit consent runs it again with --apply. Remove every mention of --yes and of a vendor-provided prompt.'
+    - 'F4 (doctor can''t check a staged tree) VERIFIED: ethos doctor (cmd/ethos/main.go:185, runDoctor:276) locates and checks the LIVE repo; it takes no staged-root argument. The SKILL step 7 (~lines 224-231) says ''run ethos doctor against the staged closure'' — doctor cannot do that. Fix: drop the claim that doctor validates a staged temp dir. Instead, validate the proposed closure by the checks the skill CAN do (ValidateModel per model value; the strict-tier review-edge check; worker!=evaluator), then write to the live tree, then run ''ethos doctor'' on the result and, if it FAILs, restore from the backup the skill already made. Make the backup-and-restore the real safety net, since the validation-before-write is now skill-side not doctor-side.'
+    - 'F5 (agent files not auto-pruned) VERIFIED: internal/hook/agent_plan.go writes current members'' agent files but never removes a pruned member''s file (the only os.Remove is a staging temp). doctor flags it as orphaned. The SKILL (optimize-in-place section, ~line 256) promises ''the agent file disappears on the next SessionStart regeneration'' — false. Fix: state the truth — pruning a member removes it from team YAML, but its generated .claude/agents/<handle>.md is NOT auto-deleted; it is flagged orphaned by ethos doctor and the user removes it (or it is left as inert). Do not promise automatic deletion.'
+    - 'F8 (setup before ratify breaks ''cancel writes nothing'') VERIFIED: ethos setup (cmd/ethos/setup.go:226,252,299) calls store.Save immediately — it persists identities and repo config. The greenfield section offers setup ''first'', but the skill elsewhere promises canceling writes nothing. Fix: in greenfield, either gather the full proposal WITHOUT running setup and only run setup after ratification, OR explicitly disclose that accepting setup writes starter state immediately and canceling the roster afterward does NOT undo it. Pick the first (cleaner) unless it''s infeasible, and say which.'
+    - 'F6+F10 (budget estimate wrong) VERIFIED against internal/hook/generate_agents.go: the estimate must (a) EXCLUDE the configured main agent — SessionStart''s agent planner does not generate a file for it, so counting it distorts savings; and (b) INCLUDE the generator-owned hook/scaffolding block that buildAgentFile adds for roles with Write/Edit tools, which the current recipe omits, understating write-enabled seats. Fix the context-budget section (~lines 140-184) to exclude the main agent and account for the per-seat generated scaffolding, or state the estimate is a lower bound and name what it omits.'
+    - 'F3 (Swift/other languages) + F2 (personality content): F3 — the decision table (~lines 66-73) maps a non-Go/Python primary language to ''other/none'' with no implementer seat, which would prune a real Swift specialist pair in a Swift repo. Fix: add an interview path that proposes an implementer+distinct-reviewer pair for any primary language, not just Go/Python. F2 — writing an identity YAML referencing a personality/writing-style slug does not create that content; if the slug isn''t resolvable, agent generation skips the member. Fix: the write flow must use personality/writing-style slugs that already resolve (or stage their markdown), and validate every proposed member actually resolves before cutover. Keep these two concise.'
+    - 'Verify: npx markdownlint-cli2 on the SKILL.md is zero findings. Re-read the whole SKILL.md end to end after edits for any remaining claim about ethos CLI/hook behavior and cross-check it against the real command — the failure mode here was confident prose about commands that behave differently. Do not WEAKEN the skill''s substance (the interview, decision table, tier ladder, budget method, propose-then-ratify flow all stay); only correct the factual claims about how ethos behaves and the gaps above.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+round_decisions:
+    version: 1
+    entries: []
+context: 'Qodo review of PR #609 found that the optimize-team SKILL.md procedure instructs the model to drive ethos CLI/hooks in ways the ACTUAL CODE does not support. The leader verified each finding against the real ethos source — they are valid. Fix the SKILL.md to match real ethos behavior. Do NOT change Go code; the schema/CLI are correct, the SKILL''s description of them is wrong. OKINOS NOTE: make check has an unrelated gitenv flake (ethos-fay2); verify markdown with npx markdownlint-cli2 on the file. Commit on branch feat/optimize-team-skill only; no push/PR/merge. git add the one file only.'
