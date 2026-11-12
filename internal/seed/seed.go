@@ -286,7 +286,15 @@ func (s *seeder) seedSkills(skillsRoot string) {
 // duplicated under both its old bare slug and its new ethos:<skill> name.
 // baseline-ops is deliberately NOT here: it still seeds to the global
 // skills root, since every generated agent preloads it by bare slug.
-var retiredTopLevelSkills = []string{"mission", "create-from-project", "optimize-team"}
+var retiredTopLevelSkills = []string{
+	"mission", "create-from-project", "optimize-team",
+	// PL-532: baseline-ops and the gstack bundle skills also moved to the
+	// plugin (plugin/skills/) and are referenced as ethos:<slug> in
+	// generated agents; retire their old flat ~/.claude/skills/ copies.
+	"baseline-ops",
+	"gstack-plan", "gstack-design", "gstack-debug",
+	"gstack-qa", "gstack-review", "gstack-ship",
+}
 
 // seedRetiredSkills removes a previously-seeded copy of each retired
 // top-level skill (see retiredTopLevelSkills) from skillsRoot, but only

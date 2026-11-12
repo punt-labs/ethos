@@ -1,22 +1,25 @@
 # Seeded skills
 
-This directory holds the one skill `ethos seed` deposits to the global
-`~/.claude/skills/` namespace: `baseline-ops`. It is preloaded into every
-generated agent by bare slug (`skills: [baseline-ops]`), so it must resolve
-under that bare name rather than a plugin prefix.
+This directory no longer holds any skill that `ethos seed` deposits to the
+global `~/.claude/skills/` namespace. Every ethos skill now ships through the
+plugin under `plugin/skills/<name>/`, so it resolves as `ethos:<skill>` per
+`standards/plugins.md` §"Namespace scope" rather than as a bare slug in the
+flat global namespace.
 
-The **discoverable** skills a human or agent invokes by name
-(`optimize-team`, `mission`, `create-from-project`) ship through the plugin
-instead, under `plugin/skills/<name>/`, so they resolve as `ethos:<skill>`
-per `standards/plugins.md` §"Namespace scope" — not in the flat global
-namespace. They are not seeded here.
+This holds for all three kinds:
 
-## baseline-ops
+- `baseline-ops` — operational discipline preloaded into every generated
+  agent. Referenced in agent frontmatter as `skills: [ethos:baseline-ops]`
+  (`internal/hook/generate_agents.go`).
+- The gstack bundle skills (`gstack-plan`, `gstack-design`, `gstack-debug`,
+  `gstack-qa`, `gstack-review`, `gstack-ship`) — the role-based pipeline
+  skills, referenced as `ethos:<skill>`.
+- The discoverable skills a human or agent invokes by name (`optimize-team`,
+  `mission`, `create-from-project`).
 
-Operational discipline for sub-agents that lose Claude Code's default
-system prompt. Covers dedicated tool usage, verification, scope
-discipline, commits, security, and output formatting.
+All of them live under `plugin/skills/<name>/SKILL.md`.
 
-Referenced in agent frontmatter as `skills: [baseline-ops]`.
-
-See [baseline-ops/SKILL.md](baseline-ops/SKILL.md) for the full content.
+Flat copies deposited by an older `ethos seed` are cleaned up on upgrade via
+`retiredTopLevelSkills` (`seed.go`). This `README.md` remains only to keep the
+`Skills` embed directive (`embed.go`) matching at least one file; the seed
+deploys nothing from it.
