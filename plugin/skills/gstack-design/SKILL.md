@@ -1,3 +1,9 @@
+---
+name: gstack-design
+display-name: "GStack: Design"
+description: Design-quality review workflow — a designer's eye for a plan, mockup, or shipped UI, covering information architecture, visual design, interaction, accessibility, and content. Use when reviewing a design system, plan/mockup, or shipped page/flow for readiness.
+---
+
 # GStack Design
 
 Design-quality workflow: a designer's eye for a plan, mockup, or shipped

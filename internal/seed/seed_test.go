@@ -79,17 +79,12 @@ func TestSeedEmptyDir(t *testing.T) {
 	assert.FileExists(t, filepath.Join(dest, "personalities", "README.md"))
 	assert.FileExists(t, filepath.Join(dest, "writing-styles", "README.md"))
 
-	// Should have deployed every top-level sidecar skill — this is the
-	// regression guard for the deploy loop in seedSkills: deleting the
-	// loop (or dropping a slug from it) leaves TestTopLevelSkillSlugs
-	// green, since that test only reads the embed directive, but these
-	// assertions fail because the file never lands on disk.
-	// baseline-ops is the only top-level sidecar skill still seeded to the
-	// global skills dir: it is preloaded into every generated agent by bare
-	// slug. The discoverable skills (optimize-team, mission,
-	// create-from-project) now ship through the plugin as ethos:<skill>
-	// (plugin/skills/), not seeded here.
-	assert.FileExists(t, filepath.Join(skills, "baseline-ops", "SKILL.md"))
+	// No sidecar skill seeds to the global skills dir anymore: every ethos
+	// skill (baseline-ops and the gstack bundle skills included) ships
+	// through the plugin as ethos:<skill> (plugin/skills/) and is referenced
+	// by that namespaced name in generated agents (PL-532).
+	assert.NoFileExists(t, filepath.Join(skills, "baseline-ops", "SKILL.md"),
+		"baseline-ops ships via the plugin now, not the flat skills dir")
 
 	// Should have deployed all 8 generic pipeline files at the top
 	// level. The 5 gstack-* pipelines now ship inside the gstack
@@ -357,20 +352,20 @@ func TestSeedPartialState(t *testing.T) {
 	assert.FileExists(t, filepath.Join(dest, "talents", "go.md"))
 	assert.FileExists(t, filepath.Join(dest, "talents", "python.md"))
 
-	// Skills created
-	assert.FileExists(t, filepath.Join(skills, "baseline-ops", "SKILL.md"))
+	// No skill seeds to the flat skills dir anymore (PL-532): ethos skills
+	// ship through the plugin.
+	assert.NoFileExists(t, filepath.Join(skills, "baseline-ops", "SKILL.md"))
 
 	assert.NotEmpty(t, result.Deployed)
 }
 
-func TestSeedSkillsPath(t *testing.T) {
-	dest := t.TempDir()
-	skills := t.TempDir()
-
-	_, err := Seed(dest, skills, false)
-	require.NoError(t, err)
-
-	skillPath := filepath.Join(skills, "baseline-ops", "SKILL.md")
+// TestBaselineOpsSkillContent checks baseline-ops ships with its operational
+// content. It now ships through the plugin (plugin/skills/baseline-ops/) as
+// ethos:baseline-ops rather than being seeded to the flat skills dir, so this
+// reads the plugin file. `go test` runs with the package dir as cwd, so the
+// repo root is two levels up from internal/seed.
+func TestBaselineOpsSkillContent(t *testing.T) {
+	skillPath := filepath.Join("..", "..", "plugin", "skills", "baseline-ops", "SKILL.md")
 	assert.FileExists(t, skillPath)
 
 	data, err := os.ReadFile(skillPath)
@@ -487,37 +482,28 @@ func TestSeedBundleNoClobber(t *testing.T) {
 	assert.True(t, found, "edited bundle manifest should be in the edited list on second seed")
 }
 
-// TestTopLevelSkillSlugs_DerivedFromEmbeddedFS pins the Copilot MEDIUM
-// finding on PR #481: the sidecar top-level skill set must be enumerated
-// from the embedded Skills FS, not hardcoded, so a new skill added under
-// sidecar/skills/ is picked up with no code change here.
-func TestTopLevelSkillSlugs_DerivedFromEmbeddedFS(t *testing.T) {
-	got := topLevelSkillSlugs()
-	assert.Equal(t, map[string]bool{
-		"baseline-ops": true,
-	}, got)
-}
-
-// TestSeedDeploysBundleSkills pins DES-073's bundle-scoped skill deploy:
-// with the gstack bundle active, its skills/<slug>/SKILL.md files land
-// under skillsRoot alongside the sidecar top-level skills. With no
-// active bundle named, no bundle-scoped skill is deployed.
-func TestSeedDeploysBundleSkills(t *testing.T) {
+// TestSeedDeploysNoFlatSkills pins PL-532: no ethos skill seeds to the flat
+// ~/.claude/skills/ namespace anymore — neither the gstack bundle skills nor
+// baseline-ops. They all ship through the plugin (plugin/skills/) as
+// ethos:<skill> and are referenced by that namespaced name in generated
+// agents. A seed, with the gstack bundle active or not, deploys no SKILL.md to
+// the skills root.
+func TestSeedDeploysNoFlatSkills(t *testing.T) {
 	dest := t.TempDir()
 	skills := t.TempDir()
 
 	_, err := SeedVersionWithBundle(dest, skills, "", "gstack", "", false)
 	require.NoError(t, err)
 
-	assert.FileExists(t, filepath.Join(skills, "gstack-plan", "SKILL.md"))
-	assert.FileExists(t, filepath.Join(skills, "gstack-ship", "SKILL.md"))
-	// Sidecar top-level skills still deploy alongside the bundle ones.
-	assert.FileExists(t, filepath.Join(skills, "baseline-ops", "SKILL.md"))
+	assert.NoFileExists(t, filepath.Join(skills, "gstack-plan", "SKILL.md"))
+	assert.NoFileExists(t, filepath.Join(skills, "gstack-ship", "SKILL.md"))
+	assert.NoFileExists(t, filepath.Join(skills, "baseline-ops", "SKILL.md"))
 
 	noBundleSkills := t.TempDir()
 	_, err = Seed(dest, noBundleSkills, false)
 	require.NoError(t, err)
 	assert.NoFileExists(t, filepath.Join(noBundleSkills, "gstack-plan", "SKILL.md"))
+	assert.NoFileExists(t, filepath.Join(noBundleSkills, "baseline-ops", "SKILL.md"))
 }
 
 // TestSeedDeploysRepoLocalBundleSkills pins the Bugbot MEDIUM finding on
@@ -544,6 +530,39 @@ func TestSeedDeploysRepoLocalBundleSkills(t *testing.T) {
 	// The embedded gstack skills must NOT appear — the resolved bundle
 	// (my-bundle, at bundleDir) is what's deployed, not the embedded one.
 	assert.NoFileExists(t, filepath.Join(skills, "gstack-plan", "SKILL.md"))
+}
+
+// TestSeedBundleSkillsSkipsEthosPluginSlugs pins the Qodo HIGH finding on
+// PR #614: an older seed left a gstack bundle on disk whose skills/ subtree
+// still carries gstack-plan/SKILL.md (a skill that now ships through the
+// plugin). With that bundle active, seedBundleSkills must NOT re-deploy
+// gstack-plan flat under ~/.claude/skills/ — doing so would undo
+// seedRetiredSkills and bring the duplicate bare /gstack-plan entry back on
+// every run. A genuinely-bundle-only skill (foo) in the same bundle still
+// deploys flat.
+func TestSeedBundleSkillsSkipsEthosPluginSlugs(t *testing.T) {
+	dest := t.TempDir()
+	skills := t.TempDir()
+
+	bundleDir := t.TempDir()
+	// An ethos-plugin skill left behind in an old on-disk bundle copy.
+	require.NoError(t, os.MkdirAll(filepath.Join(bundleDir, "skills", "gstack-plan"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(bundleDir, "skills", "gstack-plan", "SKILL.md"),
+		[]byte("# Stale gstack-plan\n\nLeft behind by an older seed.\n"), 0o644))
+	// A genuinely bundle-only skill that is NOT an ethos-plugin skill.
+	require.NoError(t, os.MkdirAll(filepath.Join(bundleDir, "skills", "foo"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(bundleDir, "skills", "foo", "SKILL.md"),
+		[]byte("# Foo\n\nA real bundle-only skill.\n"), 0o644))
+
+	_, err := SeedVersionWithBundleDir(dest, skills, "", "my-bundle", bundleDir, "", false)
+	require.NoError(t, err)
+
+	// gstack-plan ships through the plugin now; it must never land flat,
+	// even though the on-disk bundle still carries a copy.
+	assert.NoFileExists(t, filepath.Join(skills, "gstack-plan", "SKILL.md"),
+		"an ethos-plugin skill in a stale on-disk bundle must not be re-seeded flat")
+	// foo is bundle-only; it still deploys flat.
+	assert.FileExists(t, filepath.Join(skills, "foo", "SKILL.md"))
 }
 
 func TestSeedIdempotent(t *testing.T) {
@@ -726,18 +745,16 @@ func TestSeedAgents_CommittedCopyMatchesShippedSource(t *testing.T) {
 	}
 }
 
-// TestSeedRetiresMovedSkills guards PL-319's upgrade path: the three
-// discoverable skills (mission, create-from-project, optimize-team) moved to
-// plugin/skills/ and are no longer seeded, so a re-seed on an existing install
-// must remove their previously-seeded ~/.claude/skills/<slug>/ copies — but
-// only the unmodified shipped copies seed itself wrote, never a user edit, and
-// never baseline-ops.
+// TestSeedRetiresMovedSkills guards the upgrade path: every ethos skill that
+// moved to plugin/skills/ (the PL-319 three plus the PL-532 baseline-ops and
+// gstack skills) is no longer seeded, so a re-seed on an existing install must
+// remove its previously-seeded ~/.claude/skills/<slug>/ copy — but only the
+// unmodified copy seed itself wrote, never a user edit, and never a skill ethos
+// did not ship (an unrelated slug the user put there).
 func TestSeedRetiresMovedSkills(t *testing.T) {
 	dest := t.TempDir()
 	skills := t.TempDir()
 
-	// Simulate an existing install that an older ethos seeded: the three
-	// retired skills plus baseline-ops on disk under the skills root.
 	writeSkill := func(slug, body string) string {
 		dir := filepath.Join(skills, slug)
 		require.NoError(t, os.MkdirAll(dir, 0o755))
@@ -747,56 +764,57 @@ func TestSeedRetiresMovedSkills(t *testing.T) {
 	}
 	unmodified := "---\nname: mission\n---\n\n# old seeded body\n"
 	missionPath := writeSkill("mission", unmodified)
-	cfpPath := writeSkill("create-from-project", "---\nname: create-from-project\n---\n\n# old\n")
+	// baseline-ops is now a retired skill too; present and unmodified, so it
+	// must be removed on re-seed.
+	baselineBody := "---\nname: baseline-ops\n---\n\n# baseline\n"
+	baselinePath := writeSkill("baseline-ops", baselineBody)
 	// optimize-team is present but USER-MODIFIED relative to what the
-	// manifest will record, so it must be left untouched.
+	// manifest records, so it must be left untouched.
 	optPath := writeSkill("optimize-team", "---\nname: optimize-team\n---\n\n# MY LOCAL EDIT\n")
-	baselinePath := writeSkill("baseline-ops", "---\nname: baseline-ops\n---\n\n# baseline\n")
+	// my-custom-skill is a skill ethos never shipped (not in
+	// pluginskill.Slugs), so it must never be touched even if present.
+	customBody := "---\nname: my-custom-skill\n---\n\n# mine\n"
+	customPath := writeSkill("my-custom-skill", customBody)
 
-	// A manifest recording what seed "last wrote": mission and
-	// create-from-project at their current (unmodified) hashes, and
-	// optimize-team at a DIFFERENT hash (so the on-disk file reads as a user
-	// edit). baseline-ops is also tracked — it must still never be retired.
 	key := func(slug string) string { return "skills/" + slug + "/SKILL.md" }
 	mf := &Manifest{Schema: manifestSchema, Entries: map[string]Entry{
-		key("mission"):             {Scope: scopeSkills, Hash: hashBytes([]byte(unmodified))},
-		key("create-from-project"): {Scope: scopeSkills, Hash: hashBytes([]byte("---\nname: create-from-project\n---\n\n# old\n"))},
-		key("optimize-team"):       {Scope: scopeSkills, Hash: hashBytes([]byte("different shipped content"))},
-		key("baseline-ops"):        {Scope: scopeSkills, Hash: hashBytes([]byte("---\nname: baseline-ops\n---\n\n# baseline\n"))},
+		key("mission"):         {Scope: scopeSkills, Hash: hashBytes([]byte(unmodified))},
+		key("baseline-ops"):    {Scope: scopeSkills, Hash: hashBytes([]byte(baselineBody))},
+		key("optimize-team"):   {Scope: scopeSkills, Hash: hashBytes([]byte("different shipped content"))},
+		key("my-custom-skill"): {Scope: scopeSkills, Hash: hashBytes([]byte(customBody))},
 	}}
 	require.NoError(t, mf.save(dest))
 
 	result, err := Seed(dest, skills, false)
 	require.NoError(t, err)
 
-	// (a) unmodified retired skills are removed, and (b) their manifest
-	// entries are dropped.
+	// (a) unmodified retired skills are removed (incl. baseline-ops), and
+	// (b) their manifest entries are dropped.
 	assert.NoFileExists(t, missionPath, "unmodified retired mission skill should be removed")
-	assert.NoFileExists(t, cfpPath, "unmodified retired create-from-project skill should be removed")
+	assert.NoFileExists(t, baselinePath, "unmodified retired baseline-ops skill should be removed")
 	assert.Contains(t, result.Retired, missionPath)
-	assert.Contains(t, result.Retired, cfpPath)
+	assert.Contains(t, result.Retired, baselinePath)
 
 	// (c) a USER-MODIFIED retired skill is left in place.
 	assert.FileExists(t, optPath, "user-modified optimize-team skill must not be removed")
 	assert.NotContains(t, result.Retired, optPath)
 
-	// (d) baseline-ops is never a retirement target — it stays seeded.
-	assert.FileExists(t, baselinePath, "baseline-ops must never be retired")
-	assert.NotContains(t, result.Retired, baselinePath)
+	// (d) a skill ethos never shipped is never a retirement target.
+	assert.FileExists(t, customPath, "a non-ethos skill must never be retired")
+	assert.NotContains(t, result.Retired, customPath)
 
-	// The manifest on disk reflects the drops: mission and
-	// create-from-project gone, optimize-team and baseline-ops kept.
 	after, err := loadManifest(dest)
 	require.NoError(t, err)
 	assert.NotContains(t, after.Entries, key("mission"))
-	assert.NotContains(t, after.Entries, key("create-from-project"))
+	assert.NotContains(t, after.Entries, key("baseline-ops"))
 	assert.Contains(t, after.Entries, key("optimize-team"))
+	assert.Contains(t, after.Entries, key("my-custom-skill"))
 
 	// (e) a second seed does not resurrect the removed skills.
 	_, err = Seed(dest, skills, false)
 	require.NoError(t, err)
 	assert.NoFileExists(t, missionPath)
-	assert.NoFileExists(t, cfpPath)
+	assert.NoFileExists(t, baselinePath)
 }
 
 // TestRetireSkillBranches covers retireSkill's error and edge paths directly:

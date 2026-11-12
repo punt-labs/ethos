@@ -11,6 +11,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/agentmark"
 	"github.com/punt-labs/ethos/v4/internal/bundle"
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/pluginskill"
 	"github.com/punt-labs/ethos/v4/internal/repomiss"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/role"
@@ -595,9 +596,36 @@ func activeBundleDefaultSkills(configRoot string) []string {
 // agent: baseline-ops always first, then the identity's own Skills, then
 // the active bundle's default_skills — in that order, first occurrence
 // wins (DES-073).
+//
+// A slug ethos ships through its plugin (pluginskill.Is) is emitted under
+// BOTH plugin-namespace prefixes, the released "ethos:" and the dev-build
+// "ethos-dev:" (skillNames). ethos ships those skills through the plugin
+// (plugin/skills/), not the flat ~/.claude/skills/ namespace, so a generated
+// agent must reference them by their plugin-namespaced name for Claude Code
+// to resolve them (standards/plugins.md §"Namespace scope"). The installed
+// plugin is "ethos" in a consumer repo but "ethos-dev" in this repo's own dev
+// sessions (plugin/.claude-plugin/plugin.json), and release-plugin.sh does
+// NOT rewrite skill names in generated agents, so a single prod-only prefix
+// would not resolve in dev. Listing both is the same tolerant dual-prefix
+// pattern the role YAML uses for MCP tools (mcp__plugin_ethos_self__*
+// alongside mcp__plugin_ethos-dev_self__*): Claude Code resolves whichever
+// plugin is installed and skips the other with a debug-log warning.
+//
+// Any OTHER slug — a user's own skill, a third-party bundle skill under its
+// bare slug, or an already-namespaced slug such as lux:scene — is passed
+// through verbatim. Prefixing one of those with ethos: would name a skill
+// ethos does not ship, which Claude Code then silently skips (the regression
+// Qodo caught on this PR).
+func skillNames(slug string) []string {
+	if pluginskill.Is(slug) {
+		return []string{"ethos:" + slug, "ethos-dev:" + slug}
+	}
+	return []string{slug}
+}
+
 func mergeSkills(identitySkills, bundleDefaultSkills []string) []string {
 	seen := map[string]bool{"baseline-ops": true}
-	out := []string{"baseline-ops"}
+	out := skillNames("baseline-ops")
 	for _, lists := range [][]string{identitySkills, bundleDefaultSkills} {
 		for _, s := range lists {
 			s = strings.TrimSpace(s)
@@ -605,7 +633,7 @@ func mergeSkills(identitySkills, bundleDefaultSkills []string) []string {
 				continue
 			}
 			seen[s] = true
-			out = append(out, s)
+			out = append(out, skillNames(s)...)
 		}
 	}
 	return out

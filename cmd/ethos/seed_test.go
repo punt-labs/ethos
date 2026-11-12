@@ -55,14 +55,16 @@ func TestSeed_UpgradeAndPreserve(t *testing.T) {
 	assert.Contains(t, string(data), "name: implementer")
 }
 
-// TestSeed_FreshInstallDeploysEmbeddedBundleSkills pins the Bugbot HIGH
-// finding on PR #481: a fresh install has active_bundle set in
-// .punt-labs/ethos.yaml but the bundle isn't on disk yet anywhere
-// bundle.ResolveActive looks (no repo-local override, no global bundle
-// store from a prior seed). runSeed must still fall back to the
-// config's bundle NAME and deploy that bundle's embedded skills — not
-// silently no-op just because ResolveActive found nothing to resolve.
-func TestSeed_FreshInstallDeploysEmbeddedBundleSkills(t *testing.T) {
+// TestSeed_FreshInstallGstackBundleDeploysNoFlatSkills pins PL-532: a fresh
+// install with active_bundle: gstack still deploys the bundle (its roles,
+// identities, pipelines) but deposits NO skill flat under ~/.claude/skills/.
+// The gstack skills are ethos-plugin skills now (pluginskill.Is) — they ship
+// through plugin/skills/ as ethos:<slug>, not the flat namespace — so
+// seedBundleSkills skips them even on a fresh install where the embedded
+// bundle is the only source. (Before PL-532 this test asserted the opposite:
+// that gstack-plan/gstack-ship landed flat, the Bugbot HIGH finding on #481.
+// That behavior is exactly what moved to the plugin.)
+func TestSeed_FreshInstallGstackBundleDeploysNoFlatSkills(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -75,8 +77,12 @@ func TestSeed_FreshInstallDeploysEmbeddedBundleSkills(t *testing.T) {
 	_, err := execSeed(t, "seed")
 	require.NoError(t, err)
 
-	assert.FileExists(t, filepath.Join(home, ".claude", "skills", "gstack-plan", "SKILL.md"))
-	assert.FileExists(t, filepath.Join(home, ".claude", "skills", "gstack-ship", "SKILL.md"))
+	// The bundle itself still deploys — the fresh-install fallback is intact.
+	assert.FileExists(t, filepath.Join(home, ".punt-labs", "ethos", "bundles", "gstack", "bundle.yaml"))
+	// But no gstack skill lands flat: they ship through the plugin now.
+	assert.NoFileExists(t, filepath.Join(home, ".claude", "skills", "gstack-plan", "SKILL.md"))
+	assert.NoFileExists(t, filepath.Join(home, ".claude", "skills", "gstack-ship", "SKILL.md"))
+	assert.NoDirExists(t, filepath.Join(home, ".claude", "skills"))
 }
 
 // A malformed repo config is not a reason to skip bundle skills silently: seed

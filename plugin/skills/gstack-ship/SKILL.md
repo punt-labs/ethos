@@ -1,3 +1,9 @@
+---
+name: gstack-ship
+display-name: "GStack: Ship"
+description: Ship-readiness checklist — merge the base branch, run and audit tests, verify the plan was actually implemented, bisect commits, and verify against the final merged state before pushing. Use when preparing to merge or ship a change and wanting a structured pre-merge gate instead of an ad hoc final check.
+---
+
 # GStack Ship
 
 Ship-readiness checklist: merge the base branch, run tests, verify the

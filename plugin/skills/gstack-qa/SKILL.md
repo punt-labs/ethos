@@ -1,3 +1,9 @@
+---
+name: gstack-qa
+display-name: "GStack: QA"
+description: Manual/exploratory QA workflow with a scored health rubric covering functional, accessibility, UX, console errors, links, performance, visual, and content. Use when QA-testing a feature or page, triaging findings with evidence, or scoring a shipped flow's health.
+---
+
 # GStack QA
 
 Manual/exploratory QA workflow with a scored health rubric, distilled

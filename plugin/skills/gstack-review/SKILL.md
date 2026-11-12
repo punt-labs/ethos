@@ -1,3 +1,9 @@
+---
+name: gstack-review
+display-name: "GStack: Review"
+description: Code review workflow with calibrated confidence scoring — SQL/data safety, concurrency, trust-boundary, shell injection, and enum completeness checks, each finding gated on a quoted file:line before it is reported. Use when reviewing a diff for bugs and wanting severity- and confidence-scored findings instead of an unfiltered list.
+---
+
 # GStack Review
 
 Code review workflow with calibrated confidence scoring, distilled from

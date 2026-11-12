@@ -254,20 +254,22 @@ func TestSeed_ForceReadOnlyDest(t *testing.T) {
 	assert.NotEmpty(t, result.Errors)
 }
 
-// TestSeed_SkillsPathBlocked exercises the seedFile error surface by
-// making the skills destination unwritable. seedFile reads from the
-// embedded FS successfully, then place fails to mkdir under a file.
-func TestSeed_SkillsPathBlocked(t *testing.T) {
-	dest := t.TempDir()
+// TestSeed_DestPathBlocked exercises the seedFile error surface by making
+// the dest root unwritable: seedFile reads an embedded file (a role/talent)
+// successfully, then place fails to mkdir under a regular file. (Skills no
+// longer seed to the flat skills dir — PL-532 — so this now blocks dest,
+// where roles/talents still deploy, to hit the same place/mkdir path.)
+func TestSeed_DestPathBlocked(t *testing.T) {
 	parent := t.TempDir()
-	skills := filepath.Join(parent, "skills")
-	require.NoError(t, os.WriteFile(skills, []byte("not a dir"), 0o600))
+	dest := filepath.Join(parent, "dest")
+	require.NoError(t, os.WriteFile(dest, []byte("not a dir"), 0o600))
+	skills := t.TempDir()
 
 	result, err := Seed(dest, skills, false)
 	require.Error(t, err)
-	// seedFile reads the embedded SKILL.md, then place's MkdirAll fails
-	// with ENOTDIR because the skills destination is a regular file, not
-	// a directory. The wrapper in place prefixes "mkdir".
+	// seedFile reads an embedded source file, then place's MkdirAll fails
+	// with ENOTDIR because the dest root is a regular file, not a
+	// directory. The wrapper in place prefixes "mkdir".
 	var sawMkdirError bool
 	for _, e := range result.Errors {
 		if strings.Contains(e, "mkdir") &&

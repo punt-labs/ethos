@@ -1,3 +1,9 @@
+---
+name: baseline-ops
+display-name: Baseline Operations
+description: Operational discipline for sub-agents — tool usage, verification, scope discipline, git, security, and output conventions. Use when a generated sub-agent needs the operational guidance lost when Claude Code's default system prompt is replaced by an agent definition.
+---
+
 # Baseline Operations
 
 Operational discipline for sub-agents. This skill replaces the
