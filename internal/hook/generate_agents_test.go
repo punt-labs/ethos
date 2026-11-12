@@ -195,19 +195,29 @@ func TestGeneratedAgentHandles(t *testing.T) {
 // entry in generated agent frontmatter.
 func TestMergeSkills_TrimsAndSkipsEmpty(t *testing.T) {
 	got := mergeSkills([]string{"", " ", "gstack-plan", "  \t"}, nil)
-	assert.Equal(t, []string{"ethos:baseline-ops", "ethos:gstack-plan"}, got)
+	assert.Equal(t, []string{
+		"ethos:baseline-ops", "ethos-dev:baseline-ops",
+		"ethos:gstack-plan", "ethos-dev:gstack-plan",
+	}, got)
 }
 
 // TestMergeSkills_NamespacesEveryEthosSkill pins PL-532: ethos ships its
 // skills through the plugin (plugin/skills/), so every slug a generated
-// agent references must be emitted under the ethos plugin namespace
-// (ethos:<slug>). A bare slug would not resolve once the flat
-// ~/.claude/skills/ copies are retired.
+// agent references must be emitted under the ethos plugin namespace. A bare
+// slug would not resolve once the flat ~/.claude/skills/ copies are retired.
+// Both the released "ethos:" and the dev-build "ethos-dev:" prefixes are
+// emitted so the skill resolves whether this repo's own dev plugin or the
+// released consumer plugin is installed (the MCP dual-prefix pattern); Claude
+// Code skips the uninstalled one with a debug-log warning.
 func TestMergeSkills_NamespacesEveryEthosSkill(t *testing.T) {
 	got := mergeSkills([]string{"gstack-plan"}, []string{"gstack-ship"})
-	assert.Equal(t, []string{"ethos:baseline-ops", "ethos:gstack-plan", "ethos:gstack-ship"}, got)
+	assert.Equal(t, []string{
+		"ethos:baseline-ops", "ethos-dev:baseline-ops",
+		"ethos:gstack-plan", "ethos-dev:gstack-plan",
+		"ethos:gstack-ship", "ethos-dev:gstack-ship",
+	}, got)
 	for _, s := range got {
-		assert.True(t, strings.HasPrefix(s, "ethos:"),
+		assert.True(t, strings.HasPrefix(s, "ethos:") || strings.HasPrefix(s, "ethos-dev:"),
 			"every emitted skill must be plugin-namespaced, got bare %q", s)
 	}
 }
@@ -246,7 +256,10 @@ func TestGenerateAgentFile_SkillSlugYAMLSafe(t *testing.T) {
 		Skills []string `yaml:"skills"`
 	}
 	require.NoError(t, yaml.Unmarshal([]byte(parts[1]), &fm), "frontmatter must remain valid YAML")
-	assert.Equal(t, []string{"ethos:baseline-ops", "ethos:" + maliciousSlug}, fm.Skills,
+	assert.Equal(t, []string{
+		"ethos:baseline-ops", "ethos-dev:baseline-ops",
+		"ethos:" + maliciousSlug, "ethos-dev:" + maliciousSlug,
+	}, fm.Skills,
 		"the malicious slug must round-trip verbatim (namespaced), not be split into extra YAML structure")
 }
 
@@ -290,8 +303,11 @@ func TestGenerateAgentFile_MergesIdentityAndBundleSkills(t *testing.T) {
 	content := string(data)
 	assert.Contains(t, content, "skills:\n"+
 		"  - \"ethos:baseline-ops\"\n"+
+		"  - \"ethos-dev:baseline-ops\"\n"+
 		"  - \"ethos:gstack-design\"\n"+
-		"  - \"ethos:gstack-ship\"\n")
+		"  - \"ethos-dev:gstack-design\"\n"+
+		"  - \"ethos:gstack-ship\"\n"+
+		"  - \"ethos-dev:gstack-ship\"\n")
 }
 
 func writeYAML(t *testing.T, path string, data interface{}) {
@@ -358,6 +374,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 				assert.Contains(t, content,
 					"skills:\n"+
 						"  - \"ethos:baseline-ops\"\n"+
+						"  - \"ethos-dev:baseline-ops\"\n"+
 						"hooks:\n"+
 						"  PostToolUse:\n"+
 						"    - matcher: \"Write|Edit\"\n"+
@@ -607,12 +624,13 @@ func TestGenerateAgentFiles(t *testing.T) {
 				parts := strings.SplitN(content, "---", 3)
 				require.Len(t, parts, 3, "expected frontmatter delimiters")
 				frontmatter := parts[1]
-				assert.Contains(t, frontmatter, "skills:\n  - \"ethos:baseline-ops\"\n")
+				assert.Contains(t, frontmatter, "skills:\n  - \"ethos:baseline-ops\"\n  - \"ethos-dev:baseline-ops\"\n")
 				// bwk has Write in its tools list, so the hooks block
 				// follows skills in the same frontmatter section.
 				assert.Contains(t, frontmatter,
 					"skills:\n"+
 						"  - \"ethos:baseline-ops\"\n"+
+						"  - \"ethos-dev:baseline-ops\"\n"+
 						"hooks:\n"+
 						"  PostToolUse:\n"+
 						"    - matcher: \"Write|Edit\"\n"+
@@ -642,6 +660,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 				content := string(data)
 				want := "skills:\n" +
 					"  - \"ethos:baseline-ops\"\n" +
+					"  - \"ethos-dev:baseline-ops\"\n" +
 					"hooks:\n" +
 					"  PostToolUse:\n" +
 					"    - matcher: \"Write|Edit\"\n" +
@@ -713,6 +732,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 				assert.Contains(t, content,
 					"skills:\n"+
 						"  - \"ethos:baseline-ops\"\n"+
+						"  - \"ethos-dev:baseline-ops\"\n"+
 						"---\n")
 			},
 		},
@@ -796,6 +816,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 				assert.Contains(t, content,
 					"skills:\n"+
 						"  - \"ethos:baseline-ops\"\n"+
+						"  - \"ethos-dev:baseline-ops\"\n"+
 						"hooks:\n"+
 						"  PostToolUse:\n",
 					"write-enabled role must still emit hooks block when output_format is set")
@@ -952,6 +973,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 				content := string(data)
 				want := "skills:\n" +
 					"  - \"ethos:baseline-ops\"\n" +
+					"  - \"ethos-dev:baseline-ops\"\n" +
 					"hooks:\n" +
 					"  PostToolUse:\n" +
 					"    - matcher: \"Write|Edit\"\n" +

@@ -599,18 +599,25 @@ func activeBundleDefaultSkills(configRoot string) []string {
 // plugin (plugin/skills/), not the flat ~/.claude/skills/ namespace, so a
 // generated agent must reference them by their plugin-namespaced name for
 // Claude Code to resolve them (per standards/plugins.md §Namespace scope).
-// ethosSkill returns a skill slug under the ethos plugin namespace. ethos
-// ships every one of its skills through the plugin (plugin/skills/), so a
-// generated agent references them as ethos:<slug>. The prefix is the
-// released plugin name; the -dev plugin build swaps it the same way it
-// swaps the command and MCP-tool prefixes (release-plugin.sh).
-func ethosSkill(slug string) string {
-	return "ethos:" + slug
+// ethosSkillNames returns a skill slug under both ethos plugin-namespace
+// prefixes: the released "ethos:" and the dev-build "ethos-dev:". ethos ships
+// every one of its skills through the plugin (plugin/skills/), so a generated
+// agent must reference them by the plugin-namespaced name for Claude Code to
+// resolve them (standards/plugins.md §"Namespace scope"). The installed plugin
+// is "ethos" in a consumer repo but "ethos-dev" in this repo's own dev
+// sessions (plugin/.claude-plugin/plugin.json). release-plugin.sh does NOT
+// rewrite skill names in generated agents, so a single prod-only prefix would
+// not resolve in dev. Listing both is the same tolerant dual-prefix pattern
+// the role YAML uses for MCP tools (mcp__plugin_ethos_self__* alongside
+// mcp__plugin_ethos-dev_self__*): Claude Code resolves whichever plugin is
+// installed and skips the other with a debug-log warning, never an error.
+func ethosSkillNames(slug string) []string {
+	return []string{"ethos:" + slug, "ethos-dev:" + slug}
 }
 
 func mergeSkills(identitySkills, bundleDefaultSkills []string) []string {
 	seen := map[string]bool{"baseline-ops": true}
-	out := []string{ethosSkill("baseline-ops")}
+	out := ethosSkillNames("baseline-ops")
 	for _, lists := range [][]string{identitySkills, bundleDefaultSkills} {
 		for _, s := range lists {
 			s = strings.TrimSpace(s)
@@ -618,7 +625,7 @@ func mergeSkills(identitySkills, bundleDefaultSkills []string) []string {
 				continue
 			}
 			seen[s] = true
-			out = append(out, ethosSkill(s))
+			out = append(out, ethosSkillNames(s)...)
 		}
 	}
 	return out

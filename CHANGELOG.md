@@ -22,6 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can target the top reviewer tier the optimize-team decision table assigns
   to its hardest-to-review work.
 
+### Changed
+
+- Every ethos skill now ships through the plugin (`plugin/skills/<name>/`) and
+  resolves under the plugin namespace, so the Claude Code picker shows them as
+  `ethos:baseline-ops` and `ethos:gstack-*` with clear names and help text
+  instead of bare `/baseline-ops` with license-boilerplate help. `baseline-ops`
+  and the six gstack pipeline skills (`gstack-plan`, `gstack-design`,
+  `gstack-debug`, `gstack-qa`, `gstack-review`, `gstack-ship`) moved off the
+  seeded flat `~/.claude/skills/` namespace; generated agents reference them as
+  `ethos:<skill>`, and an older binary's flat copies are retired on the next
+  `ethos seed` (PL-532).
+
 ## [5.0.1] - 2026-11-10
 
 ### Changed
