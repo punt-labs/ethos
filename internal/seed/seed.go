@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -172,18 +171,14 @@ func SeedVersionWithBundleDir(destRoot, skillsRoot, agentsRoot, activeBundle, ac
 		s.seedAgents()
 	}
 
-	// Skills — every slug under the embedded sidecar/skills/ tree, so a
-	// new skill deploys as soon as its directory is embedded, with no
-	// further change here.
-	s.seedSkills(skillsRoot)
-
-	// Retire the flat copies of skills that moved to plugin/skills/: a stale
-	// shipped copy left behind after upgrade would duplicate the new
-	// plugin-namespaced ethos:<skill> version. See seedRetiredSkills.
+	// Skills — ethos ships none flat anymore (every skill moved to
+	// plugin/skills/, pluginskill). Retire any flat copy an older binary
+	// left behind, so it does not duplicate the new plugin-namespaced
+	// ethos:<skill> version. See seedRetiredSkills.
 	s.seedRetiredSkills(skillsRoot)
 
-	// Bundle-scoped skills (DES-073): deployed after the sidecar top-level
-	// skills above, so a slug collision resolves bundle-wins per the ADR.
+	// Bundle-scoped skills (DES-073): a bundle may still ship its OWN skills
+	// flat (pluginskill.Is slugs excepted — those belong to the plugin).
 	s.seedBundleSkills(Bundles, s.activeBundle, s.activeBundleDir)
 
 	// READMEs
@@ -257,27 +252,6 @@ func (s *seeder) seedFile(fsys embed.FS, src, dest string) {
 		return
 	}
 	s.place(scopeSkills, dest, data, notRepairCandidate)
-}
-
-// seedSkills deploys every top-level sidecar skill to skillsRoot. Slugs come
-// from topLevelSkillSlugs, which enumerates the embedded Skills FS, so deploy
-// and bundle-collision detection read the same list and cannot disagree: the
-// //go:embed directive in embed.go is the one list that decides what deploys.
-// (That directive is still a hand-written per-file list, so a new skill needs
-// its line added there — it is not auto-discovered from disk.) Slugs are
-// sorted for a deterministic deploy order (and so Result's slices are
-// deterministic for tests).
-func (s *seeder) seedSkills(skillsRoot string) {
-	topLevel := topLevelSkillSlugs()
-	slugs := make([]string, 0, len(topLevel))
-	for slug := range topLevel {
-		slugs = append(slugs, slug)
-	}
-	sort.Strings(slugs)
-	for _, slug := range slugs {
-		s.seedFile(Skills, "sidecar/skills/"+slug+"/SKILL.md",
-			filepath.Join(skillsRoot, slug, "SKILL.md"))
-	}
 }
 
 // seedRetiredSkills removes a previously-seeded flat copy of each skill ethos
@@ -394,31 +368,8 @@ func (s *seeder) seedBundles(fsys embed.FS, destBundlesRoot string) {
 	}
 }
 
-// topLevelSkillSlugs returns every sidecar top-level skill directory name,
-// enumerated from the embedded Skills FS rather than from a hardcoded slug
-// list here — so once a skill is embedded, this function needs no change.
-// (Embedding it still means adding its SKILL.md to the //go:embed directive
-// in embed.go.) seedBundleSkills checks a bundle-scoped slug against this set
-// to detect
-// a collision. A read error yields an empty set: seedBundleSkills then
-// treats every bundle slug as non-colliding, which is the same behavior
-// (deploy via the normal no-clobber path) as before this set existed.
-func topLevelSkillSlugs() map[string]bool {
-	entries, err := fs.ReadDir(Skills, "sidecar/skills")
-	if err != nil {
-		return nil
-	}
-	slugs := make(map[string]bool, len(entries))
-	for _, e := range entries {
-		if e.IsDir() {
-			slugs[e.Name()] = true
-		}
-	}
-	return slugs
-}
-
 // seedBundleSkills deploys bundleName's skills/<slug>/SKILL.md tree (if
-// any) to skillsRoot, alongside the sidecar top-level skills (DES-073).
+// any) to skillsRoot (DES-073).
 // bundleName empty is a no-op — no active bundle, nothing to deploy. A
 // bundle with no skills/ subtree is also a silent no-op: not every
 // bundle ships skills.
@@ -432,14 +383,13 @@ func topLevelSkillSlugs() map[string]bool {
 // the only source available before a fresh machine's global bundle
 // store exists on disk at all.
 //
-// Namespacing: a bundle-scoped slug keeps its name as-is. When it
-// collides with a sidecar top-level slug, the bundle wins — this method
-// runs after the sidecar skills are seeded, and s.place's content-hash
-// decision would otherwise treat a genuine bundle-vs-sidecar difference
-// as a "local edit" and preserve the sidecar copy. A logged warning
-// plus a direct write (bypassing the no-clobber/edited-preserve path)
-// makes the ADR's ruling ("bundle scope wins, log a warning") actually
-// take effect instead of silently losing to the preserve-edit rule.
+// Namespacing: a bundle-scoped slug keeps its name as-is, EXCEPT a slug
+// ethos ships through its own plugin (pluginskill.Is). Those never deploy
+// flat — they ship as ethos:<slug> through plugin/skills/ — so a stale
+// on-disk copy of an older bundle that still carries one is skipped (with a
+// stderr note), not re-deposited flat where it would undo seedRetiredSkills
+// on every run. Ethos itself no longer seeds any sidecar skill flat, so a
+// bundle's own non-plugin skills are the only thing this method deploys.
 func (s *seeder) seedBundleSkills(fsys embed.FS, bundleName, bundleDir string) {
 	if bundleName == "" {
 		return
@@ -452,17 +402,14 @@ func (s *seeder) seedBundleSkills(fsys embed.FS, bundleName, bundleDir string) {
 		s.r.Errors = append(s.r.Errors, err.Error())
 		return
 	}
-	topLevel := topLevelSkillSlugs()
 	for _, slug := range slugs {
 		// An ethos-plugin skill (pluginskill.Is) ships through the plugin
 		// now, never flat — even when a stale on-disk copy of an older
 		// bundle still carries it under skills/<slug>/. Deploying it flat
 		// here would undo seedRetiredSkills on every run (the duplicate bare
-		// /gstack-* entry Qodo caught on this PR). Skip it; the retire pass
-		// owns its old flat copy, and the plugin owns its live one. Say so
-		// on stderr, mirroring the sidecar-collision branch below, so a
+		// /gstack-* entry Qodo caught on this PR). Skip it, and say why so a
 		// bundle author who ships a skill under one of ethos's reserved slugs
-		// learns why it did not deploy rather than finding it silently gone.
+		// learns it did not deploy rather than finding it silently gone.
 		if pluginskill.Is(slug) {
 			fmt.Fprintf(os.Stderr,
 				"ethos: seed: bundle %q skill %q is an ethos-plugin skill; it ships through the plugin, flat copy skipped\n",
@@ -475,17 +422,6 @@ func (s *seeder) seedBundleSkills(fsys embed.FS, bundleName, bundleDir string) {
 			continue
 		}
 		dest := filepath.Join(s.skillsRoot, slug, "SKILL.md")
-		if topLevel[slug] {
-			fmt.Fprintf(os.Stderr,
-				"ethos: seed: bundle %q skill %q collides with a sidecar skill; bundle wins\n",
-				bundleName, slug)
-			if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
-				s.r.Errors = append(s.r.Errors, fmt.Sprintf("mkdir %s: %v", filepath.Dir(dest), err))
-				continue
-			}
-			s.write(scopeSkills, dest, data, hashBytes(data), &s.r.Updated)
-			continue
-		}
 		s.place(scopeSkills, dest, data, notRepairCandidate)
 	}
 }

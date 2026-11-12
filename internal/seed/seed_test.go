@@ -79,14 +79,10 @@ func TestSeedEmptyDir(t *testing.T) {
 	assert.FileExists(t, filepath.Join(dest, "personalities", "README.md"))
 	assert.FileExists(t, filepath.Join(dest, "writing-styles", "README.md"))
 
-	// Should have deployed every top-level sidecar skill — this is the
-	// regression guard for the deploy loop in seedSkills: deleting the
-	// loop (or dropping a slug from it) leaves TestTopLevelSkillSlugs
-	// green, since that test only reads the embed directive.
-	// No top-level sidecar skill seeds to the global skills dir anymore:
-	// every ethos skill (baseline-ops and the gstack bundle skills included)
-	// ships through the plugin as ethos:<skill> (plugin/skills/) and is
-	// referenced by that namespaced name in generated agents (PL-532).
+	// No sidecar skill seeds to the global skills dir anymore: every ethos
+	// skill (baseline-ops and the gstack bundle skills included) ships
+	// through the plugin as ethos:<skill> (plugin/skills/) and is referenced
+	// by that namespaced name in generated agents (PL-532).
 	assert.NoFileExists(t, filepath.Join(skills, "baseline-ops", "SKILL.md"),
 		"baseline-ops ships via the plugin now, not the flat skills dir")
 
@@ -484,18 +480,6 @@ func TestSeedBundleNoClobber(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "edited bundle manifest should be in the edited list on second seed")
-}
-
-// TestTopLevelSkillSlugs_DerivedFromEmbeddedFS pins the Copilot MEDIUM
-// finding on PR #481: the sidecar top-level skill set must be enumerated
-// from the embedded Skills FS, not hardcoded, so a new skill added under
-// sidecar/skills/ is picked up with no code change here.
-func TestTopLevelSkillSlugs_DerivedFromEmbeddedFS(t *testing.T) {
-	got := topLevelSkillSlugs()
-	// No top-level sidecar skill seeds to the flat skills dir anymore
-	// (PL-532): every ethos skill ships through the plugin. The Skills FS
-	// embeds only the README (not a directory), so the slug set is empty.
-	assert.Empty(t, got)
 }
 
 // TestSeedDeploysNoFlatSkills pins PL-532: no ethos skill seeds to the flat
