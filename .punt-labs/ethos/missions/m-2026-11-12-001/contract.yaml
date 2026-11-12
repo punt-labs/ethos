@@ -1,0 +1,31 @@
+mission_id: m-2026-11-12-001
+status: closed
+type: implement
+created_at: "2026-11-12T01:57:58Z"
+updated_at: "2026-11-12T02:19:35Z"
+closed_at: "2026-11-12T02:19:35Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-11-12T01:57:58Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: PL-319
+write_set:
+    - internal/seed/seed.go
+    - internal/seed/seed_test.go
+    - internal/seed/manifest.go
+success_criteria:
+    - 'Add a retirement step so ethos seed removes the three FORMER top-level skills from the global skills root (~/.claude/skills/) ON UPGRADE, SAFELY. The seed Manifest (internal/seed/manifest.go) already records the content hash of what seed last wrote to each path (''lets a later seed tell an unmodified shipped file from a user edit'') — use it. For each of the three slugs mission, create-from-project, optimize-team: if the manifest has an entry for its skills-root path AND the on-disk SKILL.md content hash still matches the recorded hash (unmodified shipped copy), delete the <slug>/ dir under skillsRoot and remove its manifest entry. If the file is user-modified (hash mismatch) or has no manifest entry (seed did not write it), LEAVE it untouched — never clobber a user edit. Record removals in the seed Result so they surface to the user.'
+    - Define the three retired slugs as a named list (e.g. retiredTopLevelSkills = []string{"mission", "create-from-project", "optimize-team"}) with a comment explaining they moved to plugin/skills/ in PL-319, so a future reader knows why the retirement list exists and that baseline-ops is deliberately NOT in it.
+    - 'TDD: write a test that simulates an existing install — seed once with a manifest that has the three old skill entries + their files on disk, then run the retirement and assert (a) an unmodified old skill file is removed and its manifest entry dropped, (b) a user-MODIFIED old skill file is LEFT in place with its manifest entry, (c) baseline-ops is never touched, (d) the three dirs do not reappear on a subsequent seed. Confirm the test fails before the retirement code exists.'
+    - 'Verify: go build ./... clean; go test ./internal/seed/ green; go run ./cmd/validate-content passes. Do not run full make check ([REDACTED:hostname] gitenv flake).'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+round_decisions:
+    version: 1
+    entries: []
+context: 'Branch fix/skills-to-plugin in worktree <repo>/.worktrees/skills-plugin. This PR moved three discoverable skills (mission, create-from-project, optimize-team) from the seed path to plugin/skills/. Qodo found a real upgrade bug: removing them from the //go:embed Skills list stops FUTURE seeding, but ethos seed never deletes previously-seeded files, so an existing user who upgrades and re-runs ethos seed keeps the stale ~/.claude/skills/{mission,create-from-project,optimize-team}/SKILL.md AND gets the new plugin-namespaced ones — duplicate skills. OKINOS NOTE: make check fails in internal/gitenv for an unrelated env reason (PL-318); verify with go build ./... and go test ./internal/seed/. Commit on this branch only; no push/PR/merge; git add explicit paths.'

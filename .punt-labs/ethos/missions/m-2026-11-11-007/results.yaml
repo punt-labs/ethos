@@ -1,0 +1,36 @@
+results:
+    - mission: m-2026-11-11-007
+      round: 1
+      created_at: "2026-11-11T18:47:12Z"
+      author: adb
+      verdict: pass
+      confidence: 0.92
+      files_changed:
+        - path: internal/seed/sidecar/skills/optimize-team/SKILL.md
+          added: 148
+          removed: 40
+      evidence:
+        - name: 'internal/team/team.go:22-25,44 -- Collaboration.Type mandatory, CollaborationTypes enum; engineering/gstack/foundation team YAML all use type: reports_to'
+          status: pass
+        - name: cmd/ethos/vendor.go flags + ./ethos vendor --help (live binary) -- --dry-run default, --apply writes, no --yes flag exists
+          status: pass
+        - name: 'cmd/ethos/main.go doctorCmd (Args: cobra.NoArgs, runDoctor) + ./ethos doctor --help (live binary) -- no staged-root flag'
+          status: pass
+        - name: internal/hook/agent_plan.go -- only os.Remove is on a staging temp file, never a pruned member's output file
+          status: pass
+        - name: internal/doctor/doctor.go CheckOrphanedAgentFiles/classifyOrphans -- orphan detection exists, no auto-delete
+          status: pass
+        - name: cmd/ethos/setup.go -- store.Save called directly for human/agent identities, repo config written same pass; ./ethos setup --help (live binary) shows no dry-run flag
+          status: pass
+        - name: internal/hook/generate_agents.go -- `if m.Identity == mainAgent { continue }` skips cfg.Agent from generation
+          status: pass
+        - name: 'internal/hook/generate_agents.go hasWriteTool + buildAgentFile hooks: block emitted for Write/Edit roles'
+          status: pass
+        - name: internal/role/role.go ModelAliases/ValidateModel -- unchanged; SKILL's existing tier-ladder claims re-verified accurate
+          status: pass
+        - name: internal/identity/identity.go Identity struct -- no model/tools fields, confirms 'those live on the role' claim
+          status: pass
+        - name: npx markdownlint-cli2 internal/seed/sidecar/skills/optimize-team/SKILL.md
+          status: pass
+      prose: |
+        Corrected all 8 findings (F2-F10) in internal/seed/sidecar/skills/optimize-team/SKILL.md against the real ethos source and the live built binary at <repo>/ethos. F7: every collaboration edge example now carries from/to/type, with a worked reports_to example matching the engineering/gstack/ foundation team YAML convention. F9: step 8 now runs `ethos vendor --team <t> --prune` (plan, no --apply) first, surfaces the plan via AskUserQuestion, and only runs `--apply --prune` on consent -- all --yes mentions removed. F4: step 7 now validates the staged closure with skill-owned checks (ValidateModel, edge type+tier, worker!=evaluator, slug resolution) before swap, then runs `ethos doctor` against the live result as confirmation, restoring the step-6 backup on any FAIL -- doctor is never pointed at a staged root, since it has no such argument. F5: optimize-in-place section now states plainly that pruning does not delete the generated agent file; doctor's "Orphaned agent files" check flags it and the user removes it by hand. F8: greenfield section now gathers the full proposal before ever invoking `ethos setup`, since setup persists identities and repo config immediately with no staging step. F6+F10: budget-estimate section now excludes the configured main agent (skipped by the generator) and adds the per-seat Write/Edit hook scaffolding bytes that buildAgentFile appends. F3: decision table rows 1-2 extended to "any primary language," with a note that "none" means no implementation surface at all, not "not Go or Python." F2: the identities bullet in step 6 states that a personality/ writing-style slug is a reference, not content, and must resolve or be staged; step 7's pre-swap validation now checks every proposed member's slugs resolve before cutover. Did not weaken the interview, decision table, tier ladder, budget method, or propose-then-ratify-then-write flow -- every edit either corrects a factual claim about ethos behavior or closes one of the eight named gaps. Verified `npx markdownlint-cli2` zero findings, and re-read the full file end to end afterward, cross-checking remaining unflagged claims (ModelAliases/ValidateModel tier ladder, Identity struct having no model/tools fields, docs/optimize-team.md existing, resolution: repo-only key name) against source -- all held up, so left unchanged. No findings believed invalid: all 8 were independently reproduced against source and/or the live binary before fixing.

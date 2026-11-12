@@ -1,0 +1,33 @@
+mission_id: m-2026-11-11-004
+status: closed
+type: implement
+created_at: "2026-11-11T16:11:39Z"
+updated_at: "2026-11-11T17:10:30Z"
+closed_at: "2026-11-11T17:10:30Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-11-11T16:11:39Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-qffs
+write_set:
+    - internal/role/role.go
+    - internal/role/role_test.go
+    - internal/schema/registry.go
+    - internal/schema/schema_test.go
+success_criteria:
+    - role.go:41 ModelAliases becomes {opus, sonnet, haiku, fable, inherit} (fable added)
+    - role.go:62 error string lists fable
+    - registry.go:41 Description string lists fable (the Enum already reads ModelAliases, do not hand-list there)
+    - 'TDD: first add a failing test case proving ValidateModel(fable) is rejected on unfixed code, record the failing output, then fix; add fable positive case to role_test.go TestValidateModel (line ~22) and to schema_test.go accepted list (line 244)'
+    - make check passes; no new suppressions
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+round_decisions:
+    version: 1
+    entries: []
+context: 'Branch feat/optimize-team-skill in worktree .worktrees/optimize-team off main. Prerequisite for the /ethos:optimize-team skill (ethos-qffs), designed in docs/optimize-team.md. The skill''s top reviewer rung emits model: fable, which ethos rejects today. Add fable as a 4th model alias. role.ModelAliases (role.go:41) is the single source: the schema enum at registry.go:41 reads it automatically, so only the two HAND-ENUMERATED strings need editing. Commit on this branch only; DO NOT push, open PRs, or merge — the leader does that. Commit only files you changed (git add <file>, never -A). make check must pass on every commit.'
