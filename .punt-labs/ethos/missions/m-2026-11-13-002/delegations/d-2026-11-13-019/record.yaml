@@ -1,0 +1,10 @@
+id: d-2026-11-13-019
+tier: B
+mission: m-2026-11-13-002
+parent_session: 250b02b1-d16d-48dd-9ce8-53c0d561485f
+agent_type: bwk
+created_at: "2026-11-13T14:37:14Z"
+closed_at: "2026-11-13T16:47:58Z"
+verdict: pass
+prompt_hash: d431cc5ab2d5d1034f48a1ed445601e43dece8371be2b39e402b29dbfbe775fc
+bound_via: active_mission_sidecar_dispatch
