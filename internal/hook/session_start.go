@@ -121,6 +121,17 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	// persona is taken from the global store in its place, and the roster
 	// records repo_unresolved.
 	storeFailure := loc.StoreFailure()
+	// An unlocatable checkout is a located failure too: HandleSessionStart uses
+	// loc.Checkout to resolve the human identity and to emit the agent context,
+	// so a non-nil loc.CheckoutErr must be consulted here and not turned into a
+	// bare empty path. Fold it into storeFailure, which routes the session to
+	// the human fallback with the failure noted — the same degraded greeting a
+	// bad store gives — and keeps loc.Checkout used only on the storeFailure ==
+	// nil (checkout-resolved) path below. The agent pipeline consults
+	// loc.CheckoutErr again, authoritatively, in runAgentPipeline.
+	if storeFailure == nil && loc.CheckoutErr != nil {
+		storeFailure = loc.CheckoutErr
+	}
 	// A bundle or policy that cannot be honoured refuses the persona as a broken
 	// store does, as the CLI and the MCP do: answering from the layers left
 	// would consult the global one the repository did not choose.
