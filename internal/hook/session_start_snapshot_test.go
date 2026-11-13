@@ -37,7 +37,8 @@ func TestSessionAgentHelpersSnapshot_RefuseCapturedFailure(t *testing.T) {
 			plan, err := planSessionAgents(loc, nil, nil, nil)
 			require.ErrorIs(t, err, failure)
 			assert.Empty(t, plan.Files)
-			require.ErrorIs(t, installAgentDefsFor(loc, nil), failure)
+			_, installErr := installAgentDefsFor(loc, nil)
+			require.ErrorIs(t, installErr, failure)
 			assert.NoDirExists(t, filepath.Join(root, ".claude"))
 		})
 	}
