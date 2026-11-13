@@ -59,6 +59,27 @@ func TestPruneOrphanedGeneratedAgents(t *testing.T) {
 		assert.Nil(t, deleted)
 	})
 
+	t.Run("a symlinked marked file is never deleted", func(t *testing.T) {
+		// A checkout whose agent file links into another tree must not have the
+		// link's target removed. CheckAgentPath refuses the symlink, so prune
+		// skips it even though it is marked and off-keep.
+		root := t.TempDir()
+		dir := filepath.Join(root, ".claude", "agents")
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		other := filepath.Join(t.TempDir(), "shared.md")
+		require.NoError(t, os.WriteFile(other, []byte(agentmark.Add("---\nname: shared\n---\nbody\n")), 0o644))
+		link := filepath.Join(dir, "shared.md")
+		if err := os.Symlink(other, link); err != nil {
+			t.Skipf("symlinks unsupported: %v", err)
+		}
+
+		deleted, err := PruneOrphanedGeneratedAgents(root, map[string]bool{})
+		require.Error(t, err)
+		assert.Empty(t, deleted)
+		assert.FileExists(t, link)
+		assert.FileExists(t, other)
+	})
+
 	t.Run("empty checkout root is refused, never globs the CWD", func(t *testing.T) {
 		// A marked, off-keep file under the process CWD's .claude/agents must
 		// survive: an empty checkoutRoot must not collapse to a relative glob

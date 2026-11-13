@@ -37,6 +37,15 @@ func PruneOrphanedGeneratedAgents(checkoutRoot string, keep map[string]bool) (de
 		if keep[handle] {
 			continue
 		}
+		// Never delete through a symlink: a checkout whose .claude/agents (or a
+		// file under it) links to a shared or another checkout's tree must not
+		// have that target removed. CheckAgentPath is the same symlink-refusing
+		// guard the generator and installer use, so prune honors the same zone
+		// boundary. A symlinked path is skipped, not deleted.
+		if symErr := CheckAgentPath(dir, path); symErr != nil {
+			errs = append(errs, symErr)
+			continue
+		}
 		content, readErr := os.ReadFile(path)
 		if readErr != nil {
 			if !errors.Is(readErr, os.ErrNotExist) {
