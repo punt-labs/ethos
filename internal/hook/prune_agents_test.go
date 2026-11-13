@@ -59,6 +59,21 @@ func TestPruneOrphanedGeneratedAgents(t *testing.T) {
 		assert.Nil(t, deleted)
 	})
 
+	t.Run("empty checkout root is refused, never globs the CWD", func(t *testing.T) {
+		// A marked, off-keep file under the process CWD's .claude/agents must
+		// survive: an empty checkoutRoot must not collapse to a relative glob
+		// and delete it. Guards the Qodo/silent-failure MEDIUM on PR for
+		// PL-878.
+		cwd := t.TempDir()
+		t.Chdir(cwd)
+		writeAgentsDirFile(t, cwd, "cwd-victim", agentmark.Add("---\nname: cwd-victim\n---\nbody\n"))
+
+		deleted, err := PruneOrphanedGeneratedAgents("", map[string]bool{})
+		require.Error(t, err)
+		assert.Empty(t, deleted)
+		assert.FileExists(t, filepath.Join(cwd, ".claude", "agents", "cwd-victim.md"))
+	})
+
 	t.Run("removal error is surfaced, not swallowed", func(t *testing.T) {
 		if os.Getuid() == 0 {
 			t.Skip("root ignores directory write permission bits")

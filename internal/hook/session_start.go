@@ -274,11 +274,13 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	}
 
 	// Prune stale generated agent files only when the keep-set is known
-	// complete: the generator and installer both ran and planning succeeded.
-	// A failed or partial plan means the keep-set cannot be trusted, so
-	// nothing is deleted — fail closed, the same posture the installer above
-	// takes on a Roles-less or failed-plan session.
-	if deps.Teams != nil && deps.Roles != nil && planErr == nil {
+	// complete: a resolved checkout, and the generator and installer both ran
+	// with planning succeeded. A failed or partial plan means the keep-set
+	// cannot be trusted; an empty checkoutRoot would make the prune glob the
+	// process CWD's .claude/agents instead of the checkout. Either way nothing
+	// is deleted — fail closed, matching the generation/install block above,
+	// which guards repoRoot and checkoutRoot for the same reason.
+	if repoRoot != "" && checkoutRoot != "" && deps.Teams != nil && deps.Roles != nil && planErr == nil {
 		pruneStaleAgents(checkoutRoot, plan.Owned, installed)
 	}
 

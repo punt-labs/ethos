@@ -19,6 +19,13 @@ import (
 // error never stops the rest of the sweep. A missing agents directory is
 // not an error: there is nothing to prune.
 func PruneOrphanedGeneratedAgents(checkoutRoot string, keep map[string]bool) (deleted []string, err error) {
+	// An empty checkoutRoot would make filepath.Join collapse to the relative
+	// ".claude/agents", globbing and deleting against the process CWD instead
+	// of a real checkout. Refuse it: the caller gates on a resolved checkout,
+	// and this is the defense-in-depth backstop for that contract.
+	if checkoutRoot == "" {
+		return nil, errors.New("prune agents: empty checkout root")
+	}
 	dir := filepath.Join(checkoutRoot, ".claude", "agents")
 	matches, globErr := filepath.Glob(filepath.Join(dir, "*.md"))
 	if globErr != nil {
