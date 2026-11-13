@@ -1,0 +1,27 @@
+mission: m-2026-11-13-002
+round: 1
+created_at: "2026-11-13T16:47:57Z"
+author: bwk
+verdict: pass
+confidence: 0.95
+files_changed:
+    - path: internal/hook/session_start.go
+      added: 81
+      removed: 27
+    - path: internal/hook/session_start_test.go
+      added: 164
+      removed: 0
+evidence:
+    - name: 'TDD red->green: TestHandleSessionStart_PrunesStaleAgentsWithNoRosterConfigured fails on main (early return skips prune), passes with the fix — falsified by reverting session_start.go to main'
+      status: pass
+    - name: 'Real hook on a no-agent/no-team repo: planted a marked orphan + an unmarked file, ran ethos hook session-start -> marked orphan pruned, unmarked file survived'
+      status: pass
+    - name: 'Review fix 1 (code-reviewer + silent-failure-hunter): reorder could drop the human greeting when the checkout fails to resolve (StoreFailure excludes CheckoutErr). Fixed by extracting runAgentPipeline (returns its error); no-agent path greets first. Test TestHandleSessionStart_NoAgentStillGreetsOnPipelineError, falsified'
+      status: pass
+    - name: 'Review fix 2 (CI internal/resolve guard): the extraction left loc.Checkout used without consulting loc.CheckoutErr in HandleSessionStart. Fixed by folding CheckoutErr into storeFailure; the guard test passes'
+      status: pass
+    - name: 'Gates: go build/vet clean; go test ./internal/hook/ ./internal/doctor/ ./internal/resolve/ green; validate-content 15 identities/3 teams; full go test ./... clean except the known gitenv flake; CI all green; coverage internal/hook at baseline 84.4%'
+      status: pass
+    - name: 'Qodo: 2 Mediums, both answered. #1 (retired repos reinstall legacy stubs) is correct stub-source-of-truth behavior, not a regression. #2 (double-fault greeting) is the sub-threshold edge, deliberately left per dead-simple scope'
+      status: pass
+prose: 'The agent generate/install/prune pipeline now runs whenever the checkout and store resolved, independent of whether a primary agent is configured, so a fully-retired repo (no agent:, no team:) cleans up its stale generated agent files. Extracted into runAgentPipeline so the no-agent path greets the human before surfacing any pipeline error; an unlocatable checkout is folded into storeFailure so loc.Checkout is never read without its error. Closes the last substantive item on PL-878. Shipped in PR #617 (squash c362e77c).'

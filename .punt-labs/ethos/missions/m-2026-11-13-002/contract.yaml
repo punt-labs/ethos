@@ -1,0 +1,31 @@
+mission_id: m-2026-11-13-002
+status: closed
+type: implement
+created_at: "2026-11-13T14:36:42Z"
+updated_at: "2026-11-13T16:47:57Z"
+closed_at: "2026-11-13T16:47:57Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: mdm
+    pinned_at: "2026-11-13T14:36:42Z"
+    hash: a532fcdb152c76185524a96d4ff9a1860ed24808a9e998bfb0a949ebb732c173
+inputs:
+    ticket: PL-878
+write_set:
+    - internal/hook/session_start.go
+    - internal/hook/session_start_test.go
+success_criteria:
+    - 'THE BUG: in internal/hook/HandleSessionStart, when agentPersona == "" (no agent: set in .punt-labs/ethos.yaml) the function returns early via emitHumanFallback (around line 194-204) BEFORE the agent generate/install/prune pipeline (lines ~228-285). So a repo that retires its whole roster — removes BOTH agent: and team: — never prunes its stale marked .claude/agents/*.md. The auto-prune shipped in #616 only runs when a primary agent is configured.'
+    - 'THE FIX (control-flow reorder, no new behavior for the configured-agent case): run the generate/install/prune pipeline whenever the checkout and store resolved, INDEPENDENT of whether agentPersona is set. Concretely: hoist the pipeline block (the loc.CheckoutErr guard at ~242, checkoutRoot/plan/planErr, the installAgentDefsFor call, the ApplyAgentPlan generate block, and the pruneStaleAgents call at ~283-285) to run BEFORE the ''if agentPersona == ""'' branch at ~194. The persona emission (emitHumanFallback when empty, else store.Load + emitAgentContext) happens AFTER the pipeline, using its result. The existing gates are unchanged — generation/install/prune still require deps.Teams/deps.Roles/planErr==nil/repoRoot/checkoutRoot; the ONLY change is that reaching them no longer requires agentPersona != "". A fully-retired repo (no agent:, no team:) has deps.Teams==nil so the plan/install/generate are skipped (nothing to generate) but the prune... see next criterion.'
+    - 'THE KEY CASE: a fully-retired repo has NO team, so plan.Owned is empty and deps.Teams may be nil. The prune must still run to delete the now-orphaned marked files down to the keep-set (which is then just the seeded checklist agents). Today the prune is gated on deps.Teams != nil && deps.Roles != nil && planErr == nil — which EXCLUDES the no-team case. Relax ONLY the prune gate so it runs on a resolved checkout even with no team (keep-set = whatever was generated [possibly empty] ∪ installed stubs [possibly empty] ∪ checklist), while KEEPING the fail-closed safety: still require repoRoot != "" && checkoutRoot != "", and do NOT prune when planErr != nil (a team exists but failed to plan — keep-set untrustworthy, must not delete). So the prune condition becomes: repoRoot != "" && checkoutRoot != "" && planErr == nil (planErr stays zero-value nil when no team, which is correct — nothing failed). Think carefully: when deps.Teams != nil but deps.Roles == nil, planErr is nil but ownership is unavailable (installed is nil, no generation ran) — in THAT partial case the keep-set is NOT trustworthy and prune must be skipped. Preserve that: do not prune in the Teams-without-Roles partial state.'
+    - 'TDD, failing test FIRST (record failing output in result): in session_start_test.go, a test driving the real HandleSessionStart against a fixture repo with NO agent: and NO team: configured, where a marked off-config .claude/agents/<h>.md exists before the call and is GONE after, while an unmarked file survives. It must FAIL on current main (early return skips the prune) and PASS after the reorder. Also add/keep a test that the configured-agent happy path still generates + prunes exactly as before (no regression), and that a Teams-without-Roles partial state prunes NOTHING (safety).'
+    - 'Verify: go build ./... clean; go test ./internal/hook/ ./internal/doctor/ green; go run ./cmd/validate-content passes; and run the real binary: build to .tmp/ethos, in a throwaway repo with no agent:/team: set, plant a marked orphan + unmarked file under .claude/agents/, run ''ethos hook session-start'', confirm the marked orphan is deleted and the unmarked file survives. Keep internal/hook coverage at/above baseline. Report the before/after.'
+budget:
+    rounds: 3
+    reflection_after_each: true
+current_round: 1
+round_decisions:
+    version: 1
+    entries: []
+context: 'Operator ruling 2026-11-13: fix the full-retirement gap from PR #616 (Qodo Medium #2). Branch fix/prune-without-primary-agent off main. Dead simple, a control-flow fix, not new machinery. [REDACTED:hostname]: make check hits the gitenv flake; verify with go build ./... + go test ./internal/hook/ ./internal/doctor/ + go run ./cmd/validate-content; commit --no-verify. Commit on this branch only; no push/PR/merge; git add explicit paths. If the control-flow restructure turns out to need more than reordering existing blocks (a new helper, a signature change, touching the generator/installer internals), STOP and tell the leader.'
