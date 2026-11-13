@@ -189,6 +189,83 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 		note += rosterNotice
 	}
 
+	// Generate .claude/agents/<handle>.md from ethos identity data, install
+	// legacy stubs for handles the generator does not own, and prune stale
+	// generated files. This runs whenever the checkout and store resolved
+	// (storeFailure == nil), independent of whether this repo configures an
+	// agent persona: a repo that has retired its whole roster (no agent, no
+	// team) still has its orphaned generated files pruned, not just one that
+	// still names an agent (PL-878). A storeFailure — an unreadable config,
+	// an unlocatable store — means agentPersona is already forced to "" and
+	// nothing below can be trusted either, so the block is skipped exactly
+	// as the old early return skipped it, and the session falls through to
+	// the human fallback below with the same message it always gave.
+	//
+	// Propagates: the returned error is the single authoritative
+	// signal the CLI can gate on. The shell wrapper's `|| true` keeps
+	// Claude Code session startup fail-open (cli.md §Hook Architecture)
+	// so a broken config does not brick sessions, but `ethos hook
+	// session-start` invoked directly exits non-zero — useful for
+	// `ethos doctor` and manual debugging.
+	//
+	// Two roots: the config/team selection resolves from the shared store
+	// (repoRoot = StoreRootIfAny), while the agent files are written to the
+	// CURRENT checkout (CheckoutRootIfAny) — the tree the worktree's Claude reads
+	// and where InstallAgentDefinitions writes. A single root would generate
+	// a worktree's agents into the main tree, invisible to that worktree
+	// (Bugbot HIGH on PR #370).
+	if storeFailure == nil {
+		if loc.CheckoutErr != nil {
+			return fmt.Errorf("locating the checkout for agent generation: %w", loc.CheckoutErr)
+		}
+		checkoutRoot := loc.Checkout
+		plan := AgentPlan{}
+		var planErr error
+		if deps.Teams != nil && deps.Roles != nil {
+			plan, planErr = planSessionAgents(loc, store, deps.Teams, deps.Roles)
+			if planErr != nil {
+				fmt.Fprintf(os.Stderr, "ethos: session-start: resolving generated agents: %v; installing no stubs\n", planErr)
+			}
+		}
+		var installErr error
+		var installed []string
+		// A partial dependency set — a team store but no role store — cannot
+		// render a plan and establish its ownership. Never pass nil as if the
+		// generator owned nothing, and never trust the keep-set it would leave
+		// pruneStaleAgents below.
+		teamsWithoutRoles := deps.Teams != nil && deps.Roles == nil
+		if teamsWithoutRoles {
+			fmt.Fprintln(os.Stderr, "ethos: session-start: Roles store missing; installing no stubs because generator ownership is unavailable")
+		} else if planErr == nil {
+			installed, installErr = installAgentDefsFor(loc, plan.Owned)
+		}
+		if repoRoot != "" && checkoutRoot != "" && deps.Teams != nil && deps.Roles != nil {
+			policy, err := loc.Layout()
+			if err != nil {
+				return fmt.Errorf("constructing agent storage: %w", err)
+			}
+			if genErr := errors.Join(planErr, ApplyAgentPlan(policy, plan)); genErr != nil {
+				return fmt.Errorf("generating agents: %w", errors.Join(installErr, genErr))
+			}
+		}
+		if installErr != nil {
+			return fmt.Errorf("installing agent definitions: %w", installErr)
+		}
+
+		// Prune stale generated agent files whenever the keep-set is known
+		// complete: a resolved checkout, and no failed or partial plan. A team
+		// configured but not yet planned (planErr != nil) or planned without a
+		// role store (teamsWithoutRoles) leaves ownership unknown, so nothing is
+		// pruned; a repo with no team at all plans to the empty AgentPlan with a
+		// nil error, and IS pruned — the keep-set is just the checklist agents,
+		// known complete. An empty checkoutRoot would make the prune glob the
+		// process CWD's .claude/agents instead of the checkout, so it is guarded
+		// here too, matching the generation/install block above.
+		if repoRoot != "" && checkoutRoot != "" && planErr == nil && !teamsWithoutRoles {
+			pruneStaleAgents(checkoutRoot, plan.Owned, installed)
+		}
+	}
+
 	// Emit the agent's persona block (not the human's).
 	// The agent persona comes from repo config (.punt-labs/ethos.yaml).
 	if agentPersona == "" {
@@ -223,65 +300,6 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	if len(agentID.MissingExt) > 0 {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: %v\n",
 			repomiss.New(agentPersona, agentID.MissingExt))
-	}
-
-	// Generate .claude/agents/<handle>.md from ethos identity data.
-	// Propagates: the returned error is the single authoritative
-	// signal the CLI can gate on. The shell wrapper's `|| true` keeps
-	// Claude Code session startup fail-open (cli.md §Hook Architecture)
-	// so a broken config does not brick sessions, but `ethos hook
-	// session-start` invoked directly exits non-zero — useful for
-	// `ethos doctor` and manual debugging.
-	//
-	// Two roots: the config/team selection resolves from the shared store
-	// (repoRoot = StoreRootIfAny), while the agent files are written to the
-	// CURRENT checkout (CheckoutRootIfAny) — the tree the worktree's Claude reads
-	// and where InstallAgentDefinitions writes. A single root would generate
-	// a worktree's agents into the main tree, invisible to that worktree
-	// (Bugbot HIGH on PR #370).
-	if loc.CheckoutErr != nil {
-		return fmt.Errorf("locating the checkout for agent generation: %w", loc.CheckoutErr)
-	}
-	checkoutRoot := loc.Checkout
-	plan := AgentPlan{}
-	var planErr error
-	if deps.Teams != nil && deps.Roles != nil {
-		plan, planErr = planSessionAgents(loc, store, deps.Teams, deps.Roles)
-		if planErr != nil {
-			fmt.Fprintf(os.Stderr, "ethos: session-start: resolving generated agents: %v; installing no stubs\n", planErr)
-		}
-	}
-	var installErr error
-	var installed []string
-	if deps.Teams != nil && deps.Roles == nil {
-		// A partial dependency set cannot render a plan and establish its
-		// ownership. Never pass nil as if the generator owned nothing.
-		fmt.Fprintln(os.Stderr, "ethos: session-start: Roles store missing; installing no stubs because generator ownership is unavailable")
-	} else if planErr == nil {
-		installed, installErr = installAgentDefsFor(loc, plan.Owned)
-	}
-	if repoRoot != "" && checkoutRoot != "" && deps.Teams != nil && deps.Roles != nil {
-		policy, err := loc.Layout()
-		if err != nil {
-			return fmt.Errorf("constructing agent storage: %w", err)
-		}
-		if genErr := errors.Join(planErr, ApplyAgentPlan(policy, plan)); genErr != nil {
-			return fmt.Errorf("generating agents: %w", errors.Join(installErr, genErr))
-		}
-	}
-	if installErr != nil {
-		return fmt.Errorf("installing agent definitions: %w", installErr)
-	}
-
-	// Prune stale generated agent files only when the keep-set is known
-	// complete: a resolved checkout, and the generator and installer both ran
-	// with planning succeeded. A failed or partial plan means the keep-set
-	// cannot be trusted; an empty checkoutRoot would make the prune glob the
-	// process CWD's .claude/agents instead of the checkout. Either way nothing
-	// is deleted — fail closed, matching the generation/install block above,
-	// which guards repoRoot and checkoutRoot for the same reason.
-	if repoRoot != "" && checkoutRoot != "" && deps.Teams != nil && deps.Roles != nil && planErr == nil {
-		pruneStaleAgents(checkoutRoot, plan.Owned, installed)
 	}
 
 	return emitAgentContext(agentID, agentPersona, store, deps, loc.Checkout, note)

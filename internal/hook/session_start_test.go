@@ -1183,3 +1183,101 @@ func TestHandleSessionStart_PrunesStaleGeneratedAgents(t *testing.T) {
 	assert.FileExists(t, filepath.Join(repoRoot, ".claude", "agents", "claude.md"),
 		"the active team's own generated agent file must survive its own generation run")
 }
+
+// TestHandleSessionStart_PrunesStaleAgentsWithNoRosterConfigured covers
+// PL-878: a repo that has retired its whole roster — neither agent: nor
+// team: set in .punt-labs/ethos.yaml — still prunes its orphaned generated
+// agent files. Before the fix, agentPersona == "" made HandleSessionStart
+// return early via emitHumanFallback before the generate/install/prune
+// pipeline ran at all, so a fully-retired repo's stale marked files were
+// never cleaned up.
+func TestHandleSessionStart_PrunesStaleAgentsWithNoRosterConfigured(t *testing.T) {
+	dir := t.TempDir()
+	s := identity.NewStore(dir)
+	ss := session.NewStore(dir)
+	rs := role.NewLayeredStore("", dir)
+	ts := team.NewLayeredStore("", dir)
+
+	require.NoError(t, s.Save(&identity.Identity{
+		Name:   "Test Human",
+		Handle: "test-human",
+		Kind:   "human",
+	}))
+
+	repoRoot := t.TempDir()
+	testhelpers.MakeGitDir(t, repoRoot)
+	puntDir := filepath.Join(repoRoot, ".punt-labs")
+	require.NoError(t, os.MkdirAll(puntDir, 0o755))
+	// Neither agent: nor team: — the fully-retired config.
+	require.NoError(t, os.WriteFile(filepath.Join(puntDir, "ethos.yaml"), []byte(""), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(puntDir, "ethos"), 0o755))
+
+	orig, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repoRoot))
+	t.Cleanup(func() { os.Chdir(orig) }) //nolint:errcheck
+
+	isolateGitConfig(t, "test-human")
+
+	// A marked file for a handle the retired roster no longer owns.
+	writeAgentsDirFile(t, repoRoot, "retired-specialist", agentmark.Add("---\nname: retired-specialist\n---\nbody\n"))
+	// An unmarked file is never ethos's to delete, whatever its handle.
+	writeAgentsDirFile(t, repoRoot, "hand-authored", "---\nname: hand-authored\n---\nbody\n")
+
+	deps := SessionStartDeps{
+		Store:    s,
+		Sessions: ss,
+		Teams:    ts,
+		Roles:    rs,
+	}
+	captureSessionStartOutput(t, `{"session_id": "s-prune-no-roster"}`, deps)
+
+	assert.NoFileExists(t, filepath.Join(repoRoot, ".claude", "agents", "retired-specialist.md"),
+		"a marked agent file must be pruned even with no agent or team configured")
+	assert.FileExists(t, filepath.Join(repoRoot, ".claude", "agents", "hand-authored.md"),
+		"an unmarked file is never ethos's to delete, whatever its handle")
+}
+
+// TestHandleSessionStart_TeamsWithoutRolesPrunesNothing pins invariant (c):
+// a Teams store with no Roles store is a partial dependency set — ownership
+// is unavailable, so pruning must not run even though planErr is nil (no
+// team was even attempted). A marked orphan must survive this state.
+func TestHandleSessionStart_TeamsWithoutRolesPrunesNothing(t *testing.T) {
+	dir := t.TempDir()
+	s := identity.NewStore(dir)
+	ss := session.NewStore(dir)
+	ts := team.NewLayeredStore("", dir)
+
+	require.NoError(t, s.Save(&identity.Identity{
+		Name:   "Test Human",
+		Handle: "test-human",
+		Kind:   "human",
+	}))
+
+	repoRoot := t.TempDir()
+	testhelpers.MakeGitDir(t, repoRoot)
+	puntDir := filepath.Join(repoRoot, ".punt-labs")
+	require.NoError(t, os.MkdirAll(puntDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(puntDir, "ethos.yaml"), []byte(""), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(puntDir, "ethos"), 0o755))
+
+	orig, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repoRoot))
+	t.Cleanup(func() { os.Chdir(orig) }) //nolint:errcheck
+
+	isolateGitConfig(t, "test-human")
+
+	writeAgentsDirFile(t, repoRoot, "orphan", agentmark.Add("---\nname: orphan\n---\nbody\n"))
+
+	deps := SessionStartDeps{
+		Store:    s,
+		Sessions: ss,
+		Teams:    ts,
+		Roles:    nil,
+	}
+	captureSessionStartOutput(t, `{"session_id": "s-teams-no-roles"}`, deps)
+
+	assert.FileExists(t, filepath.Join(repoRoot, ".claude", "agents", "orphan.md"),
+		"a Teams-without-Roles partial dependency set must prune nothing: ownership is unavailable")
+}
