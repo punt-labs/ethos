@@ -1,0 +1,33 @@
+results:
+    - mission: m-2026-11-12-003
+      round: 1
+      created_at: "2026-11-13T01:54:07Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: internal/hook/prune_agents.go
+          added: 64
+          removed: 0
+        - path: internal/hook/prune_agents_test.go
+          added: 110
+          removed: 0
+        - path: internal/hook/session_start.go
+          added: 60
+          removed: 8
+        - path: internal/hook/session_start_test.go
+          added: 84
+          removed: 0
+        - path: internal/doctor/doctor.go
+          added: 5
+          removed: 13
+      evidence:
+        - name: 'TDD red->green: prune tests failed (undefined symbol) pre-impl, pass after; empty-checkout-root guard test fails on unfixed gate (CWD file deleted), passes with guard — falsified by git-stash of prune_agents.go'
+          status: pass
+        - name: 'Real SessionStart hook run: planted marked orphan + unmarked file; hook deleted the marked orphan (logged pruned stale agent), kept the unmarked file, active-team agents intact; re-confirmed after the guard fix'
+          status: pass
+        - name: 'Gates: go build/vet clean; go test ./internal/hook/ ./internal/seed/ ./internal/doctor/ green; validate-content passes (15 identities, 3 teams); coverage-check exit 0 (hook 85.1%, seed 85.1%, doctor 91.7%, all >= baseline)'
+          status: pass
+        - name: 'Local review: code-reviewer + silent-failure-hunter + invariant-completeness all clean; one MEDIUM (prune gate missing checkoutRoot guard) fixed in cbeed92c with a falsification-proven test; safety invariant (never delete an unmarked file) confirmed in code'
+          status: pass
+      prose: 'SessionStart now auto-deletes ethos''s own stale generated .claude/agents files: a file is removed only when it carries the agentmark provenance marker AND its handle is not in the keep-set (generated ∪ installed-stub ∪ seeded checklist). Unmarked files are never touched. Fail-closed: a partial/failed plan or unresolved checkout prunes nothing. No new command — the existing team CRUD plus the next SessionStart realize the cleanup. Closes the immediate half of PL-878. Note: the change also touched internal/seed/checklist.go (+test) and internal/hook/session_start_snapshot_test.go, which fell outside the declared write_set — a leader under-scoping, not worker drift: the criteria explicitly asked for the ChecklistAgentNames extraction as the single source of truth and the snapshot test is the mechanical fallout of installAgentDefsFor''s signature change. All three are in the PR diff and reviewed.'

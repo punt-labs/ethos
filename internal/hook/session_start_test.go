@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/agentmark"
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -1098,4 +1099,87 @@ func TestHandleSessionStart_RepairNote(t *testing.T) {
 			assert.Contains(t, out, tt.wantNote)
 		})
 	}
+}
+
+// TestHandleSessionStart_PrunesStaleGeneratedAgents drives the real
+// HandleSessionStart path: a marked agent file for a handle off the active
+// team is deleted, an unmarked file is left alone whatever its handle (the
+// safety boundary), and the active team's own generated file survives.
+func TestHandleSessionStart_PrunesStaleGeneratedAgents(t *testing.T) {
+	dir := t.TempDir()
+	s := identity.NewStore(dir)
+	ss := session.NewStore(dir)
+	rs := role.NewLayeredStore("", dir)
+	ts := team.NewLayeredStore("", dir)
+
+	require.NoError(t, s.Save(&identity.Identity{
+		Name:   "Test Human",
+		Handle: "test-human",
+		Kind:   "human",
+	}))
+	agentID := &identity.Identity{
+		Name:         "Claude Agento",
+		Handle:       "claude",
+		Kind:         "agent",
+		Personality:  "calm-engineer",
+		WritingStyle: "concise-quant",
+	}
+	ps := attribute.NewStore(dir, attribute.Personalities)
+	require.NoError(t, ps.Save(&attribute.Attribute{
+		Slug:    "calm-engineer",
+		Content: "# Calm Engineer\n\nA calm and methodical engineer.\n\n- Stay focused",
+	}))
+	ws := attribute.NewStore(dir, attribute.WritingStyles)
+	require.NoError(t, ws.Save(&attribute.Attribute{
+		Slug:    "concise-quant",
+		Content: "# Concise Quantified\n\nShort and data-driven.\n\n- Under 30 words",
+	}))
+	require.NoError(t, s.Save(agentID))
+
+	require.NoError(t, rs.Save(&role.Role{
+		Name:             "ceo",
+		Responsibilities: []string{"Sets strategic direction"},
+	}))
+	require.NoError(t, rs.Save(&role.Role{
+		Name:             "coo",
+		Responsibilities: []string{"Execution quality"},
+		Tools:            []string{"Write", "Edit"},
+	}))
+
+	identityExists := func(handle string) bool { return s.Exists(handle) }
+	roleExists := func(name string) bool { return rs.Exists(name) }
+	require.NoError(t, ts.Save(&team.Team{
+		Name: "test-eng",
+		Members: []team.Member{
+			{Identity: "test-human", Role: "ceo"},
+			{Identity: "claude", Role: "coo"},
+		},
+	}, identityExists, roleExists))
+
+	isolateGitConfig(t, "test-human")
+	setupRepoWithTeam(t, "test-human", "test-eng")
+	repoRoot, err := os.Getwd()
+	require.NoError(t, err)
+
+	// A marked file for a handle off the active team: this is what an
+	// earlier roster included and the operator since removed.
+	writeAgentsDirFile(t, repoRoot, "retired-specialist", agentmark.Add("---\nname: retired-specialist\n---\nbody\n"))
+	// An unmarked file for a handle off the active team: hand-authored,
+	// never ethos's to touch.
+	writeAgentsDirFile(t, repoRoot, "hand-authored", "---\nname: hand-authored\n---\nbody\n")
+
+	deps := SessionStartDeps{
+		Store:    s,
+		Sessions: ss,
+		Teams:    ts,
+		Roles:    rs,
+	}
+	captureSessionStartOutput(t, `{"session_id": "s-prune"}`, deps)
+
+	assert.NoFileExists(t, filepath.Join(repoRoot, ".claude", "agents", "retired-specialist.md"),
+		"a marked agent file for a handle off the active team must be pruned")
+	assert.FileExists(t, filepath.Join(repoRoot, ".claude", "agents", "hand-authored.md"),
+		"an unmarked file is never ethos's to delete, whatever its handle")
+	assert.FileExists(t, filepath.Join(repoRoot, ".claude", "agents", "claude.md"),
+		"the active team's own generated agent file must survive its own generation run")
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/repomiss"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/role"
+	"github.com/punt-labs/ethos/v4/internal/seed"
 	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/punt-labs/ethos/v4/internal/team"
 )
@@ -251,12 +252,13 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 		}
 	}
 	var installErr error
+	var installed []string
 	if deps.Teams != nil && deps.Roles == nil {
 		// A partial dependency set cannot render a plan and establish its
 		// ownership. Never pass nil as if the generator owned nothing.
 		fmt.Fprintln(os.Stderr, "ethos: session-start: Roles store missing; installing no stubs because generator ownership is unavailable")
 	} else if planErr == nil {
-		installErr = installAgentDefsFor(loc, plan.Owned)
+		installed, installErr = installAgentDefsFor(loc, plan.Owned)
 	}
 	if repoRoot != "" && checkoutRoot != "" && deps.Teams != nil && deps.Roles != nil {
 		policy, err := loc.Layout()
@@ -271,7 +273,50 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 		return fmt.Errorf("installing agent definitions: %w", installErr)
 	}
 
+	// Prune stale generated agent files only when the keep-set is known
+	// complete: a resolved checkout, and the generator and installer both ran
+	// with planning succeeded. A failed or partial plan means the keep-set
+	// cannot be trusted; an empty checkoutRoot would make the prune glob the
+	// process CWD's .claude/agents instead of the checkout. Either way nothing
+	// is deleted — fail closed, matching the generation/install block above,
+	// which guards repoRoot and checkoutRoot for the same reason.
+	if repoRoot != "" && checkoutRoot != "" && deps.Teams != nil && deps.Roles != nil && planErr == nil {
+		pruneStaleAgents(checkoutRoot, plan.Owned, installed)
+	}
+
 	return emitAgentContext(agentID, agentPersona, store, deps, loc.Checkout, note)
+}
+
+// pruneStaleAgents deletes a generated agent file this session no longer
+// owns: its keep-set is the handles the plan generated, the handles the
+// stub installer just deployed, and the seeded review-checklist handles
+// (code-reviewer, silent-failure-hunter, invariant-completeness-reviewer),
+// which carry no team membership and so appear in neither of the first two
+// sets. A prune error is logged, never fatal — the next SessionStart tries
+// again.
+func pruneStaleAgents(checkoutRoot string, owned map[string]bool, installed []string) {
+	keep := make(map[string]bool, len(owned)+len(installed))
+	for h := range owned {
+		keep[h] = true
+	}
+	for _, h := range installed {
+		keep[h] = true
+	}
+	checklist, err := seed.ChecklistAgentNames(seed.Agents, "sidecar/agents")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: pruning stale agents: could not read seeded agent list: %v\n", err)
+		return
+	}
+	for h := range checklist {
+		keep[h] = true
+	}
+	deleted, err := PruneOrphanedGeneratedAgents(checkoutRoot, keep)
+	for _, h := range deleted {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: pruned stale agent %s.md\n", h)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: pruning stale agents: %v\n", err)
+	}
 }
 
 // hookRefreshSkipped is the sentence for a refresh that did not run because of
@@ -611,25 +656,32 @@ func installAgentDefs(ethosRoot string, generated map[string]bool) {
 
 // installAgentDefsFor retains the source and destination selected at entry.
 // Unlike the direct-call compatibility wrapper, it never rediscovers a root.
-func installAgentDefsFor(loc resolve.Located, generated map[string]bool) error {
+// Returns the handles of every stub it planned to install — the keep-set
+// pruneStaleAgents needs, so a stub this run installs is never the same run's
+// prune target — whether or not that stub's content actually changed on disk.
+func installAgentDefsFor(loc resolve.Located, generated map[string]bool) ([]string, error) {
 	if err := loc.Err(); err != nil {
-		return fmt.Errorf("locating agent installation paths: %w", err)
+		return nil, fmt.Errorf("locating agent installation paths: %w", err)
 	}
 	if loc.Ethos == "" {
-		return nil
+		return nil, nil
 	}
 	files, err := PlanInstalledAgentDefinitions(loc.Ethos, generated)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	handles := make([]string, len(files))
+	for i, f := range files {
+		handles[i] = f.Handle
 	}
 	if len(files) == 0 {
-		return nil
+		return handles, nil
 	}
 	policy, err := loc.Layout()
 	if err != nil {
-		return err
+		return handles, err
 	}
-	return ApplyAgentPlan(policy, AgentPlan{Files: files})
+	return handles, ApplyAgentPlan(policy, AgentPlan{Files: files})
 }
 
 // emitAgentContext builds and emits the full agent persona block with

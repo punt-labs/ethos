@@ -704,20 +704,12 @@ func identityFileExists(root, handle string) (bool, error) {
 //
 // fsys and root are parameterized (rather than reading seed.Agents
 // directly) so a test can inject a broken fs.FS and exercise the error path
-// without depending on an unreadable compile-time embed.
+// without depending on an unreadable compile-time embed. The underlying list
+// is seed.ChecklistAgentNames — the single source of truth PruneOrphanedGeneratedAgents'
+// caller (internal/hook) also reads, so the exempted set can never drift
+// between the two call sites.
 func checklistAgentNames(fsys fs.FS, root string) (map[string]bool, error) {
-	entries, err := fs.ReadDir(fsys, root)
-	if err != nil {
-		return nil, fmt.Errorf("reading embedded %s: %w", root, err)
-	}
-	names := make(map[string]bool, len(entries))
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") || e.Name() == "README.md" {
-			continue
-		}
-		names[strings.TrimSuffix(e.Name(), ".md")] = true
-	}
-	return names, nil
+	return seed.ChecklistAgentNames(fsys, root)
 }
 
 // hookBinaryTimeout bounds the --help probe of the binary the shims run.
