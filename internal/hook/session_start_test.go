@@ -649,6 +649,72 @@ func TestHandleSessionStart_GenerateAgentsErrorPropagates(t *testing.T) {
 		"depth-1 error must be GenerateAgentFiles's teams.Load wrap")
 }
 
+// TestHandleSessionStart_NoAgentStillGreetsOnPipelineError pins the fix for
+// the code-review finding on the PL-878 full-retirement reorder: hoisting the
+// agent pipeline above the persona branch must NOT let a pipeline error rob the
+// human-fallback path of its greeting. Config has NO agent: (so agentPersona ==
+// "", the human path) but team: missing-team (so the pipeline errors loading
+// the team). The greeting must still be emitted, and the pipeline error must
+// still be returned as the hook's exit status — greeting first, error after,
+// never in place of it (the pre-PL-878 guarantee that this path always greets).
+func TestHandleSessionStart_NoAgentStillGreetsOnPipelineError(t *testing.T) {
+	dir := t.TempDir()
+	s := identity.NewStore(dir)
+	ss := session.NewStore(dir)
+	rs := role.NewLayeredStore("", dir)
+	ts := team.NewLayeredStore("", dir)
+
+	require.NoError(t, s.Save(&identity.Identity{
+		Name:   "Test Human",
+		Handle: "test-human",
+		Kind:   "human",
+	}))
+
+	repoRoot := t.TempDir()
+	testhelpers.MakeGitDir(t, repoRoot)
+	puntDir := filepath.Join(repoRoot, ".punt-labs")
+	require.NoError(t, os.MkdirAll(filepath.Join(puntDir, "ethos"), 0o755))
+	// No agent: -> agentPersona == "" (human-fallback path). team: missing ->
+	// the pipeline's plan/generate step errors loading the team.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(puntDir, "ethos.yaml"),
+		[]byte("team: missing-team\n"),
+		0o644))
+
+	orig, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repoRoot))
+	t.Cleanup(func() { os.Chdir(orig) }) //nolint:errcheck
+
+	isolateGitConfig(t, "test-human")
+
+	deps := SessionStartDeps{Store: s, Sessions: ss, Teams: ts, Roles: rs}
+
+	var out bytes.Buffer
+	oldStdout := os.Stdout
+	rPipe, wPipe, pipeErr := os.Pipe()
+	require.NoError(t, pipeErr)
+	os.Stdout = wPipe
+
+	err = HandleSessionStart(bytes.NewReader([]byte(`{"session_id":"s-greet"}`)), deps)
+
+	wPipe.Close()
+	os.Stdout = oldStdout
+	_, _ = out.ReadFrom(rPipe)
+	rPipe.Close()
+
+	// The pipeline error is still the hook's exit status.
+	require.Error(t, err, "a pipeline error on the no-agent path must still be returned")
+	assert.Contains(t, err.Error(), "missing-team",
+		"the returned error must name the team that failed to load")
+	// But the human greeting was emitted FIRST, not suppressed by that error.
+	var result SessionStartResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &result),
+		"the human fallback must still emit its SessionStart JSON despite the pipeline error")
+	assert.Contains(t, result.HookSpecificOutput.AdditionalContext, "Active identity: Test Human (test-human)",
+		"the retired repo must still get its human greeting")
+}
+
 // TestHandleSessionStart_ResolveAgentErrorPropagates covers ethos-dc0:
 // a malformed .punt-labs/ethos.yaml must now cause HandleSessionStart
 // to return a non-nil error with the full wrap chain. This is the test
@@ -1182,4 +1248,102 @@ func TestHandleSessionStart_PrunesStaleGeneratedAgents(t *testing.T) {
 		"an unmarked file is never ethos's to delete, whatever its handle")
 	assert.FileExists(t, filepath.Join(repoRoot, ".claude", "agents", "claude.md"),
 		"the active team's own generated agent file must survive its own generation run")
+}
+
+// TestHandleSessionStart_PrunesStaleAgentsWithNoRosterConfigured covers
+// PL-878: a repo that has retired its whole roster — neither agent: nor
+// team: set in .punt-labs/ethos.yaml — still prunes its orphaned generated
+// agent files. Before the fix, agentPersona == "" made HandleSessionStart
+// return early via emitHumanFallback before the generate/install/prune
+// pipeline ran at all, so a fully-retired repo's stale marked files were
+// never cleaned up.
+func TestHandleSessionStart_PrunesStaleAgentsWithNoRosterConfigured(t *testing.T) {
+	dir := t.TempDir()
+	s := identity.NewStore(dir)
+	ss := session.NewStore(dir)
+	rs := role.NewLayeredStore("", dir)
+	ts := team.NewLayeredStore("", dir)
+
+	require.NoError(t, s.Save(&identity.Identity{
+		Name:   "Test Human",
+		Handle: "test-human",
+		Kind:   "human",
+	}))
+
+	repoRoot := t.TempDir()
+	testhelpers.MakeGitDir(t, repoRoot)
+	puntDir := filepath.Join(repoRoot, ".punt-labs")
+	require.NoError(t, os.MkdirAll(puntDir, 0o755))
+	// Neither agent: nor team: — the fully-retired config.
+	require.NoError(t, os.WriteFile(filepath.Join(puntDir, "ethos.yaml"), []byte(""), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(puntDir, "ethos"), 0o755))
+
+	orig, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repoRoot))
+	t.Cleanup(func() { os.Chdir(orig) }) //nolint:errcheck
+
+	isolateGitConfig(t, "test-human")
+
+	// A marked file for a handle the retired roster no longer owns.
+	writeAgentsDirFile(t, repoRoot, "retired-specialist", agentmark.Add("---\nname: retired-specialist\n---\nbody\n"))
+	// An unmarked file is never ethos's to delete, whatever its handle.
+	writeAgentsDirFile(t, repoRoot, "hand-authored", "---\nname: hand-authored\n---\nbody\n")
+
+	deps := SessionStartDeps{
+		Store:    s,
+		Sessions: ss,
+		Teams:    ts,
+		Roles:    rs,
+	}
+	captureSessionStartOutput(t, `{"session_id": "s-prune-no-roster"}`, deps)
+
+	assert.NoFileExists(t, filepath.Join(repoRoot, ".claude", "agents", "retired-specialist.md"),
+		"a marked agent file must be pruned even with no agent or team configured")
+	assert.FileExists(t, filepath.Join(repoRoot, ".claude", "agents", "hand-authored.md"),
+		"an unmarked file is never ethos's to delete, whatever its handle")
+}
+
+// TestHandleSessionStart_TeamsWithoutRolesPrunesNothing pins invariant (c):
+// a Teams store with no Roles store is a partial dependency set — ownership
+// is unavailable, so pruning must not run even though planErr is nil (no
+// team was even attempted). A marked orphan must survive this state.
+func TestHandleSessionStart_TeamsWithoutRolesPrunesNothing(t *testing.T) {
+	dir := t.TempDir()
+	s := identity.NewStore(dir)
+	ss := session.NewStore(dir)
+	ts := team.NewLayeredStore("", dir)
+
+	require.NoError(t, s.Save(&identity.Identity{
+		Name:   "Test Human",
+		Handle: "test-human",
+		Kind:   "human",
+	}))
+
+	repoRoot := t.TempDir()
+	testhelpers.MakeGitDir(t, repoRoot)
+	puntDir := filepath.Join(repoRoot, ".punt-labs")
+	require.NoError(t, os.MkdirAll(puntDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(puntDir, "ethos.yaml"), []byte(""), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(puntDir, "ethos"), 0o755))
+
+	orig, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repoRoot))
+	t.Cleanup(func() { os.Chdir(orig) }) //nolint:errcheck
+
+	isolateGitConfig(t, "test-human")
+
+	writeAgentsDirFile(t, repoRoot, "orphan", agentmark.Add("---\nname: orphan\n---\nbody\n"))
+
+	deps := SessionStartDeps{
+		Store:    s,
+		Sessions: ss,
+		Teams:    ts,
+		Roles:    nil,
+	}
+	captureSessionStartOutput(t, `{"session_id": "s-teams-no-roles"}`, deps)
+
+	assert.FileExists(t, filepath.Join(repoRoot, ".claude", "agents", "orphan.md"),
+		"a Teams-without-Roles partial dependency set must prune nothing: ownership is unavailable")
 }
