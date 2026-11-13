@@ -189,31 +189,13 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 		note += rosterNotice
 	}
 
-	// Generate .claude/agents/<handle>.md from ethos identity data, install
-	// legacy stubs for handles the generator does not own, and prune stale
-	// generated files. This runs whenever the checkout and store resolved
-	// (storeFailure == nil), independent of whether this repo configures an
-	// agent persona: a repo that has retired its whole roster (no agent, no
-	// team) still has its orphaned generated files pruned, not just one that
-	// still names an agent (PL-878). A storeFailure — an unreadable config,
-	// an unlocatable store — means agentPersona is already forced to "" and
-	// nothing below can be trusted either, so the block is skipped exactly
-	// as the old early return skipped it, and the session falls through to
-	// the human fallback below with the same message it always gave.
-	//
-	// Propagates: the returned error is the single authoritative
-	// signal the CLI can gate on. The shell wrapper's `|| true` keeps
-	// Claude Code session startup fail-open (cli.md §Hook Architecture)
-	// so a broken config does not brick sessions, but `ethos hook
-	// session-start` invoked directly exits non-zero — useful for
-	// `ethos doctor` and manual debugging.
-	//
-	// Two roots: the config/team selection resolves from the shared store
-	// (repoRoot = StoreRootIfAny), while the agent files are written to the
-	// CURRENT checkout (CheckoutRootIfAny) — the tree the worktree's Claude reads
-	// and where InstallAgentDefinitions writes. A single root would generate
-	// a worktree's agents into the main tree, invisible to that worktree
-	// (Bugbot HIGH on PR #370).
+	// Run the agent-file pipeline (generate, install, prune) whenever the
+	// checkout and store resolved — a storeFailure forces agentPersona to ""
+	// and leaves nothing below trustworthy, so the block is skipped and the
+	// human fallback runs as before. runAgentPipeline returns its first fatal
+	// error rather than returning from the hook, so the persona branches below
+	// decide whether it preempts emission (agent-configured) or is reported
+	// only after the human greeting (retired repo). See runAgentPipeline.
 	var pipelineErr error
 	if storeFailure == nil {
 		pipelineErr = runAgentPipeline(loc, store, deps, repoRoot)
