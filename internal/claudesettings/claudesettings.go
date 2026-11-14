@@ -220,6 +220,9 @@ func parseObject(data []byte) (object, error) {
 			return nil, err
 		}
 		key, _ := tok.(string)
+		if obj.get(key) != nil {
+			return nil, fmt.Errorf("duplicate key %q", key)
+		}
 		var raw json.RawMessage
 		if err := dec.Decode(&raw); err != nil {
 			return nil, err

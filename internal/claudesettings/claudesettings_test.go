@@ -114,6 +114,8 @@ func TestUnparseableFilesAreRefusedUntouched(t *testing.T) {
 		"perms null":  `{"permissions":null}`,
 		"invalid utf": "{\"a\":\"\xff\"}",
 		"trailing":    "{} {}",
+		"dup ask":     `{"permissions":{"ask":[],"ask":["Other"]}}`,
+		"dup perms":   `{"permissions":{},"permissions":{"allow":[]}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
