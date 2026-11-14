@@ -90,6 +90,15 @@ func TestNetworkGitCannotPrompt(t *testing.T) {
 	t.Setenv("SSH_ASKPASS", "/some/ssh-askpass")
 	require.NoError(t, os.Unsetenv("GIT_SSH_COMMAND"))
 	require.NoError(t, os.Unsetenv("GIT_SSH"))
+	// The spy git echoes GIT_TERMINAL_PROMPT and SSH_ASKPASS_REQUIRE too, and
+	// the final non-network assertion reads them from the ambient environment.
+	// Clear both so the test controls every field it asserts on: an inherited
+	// GIT_TERMINAL_PROMPT=0 (set by some callers' environment, e.g. a harness
+	// or CI launcher) otherwise fails line "an ordinary git is untouched".
+	// t.Setenv restores the prior value after the test; os.Unsetenv above does
+	// not, but these two must be empty, not removed, to pin the echoed field.
+	t.Setenv("GIT_TERMINAL_PROMPT", "")
+	t.Setenv("SSH_ASKPASS_REQUIRE", "")
 	run := func() string {
 		require.NoError(t, os.Remove(log))
 		out, err := Run(Spec{Git: git, Network: true, Args: []string{"clone", "u"}})
