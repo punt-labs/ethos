@@ -133,6 +133,9 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO) (*Report, error) {
 	if _, err := resolve.EnabledMarker(repoRoot); err != nil {
 		return rep, fmt.Errorf("enable: %w; marker left unchanged", err)
 	}
+	if err := claudesettings.Preflight(repoRoot, PermissionRules); err != nil {
+		return rep, fmt.Errorf("checking .claude/settings.json: %w", err)
+	}
 
 	// Preflight both hosts before any ignore mutation (or deposit). Old rules
 	// may be the only protection for private overlays or another tool's data;
@@ -233,10 +236,6 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO) (*Report, error) {
 		return rep, fmt.Errorf("adding ethos permission rules to .claude/settings.json: %w", err)
 	}
 	permissionStep(rep, granted, "added ", "all rules already present")
-
-	if err := chainHooks(repoRoot, rep); err != nil {
-		return rep, err
-	}
 
 	hint, warning := configStatus(storeRoot)
 	if warning != "" {

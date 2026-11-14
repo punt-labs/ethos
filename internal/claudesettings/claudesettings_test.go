@@ -8,7 +8,10 @@ import (
 	"testing"
 )
 
-var rules = []string{"Bash(t:*)", "mcp__t__*"}
+var rules = map[string][]string{
+	"allow": {"Bash(t:*)", "mcp__t__*"},
+	"ask":   {"Bash(t admin:*)"},
+}
 
 func writeSettings(t *testing.T, root, content string) string {
 	t.Helper()
@@ -34,10 +37,10 @@ func readString(t *testing.T, path string) string {
 func TestRegisterCreatesTheFile(t *testing.T) {
 	root := t.TempDir()
 	added, err := Register(root, rules)
-	if err != nil || !slices.Equal(added, rules) {
+	if err != nil || !slices.Equal(added, append(rules["allow"], rules["ask"]...)) {
 		t.Fatalf("Register = %v, %v", added, err)
 	}
-	want := "{\n  \"permissions\": {\n    \"allow\": [\n      \"Bash(t:*)\",\n      \"mcp__t__*\"\n    ]\n  }\n}\n"
+	want := "{\n  \"permissions\": {\n    \"allow\": [\n      \"Bash(t:*)\",\n      \"mcp__t__*\"\n    ],\n    \"ask\": [\n      \"Bash(t admin:*)\"\n    ]\n  }\n}\n"
 	if got := readString(t, settingsPath(root)); got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -57,7 +60,7 @@ func TestRegisterKeepsOrderAndOtherEntriesAndIsIdempotent(t *testing.T) {
 	if readString(t, path) != first {
 		t.Error("idempotent Register rewrote the file")
 	}
-	want := "{\n  \"z\": 1,\n  \"permissions\": {\n    \"deny\": [\n      \"X\"\n    ],\n    \"allow\": [\n      \"Bash(a && b)\",\n      \"Bash(t:*)\",\n      \"mcp__t__*\"\n    ]\n  },\n  \"a\": {\n    \"k\": true\n  }\n}\n"
+	want := "{\n  \"z\": 1,\n  \"permissions\": {\n    \"deny\": [\n      \"X\"\n    ],\n    \"allow\": [\n      \"Bash(a && b)\",\n      \"Bash(t:*)\",\n      \"mcp__t__*\"\n    ],\n    \"ask\": [\n      \"Bash(t admin:*)\"\n    ]\n  },\n  \"a\": {\n    \"k\": true\n  }\n}\n"
 	if first != want {
 		t.Errorf("got %q, want %q", first, want)
 	}
@@ -65,12 +68,12 @@ func TestRegisterKeepsOrderAndOtherEntriesAndIsIdempotent(t *testing.T) {
 
 func TestDeregisterRemovesExactlyTheOwnedRules(t *testing.T) {
 	root := t.TempDir()
-	path := writeSettings(t, root, `{"permissions":{"allow":["Read","Bash(t:*)","Bash(t:x)","mcp__t__*"]}}`)
+	path := writeSettings(t, root, `{"permissions":{"allow":["Read","Bash(t:*)","Bash(t:x)","mcp__t__*"],"ask":["Bash(t admin:*)","Bash(other:*)"]}}`)
 	removed, err := Deregister(root, rules)
-	if err != nil || !slices.Equal(removed, rules) {
+	if err != nil || !slices.Equal(removed, append(rules["allow"], rules["ask"]...)) {
 		t.Fatalf("Deregister = %v, %v", removed, err)
 	}
-	want := "{\n  \"permissions\": {\n    \"allow\": [\n      \"Read\",\n      \"Bash(t:x)\"\n    ]\n  }\n}\n"
+	want := "{\n  \"permissions\": {\n    \"allow\": [\n      \"Read\",\n      \"Bash(t:x)\"\n    ],\n    \"ask\": [\n      \"Bash(other:*)\"\n    ]\n  }\n}\n"
 	if got := readString(t, path); got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -86,6 +89,18 @@ func TestDeregisterWithoutAFileCreatesNothing(t *testing.T) {
 	}
 }
 
+func TestDeregisterDoesNotCreateAnAbsentTier(t *testing.T) {
+	root := t.TempDir()
+	path := writeSettings(t, root, `{"permissions":{"allow":["Read"]}}`)
+	removed, err := Deregister(root, rules)
+	if err != nil || len(removed) != 0 {
+		t.Fatalf("Deregister = %v, %v", removed, err)
+	}
+	if got := readString(t, path); got != `{"permissions":{"allow":["Read"]}}` {
+		t.Errorf("no-op deregister rewrote the file: %q", got)
+	}
+}
+
 func TestUnparseableFilesAreRefusedUntouched(t *testing.T) {
 	for name, content := range map[string]string{
 		"malformed":   "{nope",
@@ -93,6 +108,9 @@ func TestUnparseableFilesAreRefusedUntouched(t *testing.T) {
 		"allow type":  `{"permissions":{"allow":"Read"}}`,
 		"allow items": `{"permissions":{"allow":[1]}}`,
 		"allow null":  `{"permissions":{"allow":null}}`,
+		"ask type":    `{"permissions":{"ask":"Bash(t admin:*)"}}`,
+		"ask items":   `{"permissions":{"ask":[1]}}`,
+		"ask null":    `{"permissions":{"ask":null}}`,
 		"perms null":  `{"permissions":null}`,
 		"invalid utf": "{\"a\":\"\xff\"}",
 		"trailing":    "{} {}",

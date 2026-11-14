@@ -14,23 +14,72 @@ func TestPermissionRulesCoverCLIMCPAndEveryShippedCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"Bash(ethos:*)", "mcp__plugin_ethos_self__*"}
+	wantAsk := []string{
+		"Bash(ethos -*)",
+		"Bash(ethos setup:*)",
+		"Bash(ethos seed:*)",
+		"Bash(ethos uninstall:*)",
+		"Bash(ethos enable:*)",
+		"Bash(ethos disable:*)",
+		"Bash(ethos serve:*)",
+		"Bash(ethos hook:*)",
+		"Bash(ethos import:*)",
+		"Bash(ethos export:*)",
+		"Bash(ethos adr:*)",
+		"Bash(ethos audit:*)",
+		"Bash(ethos ext:*)",
+		"Bash(ethos identity:*)",
+		"Bash(ethos mission:*)",
+		"Bash(ethos personality:*)",
+		"Bash(ethos role:*)",
+		"Bash(ethos session:*)",
+		"Bash(ethos talent:*)",
+		"Bash(ethos team:*)",
+		"Bash(ethos vendor:*)",
+		"Bash(ethos writing-style:*)",
+		"mcp__plugin_ethos_self__adr",
+		"mcp__plugin_ethos_self__ext",
+		"mcp__plugin_ethos_self__identity",
+		"mcp__plugin_ethos_self__mission",
+		"mcp__plugin_ethos_self__personality",
+		"mcp__plugin_ethos_self__role",
+		"mcp__plugin_ethos_self__session",
+		"mcp__plugin_ethos_self__talent",
+		"mcp__plugin_ethos_self__team",
+		"mcp__plugin_ethos_self__vendor",
+		"mcp__plugin_ethos_self__writing_style",
+	}
 	for _, e := range entries {
 		name := strings.TrimSuffix(e.Name(), ".md")
 		if name == e.Name() || strings.HasSuffix(name, "-dev") {
 			continue
 		}
-		want = append(want, "Skill(ethos:"+name+")")
+		wantAsk = append(wantAsk, "Skill(ethos:"+name+")")
 	}
-	got := slices.Clone(PermissionRules)
-	slices.Sort(got)
-	slices.Sort(want)
-	if !slices.Equal(got, want) {
-		t.Errorf("PermissionRules = %v, want %v", got, want)
+	skills, err := os.ReadDir(filepath.Join("..", "..", "plugin", "skills"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, r := range PermissionRules {
-		if strings.Contains(r, "-dev") {
-			t.Errorf("dev rule granted: %s", r)
+	for _, skill := range skills {
+		if skill.IsDir() {
+			wantAsk = append(wantAsk, "Skill(ethos:"+skill.Name()+")")
+		}
+	}
+	wantAllow := []string{"Bash(ethos:*)", "mcp__plugin_ethos_self__*", "Skill(ethos:*)"}
+	if !slices.Equal(PermissionRules["allow"], wantAllow) {
+		t.Errorf("PermissionRules[allow] = %v, want %v", PermissionRules["allow"], wantAllow)
+	}
+	gotAsk := slices.Clone(PermissionRules["ask"])
+	slices.Sort(gotAsk)
+	slices.Sort(wantAsk)
+	if !slices.Equal(gotAsk, wantAsk) {
+		t.Errorf("PermissionRules[ask] = %v, want %v", gotAsk, wantAsk)
+	}
+	for _, rules := range PermissionRules {
+		for _, rule := range rules {
+			if strings.Contains(rule, "-dev") {
+				t.Errorf("dev rule granted: %s", rule)
+			}
 		}
 	}
 }
@@ -47,15 +96,21 @@ func TestEnableDisableRoundTripsPermissionRules(t *testing.T) {
 	if _, err := Enable(dir); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
-	if got, want := allowList(t, settings), append([]string{"Read"}, PermissionRules...); !slices.Equal(got, want) {
+	if got, want := permissionList(t, settings, "allow"), append([]string{"Read"}, PermissionRules["allow"]...); !slices.Equal(got, want) {
 		t.Errorf("after enable allow = %v, want %v", got, want)
+	}
+	if got := permissionList(t, settings, "ask"); !slices.Equal(got, PermissionRules["ask"]) {
+		t.Errorf("after enable ask = %v, want %v", got, PermissionRules["ask"])
 	}
 	rep, err := Disable(dir, false)
 	if err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
-	if got := allowList(t, settings); !slices.Equal(got, []string{"Read"}) {
+	if got := permissionList(t, settings, "allow"); !slices.Equal(got, []string{"Read"}) {
 		t.Errorf("after disable allow = %v, want [Read]", got)
+	}
+	if got := permissionList(t, settings, "ask"); len(got) != 0 {
+		t.Errorf("after disable ask = %v, want []", got)
 	}
 	if !slices.ContainsFunc(rep.Steps, func(s StepResult) bool { return s.Step == "permissions" && s.Status == "done" }) {
 		t.Errorf("disable report has no permissions step: %+v", rep.Steps)
@@ -77,6 +132,17 @@ func TestEnableRefusesMalformedSettingsUntouched(t *testing.T) {
 	if got := readFile(t, settings); got != "{nope" {
 		t.Errorf("settings.json changed: %q", got)
 	}
+	for _, path := range []string{
+		filepath.Join(dir, ".punt-labs", "ethos", "enabled"),
+		filepath.Join(dir, ".punt-labs", "ethos", "CLAUDE.md"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("failed enable wrote %s", path)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "CLAUDE.md")); !os.IsNotExist(err) {
+		t.Error("failed enable created CLAUDE.md")
+	}
 }
 
 func TestRefusedDisableLeavesTheRepoEnabled(t *testing.T) {
@@ -97,15 +163,13 @@ func TestRefusedDisableLeavesTheRepoEnabled(t *testing.T) {
 	}
 }
 
-func allowList(t *testing.T, path string) []string {
+func permissionList(t *testing.T, path, tier string) []string {
 	t.Helper()
 	var doc struct {
-		Permissions struct {
-			Allow []string `json:"allow"`
-		} `json:"permissions"`
+		Permissions map[string][]string `json:"permissions"`
 	}
 	if err := json.Unmarshal([]byte(readFile(t, path)), &doc); err != nil {
 		t.Fatal(err)
 	}
-	return doc.Permissions.Allow
+	return doc.Permissions[tier]
 }

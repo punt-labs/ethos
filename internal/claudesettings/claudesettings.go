@@ -1,11 +1,11 @@
-// Package claudesettings adds and removes a fixed set of permissions.allow
-// rules in a repo's .claude/settings.json (punt-kit permissions.md §6,
+// Package claudesettings adds and removes fixed permission rules by tier in a
+// repo's .claude/settings.json (punt-kit permissions.md §6,
 // tool-enable-disable §2.8). It never touches ~/.claude/settings.json.
 //
 // The file is shared with every other punt tool, so each read-modify-write
 // holds the tool-agnostic sibling lock .claude/.settings.json.punt-import.lock
 // (the name every punt CLI takes) and replaces the file atomically. Every key
-// and allow entry outside the owned rules is kept, in its original order.
+// and permission entry outside the owned rules is kept, in its original order.
 package claudesettings
 
 import (
@@ -29,15 +29,32 @@ const LockName = ".settings.json.punt-import.lock"
 // ErrRefused marks a settings file left untouched because editing it is unsafe.
 var ErrRefused = errors.New("refusing to edit .claude/settings.json")
 
-// Register appends each rule missing from permissions.allow, creating the file
-// when absent, and returns the rules it added.
-func Register(repoRoot string, rules []string) ([]string, error) {
+// Preflight verifies that the settings target can accept rules without writing
+// it. Enable uses this before changing any other repository state.
+func Preflight(repoRoot string, rules map[string][]string) error {
+	if err := refuseUnsafe(repoRoot); err != nil {
+		return err
+	}
+	path := settingsPath(repoRoot)
+	data, _, err := read(path)
+	if err != nil {
+		return err
+	}
+	if _, _, err := apply(data, rules, true); err != nil {
+		return fmt.Errorf("%w: %s: %v", ErrRefused, path, err)
+	}
+	return nil
+}
+
+// Register appends each rule to its permissions tier, creating the file when
+// absent, and returns the rules it added.
+func Register(repoRoot string, rules map[string][]string) ([]string, error) {
 	return update(repoRoot, rules, true)
 }
 
-// Deregister removes every rule from permissions.allow and returns the rules it
-// removed. A repo with no settings file is left as it is.
-func Deregister(repoRoot string, rules []string) ([]string, error) {
+// Deregister removes every rule from its permissions tier and returns the rules
+// it removed. A repo with no settings file is left as it is.
+func Deregister(repoRoot string, rules map[string][]string) ([]string, error) {
 	if _, err := os.Lstat(settingsPath(repoRoot)); errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
@@ -48,7 +65,7 @@ func settingsPath(repoRoot string) string {
 	return filepath.Join(repoRoot, ".claude", "settings.json")
 }
 
-func update(repoRoot string, rules []string, grant bool) ([]string, error) {
+func update(repoRoot string, rules map[string][]string, grant bool) ([]string, error) {
 	if err := refuseUnsafe(repoRoot); err != nil {
 		return nil, err
 	}
@@ -113,7 +130,7 @@ func read(path string) ([]byte, os.FileMode, error) {
 }
 
 // apply returns the new file content and the rules added (grant) or removed.
-func apply(data []byte, rules []string, grant bool) ([]byte, []string, error) {
+func apply(data []byte, rules map[string][]string, grant bool) ([]byte, []string, error) {
 	if !utf8.Valid(data) {
 		return nil, nil, errors.New("not valid UTF-8")
 	}
@@ -125,32 +142,44 @@ func apply(data []byte, rules []string, grant bool) ([]byte, []string, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("permissions: %w", err)
 	}
-	var allow []string
-	if raw := perms.get("allow"); raw != nil {
-		if err := json.Unmarshal(raw, &allow); err != nil || allow == nil {
-			return nil, nil, errors.New("permissions.allow is not a list of strings")
-		}
-	}
 	var changed []string
-	for _, rule := range rules {
-		if slices.Contains(allow, rule) == grant {
+	for _, tier := range []string{"allow", "ask"} {
+		owned := rules[tier]
+		if len(owned) == 0 {
 			continue
 		}
-		changed = append(changed, rule)
+		var existing []string
+		if raw := perms.get(tier); raw != nil {
+			if err := json.Unmarshal(raw, &existing); err != nil || existing == nil {
+				return nil, nil, fmt.Errorf("permissions.%s is not a list of strings", tier)
+			}
+		}
+		var tierChanged []string
+		for _, rule := range owned {
+			if slices.Contains(existing, rule) != grant {
+				tierChanged = append(tierChanged, rule)
+			}
+		}
+		if len(tierChanged) == 0 {
+			continue
+		}
+		changed = append(changed, tierChanged...)
+		if grant {
+			existing = append(existing, tierChanged...)
+		} else {
+			existing = slices.DeleteFunc(existing, func(r string) bool {
+				return slices.Contains(owned, r)
+			})
+		}
+		if existing == nil {
+			existing = []string{}
+		}
+		if err := perms.set(tier, existing); err != nil {
+			return nil, nil, err
+		}
 	}
 	if len(changed) == 0 {
 		return nil, nil, nil
-	}
-	if grant {
-		allow = append(allow, changed...)
-	} else {
-		allow = slices.DeleteFunc(allow, func(r string) bool { return slices.Contains(rules, r) })
-	}
-	if allow == nil {
-		allow = []string{}
-	}
-	if err := perms.set("allow", allow); err != nil {
-		return nil, nil, err
 	}
 	if err := root.set("permissions", perms); err != nil {
 		return nil, nil, err

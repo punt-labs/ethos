@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/punt-labs/ethos/v4/internal/claudesettings"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
@@ -75,7 +76,8 @@ func TestEnableToLinkedWorktreeKeepsRuntimeInStore(t *testing.T) {
 			if d.IsDir() && (d.Name() == ".git" || path == p.LocalRoot()) {
 				return filepath.SkipDir
 			}
-			assert.False(t, strings.Contains(d.Name(), layout.TmpMarker) || strings.HasSuffix(d.Name(), ".lock"), path)
+			isUnexpectedLock := strings.HasSuffix(d.Name(), ".lock") && d.Name() != claudesettings.LockName
+			assert.False(t, strings.Contains(d.Name(), layout.TmpMarker) || isUnexpectedLock, path)
 			return nil
 		}))
 	}

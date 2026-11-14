@@ -109,9 +109,9 @@ never touch Config, Local, or seal-managed data.
 | `<repo>/CLAUDE.md` | host file | user | One import line added/removed (§2.4) |
 | git hooks dir `pre-commit`, `commit-msg` | outside subtree | shared | Marker section chained/unchained (§2.8, DES-058/DES-054) |
 
-`<repo>/.claude/settings.json` is a shared host file: `enable` appends
-ethos's allow rules to `permissions.allow` and `disable` removes exactly those
-values (§2.8) — see "`.claude/settings.json` (§2.8)" below.
+`<repo>/.claude/settings.json` is a shared host file: `enable` appends ethos's
+rules to `permissions.allow` and `permissions.ask`; `disable` removes exactly
+those values (§2.8) — see "`.claude/settings.json` (§2.8)" below.
 
 **The carve-out is enforced by the manifest, not by good intentions.** Per
 §7, `enable` writes **exactly** the vendored-zone-manifest set
@@ -176,7 +176,8 @@ Steps, in order:
    `commit-msg`, carrying all v4.1.1 protections (below). Both embedded
    scripts carry the §2.7 marker gate (see "The §2.7 marker gate" below).
 
-After the import line, `enable` allows ethos in `.claude/settings.json`
+After the import line, `enable` adds ethos's permission rules to
+`.claude/settings.json`
 (see "`.claude/settings.json` (§2.8)"). Exit 0 on success or clean
 re-run. `--json` emits the per-step result.
 
@@ -537,11 +538,12 @@ From §2.11 (and punt-labs-dir §8, keyed by the marker):
 
 ## `.claude/settings.json` (§2.8)
 
-Running `ethos enable` is the user's consent to let Claude use ethos in this
-repo without a prompt (punt-kit `permissions.md` §6), so `enable` appends
-`internal/enable.PermissionRules` — `Bash(ethos:*)`,
-`mcp__plugin_ethos_self__*`, and one `Skill(ethos:<command>)` per shipped
-command — to `permissions.allow`, and `disable` removes exactly those values.
+Running `ethos enable` is the user's consent to use ethos in this repo
+(punt-kit `permissions.md` §6). It adds `Bash(ethos:*)`,
+`mcp__plugin_ethos_self__*`, and `Skill(ethos:*)` to `permissions.allow`.
+Exact rules in `permissions.ask` keep state-changing CLI groups, MCP tools, and
+skills prompt-gated even though the broad allow also matches. `disable` removes
+exactly the current allow and ask values.
 `~/.claude/settings.json` is never edited, and no `ethos-dev` rule is granted:
 the dev plugin only exists in a maintainer's checkout.
 
@@ -553,8 +555,8 @@ the dev plugin only exists in a maintainer's checkout.
   the per-user dir, R2), this lock must sit beside the file, or a per-tool
   lock would serialize ethos only against itself.
 - **Atomic, order-preserving.** Temp file in `.claude/`, then rename. Every
-  other key and allow entry keeps its value and position.
-- **Refusals.** A malformed or non-UTF-8 file, a non-list `allow`, a
+  other key and permission entry keeps its value and position.
+- **Refusals.** A malformed or non-UTF-8 file, a non-list `allow` or `ask`, a
   symlinked `settings.json` or `.claude/`, and a repo rooted at `$HOME` are
   refused and left untouched; `enable` then fails before the hooks are
   chained.
