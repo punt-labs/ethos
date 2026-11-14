@@ -626,42 +626,15 @@ func TestEnabledInstalledHooksTransientWrites(t *testing.T) {
 	}
 }
 
-func TestEnabledInstalledCommitMessageRenderWriteFailure(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("syscall injection acceptance is Linux-specific")
-	}
-	strace, err := exec.LookPath("strace")
-	if err != nil {
-		t.Skip("failed-write acceptance requires strace; not established on this host")
-	}
-	_, checkout, hooksDir, env := enabledMessageRepo(t, false)
-	bin, trace := t.TempDir(), filepath.Join(t.TempDir(), "write-failure")
-	// Trace the helper and its threads, detaching children on exec. Its first
-	// write supplies the in-memory original to Git's stdin. A failed pipe write
-	// must be reported rather than installing partial output or plain-appending.
-	// Git's stdout, the shell root probe and session lookup are not faulted.
-	wrapper := "#!/bin/sh\nif [ \"$1 $2\" = 'hook commit-msg' ]; then\nexec '" + strace + "' -f -b execve -o '" + trace + "' -e trace=write,fsync,renameat -e inject=write:error=ENOSPC:when=1 '" + filepath.Join(ethosBinDir(t), "ethos") + "' \"$@\"\nfi\nexec '" + filepath.Join(ethosBinDir(t), "ethos") + "' \"$@\"\n"
-	require.NoError(t, os.WriteFile(filepath.Join(bin, "ethos"), []byte(wrapper), 0o700))
-	msg := filepath.Join(checkout, "MSG")
-	writeFile(t, msg, "original bytes\n")
-	cmd := exec.Command(filepath.Join(hooksDir, "commit-msg"), msg)
-	cmd.Dir = checkout
-	cmd.Env = append(env, "PATH="+bin+":"+os.Getenv("PATH"), "MISSION_ID=m-2026-11-04-043", "DELEGATION_ID=d-2026-11-04-043")
-	out, err := cmd.CombinedOutput()
-	require.Error(t, err, string(out))
-	// Injection is per thread: it can also fault the error-report write on a
-	// different thread. The exit status, injected syscall and unchanged bytes
-	// are the evidence here; do not depend on faulted stderr being printable.
-	data, err := os.ReadFile(msg)
-	require.NoError(t, err)
-	assert.Equal(t, "original bytes\n", string(data))
-	calls, err := os.ReadFile(trace)
-	require.NoError(t, err)
-	assert.Contains(t, string(calls), "ENOSPC")
-	assert.Contains(t, string(calls), "(INJECTED)")
-	assert.NotContains(t, string(calls), "renameat(")
-	t.Log(string(calls))
-}
+// A removed test, TestEnabledInstalledCommitMessageRenderWriteFailure, used
+// strace to inject ENOSPC on the commit-msg helper's first write syscall
+// (inject=write:...:when=1), asserting a faulted message-render write is
+// reported. "First write" is not deterministically the render write: the trace
+// showed the fault landing on a help-text write to fd 1, so the test passed by
+// luck in isolation and failed under -race / full-suite load. It was removed
+// (PL-1044) rather than left to pass by coincidence; a deterministic
+// replacement that faults the specific pipe write to Git's stdin is tracked
+// there.
 
 func TestEnabledInstalledHooksOrdinaryCommit(t *testing.T) {
 	_, checkout, _, env := enabledMessageRepo(t, false)
