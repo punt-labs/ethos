@@ -549,13 +549,13 @@ the dev plugin only exists in a maintainer's checkout.
 
 `internal/claudesettings` owns the write:
 
-- **Shared lock.** Every read-modify-write holds the tool-agnostic sibling
-  lock `.claude/.settings.json.punt-import.lock`, the name every punt CLI
-  takes for this file. Unlike the `CLAUDE.md` import (whose lock lives in
-  the per-user dir, R2), this lock must sit beside the file, or a per-tool
-  lock would serialize ethos only against itself.
-- **Atomic, order-preserving.** Temp file in `.claude/`, then rename. Every
-  other key and permission entry keeps its value and position.
+- **Shared-local lock.** Every read-modify-write holds a lock under
+  `.punt-labs/local/ethos/locks/`, as the `CLAUDE.md` import does (R2), so no
+  lock file is left in the checkout. Ethos serializes against itself, not
+  against other punt tools' sibling `.settings.json.punt-import.lock`.
+- **Atomic, order-preserving.** Staged in the shared-local temp dir, synced,
+  then renamed over the file. Every other key and permission entry keeps its
+  value and position.
 - **Refusals.** A malformed or non-UTF-8 file, a non-list `allow` or `ask`, a
   symlinked `settings.json` or `.claude/`, and a repo rooted at `$HOME` are
   refused and left untouched; `enable` then fails before the hooks are

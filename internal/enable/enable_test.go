@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/punt-labs/ethos/v4/internal/claudesettings"
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/punt-labs/ethos/v4/plugin/hooks"
 )
@@ -395,7 +394,7 @@ func TestEnableDisableLeavesNoWorkTreeLitter(t *testing.T) {
 		if path == filepath.Join(dir, ".punt-labs", "local") {
 			return filepath.SkipDir
 		}
-		if strings.HasSuffix(d.Name(), ".lock") && d.Name() != claudesettings.LockName {
+		if strings.HasSuffix(d.Name(), ".lock") {
 			t.Errorf("work-tree litter: %s", path)
 		}
 		return nil

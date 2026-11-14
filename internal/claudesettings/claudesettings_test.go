@@ -6,11 +6,24 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 var rules = map[string][]string{
 	"allow": {"Bash(t:*)", "mcp__t__*"},
 	"ask":   {"Bash(t admin:*)"},
+}
+
+// policy gives root a shared-local store outside the checkout, so a test can
+// assert that nothing but settings.json is written under root.
+func policy(t *testing.T, root string) layout.Policy {
+	t.Helper()
+	p, err := layout.NewRepository(t.TempDir(), root, layout.RecordBlame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
 
 func writeSettings(t *testing.T, root, content string) string {
@@ -36,7 +49,7 @@ func readString(t *testing.T, path string) string {
 
 func TestRegisterCreatesTheFile(t *testing.T) {
 	root := t.TempDir()
-	added, err := Register(root, rules)
+	added, err := Register(root, rules, policy(t, root))
 	if err != nil || !slices.Equal(added, append(rules["allow"], rules["ask"]...)) {
 		t.Fatalf("Register = %v, %v", added, err)
 	}
@@ -49,11 +62,11 @@ func TestRegisterCreatesTheFile(t *testing.T) {
 func TestRegisterKeepsOrderAndOtherEntriesAndIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	path := writeSettings(t, root, `{"z":1,"permissions":{"deny":["X"],"allow":["Bash(a && b)"]},"a":{"k":true}}`)
-	if _, err := Register(root, rules); err != nil {
+	if _, err := Register(root, rules, policy(t, root)); err != nil {
 		t.Fatal(err)
 	}
 	first := readString(t, path)
-	added, err := Register(root, rules)
+	added, err := Register(root, rules, policy(t, root))
 	if err != nil || len(added) != 0 {
 		t.Fatalf("second Register = %v, %v", added, err)
 	}
@@ -69,7 +82,7 @@ func TestRegisterKeepsOrderAndOtherEntriesAndIsIdempotent(t *testing.T) {
 func TestDeregisterRemovesExactlyTheOwnedRules(t *testing.T) {
 	root := t.TempDir()
 	path := writeSettings(t, root, `{"permissions":{"allow":["Read","Bash(t:*)","Bash(t:x)","mcp__t__*"],"ask":["Bash(t admin:*)","Bash(other:*)"]}}`)
-	removed, err := Deregister(root, rules)
+	removed, err := Deregister(root, rules, policy(t, root))
 	if err != nil || !slices.Equal(removed, append(rules["allow"], rules["ask"]...)) {
 		t.Fatalf("Deregister = %v, %v", removed, err)
 	}
@@ -81,7 +94,7 @@ func TestDeregisterRemovesExactlyTheOwnedRules(t *testing.T) {
 
 func TestDeregisterWithoutAFileCreatesNothing(t *testing.T) {
 	root := t.TempDir()
-	if removed, err := Deregister(root, rules); err != nil || removed != nil {
+	if removed, err := Deregister(root, rules, policy(t, root)); err != nil || removed != nil {
 		t.Fatalf("Deregister = %v, %v", removed, err)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".claude")); !errors.Is(err, os.ErrNotExist) {
@@ -92,7 +105,7 @@ func TestDeregisterWithoutAFileCreatesNothing(t *testing.T) {
 func TestDeregisterDoesNotCreateAnAbsentTier(t *testing.T) {
 	root := t.TempDir()
 	path := writeSettings(t, root, `{"permissions":{"allow":["Read"]}}`)
-	removed, err := Deregister(root, rules)
+	removed, err := Deregister(root, rules, policy(t, root))
 	if err != nil || len(removed) != 0 {
 		t.Fatalf("Deregister = %v, %v", removed, err)
 	}
@@ -120,7 +133,7 @@ func TestUnparseableFilesAreRefusedUntouched(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
 			path := writeSettings(t, root, content)
-			if _, err := Register(root, rules); !errors.Is(err, ErrRefused) {
+			if _, err := Register(root, rules, policy(t, root)); !errors.Is(err, ErrRefused) {
 				t.Fatalf("Register err = %v, want ErrRefused", err)
 			}
 			if readString(t, path) != content {
@@ -143,7 +156,7 @@ func TestSymlinksAreRefused(t *testing.T) {
 		if err := os.Symlink(target, settingsPath(root)); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Register(root, rules); !errors.Is(err, ErrRefused) {
+		if _, err := Register(root, rules, policy(t, root)); !errors.Is(err, ErrRefused) {
 			t.Fatalf("err = %v, want ErrRefused", err)
 		}
 		if readString(t, target) != "{}" {
@@ -159,7 +172,7 @@ func TestSymlinksAreRefused(t *testing.T) {
 		if err := os.Symlink(elsewhere, filepath.Join(root, ".claude")); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Register(root, rules); !errors.Is(err, ErrRefused) {
+		if _, err := Register(root, rules, policy(t, root)); !errors.Is(err, ErrRefused) {
 			t.Fatalf("err = %v, want ErrRefused", err)
 		}
 		if entries, _ := os.ReadDir(elsewhere); len(entries) != 0 {
@@ -171,7 +184,7 @@ func TestSymlinksAreRefused(t *testing.T) {
 func TestTheHomeDirectoryIsRefused(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("HOME", root)
-	if _, err := Register(root, rules); !errors.Is(err, ErrRefused) {
+	if _, err := Register(root, rules, policy(t, root)); !errors.Is(err, ErrRefused) {
 		t.Fatalf("err = %v, want ErrRefused", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".claude")); !errors.Is(err, os.ErrNotExist) {

@@ -2,10 +2,10 @@
 // repo's .claude/settings.json (punt-kit permissions.md §6,
 // tool-enable-disable §2.8). It never touches ~/.claude/settings.json.
 //
-// The file is shared with every other punt tool, so each read-modify-write
-// holds the tool-agnostic sibling lock .claude/.settings.json.punt-import.lock
-// (the name every punt CLI takes) and replaces the file atomically. Every key
-// and permission entry outside the owned rules is kept, in its original order.
+// Each read-modify-write holds the repository's shared-local settings lock and
+// stages its replacement in the shared-local temp dir (DES-079), so no lock or
+// temp file is left in the checkout. Every key and permission entry outside the
+// owned rules is kept, in its original order.
 package claudesettings
 
 import (
@@ -22,9 +22,6 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/layout"
 )
-
-// LockName is the shared sibling lock for .claude/settings.json.
-const LockName = ".settings.json.punt-import.lock"
 
 // ErrRefused marks a settings file left untouched because editing it is unsafe.
 var ErrRefused = errors.New("refusing to edit .claude/settings.json")
@@ -48,24 +45,24 @@ func Preflight(repoRoot string, rules map[string][]string) error {
 
 // Register appends each rule to its permissions tier, creating the file when
 // absent, and returns the rules it added.
-func Register(repoRoot string, rules map[string][]string) ([]string, error) {
-	return update(repoRoot, rules, true)
+func Register(repoRoot string, rules map[string][]string, p layout.Policy) ([]string, error) {
+	return update(repoRoot, rules, p, true)
 }
 
 // Deregister removes every rule from its permissions tier and returns the rules
 // it removed. A repo with no settings file is left as it is.
-func Deregister(repoRoot string, rules map[string][]string) ([]string, error) {
+func Deregister(repoRoot string, rules map[string][]string, p layout.Policy) ([]string, error) {
 	if _, err := os.Lstat(settingsPath(repoRoot)); errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
-	return update(repoRoot, rules, false)
+	return update(repoRoot, rules, p, false)
 }
 
 func settingsPath(repoRoot string) string {
 	return filepath.Join(repoRoot, ".claude", "settings.json")
 }
 
-func update(repoRoot string, rules map[string][]string, grant bool) ([]string, error) {
+func update(repoRoot string, rules map[string][]string, p layout.Policy, grant bool) ([]string, error) {
 	if err := refuseUnsafe(repoRoot); err != nil {
 		return nil, err
 	}
@@ -73,8 +70,15 @@ func update(repoRoot string, rules map[string][]string, grant bool) ([]string, e
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
 	}
+	lockPath, err := p.LockPath("claudesettings", path)
+	if err != nil {
+		return nil, err
+	}
+	if err := layout.EnsureLocalDir(p, filepath.Dir(lockPath)); err != nil {
+		return nil, fmt.Errorf("creating lock dir %s: %w", filepath.Dir(lockPath), err)
+	}
 	var changed []string
-	err := withLock(filepath.Join(filepath.Dir(path), LockName), func() error {
+	err = withLock(lockPath, func() error {
 		data, mode, err := read(path)
 		if err != nil {
 			return err
@@ -87,7 +91,7 @@ func update(repoRoot string, rules map[string][]string, grant bool) ([]string, e
 		if len(c) == 0 {
 			return nil
 		}
-		return writeAtomic(path, out, mode)
+		return writeAtomic(p, path, out, mode)
 	})
 	return changed, err
 }
@@ -307,11 +311,10 @@ func withLock(lockPath string, fn func() error) error {
 	return fn()
 }
 
-func writeAtomic(path string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, layout.DotTempPattern(filepath.Base(path)))
+func writeAtomic(p layout.Policy, path string, data []byte, mode os.FileMode) error {
+	tmp, err := layout.CreateLocalTemp(p, filepath.Base(path), "")
 	if err != nil {
-		return fmt.Errorf("creating temp file in %s: %w", dir, err)
+		return fmt.Errorf("creating staging file for %s: %w", path, err)
 	}
 	name := tmp.Name()
 	defer func() { _ = os.Remove(name) }()
@@ -319,14 +322,21 @@ func writeAtomic(path string, data []byte, mode os.FileMode) error {
 		_ = tmp.Close()
 		return fmt.Errorf("writing %s: %w", name, err)
 	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("setting mode on %s: %w", name, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("syncing %s: %w", name, errors.Join(err, tmp.Close()))
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("closing %s: %w", name, err)
 	}
-	if err := os.Chmod(name, mode); err != nil {
-		return fmt.Errorf("setting mode on %s: %w", name, err)
-	}
 	if err := os.Rename(name, path); err != nil {
 		return fmt.Errorf("renaming %s to %s: %w", name, path, err)
+	}
+	if err := layout.SyncRepositoryDestination(p, path); err != nil {
+		return &layout.InstallDurabilityError{Path: path, Err: err}
 	}
 	return nil
 }

@@ -126,8 +126,6 @@ var Table = []Entry{
 	{Pattern: ".punt-labs/local/ethos/missions/*/reflection-intents/*.yaml", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/missions/*/correction-intent.yaml", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/trace/missions/*/delegations/*/prompt-consent.yaml", Class: Never},
-	// The sibling lock every punt-labs tool takes to edit .claude/settings.json.
-	{Pattern: ".claude/.settings.json.punt-import.lock", Class: Never},
 	// The original bytes of a retired chunk the redaction check withheld from
 	// the tracked tree: <stem>.<hash>.corrupt, kept in the machine-local zone.
 	{Pattern: ".punt-labs/local/ethos/quarantine/*.corrupt", Class: Never},
