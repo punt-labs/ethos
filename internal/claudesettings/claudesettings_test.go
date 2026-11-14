@@ -191,3 +191,29 @@ func TestTheHomeDirectoryIsRefused(t *testing.T) {
 		t.Error(".claude/ created in the home directory")
 	}
 }
+
+func TestARetryConfirmsAFailedDirectorySync(t *testing.T) {
+	root := t.TempDir()
+	p := policy(t, root)
+	injected := errors.New("injected directory sync failure")
+	calls := 0
+	syncDestination = func(layout.Policy, string) error {
+		calls++
+		if calls == 1 {
+			return injected
+		}
+		return nil
+	}
+	t.Cleanup(func() { syncDestination = layout.SyncRepositoryDestination })
+	var applied *layout.InstallDurabilityError
+	if _, err := Register(root, rules, p); !errors.As(err, &applied) {
+		t.Fatalf("Register err = %v, want InstallDurabilityError", err)
+	}
+	added, err := Register(root, rules, p)
+	if err != nil || added != nil {
+		t.Fatalf("retry = %v, %v; want nothing added, no error", added, err)
+	}
+	if calls != 2 {
+		t.Errorf("retry made %d directory syncs in total, want 2", calls)
+	}
+}

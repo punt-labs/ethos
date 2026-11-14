@@ -89,7 +89,7 @@ func update(repoRoot string, rules map[string][]string, p layout.Policy, grant b
 		}
 		changed = c
 		if len(c) == 0 {
-			return nil
+			return confirmUnchanged(p, path, data)
 		}
 		return writeAtomic(p, path, out, mode)
 	})
@@ -335,8 +335,22 @@ func writeAtomic(p layout.Policy, path string, data []byte, mode os.FileMode) er
 	if err := os.Rename(name, path); err != nil {
 		return fmt.Errorf("renaming %s to %s: %w", name, path, err)
 	}
-	if err := layout.SyncRepositoryDestination(p, path); err != nil {
+	if err := syncDestination(p, path); err != nil {
 		return &layout.InstallDurabilityError{Path: path, Err: err}
 	}
 	return nil
 }
+
+// confirmUnchanged re-syncs an existing file a call leaves as is, under the same
+// lock: matching bytes do not prove an earlier rename's directory sync completed.
+func confirmUnchanged(p layout.Policy, path string, data []byte) error {
+	if data == nil {
+		return nil
+	}
+	if err := syncDestination(p, path); err != nil {
+		return &layout.InstallDurabilityError{Path: path, Err: err}
+	}
+	return nil
+}
+
+var syncDestination = layout.SyncRepositoryDestination
