@@ -93,8 +93,15 @@ func TestEnableDisableRoundTripsPermissionRules(t *testing.T) {
 	if err := os.WriteFile(settings, []byte(`{"permissions":{"allow":["Read"]}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Enable(dir); err != nil {
+	enabled, err := Enable(dir)
+	if err != nil {
 		t.Fatalf("Enable: %v", err)
+	}
+	if !slices.ContainsFunc(enabled.Steps, func(s StepResult) bool {
+		return s.Step == "permissions" && strings.Contains(s.Detail, "allow: Bash(ethos:*)") &&
+			strings.Contains(s.Detail, "; ask: Bash(ethos -*)")
+	}) {
+		t.Errorf("enable report does not separate allow and ask rules: %+v", enabled.Steps)
 	}
 	if got, want := permissionList(t, settings, "allow"), append([]string{"Read"}, PermissionRules["allow"]...); !slices.Equal(got, want) {
 		t.Errorf("after enable allow = %v, want %v", got, want)

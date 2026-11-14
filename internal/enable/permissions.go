@@ -12,9 +12,9 @@ var PermissionRules = map[string][]string{
 	"ask": {
 		"Bash(ethos -*)",
 		"Bash(ethos setup:*)",
-		"Bash(ethos seed:*)",
+		"Bash(ethos seed:*)", // msgguard: allow permission rule value, never printed
 		"Bash(ethos uninstall:*)",
-		"Bash(ethos enable:*)",
+		"Bash(ethos enable:*)", // msgguard: allow permission rule value, never printed
 		"Bash(ethos disable:*)",
 		"Bash(ethos serve:*)",
 		"Bash(ethos hook:*)",
@@ -52,7 +52,7 @@ var PermissionRules = map[string][]string{
 		"Skill(ethos:team)",
 		"Skill(ethos:writing-style)",
 		"Skill(ethos:baseline-ops)",
-		"Skill(ethos:create-from-project)",
+		"Skill(ethos:create-from-project)", // msgguard: allow permission rule value, never printed
 		"Skill(ethos:gstack-debug)",
 		"Skill(ethos:gstack-design)",
 		"Skill(ethos:gstack-plan)",

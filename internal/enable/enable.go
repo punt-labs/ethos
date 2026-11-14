@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
@@ -332,7 +333,22 @@ func permissionStep(rep *Report, rules []string, verb, none string) {
 		rep.step("permissions", "already", none)
 		return
 	}
-	rep.step("permissions", "done", verb+strings.Join(rules, ", ")+" in .claude/settings.json")
+	var allow, ask []string
+	for _, rule := range rules {
+		if slices.Contains(PermissionRules["allow"], rule) {
+			allow = append(allow, rule)
+		} else {
+			ask = append(ask, rule)
+		}
+	}
+	var parts []string
+	if len(allow) > 0 {
+		parts = append(parts, "allow: "+strings.Join(allow, ", "))
+	}
+	if len(ask) > 0 {
+		parts = append(parts, "ask: "+strings.Join(ask, ", "))
+	}
+	rep.step("permissions", "done", verb+strings.Join(parts, "; ")+" in .claude/settings.json")
 }
 
 func writeMarker(repoRoot string) error {
