@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `ethos enable` now owns the repo-local Claude permission boundary. It broadly
+  allows the production CLI, MCP server, and skill namespace while exact
+  `permissions.ask` rules keep state-changing operations prompt-gated.
+  `ethos disable` removes the same current values; neither command touches
+  global settings or grants `ethos-dev` rules (PL-1036, punt-kit#471).
 - Every ethos skill now ships through the plugin (`plugin/skills/<name>/`) and
   resolves under the plugin namespace, so the Claude Code picker shows them as
   `ethos:baseline-ops` and `ethos:gstack-*` with clear names and help text

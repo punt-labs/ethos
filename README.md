@@ -288,7 +288,9 @@ covered. Override store resolution with validated `ETHOS_REPO_ROOT`.
 which deposits the vendored agent guide, writes the `enabled` marker,
 adds the `@.punt-labs/ethos/CLAUDE.md` import to the repo `CLAUDE.md`,
 and chains `ETHOS DES-058 SEAL` + `ETHOS DES-054 TRAILER` sections into
-the `pre-commit` and `commit-msg` hooks. `ethos disable` reverses it
+the `pre-commit` and `commit-msg` hooks. It broadly allows the ethos CLI,
+MCP server, and skills in the repo's `.claude/settings.json`, with exact
+`ask` rules for state-changing operations. `ethos disable` reverses it
 non-destructively — leaves the vendored guide, config, and audit data
 on disk, dormant. Both idempotent. `enable` and `setup` stay separate.
 State table, hook-chaining mechanics, `ethos doctor`'s marker vs

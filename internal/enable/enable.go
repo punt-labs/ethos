@@ -15,10 +15,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/claudemd"
+	"github.com/punt-labs/ethos/v4/internal/claudesettings"
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/githook"
 	"github.com/punt-labs/ethos/v4/internal/layout"
@@ -132,6 +134,9 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO) (*Report, error) {
 	if _, err := resolve.EnabledMarker(repoRoot); err != nil {
 		return rep, fmt.Errorf("enable: %w; marker left unchanged", err)
 	}
+	if err := claudesettings.Preflight(repoRoot, PermissionRules); err != nil {
+		return rep, fmt.Errorf("checking .claude/settings.json: %w", err)
+	}
 
 	// Preflight both hosts before any ignore mutation (or deposit). Old rules
 	// may be the only protection for private overlays or another tool's data;
@@ -227,6 +232,12 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO) (*Report, error) {
 		rep.step("import", "already", CanonicalImport+" already present")
 	}
 
+	granted, err := claudesettings.Register(repoRoot, PermissionRules, p)
+	if err != nil {
+		return rep, fmt.Errorf("adding ethos permission rules to .claude/settings.json: %w", err)
+	}
+	permissionStep(rep, granted, "added ", "all rules already present")
+
 	hint, warning := configStatus(storeRoot)
 	if warning != "" {
 		rep.Warnings = append(rep.Warnings, warning)
@@ -277,6 +288,13 @@ func DisableTo(repoRoot, storeRoot string, force bool) (*Report, error) {
 		}
 	}
 
+	// Settings first: a refusal aborts before anything else changes.
+	revoked, err := claudesettings.Deregister(repoRoot, PermissionRules, p)
+	if err != nil {
+		return rep, fmt.Errorf("removing ethos permission rules from .claude/settings.json: %w", err)
+	}
+	permissionStep(rep, revoked, "removed ", "no ethos rules present")
+
 	removed, err := claudemd.Deregister(filepath.Join(repoRoot, "CLAUDE.md"), CanonicalImport, claudemd.WithRepository(p))
 	if err != nil {
 		return rep, fmt.Errorf("removing import line: %w", err)
@@ -307,6 +325,30 @@ func DisableTo(repoRoot, storeRoot string, force bool) (*Report, error) {
 
 	rep.step("vendored", "kept", "guide left dormant at "+guideRel)
 	return rep, nil
+}
+
+// permissionStep records the .claude/settings.json outcome, naming each rule.
+func permissionStep(rep *Report, rules []string, verb, none string) {
+	if len(rules) == 0 {
+		rep.step("permissions", "already", none)
+		return
+	}
+	var allow, ask []string
+	for _, rule := range rules {
+		if slices.Contains(PermissionRules["allow"], rule) {
+			allow = append(allow, rule)
+		} else {
+			ask = append(ask, rule)
+		}
+	}
+	var parts []string
+	if len(allow) > 0 {
+		parts = append(parts, "allow: "+strings.Join(allow, ", "))
+	}
+	if len(ask) > 0 {
+		parts = append(parts, "ask: "+strings.Join(ask, ", "))
+	}
+	rep.step("permissions", "done", verb+strings.Join(parts, "; ")+" in .claude/settings.json")
 }
 
 func writeMarker(repoRoot string) error {

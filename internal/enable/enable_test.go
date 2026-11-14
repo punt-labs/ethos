@@ -382,8 +382,8 @@ func TestEnableDisableLeavesNoWorkTreeLitter(t *testing.T) {
 	if _, err := Disable(dir, false); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
-	// Repository locks are retained in the canonical shared-local zone, never
-	// beside host/source files. Ignore status is checked separately below.
+	// Repository locks are retained in their canonical ignored zones. The
+	// shared Claude settings lock is tool-agnostic and intentionally persists.
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err

@@ -109,9 +109,9 @@ never touch Config, Local, or seal-managed data.
 | `<repo>/CLAUDE.md` | host file | user | One import line added/removed (§2.4) |
 | git hooks dir `pre-commit`, `commit-msg` | outside subtree | shared | Marker section chained/unchained (§2.8, DES-058/DES-054) |
 
-`.claude/settings.json` is deliberately **absent** from this table: ethos
-registers no repo-scoped settings entry today, so `enable`/`disable` do not
-touch it. §2.8 remains available as future work — see "Deferred: `.claude/settings.json`" below.
+`<repo>/.claude/settings.json` is a shared host file: `enable` appends ethos's
+rules to `permissions.allow` and `permissions.ask`; `disable` removes exactly
+those values (§2.8) — see "`.claude/settings.json` (§2.8)" below.
 
 **The carve-out is enforced by the manifest, not by good intentions.** Per
 §7, `enable` writes **exactly** the vendored-zone-manifest set
@@ -176,8 +176,9 @@ Steps, in order:
    `commit-msg`, carrying all v4.1.1 protections (below). Both embedded
    scripts carry the §2.7 marker gate (see "The §2.7 marker gate" below).
 
-Ethos registers no `.claude/settings.json` entry, so `enable` has no §2.8
-step (see "Deferred: `.claude/settings.json`"). Exit 0 on success or clean
+After the import line, `enable` adds ethos's permission rules to
+`.claude/settings.json`
+(see "`.claude/settings.json` (§2.8)"). Exit 0 on success or clean
 re-run. `--json` emits the per-step result.
 
 #### The §2.4 import-line write contract (ported from vox `GlobalClaudeImports`)
@@ -535,22 +536,31 @@ From §2.11 (and punt-labs-dir §8, keyed by the marker):
   `config.local.yaml` (ignored) and `CLAUDE.md`, `config.yaml`,
   `locales/en.yaml` (tracked).
 
-## Deferred: `.claude/settings.json` (§2.8)
+## `.claude/settings.json` (§2.8)
 
-§2.8 **permits** `enable` to register additive `.claude/settings.json`
-entries ("may register"), it does not require it. Ethos has no repo-scoped
-settings entry today, so this design ships **no** settings.json write path
-— not even an empty-set merge (REC-1). An empty merge/remove path is dead
-code that would still need the exclusive lock, the deterministic-set
-computation, the order-preserving merge, and the exact-value-match removal,
-all tested, to register zero entries.
+Running `ethos enable` is the user's consent to use ethos in this repo
+(punt-kit `permissions.md` §6). It adds `Bash(ethos:*)`,
+`mcp__plugin_ethos_self__*`, and `Skill(ethos:*)` to `permissions.allow`.
+Exact rules in `permissions.ask` keep state-changing CLI groups, MCP tools, and
+skills prompt-gated even though the broad allow also matches. `disable` removes
+exactly the current allow and ask values.
+`~/.claude/settings.json` is never edited, and no `ethos-dev` rule is granted:
+the dev plugin only exists in a maintainer's checkout.
 
-**Rule for adding it later:** the settings.json path is added only when the
-first concrete repo-scoped entry exists, and it ships with that entry —
-never speculatively. When it lands it must take the same exclusive lock as
-the §2.4 import-line write (§2.8 extends the lock requirement to every
-shared host-file mutation) and use the permissions.md §6 idempotent
-merge / exact-value-match removal.
+`internal/claudesettings` owns the write:
+
+- **Shared-local lock.** Every read-modify-write holds a lock under
+  `.punt-labs/local/ethos/locks/`, as the `CLAUDE.md` import does (R2), so no
+  lock file is left in the checkout. Ethos serializes against itself, not
+  against other punt tools' sibling `.settings.json.punt-import.lock`.
+- **Atomic, order-preserving.** Staged in the shared-local temp dir, synced,
+  then renamed over the file. Every other key and permission entry keeps its
+  value and position.
+- **Refusals.** A malformed or non-UTF-8 file, a non-list `allow` or `ask`, a
+  symlinked `settings.json` or `.claude/`, and a repo rooted at `$HOME` are
+  refused and left untouched; `enable` then fails before the hooks are
+  chained.
+- **No-op disable.** A repo with no settings file is left without one.
 
 ## Migration (§2.12)
 
@@ -741,7 +751,8 @@ final design state implementation builds against. No open questions remain.
    sibling worktree is still enabled (shared hooks dir), naming those
    worktrees; `--force` overrides. Folded into disable step 1.
 7. **settings.json plumbing dropped** (REC-1): no write path until a
-   concrete entry exists (see "Deferred: `.claude/settings.json`").
+   concrete entry exists. Superseded once ethos's allow rules became that
+   entry (see "`.claude/settings.json` (§2.8)").
 8. **Marker-last invariant** (NIT-3): the marker is written after the
    vendored deposit completes, so a marker present implies a complete
    deposit. Folded into `enable` step 4.

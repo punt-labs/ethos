@@ -190,6 +190,7 @@ var Table = []Entry{
 	{Pattern: ".punt-labs/ethos/pipelines/*.yaml", Class: Source},
 	{Pattern: ".punt-labs/ethos-bundles/**", Class: Source},
 	{Pattern: ".claude/agents/*.md", Class: Source},
+	{Pattern: ".claude/settings.json", Class: Source}, // ethos enable permission rules
 	{Pattern: ".gitignore", Class: Source},
 	{Pattern: ".gitmodules", Class: Source}, // written by git submodule add (team add-bundle)
 	{Pattern: "CLAUDE.md", Class: Source},
