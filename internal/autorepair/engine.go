@@ -280,11 +280,7 @@ func ensure(ctx context.Context, roots resolve.Located, global string, o options
 		}
 		if t.prior != nil && only != nil {
 			s.Items += t.prior.Items
-			for _, rs := range t.prior.Residual {
-				if !slices.Contains(only, rs.Step) {
-					s.Residual = append(s.Residual, rs)
-				}
-			}
+			s.Residual = mergePrior(o, t, g, r, only, s.Residual)
 		}
 		if werr := WriteStamp(t.path, s, t.ensure); werr != nil {
 			log.Logf("engine", "write-stamp", []string{t.path}, werr)
@@ -646,12 +642,36 @@ func residualTarget(rs Residual, served []*target, r *target) *target {
 		}
 		return nil
 	}
+	// A recheck can serve both stamps; the stamp that already held this very
+	// condition keeps it rather than it moving to the other store.
+	for _, t := range served {
+		if t.prior != nil && slices.ContainsFunc(t.prior.Residual, func(p Residual) bool { return p.Step == rs.Step && p.ID == rs.ID }) {
+			return t
+		}
+	}
 	for _, t := range served {
 		if t == r {
 			return t
 		}
 	}
 	return served[0]
+}
+
+// mergePrior is the residuals a recheck of t writes: what the re-run steps
+// found, then each earlier residual of t unless t was actually rechecked for
+// its step (the step is registered here, was run, and its scope serves t). A
+// step that did not run, is not carried by this binary, or ran only for the
+// other store still owns its residual.
+func mergePrior(o options, t *target, g, r *target, only []string, found []Residual) []Residual {
+	out := slices.Clone(found)
+	for _, p := range t.prior.Residual {
+		i := slices.IndexFunc(o.steps, func(s Step) bool { return s.Name == p.Step })
+		if i >= 0 && slices.Contains(only, p.Step) && slices.Contains(serves(o.steps[i].Scope, g, r), t) {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // recheckSteps, when o.recheck is set and every target that needs a pass is a
@@ -675,12 +695,19 @@ func recheckSteps(o options, targets []*target) []string {
 			continue
 		}
 		s, err := ReadStamp(t.path)
-		if err != nil || !s.Current() {
+		// A stamp from a newer binary is not this binary's to rewrite.
+		if err != nil || !s.Current() || s.Version > LayoutVersion {
 			continue
 		}
 		var own []string
 		for _, rs := range s.Residual {
-			if rs.EffectiveClass() != ClassSettled && !slices.Contains(own, rs.Step) {
+			if rs.EffectiveClass() == ClassSettled && !rs.needsReevaluation() {
+				continue
+			}
+			// Only a step this binary carries can be re-run; the others keep
+			// their residual as it is.
+			carried := slices.ContainsFunc(o.steps, func(st Step) bool { return st.Name == rs.Step })
+			if carried && !slices.Contains(own, rs.Step) {
 				own = append(own, rs.Step)
 			}
 		}

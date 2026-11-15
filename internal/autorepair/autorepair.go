@@ -135,6 +135,13 @@ func (r Residual) EffectiveClass() Class {
 	return ClassActionable
 }
 
+// needsReevaluation is true for an unclassed incomplete-history residual: older
+// binaries wrote that reason for a damaged reflections file too, so it is not
+// trusted as settled until round-decisions has run once more and classed it.
+func (r Residual) needsReevaluation() bool {
+	return r.Class == "" && r.Step == "round-decisions" && r.Reason == mission.LegacyIncomplete.String()+fencedSuffix
+}
+
 // seeLogAction is the action for a condition whose cause only the repair log
 // names.
 const seeLogAction = "read the cause in ~/.punt-labs/ethos/logs/repair.log, fix it, then run ethos doctor"

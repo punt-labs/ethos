@@ -104,9 +104,13 @@ func runSessions(ctx context.Context, env Env) (Outcome, error) {
 		env.Log.Logf(stepSessions, "purge-roster", []string{id}, nil)
 	}
 	for _, id := range rep.Refused {
-		out.Residuals = append(out.Residuals, actionableResidual(stepSessions, id,
+		// Rosters live in the global store, so the residual belongs to its stamp
+		// whichever store a recheck happens to serve.
+		rs := actionableResidual(stepSessions, id,
 			"the roster could not be read or proven free of unsealed audit lines; left in place",
-			"end or seal session "+id+" (ethos audit seal), then run ethos doctor"))
+			"end or seal session "+id+" (ethos audit seal), then run ethos doctor")
+		rs.Scope = ScopeGlobal
+		out.Residuals = append(out.Residuals, rs)
 	}
 	if ctx.Err() != nil {
 		out.Deferred = true
