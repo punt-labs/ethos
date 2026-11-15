@@ -134,6 +134,11 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO) (*Report, error) {
 	if _, err := resolve.EnabledMarker(repoRoot); err != nil {
 		return rep, fmt.Errorf("enable: %w; marker left unchanged", err)
 	}
+	// A CLAUDE.md ending in an unclosed fence would swallow the import, so it
+	// is refused before the marker, guide, hooks, or any permission rule.
+	if err := claudemd.Preflight(filepath.Join(repoRoot, "CLAUDE.md"), CanonicalImport); err != nil {
+		return rep, fmt.Errorf("checking CLAUDE.md: %w", err)
+	}
 	if err := claudesettings.Preflight(repoRoot, PermissionRules); err != nil {
 		return rep, fmt.Errorf("checking .claude/settings.json: %w", err)
 	}

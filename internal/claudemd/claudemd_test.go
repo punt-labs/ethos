@@ -1,6 +1,7 @@
 package claudemd
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -156,13 +157,16 @@ func TestRegisterSkipsCodeBlocks(t *testing.T) {
 }
 
 func TestRegisterErrorsOnOpenFence(t *testing.T) {
-	// A host ending inside an unterminated fence is malformed: Register must
-	// error and write nothing rather than append inside the open fence.
+	// A host ending inside an unclosed fence would swallow an appended import:
+	// Register must error and write nothing rather than append inside it.
 	body := "text\n```sh\necho hi\n"
 	p := fixture(t, "CLAUDE.md", body)
 	wrote, err := Register(p, canonical)
-	if err == nil {
-		t.Fatal("Register accepted a host ending inside an open fence")
+	if !errors.Is(err, ErrUnclosedFence) {
+		t.Fatalf("Register: err = %v, want ErrUnclosedFence", err)
+	}
+	if err := Preflight(p, canonical); !errors.Is(err, ErrUnclosedFence) {
+		t.Errorf("Preflight: err = %v, want ErrUnclosedFence", err)
 	}
 	if wrote {
 		t.Error("Register reported a write despite the error")
@@ -172,21 +176,64 @@ func TestRegisterErrorsOnOpenFence(t *testing.T) {
 	}
 }
 
-func TestDeregisterErrorsOnOpenFence(t *testing.T) {
-	// A real import line sitting after an unterminated fence opener would be
-	// classified fenced. Deregister must error and write nothing rather than
-	// report "already absent" and leave the line behind (D1).
+func TestAnImportAfterAnOpenFenceIsInert(t *testing.T) {
+	// Claude Code runs an unclosed fence to EOF, so an import after it never
+	// loads: Deregister leaves the inert copy alone and Register refuses.
 	body := "text\n```sh\n" + canonical + "\n"
 	p := fixture(t, "CLAUDE.md", body)
 	wrote, err := Deregister(p, canonical)
-	if err == nil {
-		t.Fatal("Deregister accepted a host ending inside an open fence")
+	if err != nil || wrote {
+		t.Fatalf("Deregister: wrote=%v err=%v, want a no-op", wrote, err)
 	}
-	if wrote {
-		t.Error("Deregister reported a write despite the error")
+	if _, err := Register(p, canonical); !errors.Is(err, ErrUnclosedFence) {
+		t.Errorf("Register: err = %v, want ErrUnclosedFence", err)
 	}
 	if got := read(t, p); got != body {
-		t.Errorf("file changed on error: got %q, want %q", got, body)
+		t.Errorf("file changed: got %q, want %q", got, body)
+	}
+}
+
+func TestAnImportAboveAnOpenFenceStaysLive(t *testing.T) {
+	body := canonical + "\n```text\nnever closed\n"
+	p := fixture(t, "CLAUDE.md", body)
+	if err := Preflight(p, canonical); err != nil {
+		t.Fatalf("Preflight: %v", err)
+	}
+	wrote, err := Register(p, canonical)
+	if err != nil || wrote {
+		t.Fatalf("Register: wrote=%v err=%v, want a no-op", wrote, err)
+	}
+	wrote, err = Deregister(p, canonical)
+	if err != nil || !wrote {
+		t.Fatalf("Deregister: wrote=%v err=%v, want a removal", wrote, err)
+	}
+	if got, want := read(t, p), "```text\nnever closed\n"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestFencesCloseOnlyOnAMatchingDelimiter(t *testing.T) {
+	// A mismatched marker, a shorter run, or a run with trailing text does not
+	// close the block, so the import inside stays fenced.
+	for _, body := range []string{
+		"````\n```\n" + canonical + "\n````\n",
+		"```\n~~~\n" + canonical + "\n```\n",
+		"```\n``` text\n" + canonical + "\n```\n",
+	} {
+		if got := matchIndices([]byte(body), canonical); len(got) != 0 {
+			t.Errorf("matchIndices(%q) = %v, want none", body, got)
+		}
+	}
+}
+
+func TestAnInlineTripleBacktickSpanIsNotAFence(t *testing.T) {
+	body := "```x``` is inline code\n" + canonical + "\n"
+	if got := matchIndices([]byte(body), canonical); len(got) != 1 {
+		t.Errorf("matchIndices = %v, want the import matched", got)
+	}
+	tilde := "~~~ `lang`\n" + canonical + "\n~~~\n"
+	if got := matchIndices([]byte(tilde), canonical); len(got) != 0 {
+		t.Errorf("tilde fence with a backtick info string: matched %v", got)
 	}
 }
 

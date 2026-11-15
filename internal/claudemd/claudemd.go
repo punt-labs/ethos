@@ -22,6 +22,38 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/textscan"
 )
 
+// ErrUnclosedFence reports a CLAUDE.md that ends inside a code fence that
+// never closes. Claude Code's Markdown lexer runs such a fence to EOF, so an
+// import appended below it would never load.
+var ErrUnclosedFence = errors.New("ends inside an unclosed code fence; close it first")
+
+// Preflight returns an error wrapping ErrUnclosedFence when Register would
+// refuse to append line to the CLAUDE.md at path, so enable can refuse before
+// it changes anything else. Register repeats the check under the lock.
+func Preflight(path, line string) error {
+	real, _, err := resolveTarget(path)
+	if err != nil {
+		return err
+	}
+	data, err := readIfExists(real)
+	if err != nil {
+		return err
+	}
+	if len(matchIndices(data, line)) > 0 {
+		return nil
+	}
+	return appendable(real, data)
+}
+
+// appendable returns an error wrapping ErrUnclosedFence when a line appended
+// to data would sit inside a fence that never closes.
+func appendable(real string, data []byte) error {
+	if _, open := scanTopLevel(textscan.SplitKeepEnds(data)); open {
+		return fmt.Errorf("%s %w; the import line was not added", real, ErrUnclosedFence)
+	}
+	return nil
+}
+
 // Register appends line to the CLAUDE.md at path when no top-level,
 // terminator-insensitive match is already present, and returns whether it
 // wrote. A missing file is created (mode 0644). Every byte outside the
@@ -30,6 +62,8 @@ import (
 // *layout.InstallDurabilityError: the edit applied, but durability is unconfirmed.
 // A matching-file retry also confirms directory durability; it returns false
 // (no new write), with the same error type if confirmation still fails.
+// A host ending inside an unclosed fence, with no live import above it, is
+// refused with an error wrapping ErrUnclosedFence.
 func Register(path, line string, opts ...Option) (bool, error) {
 	policies := repositoryPolicies(opts)
 	real, mode, err := resolveTarget(path)
@@ -42,16 +76,11 @@ func Register(path, line string, opts ...Option) (bool, error) {
 		if err != nil {
 			return err
 		}
-		// A host ending inside an unterminated fence is malformed: an appended
-		// import would land inside the open fence (dead — Claude Code ignores
-		// fenced imports) and never match on re-run, so enable would append
-		// duplicates forever. Error rather than repositioning the user's
-		// content.
-		if fenceOpenAtEOF(data) {
-			return fmt.Errorf("%s ends inside an unterminated code fence; the import line was not added", real)
-		}
 		if len(matchIndices(data, line)) > 0 {
 			return confirmUnchangedHost(real, policies...)
+		}
+		if err := appendable(real, data); err != nil {
+			return err
 		}
 		eol := textscan.DetectEOL(data)
 		out := make([]byte, 0, len(data)+len(line)+2*len(eol))
@@ -90,14 +119,9 @@ func Deregister(path, line string, opts ...Option) (bool, error) {
 		if err != nil {
 			return err
 		}
-		// A host ending inside an unterminated fence is malformed: the import
-		// line would be classified fenced and go unmatched, so Deregister would
-		// report "already absent" and leave the line behind — breaking the
-		// enabled⟺import biconditional (§2.11). Error rather than half-remove,
-		// symmetric with Register.
-		if fenceOpenAtEOF(data) {
-			return fmt.Errorf("%s ends inside an unterminated code fence; the import line was not removed", real)
-		}
+		// An import after an unclosed fence is inert (Claude Code runs the fence
+		// to EOF), so it is not matched and is left alone; one above the open
+		// fence is live and is removed.
 		idx := matchIndices(data, line)
 		if len(idx) == 0 {
 			return confirmUnchangedHost(real, policies...)
@@ -305,39 +329,76 @@ func confirmUnchangedHost(real string, policies ...layout.Policy) error {
 // (not inside a fenced or indented code block).
 func matchIndices(data []byte, line string) []int {
 	lines := textscan.SplitKeepEnds(data)
+	top, _ := scanTopLevel(lines)
 	var out []int
-	fenceOpen := false
 	for i, raw := range lines {
-		content := textscan.StripTerminator(raw)
-		if isFence(content) {
-			fenceOpen = !fenceOpen
-			continue
-		}
-		if fenceOpen || isIndentedCode(content) {
-			continue
-		}
 		// Tolerate trailing whitespace on the host line: a hand-edited import
 		// with trailing spaces/tabs must still match, or enable appends a
 		// duplicate beside it (audit AC4) and disable leaves an ill-formed
 		// line behind (AC6). The written line stays exactly canonical.
-		if strings.TrimRight(content, " \t") == line {
+		if top[i] && strings.TrimRight(textscan.StripTerminator(raw), " \t") == line {
 			out = append(out, i)
 		}
 	}
 	return out
 }
 
-// fenceOpenAtEOF reports whether data ends with an open (unterminated) code
-// fence — an odd number of fence delimiters. Such a host is malformed: an
-// appended top-level import would fall inside the open fence.
-func fenceOpenAtEOF(data []byte) bool {
-	open := false
-	for _, raw := range textscan.SplitKeepEnds(data) {
-		if isFence(textscan.StripTerminator(raw)) {
-			open = !open
+// scanTopLevel flags each line true when it sits at the markdown top level,
+// and reports whether the document ends inside a fence that never closes.
+// Fences are balanced pairs (§2.4): a run of N backticks or tildes opens a
+// block that only a later same-marker run of at least N, with nothing but
+// whitespace after it, closes; blocks never nest. Delimiter lines are never
+// top level. An unclosed opener runs to EOF, as in Claude Code's lexer, so
+// every line after it is fenced.
+func scanTopLevel(lines []string) (top []bool, open bool) {
+	top = make([]bool, len(lines))
+	var marker byte
+	var run int
+	for i, raw := range lines {
+		content := textscan.StripTerminator(raw)
+		m, n, info, ok := parseFence(content)
+		switch {
+		case open:
+			if ok && m == marker && n >= run && strings.TrimSpace(info) == "" {
+				open = false
+			}
+		case ok:
+			open, marker, run = true, m, n
+		default:
+			top[i] = !isIndentedCode(content)
 		}
 	}
-	return open
+	return top, open
+}
+
+// parseFence reports whether content is a fence delimiter and returns its
+// marker, run length, and the text after the run. After at most three leading
+// spaces (and no tab) it begins with three or more backticks or tildes. Per
+// tool-enable-disable §2.4, a line indented with a tab or four or more spaces
+// is an INDENTED CODE line, not a fence. A backtick fence's info string cannot
+// contain a backtick (CommonMark), so a line such as ```x``` is an inline code
+// span, not a fence.
+func parseFence(content string) (marker byte, run int, info string, ok bool) {
+	spaces := 0
+	for spaces < len(content) && content[spaces] == ' ' {
+		spaces++
+	}
+	if spaces > 3 {
+		return 0, 0, "", false // four or more leading spaces: indented code
+	}
+	t := content[spaces:]
+	if t == "" || (t[0] != '`' && t[0] != '~') {
+		return 0, 0, "", false // includes a tab in the indent: indented code
+	}
+	marker = t[0]
+	for run < len(t) && t[run] == marker {
+		run++
+	}
+	info = t[run:]
+	if run < 3 || (marker == '`' && strings.ContainsRune(info, '`')) {
+		return 0, 0, "", false
+	}
+	return marker, run, info, true
 }
 
 // endsWithTerminator reports whether data's last byte is a line terminator.
@@ -349,25 +410,10 @@ func endsWithTerminator(data []byte) bool {
 	return last == '\n' || last == '\r'
 }
 
-// isFence reports whether content is a fence delimiter: after at most three
-// leading spaces (and no tab) it begins with three or more backticks or
-// tildes. Per tool-enable-disable §2.4, a line indented with a tab or four or
-// more spaces is an INDENTED CODE line, not a fence — so an indented ``` must
-// not be misread as opening a real fence (which would false-refuse a host
-// ending on such a line). Indentation precedence therefore lives here.
+// isFence reports whether content is a fence delimiter (see parseFence).
 func isFence(content string) bool {
-	spaces := 0
-	for spaces < len(content) && content[spaces] == ' ' {
-		spaces++
-	}
-	if spaces > 3 {
-		return false // four or more leading spaces: indented code
-	}
-	t := content[spaces:]
-	if strings.HasPrefix(t, "\t") {
-		return false // a tab in the indent: indented code
-	}
-	return strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~")
+	_, _, _, ok := parseFence(content)
+	return ok
 }
 
 // isIndentedCode reports whether content begins an indented code block: it

@@ -2,12 +2,14 @@ package enable
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/claudemd"
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/punt-labs/ethos/v4/plugin/hooks"
 )
@@ -733,5 +735,29 @@ func TestDisableForceOnDegradedLookup(t *testing.T) {
 				t.Errorf("no hook:* step in %+v", rep.Steps)
 			}
 		})
+	}
+}
+
+// TestEnableRefusesAnOpenFenceBeforeChangingAnything: Claude Code runs an
+// unclosed CLAUDE.md fence to EOF, so an appended import would never load.
+// Enable must refuse before the marker, the guide, or any permission rule.
+func TestEnableRefusesAnOpenFenceBeforeChangingAnything(t *testing.T) {
+	repo := gitRepo(t)
+	host := filepath.Join(repo, "CLAUDE.md")
+	body := "# Project\n\n```text\nnever closed\n"
+	if err := os.WriteFile(host, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Enable(repo)
+	if !errors.Is(err, claudemd.ErrUnclosedFence) {
+		t.Fatalf("Enable: err = %v, want claudemd.ErrUnclosedFence", err)
+	}
+	for _, rel := range []string{markerRel, ".claude/settings.json", guideRel} {
+		if _, statErr := os.Stat(filepath.Join(repo, rel)); statErr == nil {
+			t.Errorf("Enable wrote %s before refusing", rel)
+		}
+	}
+	if got, _ := os.ReadFile(host); string(got) != body {
+		t.Errorf("CLAUDE.md changed: got %q, want %q", got, body)
 	}
 }
