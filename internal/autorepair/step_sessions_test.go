@@ -43,11 +43,6 @@ func resolvePlaceholders(t *testing.T, dir, pid, repo string) {
 	}
 }
 
-// keptForLiveAudit names the snapshots whose scenario left a live session audit
-// file in the repository's local zone (v4.21.0 onward). The non-force purge
-// keeps their roster: it cannot prove the unsealed lines sealed.
-var keptForLiveAudit = map[string]bool{"v4.21.0": true, "v4.22.1": true}
-
 func sessionsDirOf(env Env) string { return filepath.Join(env.Global, "sessions") }
 
 func TestSessionsPurgesDeadState(t *testing.T) {
@@ -65,14 +60,7 @@ func TestSessionsPurgesDeadState(t *testing.T) {
 			assert.Greater(t, out.Items, 0)
 
 			roster := filepath.Join(sessionsDirOf(env), "sess-corpus-0001.yaml")
-			if keptForLiveAudit[v] {
-				// The non-force purge keeps a roster whose unsealed audit lines
-				// it cannot prove sealed, and says so once as a residual.
-				assert.FileExists(t, roster, "a roster with live audit files is kept")
-				require.Len(t, out.Residuals, 1)
-				assert.Contains(t, out.Residuals[0].ID, "sess-corpus-0001")
-				assert.Contains(t, out.Residuals[0].Reason, "could not be read or proven free of unsealed audit lines")
-			} else if strings.Contains(readFixture(t, filepath.Join("testdata", "corpus", v, "home", ".punt-labs", "ethos", "sessions", "sess-corpus-0001.yaml")), "checkout:") {
+			if strings.Contains(readFixture(t, filepath.Join("testdata", "corpus", v, "home", ".punt-labs", "ethos", "sessions", "sess-corpus-0001.yaml")), "checkout:") {
 				assert.NoFileExists(t, roster, "dead roster")
 			} else {
 				assert.FileExists(t, roster, "a roster without checkout ages out (DES-058)")
@@ -145,9 +133,9 @@ func TestSessionsStepPrintsNothingForUnreadableRoster(t *testing.T) {
 			ids = append(ids, r.ID)
 		}
 		assert.Contains(t, ids, "sess-broken", "pass %d", i)
-		// The v4.22.1 snapshot has a live audit file, so its own roster is kept
-		// too, with its own residual.
-		assert.Len(t, ids, 2, "pass %d", i)
+		// The v4.22.1 snapshot's audit lines are sealed under trace/, so its own
+		// roster is purged and only the broken one is a residual.
+		assert.Len(t, ids, 1, "pass %d", i)
 	}
 }
 

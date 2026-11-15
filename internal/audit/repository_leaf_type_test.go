@@ -288,13 +288,13 @@ func TestRepositoryLeafLegacyAndCountReaders(t *testing.T) {
 			badAuditLeaf(t, path, kind, root, nil)
 			_, err := MaxLegacyTS(path)
 			assert.ErrorContains(t, err, path)
-			_, err = SessionUnsealedCount(root, "fixture")
+			_, err = SessionUnsealedCount(root, root, "fixture")
 			assert.ErrorContains(t, err, path)
 			path = LiveMissionLogPath(root, "m-2026-11-04-001", "fixture")
 			// Use another root for the second link target so the test never
 			// overwrites the first sentinel while constructing its fixture.
 			badAuditLeaf(t, path, kind, t.TempDir(), nil)
-			_, err = MissionUnsealedCount(root, root, "m-2026-11-04-001", "fixture")
+			_, err = MissionUnsealedCount(root, root, root, "m-2026-11-04-001", "fixture")
 			assert.ErrorContains(t, err, path)
 			_, err = ListLiveLogSessions(filepath.Dir(path))
 			assert.ErrorContains(t, err, path)

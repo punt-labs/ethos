@@ -888,7 +888,7 @@ func TestPurgeTombstoned_SealedMissionInNonWriterCheckoutDoesNotFlagTombstone(t 
 	// checkout — the steady state of every checkout that did not write them.
 	sealMissionChunkFor(t, repoRoot, "m-2026-07-21-009", "sess-sealed")
 
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, false)
 	require.NoError(t, err)
 	assert.Contains(t, purged, "sess-sealed")
 	assert.Empty(t, refused)
@@ -918,7 +918,7 @@ func TestPurgeTombstoned_OutOfRepoUsesRecordedCheckout(t *testing.T) {
 	// nothing missing there to report.
 	writeLiveMissionLogFor(t, checkout, "m-2026-07-21-009", "sess-oor")
 
-	purged, refused, err := s.PurgeTombstoned("", "", false)
+	purged, refused, err := s.PurgeTombstoned("", "", "", false)
 	require.NoError(t, err)
 	assert.Contains(t, purged, "sess-oor")
 	assert.Empty(t, refused)
@@ -948,7 +948,7 @@ func TestPurgeTombstoned_DeletedLiveLogInWriterCheckoutFlagsTombstone(t *testing
 	// ordinary absence.
 	writeLiveMissionLogFor(t, repoRoot, "m-2026-07-21-010", "sess-del")
 
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, false)
 	require.NoError(t, err)
 	assert.Contains(t, purged, "sess-del")
 	assert.Empty(t, refused)
@@ -996,7 +996,7 @@ func TestPurgeTombstoned_RecordedWriterHoldsNoLiveLogFlagsTombstone(t *testing.T
 	// A sealed mission, and NO live-missions zone anywhere in this checkout.
 	sealMissionChunkFor(t, repoRoot, "m-2026-07-21-009", "sess-nozone")
 
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, false)
 	require.NoError(t, err)
 	assert.Contains(t, purged, "sess-nozone")
 	assert.Empty(t, refused)

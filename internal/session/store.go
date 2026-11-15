@@ -503,15 +503,17 @@ func (s *Store) Purge() (purged, refused []string, err error) {
 // which also records "" — so it is probed under repoRoot like this checkout's own
 // sessions; under DES-058 its live writes landed under a checkout too, so it
 // cannot skip the guard. repoRoot and repoID come from the caller — repoID is
-// audit.RepoIdentity(repoRoot).
+// audit.RepoIdentity(repoRoot). storeRoot is the canonical store S whose trace
+// archive holds the sealed chunks; it is repoRoot's own store except in a
+// linked worktree. Live files are still read from the recorded checkout.
 //
 // A session whose live file is clean purges silently. One whose unsealed state
 // cannot be verified — because the purge runs outside any repo (repoRoot == "")
 // and an empty-binding session's checkout is then unnameable — refuses without
 // force and leaves a flagged tombstone under force, the fail-safe pattern for
 // unprovable state. Returns the purged and refused session ids.
-func (s *Store) PurgeTombstoned(repoRoot, repoID string, force bool) (purged, refused []string, err error) {
-	rep, err := s.PurgeTombstonedReport(repoRoot, repoID, force)
+func (s *Store) PurgeTombstoned(storeRoot, repoRoot, repoID string, force bool) (purged, refused []string, err error) {
+	rep, err := s.PurgeTombstonedReport(storeRoot, repoRoot, repoID, force)
 	return rep.Purged, rep.Refused, err
 }
 
@@ -544,13 +546,13 @@ type SkippedSession struct {
 // PurgeTombstonedReport is PurgeTombstoned with the skipped rosters reported
 // as well: a roster whose repository identity was never resolved is skipped,
 // stale or not, and removed under force, stale or not.
-func (s *Store) PurgeTombstonedReport(repoRoot, repoID string, force bool) (PurgeReport, error) {
-	return s.PurgeTombstonedExcept(repoRoot, repoID, force, nil)
+func (s *Store) PurgeTombstonedReport(storeRoot, repoRoot, repoID string, force bool) (PurgeReport, error) {
+	return s.PurgeTombstonedExcept(storeRoot, repoRoot, repoID, force, nil)
 }
 
 // PurgeTombstonedExcept is PurgeTombstonedReport that leaves alone every
 // readable roster for which keep returns true. A nil keep keeps none.
-func (s *Store) PurgeTombstonedExcept(repoRoot, repoID string, force bool, keep func(*Roster) bool) (PurgeReport, error) {
+func (s *Store) PurgeTombstonedExcept(storeRoot, repoRoot, repoID string, force bool, keep func(*Roster) bool) (PurgeReport, error) {
 	var rep PurgeReport
 	ids, err := s.List()
 	if err != nil {
@@ -627,7 +629,7 @@ func (s *Store) PurgeTombstonedExcept(repoRoot, repoID string, force bool, keep 
 			if !isStale(roster) {
 				return nil
 			}
-			didPurge, didRefuse = s.purgeOneTombstoned(roster, repoRoot, repoID, force)
+			didPurge, didRefuse = s.purgeOneTombstoned(roster, storeRoot, repoRoot, repoID, force)
 			return nil
 		}); lockErr != nil {
 			s.warnf("ethos: purge: failed to lock session %s: %v\n", id, lockErr)
@@ -686,7 +688,7 @@ func (s *Store) purgeUnresolved(roster *Roster, force bool) (didPurge, didRefuse
 // which propagates the same errors. Reading a probe error as "nothing unsealed"
 // is the silent-loss path the tombstone exists to prevent. Under --force the
 // session is purged but a flagged tombstone records the unproven loss.
-func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, force bool) (bool, bool) {
+func (s *Store) purgeOneTombstoned(roster *Roster, storeRoot, repoRoot, repoID string, force bool) (bool, bool) {
 	repo := roster.Repo
 	// A session bound to a different repo identity has its live audit zone under
 	// another checkout by construction; this checkout cannot probe it, so leave
@@ -723,18 +725,40 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 	if trackedRoot == "" {
 		trackedRoot = liveRoot
 	}
+	// Sealed chunks live under the canonical store S (DES-079), which differs
+	// from the checkout in a linked worktree. Without one, the checkout stands in.
+	sealedRoot := storeRoot
+	if sealedRoot == "" {
+		sealedRoot = trackedRoot
+	}
+	// A roster written by another checkout (empty repo ids match, so the guard
+	// above lets it through) sealed under that checkout's store, not ours. A
+	// checkout that no longer exists has no store to resolve: keep the caller's,
+	// so the live-file-lost logic below runs and chunks sealed here still count.
+	foreignStoreErr := error(nil)
+	if roster.Checkout != "" && roster.Checkout != repoRoot && isDir(roster.Checkout) {
+		if ws, wErr := audit.StoreRootOf(roster.Checkout); wErr != nil {
+			foreignStoreErr = wErr
+		} else if !sameStore(ws, storeRoot) {
+			sealedRoot, trackedRoot = ws, roster.Checkout
+		}
+	}
+	if foreignStoreErr != nil {
+		probeFailed = true
+		s.warnf("ethos: purge: locating the store of %s's checkout: %v\n", roster.Session, foreignStoreErr)
+	}
 	// With no checkout in scope and none recorded, the session's zone lives under
 	// a checkout we cannot name, so its unsealed state is unprovable — fail safe
 	// exactly as a probe error does: flag it and let the refuse/tombstone logic
 	// below handle force.
 	if liveRoot != "" {
-		if n, cErr := audit.SessionUnsealedCountAcross(trackedRoot, liveRoot, roster.Session); cErr != nil {
+		if n, cErr := audit.SessionUnsealedCountAcross(sealedRoot, trackedRoot, liveRoot, roster.Session); cErr != nil {
 			probeFailed = true
 			s.warnf("ethos: purge: probing %s unsealed audit lines: %v\n", roster.Session, cErr)
 		} else {
 			unsealed = n
 		}
-		liveGone = audit.SessionLiveFileLost(writer, roster.Session)
+		liveGone = audit.SessionLiveFileLost(sealedRoot, writer, roster.Session)
 		// REQ-1: the guard spans both namespaces. A session that sealed a
 		// mission chunk and then lost its mission live log (worktree torn
 		// down), or a Tier B session that claimed a mission but sealed no
@@ -742,11 +766,21 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 		// live files (chunk-derived union mission-record bindings) and fold
 		// their unsealed/gone state in.
 		bound, bErr := mission.SessionBoundMissions(s.root, trackedRoot, roster.Session)
+		if sealedRoot != trackedRoot {
+			// Delegation records live under the store S (RecordRoot), which is not
+			// the checkout in a linked worktree: read both, so a binding held only
+			// there is not lost.
+			more, mErr := mission.SessionBoundMissions(s.root, sealedRoot, roster.Session)
+			if mErr != nil && bErr == nil {
+				bErr = mErr
+			}
+			bound = append(bound, more...)
+		}
 		if bErr != nil {
 			probeFailed = true
 			s.warnf("ethos: purge: resolving %s mission bindings: %v\n", roster.Session, bErr)
 		}
-		expected, eErr := audit.ExpectedMissionLiveFiles(trackedRoot, writer, roster.Session, bound)
+		expected, eErr := audit.ExpectedMissionLiveFiles(sealedRoot, trackedRoot, writer, roster.Session, bound)
 		if eErr != nil {
 			probeFailed = true
 			s.warnf("ethos: purge: enumerating %s mission live files: %v\n", roster.Session, eErr)
@@ -762,7 +796,7 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 				// is the steady state in every checkout but the writer's.
 				continue
 			}
-			if n, cErr := audit.MissionUnsealedCount(trackedRoot, liveRoot, ml.MissionID, roster.Session); cErr != nil {
+			if n, cErr := audit.MissionUnsealedCount(sealedRoot, trackedRoot, liveRoot, ml.MissionID, roster.Session); cErr != nil {
 				probeFailed = true
 				s.warnf("ethos: purge: probing mission %s unsealed lines for %s: %v\n",
 					ml.MissionID, roster.Session, cErr)
@@ -1108,4 +1142,23 @@ func isOlderThan(roster *Roster, ttl time.Duration) bool {
 		return true // Unparseable timestamp — treat as stale.
 	}
 	return time.Since(started) > ttl
+}
+
+// sameStore reports whether a and b name the same directory. An empty b (no
+// store in scope) never matches.
+func sameStore(a, b string) bool {
+	if b == "" {
+		return false
+	}
+	ai, aerr := os.Stat(a)
+	bi, berr := os.Stat(b)
+	if aerr != nil || berr != nil {
+		return filepath.Clean(a) == filepath.Clean(b)
+	}
+	return os.SameFile(ai, bi)
+}
+
+func isDir(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
 }

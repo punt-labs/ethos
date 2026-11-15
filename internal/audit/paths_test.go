@@ -37,7 +37,7 @@ func TestMissionUnsealedCountIgnoresLegacyGrowth(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n, err := MissionUnsealedCount(repoRoot, repoRoot, missionID, sess)
+	n, err := MissionUnsealedCount(repoRoot, repoRoot, repoRoot, missionID, sess)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestMissionIsWhollyLegacyUnreadableDirDoesNotVouch(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Readable: a frozen log and no chunk is a wholly pre-split mission.
-	got, err := missionIsWhollyLegacy(repo, repo, mid)
+	got, err := missionIsWhollyLegacy(repo, repo, repo, mid)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestMissionIsWhollyLegacyUnreadableDirDoesNotVouch(t *testing.T) {
 		t.Skipf("this filesystem denies open-by-name under mode 0o111: %v", err)
 	}
 
-	got, err = missionIsWhollyLegacy(repo, repo, mid)
+	got, err = missionIsWhollyLegacy(repo, repo, repo, mid)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestWriterStateUnreadableZoneReadsAsNoEvidence(t *testing.T) {
 	if err := os.WriteFile(logPath, []byte(`{"ts":"`+FormatLineTS(100)+`"}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, wrote := writerState(root, sess); !wrote {
+	if _, wrote := writerState("", root, sess); !wrote {
 		t.Fatal("readable zone with a live log must read as wrote-here")
 	}
 
@@ -197,7 +197,7 @@ func TestWriterStateUnreadableZoneReadsAsNoEvidence(t *testing.T) {
 		t.Skip("this filesystem still permits the read under mode 0o000")
 	}
 
-	present, wrote := writerState(root, sess)
+	present, wrote := writerState("", root, sess)
 	if !present {
 		t.Error("the checkout itself is readable and must read as present")
 	}
@@ -233,7 +233,7 @@ func TestWriterStateIgnoresSealCreatedLocks(t *testing.T) {
 		}
 	}
 
-	present, wrote := writerState(root, sess)
+	present, wrote := writerState("", root, sess)
 	if !present {
 		t.Error("the checkout exists and must read as present")
 	}
@@ -246,12 +246,37 @@ func TestWriterStateIgnoresSealCreatedLocks(t *testing.T) {
 	if err := os.WriteFile(logPath, []byte(`{"ts":"`+FormatLineTS(100)+`"}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, wrote = writerState(root, sess); !wrote {
+	if _, wrote = writerState("", root, sess); !wrote {
 		t.Error("a live mission log must count as evidence the checkout wrote here")
 	}
 
 	// Another session's live log says nothing about this one.
-	if _, wrote = writerState(root, "other-sess"); wrote {
+	if _, wrote = writerState("", root, "other-sess"); wrote {
 		t.Error("another session's live log counted as this session's evidence")
+	}
+}
+
+// TestExpectedMissionLiveFiles_UnreadableChunkDirErrors pins that an unreadable
+// mission chunk directory fails the probe instead of silently dropping the
+// mission from the expected set.
+func TestExpectedMissionLiveFiles_UnreadableChunkDirErrors(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("chmod 000 does not block root")
+	}
+	root := t.TempDir()
+	dir := SealedMissionDir(root, "m-2026-07-21-030")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	if _, err := ExpectedMissionLiveFiles(root, root, RecordedWriter(root), "sess-x", nil); err == nil {
+		t.Fatal("unreadable mission chunk dir must fail the probe")
+	}
+	if _, err := missionChunkCarriesSession(filepath.Join(root, "absent"), "sess-x"); err != nil {
+		t.Fatalf("absent dir must not error: %v", err)
 	}
 }

@@ -239,8 +239,8 @@ func TestCLI_EnableOpenFenceHostExit1(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("enable on an open-fence host exit = %d, want 1; stderr: %s", code, stderr)
 	}
-	if !strings.Contains(stderr, "unterminated code fence") {
-		t.Errorf("stderr = %q, want 'unterminated code fence'", stderr)
+	if !strings.Contains(stderr, "unclosed code fence") {
+		t.Errorf("stderr = %q, want 'unclosed code fence'", stderr)
 	}
 	got, err := os.ReadFile(filepath.Join(se.repo, "CLAUDE.md"))
 	if err != nil {

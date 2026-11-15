@@ -86,6 +86,10 @@ func runSessions(ctx context.Context, env Env) (Outcome, error) {
 		// still safe: with no root, repository-bound rosters are left alone.
 		env.Log.Logf(stepSessions, "locate-checkout", nil, err)
 	}
+	storeRoot, err := env.StoreRoot()
+	if err != nil && !errors.Is(err, ErrNotInRepository) {
+		env.Log.Logf(stepSessions, "locate-store", nil, err)
+	}
 	repoID, err := audit.RepoIdentity(repoRoot)
 	if err != nil {
 		// Without the identity no roster can be matched to this repository;
@@ -93,7 +97,7 @@ func runSessions(ctx context.Context, env Env) (Outcome, error) {
 		env.Log.Logf(stepSessions, "repo-identity", nil, err)
 		repoRoot, repoID = "", ""
 	}
-	rep, err := ss.PurgeTombstonedExcept(repoRoot, repoID, false, func(r *session.Roster) bool {
+	rep, err := ss.PurgeTombstonedExcept(storeRoot, repoRoot, repoID, false, func(r *session.Roster) bool {
 		return r.Checkout == ""
 	})
 	if err != nil {

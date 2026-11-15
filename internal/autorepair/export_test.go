@@ -18,3 +18,13 @@ func FixtureHome(t *testing.T) string { return fixtureHome(t) }
 
 // ResolveHome is resolveHome for package autorepair_test.
 func ResolveHome(t *testing.T, dir, home string) { resolveHome(t, dir, home) }
+
+// RunSessions, FixtureEnv and ResolvePlaceholders expose the session-purge
+// fixtures to package autorepair_test.
+var RunSessions = runSessions
+
+func FixtureEnv(t *testing.T, dir string) Env { return fixtureEnv(t, dir) }
+
+func ResolvePlaceholders(t *testing.T, dir, pid, repo string) {
+	resolvePlaceholders(t, dir, pid, repo)
+}
