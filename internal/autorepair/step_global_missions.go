@@ -60,6 +60,12 @@ func runGlobalMissions(ctx context.Context, env Env) (Outcome, error) {
 		out.Residuals = append(out.Residuals, settledResidual(stepGlobalMissions, id, reasonImportedKept))
 	}
 	out.Items = len(res.Imported)
+	// A copy imported by an earlier run and still equal to its global source is
+	// the same settled state; re-emitting it keeps a doctor recheck, which
+	// replaces this step's residuals, from dropping the record.
+	for _, id := range res.Present {
+		out.Residuals = append(out.Residuals, settledResidual(stepGlobalMissions, id, reasonImportedKept))
+	}
 	for _, id := range res.Diverged {
 		env.Log.Logf(stepGlobalMissions, "diverged", []string{filepath.Join(repo, id)}, nil)
 		out.Residuals = append(out.Residuals, actionableResidual(stepGlobalMissions, id, mission.ReasonRepoCopyDiverged, "compare the global copy of "+id+" with the repository copy and delete the global copy by hand once the repository copy is right"))
