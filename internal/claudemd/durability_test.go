@@ -207,10 +207,8 @@ func TestRepositoryHostDurabilityNoopGuards(t *testing.T) {
 	path := filepath.Join(checkout, "CLAUDE.md")
 	malformed := "```\n" + canonical + "\n"
 	require.NoError(t, os.WriteFile(path, []byte(malformed), 0o600))
-	for _, operation := range []func(string, string, ...Option) (bool, error){Register, Deregister} {
-		wrote, err := operation(path, canonical, WithRepository(p))
-		require.ErrorContains(t, err, "unterminated")
-		assert.False(t, wrote)
-		assert.Equal(t, malformed, read(t, path))
-	}
+	wrote, err = Register(path, canonical, WithRepository(p))
+	require.ErrorIs(t, err, ErrUnclosedFence)
+	assert.False(t, wrote)
+	assert.Equal(t, malformed, read(t, path))
 }

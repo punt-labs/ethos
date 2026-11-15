@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An unclosed code fence in `CLAUDE.md` runs to the end of the file
+  (PL-1087).** Claude Code's Markdown lexer treats a fence that never closes
+  as code through EOF, so an `@`-import after it never loads. `ethos enable`
+  now refuses such a host before writing the marker, the guide, the hooks, or
+  any permission rule. An import above the open fence counts as present, so
+  re-running `enable` is a no-op and `disable` removes it; `disable` leaves an
+  inert copy below the fence alone instead of refusing. Fences now close only
+  on a same-marker run at least as long as the opener, and a line such as
+  ```` ```x``` ```` is an inline code span, not a fence.
+
 ## [5.1.0] - 2026-11-14
 
 ### Added

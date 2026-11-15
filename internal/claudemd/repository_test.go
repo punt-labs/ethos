@@ -84,7 +84,7 @@ func TestRepositoryHostStagingFailurePreservesTarget(t *testing.T) {
 	require.NoError(t, os.Remove(p.TempDir()))
 	require.NoError(t, os.WriteFile(path, []byte("```\n"), 0o600))
 	wrote, err = Register(path, canonical, WithRepository(p))
-	require.ErrorContains(t, err, "unterminated")
+	require.ErrorIs(t, err, ErrUnclosedFence)
 	assert.False(t, wrote)
 	assert.Equal(t, "```\n", read(t, path))
 }

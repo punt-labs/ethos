@@ -101,8 +101,9 @@ func TestEnableCommandJSON(t *testing.T) {
 
 func TestEnableSurfacesWarningsOnErrorPath(t *testing.T) {
 	// Repro: a hand-written guide (grandfather-overwritten with a warning) plus
-	// an open-fence CLAUDE.md (the import step fails). The deposit warning must
-	// still reach stderr even though a later step errors (R1).
+	// a regular file where .git/hooks belongs (so the hook-chaining step after
+	// the deposit fails). The deposit warning must still reach stderr even
+	// though a later step errors (R1).
 	dir := enableGitRepo(t)
 	zone := filepath.Join(dir, ".punt-labs", "ethos")
 	if err := os.MkdirAll(zone, 0o755); err != nil {
@@ -111,14 +112,17 @@ func TestEnableSurfacesWarningsOnErrorPath(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(zone, "CLAUDE.md"), []byte("hand-written guide\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// A CLAUDE.md ending inside an open code fence makes the import step error.
-	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("# repo\n```\nunclosed\n"), 0o644); err != nil {
+	hooks := filepath.Join(dir, ".git", "hooks")
+	if err := os.RemoveAll(hooks); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hooks, []byte("not a directory\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(dir)
 	_, errOut, err := runEnableCmd(t, "enable")
 	if err == nil {
-		t.Fatal("expected enable to fail on the open-fence CLAUDE.md")
+		t.Fatal("expected enable to fail on the non-directory .git/hooks")
 	}
 	if !strings.Contains(errOut, "overwritten") || !strings.Contains(errOut, ".punt-labs/ethos/CLAUDE.md") {
 		t.Errorf("deposit overwrite warning not surfaced on the error path; stderr = %q", errOut)
