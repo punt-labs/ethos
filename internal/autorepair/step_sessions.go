@@ -4,14 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/session"
 )
 
 const stepSessions = "sessions"
+
+// SealSession seals every stream of one session under the repository policy
+// and returns the lines sealed. internal/hook sets it at init: hook imports
+// this package, so the step cannot call the seal directly. startDate names a
+// new sealed directory by session start; "" lets the seal choose.
+var SealSession func(p layout.Policy, sessionID, startDate string, now time.Time) (int, error)
 
 func init() { Register(Step{Name: stepSessions, Scope: ScopeBoth, Run: runSessions}) }
 
@@ -97,11 +106,21 @@ func runSessions(ctx context.Context, env Env) (Outcome, error) {
 		env.Log.Logf(stepSessions, "repo-identity", nil, err)
 		repoRoot, repoID = "", ""
 	}
-	rep, err := ss.PurgeTombstonedExcept(storeRoot, repoRoot, repoID, false, func(r *session.Roster) bool {
-		return r.Checkout == ""
-	})
+	keep := func(r *session.Roster) bool { return r.Checkout == "" }
+	rep, err := ss.PurgeTombstonedExcept(storeRoot, repoRoot, repoID, false, keep)
 	if err != nil {
 		return out, fmt.Errorf("purging dead session rosters: %w", err)
+	}
+	// A refused dead session may hold lines nothing has sealed yet. Seal them
+	// from the writer's own checkout, then purge once more: the guard that
+	// refused still decides, now over the sealed record.
+	if sealed := sealRefused(ss, env, repoRoot, rep.Refused); sealed > 0 {
+		again, err := ss.PurgeTombstonedExcept(storeRoot, repoRoot, repoID, false, keep)
+		if err != nil {
+			return out, fmt.Errorf("purging dead session rosters after sealing: %w", err)
+		}
+		rep.Purged = append(rep.Purged, again.Purged...)
+		rep.Refused = again.Refused
 	}
 	for _, id := range rep.Purged {
 		out.Items++
@@ -135,4 +154,58 @@ func runSessions(ctx context.Context, env Env) (Outcome, error) {
 		out.Items++
 	}
 	return out, nil
+}
+
+// sealRefused seals each refused session whose writer checkout exists and
+// returns how many lines it sealed. A roster that cannot be read, has no
+// recorded checkout, or whose checkout is gone is left to the guard's verdict.
+// Failures are logged and the session stays refused.
+func sealRefused(ss *session.Store, env Env, repoRoot string, refused []string) int {
+	if SealSession == nil {
+		return 0
+	}
+	total := 0
+	for _, id := range refused {
+		r, err := ss.Load(id)
+		if err != nil || r.Checkout == "" {
+			continue
+		}
+		if fi, err := os.Stat(r.Checkout); err != nil || !fi.IsDir() {
+			continue
+		}
+		p, err := writerPolicy(env, repoRoot, r.Checkout)
+		if err != nil {
+			env.Log.Logf(stepSessions, "seal-session", []string{id}, err)
+			continue
+		}
+		start := ""
+		if len(r.Started) >= 10 {
+			start = r.Started[:10]
+		}
+		n, err := SealSession(p, id, start, env.Now)
+		env.Log.Logf(stepSessions, "seal-session", []string{id}, err)
+		total += n
+	}
+	return total
+}
+
+// writerPolicy is the repository policy of the checkout that wrote a session:
+// the pass's own when that checkout is the one being served, else one built
+// from the writer's store. A foreign store's record mode is not read here, so
+// it archives locally only, which is what blame mode does.
+func writerPolicy(env Env, repoRoot, writer string) (layout.Policy, error) {
+	if repoRoot != "" && env.InRepository() && sameDir(writer, repoRoot) {
+		return env.Policy, nil
+	}
+	store, err := audit.StoreRootOf(writer)
+	if err != nil {
+		return layout.Policy{}, fmt.Errorf("locating the store of the writer checkout: %w", err)
+	}
+	return layout.NewRepository(store, writer, layout.RecordBlame)
+}
+
+func sameDir(a, b string) bool {
+	ai, aerr := os.Stat(a)
+	bi, berr := os.Stat(b)
+	return aerr == nil && berr == nil && os.SameFile(ai, bi)
 }
