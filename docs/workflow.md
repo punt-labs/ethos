@@ -154,24 +154,25 @@ cycle repeats until both reviewers report clean.
 For major features: 2 rounds minimum (implement → review → fix → review).
 For the PR itself: Copilot/Bugbot reviews add additional cycles.
 
-## Bead-Driven Work Tracking
+## Linear-Driven Work Tracking
 
-Every non-trivial task has a bead. The lifecycle:
+Every non-trivial task has a Linear issue (team `PL`, label `repo:ethos`).
+The lifecycle:
 
 ```text
-bd create → bd update --status=in_progress → work → bd close
+create issue → status In Progress → work → status Done
 ```
 
-Epics have child beads with dependencies:
+Epics have child issues with `blocks` relations:
 
 ```text
-ethos-cpi (epic)
-  ├─ ethos-cpi.1 (Role)
-  ├─ ethos-cpi.2 (Team)
-  ├─ ethos-cpi.3 (Team repo)
-  ├─ ethos-cpi.4 (Submodule) ← depends on 1-3
-  ├─ ethos-cpi.5 (Installer) ← depends on 4
-  └─ ethos-cpi.6 (punt init) ← depends on 5
+Epic
+  ├─ Role
+  ├─ Team
+  ├─ Team repo
+  ├─ Submodule ← blocked by Role, Team, Team repo
+  ├─ Installer ← blocked by Submodule
+  └─ punt init ← blocked by Installer
 ```
 
 Phases that can run in parallel should be parallelized. The COO
@@ -181,13 +182,13 @@ tracks dependencies and sequences work accordingly.
 
 Per `~/.claude/CLAUDE.md`, every code change follows 7 phases:
 
-1. **Claim** — find or create bead, claim it, set plan
+1. **Claim** — find or create the Linear issue, claim it, set plan
 2. **Branch** — feature branch from main
 3. **Implement & Verify** — tests first, make check, end-to-end verification
 4. **Document** — DESIGN.md ADRs, README, CHANGELOG
 5. **Local Review** — code-reviewer + silent-failure-hunter agents
 6. **Ship** — PR, Copilot review, fix cycles, merge
-7. **Close** — close beads, recap email
+7. **Close** — close the Linear issue, recap email
 
 ## Root Cause Analysis
 
