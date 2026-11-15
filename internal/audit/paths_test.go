@@ -37,7 +37,7 @@ func TestMissionUnsealedCountIgnoresLegacyGrowth(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n, err := MissionUnsealedCount(repoRoot, repoRoot, missionID, sess)
+	n, err := MissionUnsealedCount(repoRoot, repoRoot, repoRoot, missionID, sess)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestMissionIsWhollyLegacyUnreadableDirDoesNotVouch(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Readable: a frozen log and no chunk is a wholly pre-split mission.
-	got, err := missionIsWhollyLegacy(repo, repo, mid)
+	got, err := missionIsWhollyLegacy(repo, repo, repo, mid)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestMissionIsWhollyLegacyUnreadableDirDoesNotVouch(t *testing.T) {
 		t.Skipf("this filesystem denies open-by-name under mode 0o111: %v", err)
 	}
 
-	got, err = missionIsWhollyLegacy(repo, repo, mid)
+	got, err = missionIsWhollyLegacy(repo, repo, repo, mid)
 	if err != nil {
 		t.Fatal(err)
 	}

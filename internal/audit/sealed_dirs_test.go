@@ -41,12 +41,12 @@ func TestSessionUnsealedCountReadsTraceAndLegacy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			writeLiveLines(t, LiveAuditPath(root, "s1"), 100, 200)
-			n, err := SessionUnsealedCount(root, "s1")
+			n, err := SessionUnsealedCount(root, root, "s1")
 			if err != nil || n != 2 {
 				t.Fatalf("before seal: n=%d err=%v, want 2", n, err)
 			}
 			writeChunk(t, tc.chunk(root), SessionChunkFile(100, 200), 100, 200)
-			n, err = SessionUnsealedCount(root, "s1")
+			n, err = SessionUnsealedCount(root, root, "s1")
 			if err != nil || n != 0 {
 				t.Fatalf("after seal: n=%d err=%v, want 0", n, err)
 			}
@@ -63,11 +63,11 @@ func TestMissionSealedStateReadsTrace(t *testing.T) {
 	writeChunk(t, filepath.Join(LocalZoneBase(root), "trace", "missions", mid),
 		MissionChunkFile(sess, 100, 100), 100)
 
-	n, err := MissionUnsealedCount(root, root, mid, sess)
+	n, err := MissionUnsealedCount(root, root, root, mid, sess)
 	if err != nil || n != 1 {
 		t.Fatalf("MissionUnsealedCount = %d, %v; want 1 (ts 200 is past the chunk)", n, err)
 	}
-	got, err := ExpectedMissionLiveFiles(root, AssumedWriter(root), sess, nil)
+	got, err := ExpectedMissionLiveFiles(root, root, AssumedWriter(root), sess, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,10 +107,10 @@ func TestUnsealedProbesResolveStoreFromLinkedWorktree(t *testing.T) {
 	writeChunk(t, filepath.Join(LocalZoneBase(main), "trace", "missions", mid),
 		MissionChunkFile(sess, 100, 100), 100)
 
-	if n, err := SessionUnsealedCount(linked, sess); err != nil || n != 0 {
+	if n, err := SessionUnsealedCount(main, linked, sess); err != nil || n != 0 {
 		t.Fatalf("SessionUnsealedCount(linked) = %d, %v; want 0", n, err)
 	}
-	if n, err := MissionUnsealedCount(linked, linked, mid, sess); err != nil || n != 0 {
+	if n, err := MissionUnsealedCount(main, linked, linked, mid, sess); err != nil || n != 0 {
 		t.Fatalf("MissionUnsealedCount(linked) = %d, %v; want 0", n, err)
 	}
 }

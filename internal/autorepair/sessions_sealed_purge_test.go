@@ -31,3 +31,18 @@ func TestSessionsPurgesRosterAfterRealSeal(t *testing.T) {
 	assert.Empty(t, out.Residuals, "a fully sealed session is not a residual")
 	assert.NoFileExists(t, filepath.Join(sessions, "sess-corpus-0001.yaml"))
 }
+
+// The sealed chunks live under the canonical store S; the invoking checkout C
+// is a different directory (a linked worktree). The roster's live files are in
+// S, its recorded checkout. The purge must probe S's trace archive, not C's.
+func TestSessionsPurgesRosterSealedInStoreFromOtherCheckout(t *testing.T) {
+	env := autorepair.FixtureEnv(t, "corpus/v4.22.1")
+	sessions := filepath.Join(env.Global, "sessions")
+	autorepair.ResolvePlaceholders(t, sessions, "2147483646", env.Roots.Checkout)
+	env.Roots.Checkout = t.TempDir() // C: no sealed chunks of its own
+
+	out, err := autorepair.RunSessions(context.Background(), env)
+	require.NoError(t, err)
+	assert.Empty(t, out.Residuals, "chunks sealed under S count for a purge run from C")
+	assert.NoFileExists(t, filepath.Join(sessions, "sess-corpus-0001.yaml"))
+}

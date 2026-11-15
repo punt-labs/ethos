@@ -319,7 +319,7 @@ func DisableTo(repoRoot, storeRoot string, force bool) (*Report, error) {
 		return rep, err
 	}
 
-	if n := unsealedAuditLines(repoRoot); n > 0 {
+	if n := unsealedAuditLines(storeRoot, repoRoot); n > 0 {
 		rep.step("audit", "info", fmt.Sprintf("%d unsealed audit lines remain in the local zone; re-enable to seal them", n))
 	}
 
@@ -573,7 +573,7 @@ func enabledSiblingWorktrees(repoRoot string) ([]string, error) {
 // unsealedAuditLines counts live session audit lines past the sealed
 // watermark. A session with no sealed directory yet has every live line
 // unsealed. The count is informational only.
-func unsealedAuditLines(repoRoot string) int {
+func unsealedAuditLines(storeRoot, repoRoot string) int {
 	dir := audit.LiveSessionsDir(repoRoot)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -586,7 +586,7 @@ func unsealedAuditLines(repoRoot string) int {
 			continue
 		}
 		sid := strings.TrimSuffix(e.Name(), suffix)
-		if n, err := audit.SessionUnsealedCount(repoRoot, sid); err == nil {
+		if n, err := audit.SessionUnsealedCount(storeRoot, repoRoot, sid); err == nil {
 			total += n
 			continue
 		}

@@ -73,7 +73,7 @@ func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []ActiveSessio
 					"those lines are lost\n",
 				t.Session)
 		} else {
-			n, cErr := audit.SessionUnsealedCountAcross(repoRoot, liveRoot, t.Session)
+			n, cErr := audit.SessionUnsealedCountAcross(repoRoot, repoRoot, liveRoot, t.Session)
 			if cErr != nil {
 				return cErr
 			}
@@ -142,7 +142,7 @@ func warnMissingMissionLives(globalRoot, repoRoot string, writer audit.Writer, s
 	if err != nil {
 		return err
 	}
-	expected, err := audit.ExpectedMissionLiveFiles(repoRoot, writer, sessionID, bound)
+	expected, err := audit.ExpectedMissionLiveFiles(repoRoot, repoRoot, writer, sessionID, bound)
 	if err != nil {
 		return err
 	}

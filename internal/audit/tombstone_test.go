@@ -179,7 +179,7 @@ func TestSessionUnsealedCount(t *testing.T) {
 		t.Fatal(err)
 	}
 	// No sealed chunk → watermark 0 → both lines unsealed.
-	n, err := SessionUnsealedCount(repo, sid)
+	n, err := SessionUnsealedCount(repo, repo, sid)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestExpectedMissionLiveFiles(t *testing.T) {
 
 	// Probed as a fallback: nothing bound sess1 to this checkout, so its absent
 	// live file is the ordinary absence of another checkout's state.
-	got, err := ExpectedMissionLiveFiles(repo, AssumedWriter(repo), "sess1", nil)
+	got, err := ExpectedMissionLiveFiles(repo, repo, AssumedWriter(repo), "sess1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestExpectedMissionLiveFiles(t *testing.T) {
 	if err := os.WriteFile(got[0].LivePath, []byte(`{"ts":"`+FormatLineTS(300)+`"}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err = ExpectedMissionLiveFiles(repo, RecordedWriter(repo), "sess1", nil)
+	got, err = ExpectedMissionLiveFiles(repo, repo, RecordedWriter(repo), "sess1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestExpectedMissionLiveFiles(t *testing.T) {
 		t.Error("expected mission live file reported absent after write")
 	}
 	// It holds one line past the empty watermark → unsealed.
-	n, err := MissionUnsealedCount(repo, repo, mid, "sess1")
+	n, err := MissionUnsealedCount(repo, repo, repo, mid, "sess1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +420,7 @@ func TestExpectedMissionLiveFilesLost(t *testing.T) {
 			if tc.fallbackWriter {
 				writer = AssumedWriter(liveRoot)
 			}
-			got, err := ExpectedMissionLiveFiles(repo, writer, sess, tc.bound)
+			got, err := ExpectedMissionLiveFiles(repo, repo, writer, sess, tc.bound)
 			if err != nil {
 				t.Fatal(err)
 			}
