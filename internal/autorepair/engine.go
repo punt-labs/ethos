@@ -214,7 +214,8 @@ func ensure(ctx context.Context, roots resolve.Located, global string, o options
 	for _, t := range targets {
 		t.refresh()
 	}
-	only := recheckSteps(o, targets)
+	// recheckSteps marks targets needed; its step list is recomputed under the lock.
+	_ = recheckSteps(o, targets)
 	if !g.needed && (r == nil || !r.needed) {
 		return Result{}, nil
 	}
@@ -236,7 +237,7 @@ func ensure(ctx context.Context, roots resolve.Located, global string, o options
 	for _, t := range targets {
 		t.refresh() // another process may have finished while we waited
 	}
-	only = recheckSteps(o, targets)
+	only := recheckSteps(o, targets)
 	if !g.needed && (r == nil || !r.needed) {
 		return Result{}, nil
 	}
