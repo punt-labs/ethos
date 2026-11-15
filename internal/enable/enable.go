@@ -12,6 +12,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -324,7 +325,11 @@ func DisableTo(repoRoot, storeRoot string, force bool) (*Report, error) {
 		return rep, err
 	}
 
-	if n := unsealedAuditLines(repoRoot); n > 0 {
+	n, uErr := unsealedAuditLines(storeRoot, repoRoot)
+	switch {
+	case uErr != nil:
+		rep.step("audit", "info", fmt.Sprintf("could not count unsealed audit lines: %v", uErr))
+	case n > 0:
 		rep.step("audit", "info", fmt.Sprintf("%d unsealed audit lines remain in the local zone; re-enable to seal them", n))
 	}
 
@@ -576,28 +581,45 @@ func enabledSiblingWorktrees(repoRoot string) ([]string, error) {
 }
 
 // unsealedAuditLines counts live session audit lines past the sealed
-// watermark. A session with no sealed directory yet has every live line
-// unsealed. The count is informational only.
-func unsealedAuditLines(repoRoot string) int {
-	dir := audit.LiveSessionsDir(repoRoot)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return 0
+// watermark, in the store's live zone and the checkout's (they differ in a
+// linked worktree). A session with no sealed directory yet has every live line
+// unsealed. A missing live directory counts zero; any other read error is
+// returned, because it proves nothing about the lines.
+func unsealedAuditLines(storeRoot, repoRoot string) (int, error) {
+	roots := []string{storeRoot}
+	if repoRoot != storeRoot {
+		roots = append(roots, repoRoot)
 	}
 	total := 0
 	const suffix = ".audit.jsonl"
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), suffix) {
+	for _, root := range roots {
+		dir := audit.LiveSessionsDir(root)
+		entries, err := os.ReadDir(dir)
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		sid := strings.TrimSuffix(e.Name(), suffix)
-		if n, err := audit.SessionUnsealedCount(repoRoot, sid); err == nil {
-			total += n
-			continue
+		if err != nil {
+			return 0, fmt.Errorf("reading %s: %w", dir, err)
 		}
-		total += countNonEmptyLines(filepath.Join(dir, e.Name()))
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), suffix) {
+				continue
+			}
+			sid := strings.TrimSuffix(e.Name(), suffix)
+			n, err := audit.SessionUnsealedCountAcross(storeRoot, repoRoot, root, sid)
+			if err == nil {
+				total += n
+				continue
+			}
+			// A live file that cannot be read proves nothing: report it. Only a
+			// failure on the sealed side falls back to counting every live line.
+			if _, rErr := os.ReadFile(filepath.Join(dir, e.Name())); rErr != nil {
+				return 0, fmt.Errorf("reading %s: %w", filepath.Join(dir, e.Name()), rErr)
+			}
+			total += countNonEmptyLines(filepath.Join(dir, e.Name()))
+		}
 	}
-	return total
+	return total, nil
 }
 
 func countNonEmptyLines(path string) int {

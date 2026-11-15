@@ -46,7 +46,7 @@ func TestPurgeSkipsUnresolvedRepoRosters(t *testing.T) {
 	var purged, refused []string
 	var err error
 	out := testhelpers.CaptureStderr(t, func() {
-		purged, refused, err = s.PurgeTombstoned(t.TempDir(), "", false)
+		purged, refused, err = s.PurgeTombstoned(t.TempDir(), t.TempDir(), "", false)
 	})
 	require.NoError(t, err)
 	assert.NotContains(t, purged, "sess-un")
@@ -71,7 +71,7 @@ func TestPurgeForceRemovesUnresolvedRosters(t *testing.T) {
 	var purged []string
 	var err error
 	testhelpers.CaptureStderr(t, func() {
-		purged, _, err = s.PurgeTombstoned(t.TempDir(), "", true)
+		purged, _, err = s.PurgeTombstoned(t.TempDir(), t.TempDir(), "", true)
 	})
 	require.NoError(t, err)
 	assert.Contains(t, purged, "sess-un")
@@ -96,7 +96,7 @@ func TestPurgeForceRemovesLiveUnresolvedRosters(t *testing.T) {
 
 	var skipped PurgeReport
 	var err error
-	testhelpers.CaptureStderr(t, func() { skipped, err = s.PurgeTombstonedReport(t.TempDir(), "", false) })
+	testhelpers.CaptureStderr(t, func() { skipped, err = s.PurgeTombstonedReport(t.TempDir(), t.TempDir(), "", false) })
 	require.NoError(t, err)
 	require.Len(t, skipped.Skipped, 1, "reported as skipped, even though it is not stale")
 	assert.Equal(t, "sess-live", skipped.Skipped[0].Session)
@@ -104,7 +104,7 @@ func TestPurgeForceRemovesLiveUnresolvedRosters(t *testing.T) {
 	assert.Empty(t, skipped.Purged)
 
 	var forced PurgeReport
-	testhelpers.CaptureStderr(t, func() { forced, err = s.PurgeTombstonedReport("", "", true) })
+	testhelpers.CaptureStderr(t, func() { forced, err = s.PurgeTombstonedReport("", "", "", true) })
 	require.NoError(t, err)
 	assert.Equal(t, []string{"sess-live"}, forced.Purged)
 	assert.Empty(t, forced.Skipped)
@@ -122,7 +122,7 @@ func TestPurgeReportListsSkippedUnresolvedRosters(t *testing.T) {
 	require.NoError(t, s.CreateUnresolved("sess-un", root, primary, "git did not answer", t.TempDir(), "h"))
 	var rep PurgeReport
 	var err error
-	testhelpers.CaptureStderr(t, func() { rep, err = s.PurgeTombstonedReport(t.TempDir(), "", false) })
+	testhelpers.CaptureStderr(t, func() { rep, err = s.PurgeTombstonedReport(t.TempDir(), t.TempDir(), "", false) })
 	require.NoError(t, err)
 	assert.Equal(t, []SkippedSession{{Session: "sess-un", Reason: "git did not answer"}}, rep.Skipped)
 }

@@ -73,7 +73,7 @@ func TestPurgeTombstoned_DelegationBoundMissionFlagsTombstone(t *testing.T) {
 	// never for this one.
 	sealMissionChunkFor(t, repoRoot, "m-2026-07-21-009", "other-sess")
 
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, false)
 	require.NoError(t, err)
 	assert.Contains(t, purged, "sess-ml")
 	assert.Empty(t, refused)
@@ -99,7 +99,7 @@ func TestPurgeTombstoned_ClaimedButUnsealedMissionFlagsTombstone(t *testing.T) {
 	// enumeration this loss is silent; the mission-binding union must catch it.
 	require.NoError(t, mission.WriteActiveMission(s.root, "sess-claimed", "m-2026-07-21-009"))
 
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, false)
 	require.NoError(t, err)
 	assert.Contains(t, purged, "sess-claimed")
 	assert.Empty(t, refused)
@@ -123,7 +123,7 @@ func TestPurgeTombstoned_NoMissionBindingLeavesNoTombstone(t *testing.T) {
 	require.NoError(t, s.CreateInCheckout("sess-control", root, primary, testRepoID, repoRoot, ""))
 	writeSealedLive(t, repoRoot, "sess-control")
 
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, false)
 	require.NoError(t, err)
 	assert.Contains(t, purged, "sess-control")
 	assert.Empty(t, refused)
@@ -166,7 +166,7 @@ func TestPurgeTombstoned_SessionProbeErrorRefuses(t *testing.T) {
 	// swallow specifically — a revert of it would let this session purge.
 	writeOrphanSessionCorrupt(t, repoRoot, "sess-sp")
 
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, false)
 	require.NoError(t, err)
 	assert.Empty(t, purged)
 	assert.Contains(t, refused, "sess-sp")
@@ -192,7 +192,7 @@ func TestPurgeTombstoned_MissionProbeErrorRefuses(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
 	require.NoError(t, os.WriteFile(live, []byte(`{"ts":"`+audit.FormatLineTS(250)+`","event":"update","actor":"a"}`+"\n"), 0o600))
 
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, false)
 	require.NoError(t, err)
 	assert.Empty(t, purged)
 	assert.Contains(t, refused, "sess-mp")
@@ -231,7 +231,7 @@ func TestPurgeTombstoned_TombstoneWriteFailureRefuses(t *testing.T) {
 	establishWroteHere(t, repoRoot, "sess-tb")
 	require.NoError(t, os.MkdirAll(filepath.Join(s.sessionsDir(), "sess-tb.purged"), 0o700))
 
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, false)
 	require.NoError(t, err)
 	assert.Empty(t, purged)
 	assert.Contains(t, refused, "sess-tb")
@@ -250,7 +250,7 @@ func TestPurgeTombstoned_TombstoneWriteFailureRefusesUnderForce(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(s.sessionsDir(), "sess-tbf.purged"), 0o700))
 
 	// --force overrides an unprovable state, never a failed loss record.
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, true)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, true)
 	require.NoError(t, err)
 	assert.Empty(t, purged)
 	assert.Contains(t, refused, "sess-tbf")
@@ -268,7 +268,7 @@ func TestPurgeTombstoned_ProbeErrorRefuses(t *testing.T) {
 	breakMissionTree(t, repoRoot)
 
 	// A probe error must not read as "nothing unsealed" — fail safe: refuse.
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, false)
 	require.NoError(t, err)
 	assert.Empty(t, purged)
 	assert.Contains(t, refused, "sess-probe")
@@ -286,7 +286,7 @@ func TestPurgeTombstoned_ProbeErrorForceFlagsTombstone(t *testing.T) {
 	require.NoError(t, s.Create("sess-probe-force", root, primary, testRepoID, ""))
 	breakMissionTree(t, repoRoot)
 
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, true)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, true)
 	require.NoError(t, err)
 	assert.Contains(t, purged, "sess-probe-force")
 	assert.Empty(t, refused)
@@ -319,7 +319,7 @@ func TestPurgeTombstoned_CorruptRosterRefusesWithoutForce(t *testing.T) {
 	require.NoError(t, mission.WriteActiveMission(s.root, "sess-corrupt", "m-2026-09-08-728"))
 	require.NoError(t, mission.WriteDispatchPending(s.root, "sess-corrupt", "m-2026-09-08-729", "bwk"))
 
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, false)
 	require.NoError(t, err)
 	assert.Empty(t, purged)
 	assert.Contains(t, refused, "sess-corrupt", "an unreadable roster must refuse without --force")
@@ -346,7 +346,7 @@ func TestPurgeTombstoned_CorruptRosterForcePurges(t *testing.T) {
 	require.NoError(t, s.Create("sess-corrupt-force", root, primary, testRepoID, ""))
 	require.NoError(t, os.WriteFile(s.rosterPath("sess-corrupt-force"), []byte("[unclosed"), 0o600))
 
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, true)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, true)
 	require.NoError(t, err)
 	assert.Contains(t, purged, "sess-corrupt-force")
 	assert.Empty(t, refused)
@@ -360,7 +360,7 @@ func TestPurgeTombstoned_RefusesUnsealed(t *testing.T) {
 	require.NoError(t, s.Create("sess-unsealed", root, primary, testRepoID, ""))
 	writeUnsealedLive(t, repoRoot, "sess-unsealed")
 
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, false)
 	require.NoError(t, err)
 	assert.Empty(t, purged)
 	assert.Contains(t, refused, "sess-unsealed")
@@ -403,7 +403,7 @@ func TestPurgeTombstoned_ClearsPendingDispatchButKeepsClaimOnUnsealedRefusal(t *
 	require.NoError(t, mission.WriteActiveMission(s.root, sessionID, "m-2026-09-08-726"))
 	require.NoError(t, mission.WriteDispatchPending(s.root, sessionID, "m-2026-09-08-727", "bwk"))
 
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, false)
 	require.NoError(t, err)
 	assert.Empty(t, purged)
 	assert.Contains(t, refused, sessionID)
@@ -436,7 +436,7 @@ func TestPurgeTombstoned_ForceLeavesTombstone(t *testing.T) {
 	require.NoError(t, s.Create("sess-forced", root, primary, testRepoID, ""))
 	writeUnsealedLive(t, repoRoot, "sess-forced")
 
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, true)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, true)
 	require.NoError(t, err)
 	assert.Contains(t, purged, "sess-forced")
 	assert.Empty(t, refused)
@@ -459,7 +459,7 @@ func TestPurgeTombstoned_CleanSessionNoTombstone(t *testing.T) {
 	// No live file at all → nothing unsealed, but the recorded live file is
 	// "gone", so a tombstone with LiveFileGone is written (a checkout that
 	// never wrote, or was deleted). Purge still proceeds.
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, false)
 	require.NoError(t, err)
 	assert.Contains(t, purged, "sess-clean")
 	assert.Empty(t, refused)
@@ -479,7 +479,7 @@ func TestPurgeTombstoned_EmptyBindingUnsealedRefuses(t *testing.T) {
 	writeUnsealedLive(t, repoRoot, "sess-empty")
 
 	// repoID is "" for a no-origin checkout; the empty binding matches it.
-	purged, refused, err := s.PurgeTombstoned(repoRoot, "", false)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, "", false)
 	require.NoError(t, err)
 	assert.Empty(t, purged)
 	assert.Contains(t, refused, "sess-empty")
@@ -501,7 +501,7 @@ func TestPurgeTombstoned_EmptyBindingForceFlagsTombstone(t *testing.T) {
 	require.NoError(t, s.Create("sess-empty-force", root, primary, "", ""))
 	writeUnsealedLive(t, repoRoot, "sess-empty-force")
 
-	purged, refused, err := s.PurgeTombstoned(repoRoot, "", true)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, "", true)
 	require.NoError(t, err)
 	assert.Contains(t, purged, "sess-empty-force")
 	assert.Empty(t, refused)
@@ -523,7 +523,7 @@ func TestPurgeTombstoned_EmptyBindingNoCheckoutRefuses(t *testing.T) {
 	primary := Participant{AgentID: "9999999", Parent: "user1"}
 	require.NoError(t, s.Create("sess-nocheckout", root, primary, "", ""))
 
-	purged, refused, err := s.PurgeTombstoned("", "", false)
+	purged, refused, err := s.PurgeTombstoned("", "", "", false)
 	require.NoError(t, err)
 	assert.Empty(t, purged)
 	assert.Contains(t, refused, "sess-nocheckout")
@@ -541,7 +541,7 @@ func TestPurgeTombstoned_EmptyBindingNoCheckoutForceFlagsTombstone(t *testing.T)
 	primary := Participant{AgentID: "9999999", Parent: "user1"}
 	require.NoError(t, s.Create("sess-nocheckout-force", root, primary, "", ""))
 
-	purged, refused, err := s.PurgeTombstoned("", "", true)
+	purged, refused, err := s.PurgeTombstoned("", "", "", true)
 	require.NoError(t, err)
 	assert.Contains(t, purged, "sess-nocheckout-force")
 	assert.Empty(t, refused)
@@ -565,7 +565,7 @@ func TestPurgeTombstoned_NonEmptyBindingUnchanged(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
 	require.NoError(t, os.WriteFile(live, []byte{}, 0o600))
 
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, false)
 	require.NoError(t, err)
 	assert.Contains(t, purged, "sess-bound-clean")
 	assert.Empty(t, refused)
@@ -589,7 +589,7 @@ func TestPurgeTombstoned_OtherRepoIdentitySkipped(t *testing.T) {
 	// must not touch the session at all.
 	writeUnsealedLive(t, repoRoot, "sess-other")
 
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, false)
 	require.NoError(t, err)
 	assert.Empty(t, purged)
 	assert.Empty(t, refused)
@@ -616,7 +616,7 @@ func TestPurgeTombstoned_NonWriterCheckoutMintsNoSessionTombstone(t *testing.T) 
 	// A roster predating the checkout field: purge falls back to repoRoot.
 	require.NoError(t, s.Create("sess-elsewhere", root, primary, testRepoID, ""))
 
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, false)
 	require.NoError(t, err)
 	assert.Contains(t, purged, "sess-elsewhere")
 	assert.Empty(t, refused, "a checkout with no live zone must not force a refusal")
@@ -638,7 +638,7 @@ func TestPurgeTombstoned_WriterCheckoutGoneFlagsSessionTombstone(t *testing.T) {
 	primary := Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
 	require.NoError(t, s.CreateInCheckout("sess-gone", root, primary, testRepoID, gone, ""))
 
-	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, true)
+	purged, refused, err := s.PurgeTombstoned(repoRoot, repoRoot, testRepoID, true)
 	require.NoError(t, err)
 	assert.Contains(t, purged, "sess-gone")
 	assert.Empty(t, refused)
@@ -646,4 +646,49 @@ func TestPurgeTombstoned_WriterCheckoutGoneFlagsSessionTombstone(t *testing.T) {
 	tb, err := audit.ReadTombstone(filepath.Join(s.sessionsDir(), "sess-gone.purged"))
 	require.NoError(t, err, "a deleted writer checkout must leave a loss tombstone")
 	assert.True(t, tb.LiveFileGone)
+}
+
+// TestPurgeTombstoned_LiveFileUnderStoreRootKeepsRoster covers a linked
+// worktree: the hook writes live files under the canonical store S, while the
+// roster records the linked checkout C. Unsealed lines at S's live path must
+// keep the roster; probing only C sees no file and would tombstone and delete.
+func TestPurgeTombstoned_LiveFileUnderStoreRootKeepsRoster(t *testing.T) {
+	s := testStore(t)
+	storeRoot := t.TempDir()
+	checkout := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
+	require.NoError(t, s.CreateInCheckout("sess-S", root, primary, testRepoID, checkout, ""))
+	writeUnsealedLive(t, storeRoot, "sess-S")
+
+	purged, refused, err := s.PurgeTombstoned(storeRoot, checkout, testRepoID, false)
+	require.NoError(t, err)
+	assert.NotContains(t, purged, "sess-S")
+	assert.Contains(t, refused, "sess-S")
+	_, statErr := os.Stat(filepath.Join(s.sessionsDir(), "sess-S.purged"))
+	assert.True(t, os.IsNotExist(statErr), "no tombstone while unsealed lines remain")
+}
+
+// TestPurgeTombstoned_MissionLiveFileUnderStoreRootKeepsRoster is the mission
+// namespace twin: the unsealed mission live log sits under S, not C.
+func TestPurgeTombstoned_MissionLiveFileUnderStoreRootKeepsRoster(t *testing.T) {
+	s := testStore(t)
+	storeRoot := t.TempDir()
+	checkout := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"}
+	require.NoError(t, s.CreateInCheckout("sess-M", root, primary, testRepoID, checkout, ""))
+	writeSealedLive(t, storeRoot, "sess-M")
+	sealMissionChunkFor(t, storeRoot, "m-2026-07-21-020", "sess-M")
+	path := audit.LiveMissionLogPath(storeRoot, "m-2026-07-21-020", "sess-M")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	body := `{"ts":"` + audit.FormatLineTS(100) + `","event":"create","actor":"c"}` + "\n" +
+		`{"ts":"` + audit.FormatLineTS(200) + `","event":"close","actor":"c"}` + "\n" +
+		`{"ts":"` + audit.FormatLineTS(300) + `","event":"note","actor":"c"}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+
+	purged, refused, err := s.PurgeTombstoned(storeRoot, checkout, testRepoID, false)
+	require.NoError(t, err)
+	assert.NotContains(t, purged, "sess-M")
+	assert.Contains(t, refused, "sess-M")
 }
