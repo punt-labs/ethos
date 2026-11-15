@@ -176,11 +176,7 @@ func SessionDirMatches(name, sessionID string) bool {
 // past its sealed watermark when the sealed record and the live file live in
 // different checkouts. Zero when the live file is absent or fully sealed.
 func SessionUnsealedCountAcross(trackedRoot, liveRoot, sessionID string) (int, error) {
-	dir, err := FindSealedSessionDir(trackedRoot, sessionID)
-	if err != nil {
-		return 0, err
-	}
-	wm, err := Watermark(dir, SessionNS, "")
+	wm, err := sealedSessionWatermark(trackedRoot, sessionID)
 	if err != nil {
 		return 0, err
 	}
@@ -401,14 +397,15 @@ func ExpectedMissionLiveFiles(trackedRoot string, w Writer, sessionID string, bo
 		ids = append(ids, id)
 	}
 
-	base := SealedMissionsBase(trackedRoot)
-	missions, err := os.ReadDir(base)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("reading %s: %w", base, err)
-	}
-	for _, d := range missions {
-		if d.IsDir() && missionChunkCarriesSession(filepath.Join(base, d.Name()), sessionID) {
-			add(d.Name())
+	for _, base := range sealedMissionsBases(trackedRoot) {
+		missions, err := os.ReadDir(base)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("reading %s: %w", base, err)
+		}
+		for _, d := range missions {
+			if d.IsDir() && missionChunkCarriesSession(filepath.Join(base, d.Name()), sessionID) {
+				add(d.Name())
+			}
 		}
 	}
 	for _, id := range boundMissions {
@@ -422,7 +419,7 @@ func ExpectedMissionLiveFiles(trackedRoot string, w Writer, sessionID string, bo
 	for _, id := range ids {
 		livePath := LiveMissionLogPath(w.Root, id, sessionID)
 		_, statErr := os.Stat(livePath)
-		sealed, err := Watermark(SealedMissionDir(trackedRoot, id), MissionNS, sessionID)
+		sealed, err := sealedMissionWatermark(trackedRoot, id, sessionID)
 		if err != nil {
 			return nil, err
 		}
@@ -515,8 +512,14 @@ func holdsAnyLiveMissionLog(liveRoot, sessionID string) bool {
 // The tracked log.jsonl travels with git; the drained residue does not, so each
 // is read from its own root.
 func missionIsWhollyLegacy(trackedRoot, liveRoot, missionID string) (bool, error) {
-	if missionHasAnyChunk(SealedMissionDir(trackedRoot, missionID)) {
-		return false, nil
+	dirs, err := sealedMissionDirs(trackedRoot, missionID)
+	if err != nil {
+		return false, err
+	}
+	for _, d := range dirs {
+		if missionHasAnyChunk(d) {
+			return false, nil
+		}
 	}
 	sources := []string{
 		MissionLegacyLogPath(trackedRoot, missionID),
@@ -591,8 +594,7 @@ func missionChunkCarriesSession(dir, sessionID string) bool {
 // is absent or fully sealed. Chunks come from trackedRoot, the live log from
 // liveRoot — the checkout that wrote it.
 func MissionUnsealedCount(trackedRoot, liveRoot, missionID, sessionID string) (int, error) {
-	sealedDir := SealedMissionDir(trackedRoot, missionID)
-	wm, err := Watermark(sealedDir, MissionNS, sessionID)
+	wm, err := sealedMissionWatermark(trackedRoot, missionID, sessionID)
 	if err != nil {
 		return 0, err
 	}
