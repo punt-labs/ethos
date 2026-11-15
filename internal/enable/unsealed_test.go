@@ -50,3 +50,20 @@ func TestUnsealedAuditLinesReportsReadError(t *testing.T) {
 		t.Errorf("unsealedAuditLines = %d, nil; want a read error", n)
 	}
 }
+
+// A live file that cannot be read must surface as an error, not as zero lines.
+func TestUnsealedAuditLinesReportsUnreadableLiveFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file permissions")
+	}
+	root := t.TempDir()
+	writeLiveLine(t, root, "sid")
+	p := audit.LiveAuditPath(root, "sid")
+	if err := os.Chmod(p, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(p, 0o600) })
+	if n, err := unsealedAuditLines(root, root); err == nil {
+		t.Errorf("unsealedAuditLines = %d, nil; want a read error", n)
+	}
+}

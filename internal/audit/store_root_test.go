@@ -31,3 +31,18 @@ func TestStoreRootOf_BareRepositoryWorktreeIsOwnStore(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, wt, got)
 }
+
+// A linked worktree whose common dir is neither bare nor a work tree's .git
+// (a separate git dir) has no store ethos can name: resolve refuses it, and so
+// must StoreRootOf, so a caller keeps what it cannot place.
+func TestStoreRootOf_SeparateGitDirWorktreeIsRefused(t *testing.T) {
+	d := t.TempDir()
+	work, sep := filepath.Join(d, "work"), filepath.Join(d, "sep")
+	runGitT(t, d, "init", "-q", "--separate-git-dir", sep, work)
+	runGitT(t, work, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "x")
+	wt := filepath.Join(d, "wt")
+	runGitT(t, work, "worktree", "add", "-q", "--detach", wt)
+	if got, err := StoreRootOf(wt); err == nil {
+		t.Errorf("StoreRootOf = %q, nil; want a refusal", got)
+	}
+}
