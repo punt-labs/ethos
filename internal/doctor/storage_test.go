@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,4 +175,19 @@ func TestResidualEffectiveClass(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) { assert.Equal(t, c.want, c.r.EffectiveClass()) })
 	}
+}
+
+// A repository whose layout cannot be resolved must not PASS on the global
+// stamp alone: its own stamp was not checked.
+func TestCheckStorageLayoutErrorWarns(t *testing.T) {
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	g := filepath.Join(d, "g")
+	writeGlobalStamp(t, g, autorepair.Stamp{Version: autorepair.LayoutVersion})
+	store := t.TempDir()
+	loc := resolve.Located{Store: store, Checkout: store, ConfigErr: errors.New("record: must be blame or full")}
+	r := CheckStorage(loc, g)
+	assert.Equal(t, "WARN", r.Status)
+	assert.Contains(t, r.Detail, "repository layout stamp not checked")
+	assert.Contains(t, r.Detail, "record: must be blame or full")
 }

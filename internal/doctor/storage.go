@@ -37,18 +37,19 @@ func CheckStorage(loc resolve.Located, global string) Result {
 	}
 	items, upgraded := g.Items, g.RepairedAt
 	residuals := append([]autorepair.Residual(nil), g.Residual...)
-	if loc.Store != "" && loc.StoreFailure() == nil {
+	if loc.Store != "" {
 		p, perr := loc.Layout()
-		if perr == nil {
-			rs, rerr := autorepair.ReadStamp(autorepair.RepositoryStampPath(p))
-			if bad := stampProblem("repository", rs, rerr); bad != "" {
-				return Result{Name: name, Status: "WARN", Detail: bad}
-			}
-			items += rs.Items
-			residuals = append(residuals, rs.Residual...)
-			if rs.RepairedAt > upgraded {
-				upgraded = rs.RepairedAt
-			}
+		if perr != nil {
+			return Result{Name: name, Status: "WARN", Detail: "repository layout stamp not checked: " + perr.Error()}
+		}
+		rs, rerr := autorepair.ReadStamp(autorepair.RepositoryStampPath(p))
+		if bad := stampProblem("repository", rs, rerr); bad != "" {
+			return Result{Name: name, Status: "WARN", Detail: bad}
+		}
+		items += rs.Items
+		residuals = append(residuals, rs.Residual...)
+		if rs.RepairedAt > upgraded {
+			upgraded = rs.RepairedAt
 		}
 	}
 	var act, settled []autorepair.Residual
