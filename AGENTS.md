@@ -99,4 +99,4 @@ playbook; Ethos repository cleanup; consuming-repository rollout.
 
 ## Issue tracking
 
-Read `.punt-labs/punt/CLAUDE.md` before planning or writing to the issue tracker. Linear is the tracker of record where this repo is migrated. Beads is a local mirror there and the tracker of record elsewhere.
+Read `.punt-labs/punt/CLAUDE.md` before planning or writing to the issue tracker. Linear is the sole tracker of record (team Punt Labs, label `repo:ethos`).
