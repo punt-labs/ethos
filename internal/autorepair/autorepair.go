@@ -17,6 +17,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/redact"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
@@ -141,6 +142,22 @@ func (r Residual) EffectiveClass() Class {
 func (r Residual) needsReevaluation() bool {
 	return r.Class == "" && r.Step == "round-decisions" && r.Reason == mission.LegacyIncomplete.String()+fencedSuffix
 }
+
+// EffectiveAction is what a person does about an actionable residual: its
+// Action, or for one from a stamp written before actions existed, a pointer to
+// the repair log. A settled residual has none.
+func (r Residual) EffectiveAction() string {
+	if r.EffectiveClass() == ClassSettled {
+		return ""
+	}
+	if r.Action != "" {
+		return r.Action
+	}
+	return "see ~/.punt-labs/ethos/logs/repair.log for step " + r.Step + ", then run ethos doctor"
+}
+
+// DisplayAction is EffectiveAction through the prose redactor, for a screen.
+func (r Residual) DisplayAction() string { return redact.Prose(r.EffectiveAction()) }
 
 // seeLogAction is the action for a condition whose cause only the repair log
 // names.

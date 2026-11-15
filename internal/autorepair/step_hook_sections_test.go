@@ -185,3 +185,23 @@ func TestHookSectionsMalformedIsResidualNotError(t *testing.T) {
 		})
 	}
 }
+
+// A non-shell hook cannot take ethos enable's shell section, so enable is not
+// the action; wrapping the hook or calling ethos natively is.
+func TestHookSectionsNonShellActionIsNotEnable(t *testing.T) {
+	env := fixtureEnv(t, "corpus/v4.22.1")
+	hook := filepath.Join(env.Roots.Checkout, ".git", "hooks", "pre-commit")
+	require.NoError(t, os.WriteFile(hook, []byte("#!/usr/bin/env python3\nprint('hi')\n"), 0o755))
+	out, err := runHookSections(context.Background(), env)
+	require.NoError(t, err)
+	var got *Residual
+	for i := range out.Residuals {
+		if strings.Contains(out.Residuals[i].Reason, "non-shell") {
+			got = &out.Residuals[i]
+		}
+	}
+	require.NotNil(t, got, "residuals: %v", out.Residuals)
+	assert.NotContains(t, got.Action, "ethos enable")
+	assert.Contains(t, got.Action, "shell script")
+	assert.Contains(t, got.Action, "natively")
+}

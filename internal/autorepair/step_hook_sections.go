@@ -52,7 +52,13 @@ func refreshHookSections(ctx context.Context, env Env, step string) (Outcome, er
 					"hook section cannot be refreshed: "+st.Cause,
 					"fix or remove the malformed section in "+relTo(checkout, st.Detail)+" by hand, then run ethos doctor"))
 				env.Log.Logf(step, "refresh-hook", []string{st.Detail}, errors.New(st.Cause))
-			case enable.StatusSkippedNonShell, enable.StatusSkippedTracked,
+			case enable.StatusSkippedNonShell:
+				// ethos enable cannot install a shell section into a hook written
+				// in another language, so it is not the remedy.
+				out.Residuals = append(out.Residuals, actionableResidual(step, st.Step+": "+relTo(checkout, st.Detail),
+					"hook cannot be rewritten: "+strings.TrimPrefix(st.Status, "skipped-"),
+					"wrap "+relTo(checkout, st.Detail)+" in a shell script that calls ethos, or invoke ethos natively from the hook's own language"))
+			case enable.StatusSkippedTracked,
 				enable.StatusSkippedShared, enable.StatusSkippedTrackedMissing:
 				out.Residuals = append(out.Residuals, actionableResidual(step, st.Step+": "+relTo(checkout, st.Detail),
 					"hook cannot be rewritten: "+strings.TrimPrefix(st.Status, "skipped-"),

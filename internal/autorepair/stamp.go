@@ -74,6 +74,7 @@ func WriteStamp(path string, s Stamp, ensureDir func(dir string) error) error {
 		for i, r := range s.Residual {
 			r.ID = redact.Prose(r.ID)
 			r.Reason = redact.Prose(r.Reason)
+			r.Action = redact.Prose(r.Action)
 			rs[i] = r
 		}
 		s.Residual = rs

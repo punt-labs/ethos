@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/autorepair"
+	"github.com/punt-labs/ethos/v4/internal/redact"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
@@ -40,11 +41,12 @@ func CheckStorage(loc resolve.Located, global string) Result {
 	if loc.Store != "" {
 		p, perr := loc.Layout()
 		if perr != nil {
-			return Result{Name: name, Status: "WARN", Detail: "repository layout stamp not checked: " + perr.Error()}
+			return Result{Name: name, Status: "WARN", Lines: residualLines(residuals),
+				Detail: "repository layout stamp not checked: " + perr.Error()}
 		}
 		rs, rerr := autorepair.ReadStamp(autorepair.RepositoryStampPath(p))
 		if bad := stampProblem("repository", rs, rerr); bad != "" {
-			return Result{Name: name, Status: "WARN", Detail: bad}
+			return Result{Name: name, Status: "WARN", Lines: residualLines(residuals), Detail: bad}
 		}
 		items += rs.Items
 		residuals = append(residuals, rs.Residual...)
@@ -60,21 +62,10 @@ func CheckStorage(loc resolve.Located, global string) Result {
 			act = append(act, r)
 		}
 	}
-	lines := make([]string, 0, len(residuals))
-	for _, r := range act {
-		lines = append(lines, "action needed: "+residualLine(r))
-	}
-	for _, r := range settled {
-		lines = append(lines, "settled: "+residualLine(r))
-	}
+	lines := residualLines(residuals)
 	if len(act) > 0 {
-		const show = 3
-		parts := make([]string, 0, show+1)
-		for i, r := range act {
-			if i == show {
-				parts = append(parts, fmt.Sprintf("and %d more (ethos doctor --verbose)", len(act)-show))
-				break
-			}
+		parts := make([]string, 0, len(act))
+		for _, r := range act {
 			parts = append(parts, residualLine(r))
 		}
 		return Result{Name: name, Status: "WARN", Lines: lines, Detail: fmt.Sprintf(
@@ -87,12 +78,30 @@ func CheckStorage(loc resolve.Located, global string) Result {
 	return Result{Name: name, Status: "PASS", Detail: detail, Lines: lines}
 }
 
-// residualLine is one residual as "step id: reason; action". A residual from
-// a stamp written before actions existed shows the reason alone.
+// residualLines is every residual for --verbose, the ones needing action first.
+func residualLines(residuals []autorepair.Residual) []string {
+	lines := make([]string, 0, len(residuals))
+	for _, r := range residuals {
+		if r.EffectiveClass() != autorepair.ClassSettled {
+			lines = append(lines, "action needed: "+residualLine(r))
+		}
+	}
+	for _, r := range residuals {
+		if r.EffectiveClass() == autorepair.ClassSettled {
+			lines = append(lines, "settled: "+residualLine(r))
+		}
+	}
+	return lines
+}
+
+// residualLine is one residual as "step id: reason; action". An actionable
+// residual always names an action (a stamp written before actions existed gets
+// the repair-log pointer); text is redacted again because the stamp is a file
+// other tools may have written.
 func residualLine(r autorepair.Residual) string {
-	s := fmt.Sprintf("%s %s: %s", r.Step, r.ID, r.Reason)
-	if r.Action != "" {
-		s += "; " + r.Action
+	s := redact.Prose(fmt.Sprintf("%s %s: %s", r.Step, r.ID, r.Reason))
+	if a := r.DisplayAction(); a != "" {
+		s += "; " + a
 	}
 	return s
 }

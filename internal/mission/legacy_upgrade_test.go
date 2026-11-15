@@ -135,7 +135,7 @@ func TestUpgradeLegacyAuthority_FenceKinds(t *testing.T) {
 	t.Run("inconsistent entries stay incomplete", func(t *testing.T) {
 		for name, body := range map[string]string{
 			"wrong mission": "reflections:\n    - mission: m-other\n      round: 1\n      created_at: \"2026-11-05T10:00:00Z\"\n      author: claude\n      converging: true\n      signals:\n        - ok\n      recommendation: continue\n      reason: r\n",
-			"out of order": "reflections:\n    - round: 2\n      created_at: \"2026-11-05T10:00:00Z\"\n      author: claude\n      converging: true\n      signals:\n        - ok\n      recommendation: continue\n      reason: r\n    - round: 1\n      created_at: \"2026-11-05T10:00:00Z\"\n      author: claude\n      converging: true\n      signals:\n        - ok\n      recommendation: continue\n      reason: r\n",
+			"out of order":  "reflections:\n    - round: 2\n      created_at: \"2026-11-05T10:00:00Z\"\n      author: claude\n      converging: true\n      signals:\n        - ok\n      recommendation: continue\n      reason: r\n    - round: 1\n      created_at: \"2026-11-05T10:00:00Z\"\n      author: claude\n      converging: true\n      signals:\n        - ok\n      recommendation: continue\n      reason: r\n",
 		} {
 			t.Run(name, func(t *testing.T) {
 				s, c, _ := legacyReflectionReader(t, true, 2)

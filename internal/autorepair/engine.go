@@ -466,6 +466,12 @@ func runSteps(ctx context.Context, base Env, roots resolve.Located, policy layou
 				log.Logf(s.Name, "unclassed-residual", nil, fmt.Errorf("residual %q has no class; recorded as actionable", rs.ID))
 				rs.Class = ClassActionable
 			}
+			if rs.Class == ClassActionable && rs.Action == "" {
+				// Constructors forbid this; a step that got here built the
+				// residual by hand. Doctor must still name an action.
+				log.Logf(s.Name, "defect", nil, fmt.Errorf("actionable residual %q has no action", rs.ID))
+				rs.Action = rs.EffectiveAction()
+			}
 			if t := residualTarget(rs, served, r); t != nil {
 				t.residual = append(t.residual, rs)
 			}

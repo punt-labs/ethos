@@ -134,13 +134,14 @@ func TestCheckStorageActionableWarnsWithAction(t *testing.T) {
 	g := filepath.Join(d, "g")
 	writeGlobalStamp(t, g, autorepair.Stamp{Version: autorepair.LayoutVersion, Residual: []autorepair.Residual{
 		{Step: "round-decisions", ID: "m-1", Class: autorepair.ClassSettled, Reason: "incomplete legacy history, mission fenced from lifecycle writes"},
-		{Step: "gitignore", ID: ".gitignore: .punt-labs/ethos/sessions", Class: autorepair.ClassActionable, Reason: ".gitignore line 7 ignores the sessions record directory; the line is safe to delete"},
+		{Step: "gitignore", ID: ".gitignore: .punt-labs/ethos/sessions", Class: autorepair.ClassActionable, Reason: ".gitignore line 7 ignores the sessions record directory; the line is safe to delete", Action: "delete line 7 of .gitignore"},
 	}})
 	r := CheckStorage(resolve.Located{}, g)
 	assert.Equal(t, "WARN", r.Status)
 	assert.Contains(t, r.Detail, "1 condition(s) need action")
 	assert.Contains(t, r.Detail, ".gitignore line 7")
 	assert.Contains(t, r.Detail, "safe to delete")
+	assert.Contains(t, r.Detail, "delete line 7 of .gitignore", "the action is in the WARN")
 	require.Len(t, r.Lines, 2)
 	assert.True(t, strings.HasPrefix(r.Lines[0], "action needed: "))
 	assert.True(t, strings.HasPrefix(r.Lines[1], "settled: "))
@@ -191,4 +192,71 @@ func TestCheckStorageLayoutErrorWarns(t *testing.T) {
 	assert.Equal(t, "WARN", r.Status)
 	assert.Contains(t, r.Detail, "repository layout stamp not checked")
 	assert.Contains(t, r.Detail, "record: must be blame or full")
+}
+
+// Every actionable residual names its action in the WARN; none hides behind a
+// count.
+func TestCheckStorageWarnNamesEveryAction(t *testing.T) {
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	g := filepath.Join(d, "g")
+	var rs []autorepair.Residual
+	for _, id := range []string{"a", "b", "c", "d", "e"} {
+		rs = append(rs, autorepair.Residual{Step: "gitignore", ID: id, Class: autorepair.ClassActionable, Reason: "reason-" + id, Action: "action-" + id})
+	}
+	writeGlobalStamp(t, g, autorepair.Stamp{Version: autorepair.LayoutVersion, Residual: rs})
+	r := CheckStorage(resolve.Located{}, g)
+	assert.Equal(t, "WARN", r.Status)
+	for _, id := range []string{"a", "b", "c", "d", "e"} {
+		assert.Contains(t, r.Detail, "reason-"+id)
+		assert.Contains(t, r.Detail, "action-"+id)
+	}
+	assert.NotContains(t, r.Detail, "and 2 more")
+}
+
+// An old actionable residual with no action still names one.
+func TestCheckStorageOldActionableGetsFallbackAction(t *testing.T) {
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	g := filepath.Join(d, "g")
+	raw := "version: 5\nresidual:\n- step: gitignore\n  id: x\n  reason: old thing\n"
+	require.NoError(t, os.MkdirAll(g, 0o700))
+	require.NoError(t, os.WriteFile(autorepair.GlobalStampPath(g), []byte(raw), 0o600))
+	r := CheckStorage(resolve.Located{}, g)
+	assert.Equal(t, "WARN", r.Status)
+	assert.Contains(t, r.Detail, "repair.log for step gitignore, then run ethos doctor")
+}
+
+// A credential-shaped name in an action does not reach the screen even from a
+// stamp another tool wrote.
+func TestCheckStorageRedactsAction(t *testing.T) {
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	g := filepath.Join(d, "g")
+	const token = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+	raw := "version: 5\nresidual:\n- class: actionable\n  step: leftovers\n  id: x\n  reason: r\n  action: delete " + token + ".lock\n"
+	require.NoError(t, os.MkdirAll(g, 0o700))
+	require.NoError(t, os.WriteFile(autorepair.GlobalStampPath(g), []byte(raw), 0o600))
+	r := CheckStorage(resolve.Located{}, g)
+	assert.NotContains(t, r.Detail, token)
+	for _, l := range r.Lines {
+		assert.NotContains(t, l, token)
+	}
+}
+
+// A repository-layout WARN still lists the global stamp's residuals under
+// --verbose.
+func TestCheckStorageLayoutWarnKeepsGlobalLines(t *testing.T) {
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	g := filepath.Join(d, "g")
+	writeGlobalStamp(t, g, autorepair.Stamp{Version: autorepair.LayoutVersion, Residual: []autorepair.Residual{
+		{Step: "gitignore", ID: "x", Class: autorepair.ClassActionable, Reason: "r", Action: "do x"},
+	}})
+	store := t.TempDir()
+	loc := resolve.Located{Store: store, Checkout: store, ConfigErr: errors.New("record: must be blame or full")}
+	r := CheckStorage(loc, g)
+	assert.Equal(t, "WARN", r.Status)
+	require.Len(t, r.Lines, 1)
+	assert.Contains(t, r.Lines[0], "do x")
 }
