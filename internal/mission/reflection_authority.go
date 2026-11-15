@@ -623,7 +623,7 @@ func (s *Store) finishReflection(in reflectionIntent) error {
 func (s *Store) importLegacyDecisions(c *Contract) error {
 	rs, _, err := s.loadReflectionsBytes(c.MissionID)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", errDamagedReflections, err)
 	}
 	d := &RoundDecisions{Version: 1, Entries: []RoundDecision{}}
 	for _, r := range rs {

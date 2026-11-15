@@ -301,3 +301,22 @@ func TestRoundDecisions_ClassByFence(t *testing.T) {
 	assert.Equal(t, ClassActionable, out.Residuals[0].Class)
 	assert.Contains(t, out.Residuals[0].Action, "repair or restore")
 }
+
+// A reflections.yaml that cannot be decoded is damage a person repairs, not a
+// final verdict on the history.
+func TestRoundDecisions_CorruptReflectionsIsActionable(t *testing.T) {
+	env := stage34(t, "v4.17.0")
+	dir := filepath.Join(env.Roots.Store, ".punt-labs", "ethos", "missions", "m-2026-11-09-001")
+	write34(t, filepath.Join(dir, "reflections.yaml"), "broken: [yaml")
+	out := run34(t, "round-decisions", env)
+	var got *Residual
+	for i := range out.Residuals {
+		if out.Residuals[i].ID == "m-2026-11-09-001" {
+			got = &out.Residuals[i]
+		}
+	}
+	require.NotNil(t, got, "residuals: %v", out.Residuals)
+	assert.Equal(t, ClassActionable, got.Class)
+	assert.Contains(t, got.Action, "repair or restore")
+	assert.Contains(t, got.Action, "reflections.yaml")
+}

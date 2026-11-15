@@ -85,6 +85,8 @@ func fenceResidual(env Env, id string, h *mission.LegacyHistoryError) Residual {
 		return actionableResidual("round-decisions", id, base, "check read permission on "+rel+", then run ethos doctor")
 	case h.Kind == mission.LegacyUnloadable:
 		return actionableResidual("round-decisions", id, base, "repair or restore "+missionFileRel(id, "contract.yaml"))
+	case h.Kind == mission.LegacyDamagedReflections:
+		return actionableResidual("round-decisions", id, base, "repair or restore "+missionFileRel(id, "reflections.yaml"))
 	case h.Kind == mission.LegacyCorruptCorrections:
 		return actionableResidual("round-decisions", id, base, "repair or restore "+missionFileRel(id, "corrections.yaml"))
 	}
