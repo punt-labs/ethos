@@ -111,3 +111,18 @@ func TestCheckStorageMessagesPromiseNothing(t *testing.T) {
 	old := CheckStorage(resolve.Located{}, g)
 	assert.Equal(t, "the global store is at layout v4, not v5; see ~/.punt-labs/ethos/logs/repair.log", old.Detail)
 }
+
+// A repository whose only residuals are the final state of pre-v4.21 mission
+// history must read PASS: WARN is for a condition a person can act on.
+func TestCheckStorageSettledResidualsPass(t *testing.T) {
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	g := filepath.Join(d, "g")
+	writeGlobalStamp(t, g, autorepair.Stamp{Version: autorepair.LayoutVersion, Residual: []autorepair.Residual{
+		{Step: "round-decisions", ID: "m-1", Reason: "incomplete legacy history, mission fenced from lifecycle writes"},
+		{Step: "round-decisions", ID: "m-2", Reason: "incomplete legacy history, mission fenced from lifecycle writes"},
+	}})
+	r := CheckStorage(resolve.Located{}, g)
+	assert.Equal(t, "PASS", r.Status)
+	assert.Contains(t, r.Detail, "2 legacy missions fenced, no action needed")
+}
