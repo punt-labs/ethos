@@ -742,7 +742,7 @@ func (s *Store) purgeOneTombstoned(roster *Roster, storeRoot, repoRoot, repoID s
 		} else {
 			unsealed = n
 		}
-		liveGone = audit.SessionLiveFileLost(writer, roster.Session)
+		liveGone = audit.SessionLiveFileLost(sealedRoot, writer, roster.Session)
 		// REQ-1: the guard spans both namespaces. A session that sealed a
 		// mission chunk and then lost its mission live log (worktree torn
 		// down), or a Tier B session that claimed a mission but sealed no

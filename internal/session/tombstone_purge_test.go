@@ -647,3 +647,48 @@ func TestPurgeTombstoned_WriterCheckoutGoneFlagsSessionTombstone(t *testing.T) {
 	require.NoError(t, err, "a deleted writer checkout must leave a loss tombstone")
 	assert.True(t, tb.LiveFileGone)
 }
+
+// TestPurgeTombstoned_LiveFileUnderStoreRootKeepsRoster covers a linked
+// worktree: the hook writes live files under the canonical store S, while the
+// roster records the linked checkout C. Unsealed lines at S's live path must
+// keep the roster; probing only C sees no file and would tombstone and delete.
+func TestPurgeTombstoned_LiveFileUnderStoreRootKeepsRoster(t *testing.T) {
+	s := testStore(t)
+	storeRoot := t.TempDir()
+	checkout := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
+	require.NoError(t, s.CreateInCheckout("sess-S", root, primary, testRepoID, checkout, ""))
+	writeUnsealedLive(t, storeRoot, "sess-S")
+
+	purged, refused, err := s.PurgeTombstoned(storeRoot, checkout, testRepoID, false)
+	require.NoError(t, err)
+	assert.NotContains(t, purged, "sess-S")
+	assert.Contains(t, refused, "sess-S")
+	_, statErr := os.Stat(filepath.Join(s.sessionsDir(), "sess-S.purged"))
+	assert.True(t, os.IsNotExist(statErr), "no tombstone while unsealed lines remain")
+}
+
+// TestPurgeTombstoned_MissionLiveFileUnderStoreRootKeepsRoster is the mission
+// namespace twin: the unsealed mission live log sits under S, not C.
+func TestPurgeTombstoned_MissionLiveFileUnderStoreRootKeepsRoster(t *testing.T) {
+	s := testStore(t)
+	storeRoot := t.TempDir()
+	checkout := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"}
+	require.NoError(t, s.CreateInCheckout("sess-M", root, primary, testRepoID, checkout, ""))
+	writeSealedLive(t, storeRoot, "sess-M")
+	sealMissionChunkFor(t, storeRoot, "m-2026-07-21-020", "sess-M")
+	path := audit.LiveMissionLogPath(storeRoot, "m-2026-07-21-020", "sess-M")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	body := `{"ts":"` + audit.FormatLineTS(100) + `","event":"create","actor":"c"}` + "\n" +
+		`{"ts":"` + audit.FormatLineTS(200) + `","event":"close","actor":"c"}` + "\n" +
+		`{"ts":"` + audit.FormatLineTS(300) + `","event":"note","actor":"c"}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+
+	purged, refused, err := s.PurgeTombstoned(storeRoot, checkout, testRepoID, false)
+	require.NoError(t, err)
+	assert.NotContains(t, purged, "sess-M")
+	assert.Contains(t, refused, "sess-M")
+}

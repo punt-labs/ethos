@@ -174,21 +174,45 @@ func SessionDirMatches(name, sessionID string) bool {
 
 // SessionUnsealedCountAcross returns how many live audit lines a session holds
 // past its sealed watermark when the sealed record and the live file live in
-// different checkouts. Zero when the live file is absent or fully sealed.
+// different checkouts. The live file is read under both storeRoot and liveRoot;
+// lines in either count. Zero when no live file exists or all are sealed.
 func SessionUnsealedCountAcross(storeRoot, trackedRoot, liveRoot, sessionID string) (int, error) {
 	wm, err := sealedSessionWatermark(storeRoot, trackedRoot, sessionID)
 	if err != nil {
 		return 0, err
 	}
-	livePath := LiveAuditPath(liveRoot, sessionID)
-	if present, err := auditReadFilePresent(livePath); err != nil || !present {
-		return 0, err
+	n := 0
+	for _, root := range liveRoots(storeRoot, liveRoot) {
+		livePath := LiveAuditPath(root, sessionID)
+		present, err := auditReadFilePresent(livePath)
+		if err != nil {
+			return 0, err
+		}
+		if !present {
+			continue
+		}
+		tail, err := LiveLinesPastWatermark(livePath, "", wm)
+		if err != nil {
+			return 0, err
+		}
+		n += len(tail)
 	}
-	tail, err := LiveLinesPastWatermark(livePath, "", wm)
-	if err != nil {
-		return 0, err
+	return n, nil
+}
+
+// liveRoots returns the roots that may hold a session's live files: the
+// canonical store S, where the writer appends since DES-079, and the recorded
+// checkout, where pre-DES-079 writers left them. Empty roots are skipped and
+// duplicates collapse.
+func liveRoots(storeRoot, liveRoot string) []string {
+	var roots []string
+	for _, r := range []string{storeRoot, liveRoot} {
+		if r == "" || (len(roots) > 0 && roots[0] == r) {
+			continue
+		}
+		roots = append(roots, r)
 	}
-	return len(tail), nil
+	return roots
 }
 
 // SessionUnsealedCount is SessionUnsealedCountAcross for a session probed in
@@ -204,6 +228,17 @@ func SessionUnsealedCount(storeRoot, repoRoot, sessionID string) (int, error) {
 func SessionLiveFileExists(liveRoot, sessionID string) bool {
 	_, err := os.Stat(LiveAuditPath(liveRoot, sessionID))
 	return err == nil
+}
+
+// sessionLiveFileExistsAny reports whether the live audit file exists under the
+// store root or the recorded checkout.
+func sessionLiveFileExistsAny(storeRoot, liveRoot, sessionID string) bool {
+	for _, r := range liveRoots(storeRoot, liveRoot) {
+		if SessionLiveFileExists(r, sessionID) {
+			return true
+		}
+	}
+	return false
 }
 
 // Writer names the checkout a session's live files belong to, and says whether
@@ -230,11 +265,14 @@ func AssumedWriter(root string) Writer { return Writer{Root: root} }
 // a way that means loss rather than the ordinary absence of another checkout's
 // state. It is the session-namespace twin of MissionLive.Lost and applies the
 // same rule, so the two namespaces cannot drift apart.
-func SessionLiveFileLost(w Writer, sessionID string) bool {
-	if SessionLiveFileExists(w.Root, sessionID) {
+//
+// The live file counts as present under the store root S (where the hook writes
+// since DES-079) or under the writer's checkout (the legacy location).
+func SessionLiveFileLost(storeRoot string, w Writer, sessionID string) bool {
+	if sessionLiveFileExistsAny(storeRoot, w.Root, sessionID) {
 		return false
 	}
-	present, wrote := writerState(w.Root, sessionID)
+	present, wrote := writerState(storeRoot, w.Root, sessionID)
 	return w.Recorded || !present || wrote
 }
 
@@ -403,7 +441,14 @@ func ExpectedMissionLiveFiles(storeRoot, trackedRoot string, w Writer, sessionID
 			return nil, fmt.Errorf("reading %s: %w", base, err)
 		}
 		for _, d := range missions {
-			if d.IsDir() && missionChunkCarriesSession(filepath.Join(base, d.Name()), sessionID) {
+			if !d.IsDir() {
+				continue
+			}
+			carries, err := missionChunkCarriesSession(filepath.Join(base, d.Name()), sessionID)
+			if err != nil {
+				return nil, err
+			}
+			if carries {
 				add(d.Name())
 			}
 		}
@@ -412,13 +457,12 @@ func ExpectedMissionLiveFiles(storeRoot, trackedRoot string, w Writer, sessionID
 		add(id)
 	}
 
-	writerPresent, writerZone := writerState(w.Root, sessionID)
+	writerPresent, writerZone := writerState(storeRoot, w.Root, sessionID)
 
 	sort.Strings(ids)
 	out := make([]MissionLive, 0, len(ids))
 	for _, id := range ids {
-		livePath := LiveMissionLogPath(w.Root, id, sessionID)
-		_, statErr := os.Stat(livePath)
+		livePath, present := liveMissionLogAny(storeRoot, w.Root, id, sessionID)
 		sealed, err := sealedMissionWatermark(storeRoot, trackedRoot, id, sessionID)
 		if err != nil {
 			return nil, err
@@ -430,7 +474,7 @@ func ExpectedMissionLiveFiles(storeRoot, trackedRoot string, w Writer, sessionID
 		out = append(out, MissionLive{
 			MissionID:      id,
 			LivePath:       livePath,
-			Present:        statErr == nil,
+			Present:        present,
 			Sealed:         sealed > 0,
 			Legacy:         legacy,
 			WriterPresent:  writerPresent,
@@ -450,14 +494,33 @@ func ExpectedMissionLiveFiles(storeRoot, trackedRoot string, w Writer, sessionID
 // onto "" builds a relative path that could match some unrelated directory
 // below the working directory. An unknown writer is treated as gone, which
 // warns — the fail-safe direction.
-func writerState(liveRoot, sessionID string) (present, wrote bool) {
+func writerState(storeRoot, liveRoot, sessionID string) (present, wrote bool) {
 	if liveRoot == "" {
 		return false, false
 	}
 	if info, err := os.Stat(liveRoot); err != nil || !info.IsDir() {
 		return false, false
 	}
-	return true, holdsAnyLiveMissionLog(liveRoot, sessionID)
+	for _, r := range liveRoots(storeRoot, liveRoot) {
+		if holdsAnyLiveMissionLog(r, sessionID) {
+			return true, true
+		}
+	}
+	return true, false
+}
+
+// liveMissionLogAny returns the mission live log path that exists under the
+// store root or the writer checkout, preferring the store root. When neither
+// exists it returns the writer checkout's path and false.
+func liveMissionLogAny(storeRoot, liveRoot, missionID, sessionID string) (string, bool) {
+	roots := liveRoots(storeRoot, liveRoot)
+	for _, r := range roots {
+		p := LiveMissionLogPath(r, missionID, sessionID)
+		if _, err := os.Stat(p); err == nil {
+			return p, true
+		}
+	}
+	return LiveMissionLogPath(liveRoot, missionID, sessionID), false
 }
 
 // holdsAnyLiveMissionLog reports whether liveRoot holds at least one live
@@ -572,21 +635,26 @@ func missionHasAnyChunk(dir string) bool {
 }
 
 // missionChunkCarriesSession reports whether any valid mission chunk in dir
-// carries the session's id.
-func missionChunkCarriesSession(dir, sessionID string) bool {
+// carries the session's id. An absent dir answers false; any other read error
+// propagates, because dropping the mission from the probe set on EACCES or EIO
+// would let the purge delete a roster whose mission state is unknown.
+func missionChunkCarriesSession(dir, sessionID string) (bool, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return false
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("reading mission chunk dir %s: %w", dir, err)
 	}
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
 		if cn, kind := Classify(e.Name(), MissionNS); kind == KindValid && cn.Session == sessionID {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // MissionUnsealedCount returns how many lines a mission's per-(mission,
@@ -598,15 +666,23 @@ func MissionUnsealedCount(storeRoot, trackedRoot, liveRoot, missionID, sessionID
 	if err != nil {
 		return 0, err
 	}
-	livePath := LiveMissionLogPath(liveRoot, missionID, sessionID)
-	if present, err := auditReadFilePresent(livePath); err != nil || !present {
-		return 0, err
+	n := 0
+	for _, root := range liveRoots(storeRoot, liveRoot) {
+		livePath := LiveMissionLogPath(root, missionID, sessionID)
+		present, err := auditReadFilePresent(livePath)
+		if err != nil {
+			return 0, err
+		}
+		if !present {
+			continue
+		}
+		tail, err := LiveLinesPastWatermark(livePath, sessionID, wm)
+		if err != nil {
+			return 0, err
+		}
+		n += len(tail)
 	}
-	tail, err := LiveLinesPastWatermark(livePath, sessionID, wm)
-	if err != nil {
-		return 0, err
-	}
-	return len(tail), nil
+	return n, nil
 }
 
 // ListLiveLogSessions returns the session ids whose live mission log files
