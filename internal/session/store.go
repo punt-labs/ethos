@@ -766,6 +766,16 @@ func (s *Store) purgeOneTombstoned(roster *Roster, storeRoot, repoRoot, repoID s
 		// live files (chunk-derived union mission-record bindings) and fold
 		// their unsealed/gone state in.
 		bound, bErr := mission.SessionBoundMissions(s.root, trackedRoot, roster.Session)
+		if sealedRoot != trackedRoot {
+			// Delegation records live under the store S (RecordRoot), which is not
+			// the checkout in a linked worktree: read both, so a binding held only
+			// there is not lost.
+			more, mErr := mission.SessionBoundMissions(s.root, sealedRoot, roster.Session)
+			if mErr != nil && bErr == nil {
+				bErr = mErr
+			}
+			bound = append(bound, more...)
+		}
 		if bErr != nil {
 			probeFailed = true
 			s.warnf("ethos: purge: resolving %s mission bindings: %v\n", roster.Session, bErr)

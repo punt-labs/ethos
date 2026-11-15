@@ -462,7 +462,10 @@ func ExpectedMissionLiveFiles(storeRoot, trackedRoot string, w Writer, sessionID
 	sort.Strings(ids)
 	out := make([]MissionLive, 0, len(ids))
 	for _, id := range ids {
-		livePath, present := liveMissionLogAny(storeRoot, w.Root, id, sessionID)
+		livePath, present, err := liveMissionLogAny(storeRoot, w.Root, id, sessionID)
+		if err != nil {
+			return nil, err
+		}
 		sealed, err := sealedMissionWatermark(storeRoot, trackedRoot, id, sessionID)
 		if err != nil {
 			return nil, err
@@ -511,16 +514,20 @@ func writerState(storeRoot, liveRoot, sessionID string) (present, wrote bool) {
 
 // liveMissionLogAny returns the mission live log path that exists under the
 // store root or the writer checkout, preferring the store root. When neither
-// exists it returns the writer checkout's path and false.
-func liveMissionLogAny(storeRoot, liveRoot, missionID, sessionID string) (string, bool) {
-	roots := liveRoots(storeRoot, liveRoot)
-	for _, r := range roots {
+// exists it returns the writer checkout's path and false. Only a missing file
+// is absence: any other stat error is returned, since it proves nothing.
+func liveMissionLogAny(storeRoot, liveRoot, missionID, sessionID string) (string, bool, error) {
+	for _, r := range liveRoots(storeRoot, liveRoot) {
 		p := LiveMissionLogPath(r, missionID, sessionID)
-		if _, err := os.Stat(p); err == nil {
-			return p, true
+		_, err := os.Stat(p)
+		if err == nil {
+			return p, true, nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", false, fmt.Errorf("checking %s: %w", p, err)
 		}
 	}
-	return LiveMissionLogPath(liveRoot, missionID, sessionID), false
+	return LiveMissionLogPath(liveRoot, missionID, sessionID), false, nil
 }
 
 // holdsAnyLiveMissionLog reports whether liveRoot holds at least one live
