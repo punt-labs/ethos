@@ -5,41 +5,46 @@
 [![License](https://img.shields.io/github/license/punt-labs/ethos)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/punt-labs/ethos/test.yml?label=CI)](https://github.com/punt-labs/ethos/actions/workflows/test.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/punt-labs/ethos/v4.svg)](https://pkg.go.dev/github.com/punt-labs/ethos/v4)
-[![Working Backwards](https://img.shields.io/badge/Working_Backwards-validated-blue)](./prfaq.pdf)
+[![Working Backwards](https://img.shields.io/badge/Working_Backwards-hypothesis-lightgrey)](./prfaq.pdf)
 
-Ethos runs typed mission contracts for AI agents — a write-set, a frozen
-evaluator, bounded review rounds, and a per-tool-call audit trail.
-Commit trailers link recorded mission/delegation associations; full prompts
-and tool traces need not be shared with the code.
-Missions dispatch against a persistent layer of identities and teams that
-give each agent a role, tool restrictions, and a delegation graph. It ships
-as a single Go binary with a Claude Code plugin, an MCP server, and a
-filesystem layout other tools read directly. It runs locally — no server, no
-telemetry, no cloud.
+Ethos is a command-line tool, an MCP (Model Context Protocol) server, and a
+Claude Code plugin for developers who hand work to AI coding agents in a Git
+repository. It gives each agent a named identity and role, runs delegated work
+under a written mission contract that limits which files the agent may change,
+and logs every tool call the agent makes. It is a single Go binary that runs
+locally, with no server, telemetry, or cloud service.
 
 **Platforms:** macOS, Linux (amd64, arm64).
 
 ## Quick Start
 
+Install ethos:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/2ef90938/install.sh | sh
+```
+
+Create your identity and team:
+
+```bash
 ~/.local/bin/ethos setup
 ```
 
-The installer places the `ethos` binary in `~/.local/bin`, seeds
-starter content into `~/.punt-labs/ethos/`, and — when `claude` and
-`git` are available — registers the Claude Code plugin. `ethos setup`
-walks a 60-second wizard that creates your CEO identity, a paired COO
-agent (`claude`), and a specialist team. Once your shell rc adds
-`~/.local/bin` to `PATH` (open a new terminal, or `source` the rc),
-the bare `ethos` command works. Full walkthrough:
-[Onboarding](docs/onboarding.md).
+The installer places the `ethos` binary in `~/.local/bin`, adds that
+directory to `PATH` in your shell profile, copies starter roles, talents and
+skills into `~/.punt-labs/ethos/`, and, when `claude`
+and `git` are available, installs the Claude Code plugin. When you run it
+inside a Git repository it also runs `ethos enable` there, and it finishes
+with `ethos doctor`. `ethos setup` is an interactive wizard that creates an
+identity for you, an agent identity named `claude`, and a team of specialist
+agents. After you open a new terminal (or `source` your shell profile), the
+bare `ethos` command works. Full walkthrough: [Onboarding](docs/onboarding.md).
 
 <details>
 <summary>Install without the Claude Code plugin</summary>
 
-For a non-Claude harness, or a Claude install where org policy blocks
-plugins:
+For a harness other than Claude Code, or a Claude Code install where
+organization policy blocks plugins:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/2ef90938/install.sh | sh -s -- --no-plugin
@@ -51,10 +56,10 @@ Where arguments cannot pass through the pipe, set `ETHOS_NO_PLUGIN=1`:
 curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/2ef90938/install.sh | ETHOS_NO_PLUGIN=1 sh
 ```
 
-`--no-plugin` skips only the marketplace-register and plugin-install
-steps; the binary, PATH setup, directories, seed content, per-repo
-`ethos enable`, and health check all still run. Re-run without the flag
-to add the plugin later.
+`--no-plugin` skips only the marketplace registration and plugin install. The
+binary, `PATH` setup, starter content, `ethos enable` in the current
+repository, and the health check still run. Run the installer again without
+the flag to add the plugin later.
 </details>
 
 <details>
@@ -68,50 +73,45 @@ github: mal                # optional
 writing_style: concise-quantified
 ```
 
-Run `ethos setup --file config.yaml`. When `email` is omitted, setup
-uses `git config user.email`; if that is also unset, setup fails with
-a remedy rather than creating an identity nothing can resolve.
+Run `ethos setup --file config.yaml`. When `email` is omitted, setup uses
+`git config user.email`. If that is also unset, setup fails and says how to
+fix it, instead of creating an identity that cannot be resolved.
 </details>
 
 ## Features
 
-**Storage upgrades itself.** Ethos converts a store in any layout written
-since v3.11 to the current layout the first time any command, hook or MCP call
-runs, and writes a layout stamp so the next run costs two file reads. The user
-runs nothing and sees at most one line,
-`ethos: upgraded storage (N items; see ~/.punt-labs/ethos/logs/repair.log)`.
-A conversion that cannot finish is retried on the next run; a loss is written
-to the repair log and never blocks a command or a commit. `ethos doctor` shows
-the result in its `Storage` row. The
-[storage and publication contract](docs/storage-layout.md) defines the layout
-and names the test that proves each promise.
+A **mission** is one unit of delegated work. Its **contract** is a YAML file
+that names the worker agent, the evaluator (the agent that reviews the work),
+the write set (the files the worker may change), the success criteria, and the
+number of review rounds allowed.
 
 | Feature | What it does |
 |---------|-------------|
-| Mission contracts | Typed delegation with write-sets, frozen evaluators, bounded rounds, success criteria |
-| Audit trail | Per-tool-call log tagged with delegation ID + contract ID; PII-redacted paths |
-| Git trailers | `Mission:`/`Delegation:` associations on locally hooked commits; DES-079 squash manifests and actual-commit verification pending |
-| Traceability UI | Browse code with ethos blame; mission + delegation detail views |
-| Preconditions | Gate tool calls on prior reads ("must read DESIGN.md before editing") |
-| Expert identities | Personalities, writing styles, talents bound to named agents |
-| Team structure | Roles with tool restrictions, reports-to graph, anti-responsibilities |
-| Pipeline templates | Multi-stage mission workflows from 8 built-in templates (plus bundle-specific ones) |
-| Lifecycle hooks | 7 events (SessionStart, PreToolUse, PostToolUse, SubagentStart, SubagentStop, PreCompact, SessionEnd) |
-| Write-set enforcement | PreToolUse blocks unauthorized file modifications at runtime |
-| Self-standing repos | `ethos vendor` snapshots a resolvable identity set; `resolution: repo-only` drops the global fallback |
-| Symlink rejection | Uniform policy across all mission loaders and lock paths |
-| Depth limits | Configurable ceiling on nested delegation chains |
-| Query surface | `ethos find missions` with date/worker/status filters |
-| Composable integration | CLI, MCP (12 tools), filesystem reads; works with biff, vox, beadle, quarry |
+| Mission contracts | Typed contracts with write sets, success criteria and a round limit. The evaluator's identity is hash-pinned when the mission starts, so it cannot be swapped mid-mission. |
+| Write-set enforcement | The PreToolUse hook blocks an edit to a file outside the write set before the edit runs |
+| Audit trail | Logs every tool call with its delegation ID and mission ID, and keeps each delegation's contract, results and prompt on disk. Email addresses, credentials and home-directory paths are removed from files written to Git-tracked directories. |
+| Git trailers | The commit-msg hook adds `Mission:` and `Delegation:` trailers to commits. For squash merges, `ethos mission publish`, `ethos provenance message` and `ethos provenance verify` carry and check the attribution in the merge commit. |
+| Traceability UI | `ethos ui` opens a local web dashboard to browse repository files and view mission and delegation details |
+| Preconditions | Block a tool call until a required earlier step has happened ("must read DESIGN.md before editing") |
+| Agent identities | Each identity has a personality, a writing style and talents, written into the generated agent file |
+| Teams and roles | Roles limit which tools an agent can use; teams record who reports to whom and what each role is not responsible for |
+| Pipeline templates | Chain missions into multi-stage workflows from 8 built-in templates, plus 5 in the gstack team bundle |
+| Lifecycle hooks | 7 Claude Code hook events: SessionStart, PreToolUse, PostToolUse, SubagentStart, SubagentStop, PreCompact, SessionEnd |
+| Repo-only identities | `ethos vendor` copies a complete identity set into the repository; `resolution: repo-only` stops lookups in your home directory |
+| Symlink rejection | Mission files and lock paths that are symbolic links are refused |
+| Depth limits | `max_delegation_depth` limits how deeply delegations can nest |
+| Mission queries | `ethos find missions` filters closed missions by date, worker and status |
+| Integration | CLI, MCP server (12 tools), and plain files that other tools read; biff, vox, beadle and quarry use ethos identities when it is installed |
+| Automatic storage upgrade | Converts older store layouts the first time any command, hook or MCP call runs; `ethos doctor` reports the result in its `Storage` row. See [Storage Layout](docs/storage-layout.md). |
 
 ## What It Looks Like
 
 ### Traceability: Line of Code to Full History
 
-For a single recorded association, local commit-msg hooks append
-`Mission:`/`Delegation:` trailers. This example also assumes the full prompt
-and audit detail are available locally; a fresh blame-only clone need not have
-them. Resolve the canonical store root S first:
+The commit-msg hook adds `Mission:` and `Delegation:` trailers to the commit.
+The prompt and audit log are kept locally under `.punt-labs/local/ethos/` in
+the main checkout of the repository, so a fresh clone does not have them.
+Run these commands from the main checkout:
 
 ```text
 $ git blame -L 42,42 internal/hook/generate_agents.go
@@ -121,7 +121,7 @@ $ git log --format='%(trailers)' abc1234
 Mission: m-2026-05-25-002
 Delegation: d-2026-05-25-011
 
-$ cat "$S/.punt-labs/local/ethos/trace/missions/m-2026-05-25-002/delegations/d-2026-05-25-011/prompt.md"
+$ cat .punt-labs/local/ethos/trace/missions/m-2026-05-25-002/delegations/d-2026-05-25-011/prompt.md
 "Fix the hardcoded Go file-extension patterns. Detect project type
 at generation time (go.mod → Go, pyproject.toml → Python)..."
 
@@ -133,27 +133,23 @@ $ ethos audit show --delegation d-2026-05-25-011 --format text
 2026-05-25T12:53:37Z  Bash   git commit ...
 ```
 
-Illustrative — actual SHAs and IDs vary per repo.
+Illustrative: actual SHAs and IDs vary per repository.
 
-Live logs and immutable archives live under
-`S/.punt-labs/local/ethos/` in **both** recording modes. Default `record: blame`
-archives without querying or changing the index; `record: full` adds eligible
-published copies, including sealed session audits, while retaining the local
-copy. Eligibility is captured per immutable entry. Switching modes neither
-promotes old private history nor removes published history. Invalid `record`
-values fail visibly; omitted means `blame`. A store that still holds the
-tracked-by-default seal of DES-058 is converted by the automatic upgrade.
+The `record` setting in `.punt-labs/ethos.yaml` controls what is shared. With
+the default, `record: blame`, prompts and audit logs stay in
+`.punt-labs/local/ethos/`, which Git ignores; the contract, results and
+delegation records are written to `.punt-labs/ethos/` for you to commit. With `record: full`,
+ethos also copies prompts, reflections and sealed audit logs recorded while
+`record: full` was set into `.punt-labs/ethos/`, so they are committed with
+the code. Sealing is done by
+the pre-commit hook, which runs `ethos audit seal` to move pending log lines
+into fixed archive files. Switching modes does not publish older private
+history or remove history that was already published.
 
-For multi-mission/delegation squash merges, selected `mission publish`,
-`provenance message` and `provenance verify` are the supported route. It supplies a generated body and pins the reviewed head to
-GitHub's squash command, then fetches and verifies the actual merge commit.
-Local hooks do not run remotely. Attribution must preserve ambiguity rather
-than guess the first delegation. See the [merge example](docs/example/07-pr-and-merge.md).
-
-`ethos ui` opens a localhost dashboard for code and mission detail. DES-079
-requires it to distinguish unavailable local detail from non-submission or
-unreadable data. Shared round decisions still govern advancement when full
-reflection prose is unavailable here.
+For a squash merge that covers one or more missions, use `ethos mission
+publish`, `ethos provenance message` and `ethos provenance verify`. They
+generate the merge commit body and check the merged commit afterward. See
+the [merge example](docs/example/07-pr-and-merge.md).
 
 ### Contract-Bound Delegation
 
@@ -173,9 +169,8 @@ budget:
   reflection_after_each: true
 ```
 
-When a verifier agent is spawned, the PreToolUse hook enforces the
-write-set — an Edit to a file outside the contract is blocked before
-it executes.
+When the worker agent is spawned, the PreToolUse hook enforces the write
+set: an Edit to a file outside the contract is blocked before it runs.
 
 ### Specialist Agents
 
@@ -186,212 +181,131 @@ it executes.
 [ethos] Anti-responsibilities: strategic direction (that's the COO's job)
 ```
 
-Each specialist has a personality that constrains and focuses the
-model's output, a writing style, domain talents, and a role that
-determines which tools they can use. Generated from identity +
-role + team data as `.claude/agents/*.md`.
+Ethos generates each `.claude/agents/<handle>.md` file from the identity,
+role and team data. The identity's personality, writing style and talents
+become text in the agent's prompt. The role sets which tools the agent can
+use.
 
 ## Commands
 
-Essentials below. Every command accepts `--json`. Full reference in
-[Agent Guide](docs/agent-guide.md#commands).
+The most common commands are below. Every command accepts `--json`. Full
+reference: [Agent Guide](docs/agent-guide.md).
 
 | Command | What it does |
 |---------|--------------|
-| `ethos enable` / `disable` | Turn ethos on/off in this repo (see below) |
-| `ethos setup` | Set up identities and team (60-second wizard) |
+| `ethos enable` / `disable` | Turn ethos on or off in this repository (see [Enable / Disable](#enable--disable)) |
+| `ethos setup` | Create identities and a team (interactive wizard) |
 | `ethos whoami` | Show your resolved identity |
-| `ethos identity schema` | Show the field reference for an entity (also `role schema`, `team schema`) |
-| `ethos session start` / `end` | Open/close a session from any harness — `eval "$(ethos session start)"` |
+| `ethos identity schema` | Show the field reference for an identity (also `role schema`, `team schema`) |
+| `ethos session start` / `end` | Open or close a session from any harness: `eval "$(ethos session start)"` |
 | `ethos session iam <persona>` | Declare your persona in the active session |
 | `ethos doctor` | Check installation health |
-| `ethos vendor [handle...]` | Snapshot a complete, self-standing identity set into this repo (see below) |
-| `ethos mission create` / `dispatch` | Create a mission contract |
-| `ethos mission claim` / `release` | Bind session to mission for Tier B dispatch |
-| `ethos mission show <id>` | Show contract, results, reflections |
-| `ethos audit show --delegation <id>` | Full tool-call trace for a delegation |
-| `ethos audit seal [--dry-run]` | Seal pending lines into immutable local chunks (the pre-commit hook runs it) |
-| `ethos find missions` | Query closed missions by date, worker, status |
-| `ethos ui` | Open traceability dashboard in browser |
+| `ethos vendor [handle...]` | Copy a complete identity set into this repository (see [Repo-Only Identities](#repo-only-identities)) |
+| `ethos mission create` / `dispatch` | Create a mission contract from a YAML file or from flags |
+| `ethos mission claim` / `release` | Bind the current session to a mission, so agents it spawns run under that contract, or clear the binding |
+| `ethos mission show <id>` | Show a contract, its results and reflections |
+| `ethos audit show --delegation <id>` | Show every tool call made under a delegation |
+| `ethos audit seal [--dry-run]` | Move pending audit lines into fixed local archive files (the pre-commit hook runs it) |
+| `ethos find missions` | Query closed missions by date, worker and status |
+| `ethos ui` | Open the traceability dashboard in a browser |
 
 ## Setup
 
 Configuration beyond the Quick Start.
 
-### Outside Claude Code (Codex, plain terminal)
+### Outside Claude Code (Codex, Plain Terminal)
 
-Ethos is harness-neutral. Inside Claude Code, hooks open a session for
-you. Anywhere else, open one explicitly at shell or harness init:
+Inside Claude Code, the plugin's hooks open a session for you. In any other
+harness, open one when the shell or harness starts:
 
 ```bash
 eval "$(ethos session start --persona bwk)"
 ```
 
-Then `ethos whoami` reports the persona, `ethos session` shows the
-roster, `ethos session end` tears it down. `session start` is idempotent
-and exports `ETHOS_SESSION` (plus `ETHOS_AGENT_ID` when `--persona` is
-supplied). Design + resolution rules:
-[Harness-neutral sessions](docs/harness-sessions.md).
+Then `ethos whoami` reports the persona, `ethos session` shows who is in the
+session, and `ethos session end` closes it. `session start` is safe to run
+again; it exports `ETHOS_SESSION`, plus `ETHOS_AGENT_ID` when `--persona` is
+given. Details: [Harness-Neutral Sessions](docs/harness-sessions.md).
 
-### Native OpenCode MCP identity
+### Native OpenCode MCP Identity
 
-With `ethos serve --opencode-session-metadata`, OpenCode MCP calls can resolve
-identity from request-local session metadata, without setting a shared server
-identity. Default MCP behavior remains unchanged, including when metadata is
-malformed. Metadata is routing context, not authentication.
-Explicitly seat the OpenCode session
-ID as an Ethos participant first; `whoami`, implicit roster lookup, and `iam`
-then use that exact caller and fail if its binding is missing or invalid.
-Repair a missing participant by joining the existing roster, not recreating it.
-See the [identity pilot guide](docs/opencode-mcp-identity.md) for setup and
-limitations. This does not implement automatic lifecycle, mission, or fork
-integration.
+This is a pilot and is off by default. With `ethos serve
+--opencode-session-metadata`, MCP calls from OpenCode resolve identity from
+the OpenCode session ID sent with each request, after you add that session
+to an ethos session roster. The session ID is used for routing, not
+authentication. Setup and limitations: [OpenCode MCP
+Identity](docs/opencode-mcp-identity.md).
 
-### Self-Standing Repos: `vendor` and `resolution: repo-only`
+### Repo-Only Identities
 
-Default resolution is repo → active bundle → global, and the global
-fallback catches whatever the repo lacks — which is why a partially-
-vendored repo does not know it is partial. `ethos vendor` computes the
-identity closure (attributes, roles, teams, *and other members of those
-teams* — the edge that pulls in people reachable no other way) and
-writes a set that resolves on its own:
+By default ethos looks up an identity in the repository, then the active team
+bundle, then `~/.punt-labs/ethos/`. Because of that last step, an identity
+missing from the repository is found in your home directory without warning,
+and the gap shows up only on a CI runner or a fresh clone. `ethos vendor`
+copies every identity, role, team and attribute that the chosen identities
+need into the repository:
 
 ```bash
 ethos vendor --team engineering --apply --prune
 ```
 
-Then set `resolution: repo-only` in `.punt-labs/ethos.yaml` to drop
-the global layer — missing references become hard errors naming each
-one, instead of silently resolving from a home directory a CI runner
-or fresh clone does not have. `ethos doctor` is the gate. Repository
-overlays live at `S/.punt-labs/local/ethos/identities/<handle>.ext/<namespace>.local.yaml`,
-with local precedence and base-only writes; the upgrade moves an overlay from
-the old sibling location and keeps the new one when both exist. Global sibling overlays stay
-unchanged. Vendor never copies overlays; they are not a vault and can reach model
-context. Full walkthrough: [Team Setup](docs/team-setup.md).
+Then set `resolution: repo-only` in `.punt-labs/ethos.yaml`. A missing
+reference then fails with an error that names it, and `ethos doctor` reports
+it. Full walkthrough: [Team Setup](docs/team-setup.md).
 
 ### Git Worktrees
 
-Ethos resolves the canonical store root **S** through Git's common directory,
-separately from the invoking checkout **C**. Missions share S's record tree.
-All repository live logs, retained trace, locks, overlays, receipts, scratch
-and staging are under `S/.punt-labs/local/ethos/`.
-Generated agents, enablement deposits, host-file edits and publication/index
-effects target C; publication copies are not another mutable mission authority.
-Removing a linked C distinct from S keeps prompts, reflections, chunks and
-unsealed tails, SessionEnd or not. Deleting S or its local data is not
-covered. Override store resolution with validated `ETHOS_REPO_ROOT`.
+All worktrees of a repository share one ethos store in the main checkout.
+Removing a linked worktree keeps its prompts, reflections and audit logs,
+even if the session did not end cleanly. Deleting the main checkout, or its
+`.punt-labs/local/ethos/` directory, deletes them. Set `ETHOS_REPO_ROOT` to
+use a different store location. Details: [Storage
+Layout](docs/storage-layout.md).
 
 ### Enable / Disable
 
-`install.sh` is machine scope. Per-repo enablement is `ethos enable`,
-which deposits the vendored agent guide, writes the `enabled` marker,
-adds the `@.punt-labs/ethos/CLAUDE.md` import to the repo `CLAUDE.md`,
-and chains `ETHOS DES-058 SEAL` + `ETHOS DES-054 TRAILER` sections into
-the `pre-commit` and `commit-msg` hooks. It broadly allows the ethos CLI,
-MCP server, and skills in the repo's `.claude/settings.json`, with exact
-`ask` rules for state-changing operations. `ethos disable` reverses it
-non-destructively — leaves the vendored guide, config, and audit data
-on disk, dormant. Both idempotent. `enable` and `setup` stay separate.
-State table, hook-chaining mechanics, `ethos doctor`'s marker vs
-currency check distinction, and the sibling-worktree `--force` case:
+The installer works at machine scope. `ethos enable` turns ethos on in one
+repository: it adds the ethos agent guide and its `@.punt-labs/ethos/CLAUDE.md`
+import to the repository's `CLAUDE.md`, adds ethos steps to the `pre-commit`
+and `commit-msg` Git hooks, and allows the ethos CLI, MCP server and skills in
+`.claude/settings.json`, with `ask` rules that prompt before state-changing
+operations. `ethos disable` removes these and leaves your identities, missions
+and audit data in place. Both commands are safe to run again. Details:
 [Enable / Disable](docs/enable-disable.md).
-
-## What Ethos Does
-
-Ethos records and bounds agent delegation along three axes.
-
-**Control.** Typed mission contracts with file-level write-sets
-enforced at runtime, frozen evaluators (hash-pinned so nobody swaps
-the reviewer mid-mission), bounded review rounds, preconditions
-that gate tool calls on prior reads, and delegation depth limits.
-The agent can only do what the contract authorizes.
-
-**Auditability.** Every delegation produces artifacts on disk —
-contract, results, delegation records, the exact dispatch prompt and a
-per-tool-call trail tagged with the delegation ID. Compact round decisions
-and corrections are shared; the full detail stays local; blame publication is
-explicit and complete. A blame-only clone must retain demonstrable
-attribution after the supported squash route, without depending on another
-machine's archive. Full export explicitly shares one mission's retained trace,
-including its unsealed tail, but excludes session audits, agent artifacts and
-transcripts. Publication and full-export acceptance remain pending.
-
-**Performance.** Named specialist agents with encapsulated domain
-expertise — a Go specialist grounded in Kernighan's principles, a
-security reviewer built on Bernstein's methodology. Personalities,
-writing styles, and talents are prompt-scaffolding that
-constrains the model's output within a role's stated domain. Roles
-restrict tool access. Teams define delegation topology. The
-configuration is reusable, versioned, and revisable.
 
 ## How This Is Different
 
 | Tool | What it does | Where ethos differs |
 |------|--------------|---------------------|
-| [SoulSpec](https://soulmd.dev) | Structured agent personas | Agent-only; no contracts, no audit trail, no team structure |
-| [Mastra](https://mastra.ai) | Typed Zod schemas and pre-delegation hooks | No persistent identity, no write-set boundaries, no frozen evaluator |
-| [CrewAI](https://www.crewai.com) | Role-based agent orchestration | Prose delegation; no typed contracts, no write-set enforcement, no traceability |
-| [Claude Managed Agents](https://docs.anthropic.com/en/docs/claude-code/managed-agents) | Hosted stateful sessions | Vendor-specific; no forensic audit trail, no contract binding |
+| [SoulSpec](https://soulmd.dev) | Structured agent personas | Ethos adds mission contracts, an audit trail and team structure to personas |
+| [Mastra](https://mastra.ai) | Typed Zod schemas and pre-delegation hooks | Ethos adds persistent identities, file-level write sets and a fixed evaluator |
+| [CrewAI](https://www.crewai.com) | Role-based agent orchestration | Ethos uses typed YAML contracts with write sets enforced before each tool call, and links commits to missions |
+| [Claude Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview) | Hosted agent harness for long-running and asynchronous work | Ethos runs locally with any harness and keeps contracts and audit logs in the repository |
 
-Ethos ingests SoulSpec on the way in (`ethos import --from soulspec`)
-and exports on the way out (lossy — enforcement drops because
-markdown cannot represent it).
+Ethos imports SoulSpec personas (`ethos import --from soulspec`) and exports
+to SoulSpec (`ethos export --to soulspec`). Export is lossy: the enforcement
+data has no place in SoulSpec's markdown.
 
 ## Documentation
 
 | Guide | Audience |
 |-------|----------|
 | [Onboarding](docs/onboarding.md) | Install, setup, first delegation |
-| [Team Setup](docs/team-setup.md) | Configuring roles, teams, bundles, vendor + repo-only |
+| [Team Setup](docs/team-setup.md) | Configuring roles, teams, bundles, vendor and repo-only resolution |
 | [Harness-Neutral Sessions](docs/harness-sessions.md) | Running ethos outside Claude Code (Codex, plain terminal) |
-| [Enable / Disable](docs/enable-disable.md) | Per-repo enable/disable, hook chaining, `ethos doctor` |
-| [Audited Delegation](docs/audited-delegation.md) | Tier A/B dispatch, claim/release, audit trail, git trailers |
-| [Traceability Data Assets](docs/traceability-data-assets.md) | Every artifact ethos produces, organized by scope |
-| [Storage and Publication Contract](docs/storage-layout.md) | S/C ownership, the automatic upgrade, decisions, mode switches, publication/export, and the test behind each promise |
-| [Traceability Use Cases](docs/traceability-use-cases.md) | 10 forensic/compliance scenarios with query paths |
+| [Enable / Disable](docs/enable-disable.md) | Per-repository enable and disable, Git hook chaining, `ethos doctor` |
+| [Audited Delegation](docs/audited-delegation.md) | Ad hoc and contract-bound agent spawns, claim and release, audit trail, Git trailers |
+| [Traceability Data Assets](docs/traceability-data-assets.md) | Every file ethos produces, organized by scope |
+| [Storage Layout](docs/storage-layout.md) | Where ethos stores each file, the automatic upgrade, recording modes, publication and export, and the test behind each rule |
+| [Traceability Use Cases](docs/traceability-use-cases.md) | 10 forensic and compliance scenarios with query paths |
 | [Archetypes and Pipelines](docs/archetypes-and-pipelines.md) | Mission templates and multi-stage workflows |
 | [Architecture](docs/architecture.tex) | System design (LaTeX) |
 | [Agent Guide](docs/agent-guide.md) | CLI, MCP, hooks, storage layout |
-| [OpenCode Setup](docs/opencode-setup.md) | Native development agents, models, tools, and verification |
-| [Design Decisions](DESIGN.md) | ADRs with rationale and rejected alternatives |
+| [OpenCode Setup](docs/opencode-setup.md) | Native OpenCode agents, models, tools, and verification |
+| [Design Decisions](DESIGN.md) | Architecture decision records with rationale and rejected alternatives |
+| [Contributing](CONTRIBUTING.md) | Building ethos and running the quality gates |
 | [Changelog](CHANGELOG.md) | Release history |
-| [Roadmap](docs/ETHOS-ROADMAP.md) | What's shipped and what's next |
-
-## Development
-
-Project instructions live in [AGENTS.md](AGENTS.md). Native OpenCode setup and
-the task/review workflow are documented in [OpenCode Setup](docs/opencode-setup.md)
-and [OpenCode Workflow](docs/opencode-workflow.md). `make check-opencode` validates
-the committed configuration offline; `make doctor-opencode` and
-`make smoke-opencode` verify the live workstation and actual tool execution.
-
-Run all quality gates (vet, staticcheck, shellcheck, markdownlint, validate-content, tests, Z-spec fuzz type-check):
-
-```bash
-make check
-```
-
-Build the binary:
-
-```bash
-make build
-```
-
-Install to `~/.local/bin`:
-
-```bash
-make install
-```
-
-List all targets:
-
-```bash
-make help
-```
-
-Contributors: see [CLAUDE.md](CLAUDE.md) for the development
-lifecycle.
+| [Roadmap](docs/ETHOS-ROADMAP.md) | What has shipped and what is planned |
 
 ## License
 
