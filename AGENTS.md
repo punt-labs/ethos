@@ -69,7 +69,7 @@ Proof, delivery order and parallelism rules (operator ruling 2026-11-09):
 - Task write-sets name Go files. Shell only for test tooling that never ships,
   and only when the task says so.
 
-Track substantive work in Beads (`bd ... --json`). For the authorized storage
+Track substantive work in Linear (team `PL`, label `repo:ethos`). For the authorized storage
 repair, Ethos missions are optional: the product under repair must not prevent
 its own repair. Native OpenCode agents do not imply Claude hook parity or the
 proposed DES-078 adapter. Circuit is not a prerequisite.
@@ -99,4 +99,4 @@ playbook; Ethos repository cleanup; consuming-repository rollout.
 
 ## Issue tracking
 
-Read `.punt-labs/punt/CLAUDE.md` before planning or writing to the issue tracker. Linear is the tracker of record where this repo is migrated. Beads is a local mirror there and the tracker of record elsewhere.
+Read `.punt-labs/punt/CLAUDE.md` before planning or writing to the issue tracker. Linear is the sole tracker of record (team Punt Labs, label `repo:ethos`).

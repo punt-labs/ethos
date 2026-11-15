@@ -88,9 +88,8 @@ docs/**/*.audit.json
 .worktrees/
 .claude/worktrees/
 
-# Bead daemon runtime state — issues.jsonl is the tracked source of truth
-.beads/bd.sock*
-.beads/daemon-error
+# Retired beads tracker; Linear is the tracker of record
+.beads/
 
 # Claude Code session transcripts (ethos-<date>.jsonl at repo root)
 ethos-*.jsonl

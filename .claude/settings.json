@@ -3,7 +3,6 @@
     "allow": [
       "Bash(git:*)",
       "Bash(gh:*)",
-      "Bash(bd:*)",
       "Bash(punt:*)",
       "Bash(make:*)",
       "mcp__plugin_beadle_email__*",
