@@ -67,22 +67,79 @@ func TestGitignorePreservesUserLines(t *testing.T) {
 	assert.NotContains(t, after, "*.ethos-tmp*")
 }
 
-func TestGitignoreSessionsIgnoreIsResidual(t *testing.T) {
+// A user rule that ignores the sessions record directory is deleted by the
+// step itself: the line is exact, the fix is known, nothing else changes.
+func TestGitignoreDeletesSessionsIgnoreLine(t *testing.T) {
 	env := fixtureEnv(t, "damage/gitignore-ignores-sessions")
 	path := filepath.Join(env.Roots.Checkout, ".gitignore")
 	before := readFixture(t, path)
+	require.Contains(t, before, ".punt-labs/ethos/sessions/")
 
+	log := &recLog{}
+	env.Log = log
 	out, err := runGitignore(context.Background(), env)
 	require.NoError(t, err)
-	assert.Equal(t, 0, out.Items)
-	require.Len(t, out.Residuals, 1)
-	assert.Equal(t, stepGitignore, out.Residuals[0].Step)
-	assert.Contains(t, out.Residuals[0].ID, ".punt-labs/ethos/sessions/")
-	assert.Equal(t, before, readFixture(t, path), "a user line outside the former block is never touched")
+	assert.Empty(t, out.Residuals, "a condition ethos fixed is not a residual")
+	assert.GreaterOrEqual(t, out.Items, 1)
+	assert.Contains(t, log.steps, "gitignore:delete-sessions-ignore")
+	after := readFixture(t, path)
+	assert.NotContains(t, after, ".punt-labs/ethos/sessions")
+	for _, l := range strings.Split(before, "\n") {
+		if strings.TrimRight(l, "\r") != ".punt-labs/ethos/sessions/" && l != "" && !strings.HasPrefix(l, "# ethos") {
+			assert.Contains(t, after, l, "every other line survives")
+		}
+	}
 
 	again, err := runGitignore(context.Background(), env)
 	require.NoError(t, err)
 	assert.Equal(t, 0, again.Items)
+	assert.Equal(t, after, readFixture(t, path))
+}
+
+// Only the exact lines go, and every other byte stays, CRLF endings and a
+// missing final newline included.
+func TestGitignoreDeleteKeepsOtherBytes(t *testing.T) {
+	for name, c := range map[string]struct{ in, want string }{
+		"three spellings":  {"a/\n.punt-labs/ethos/sessions\nb\n.punt-labs/ethos/sessions/**\n.punt-labs/ethos/sessions/\nc\n", "a/\nb\nc\n"},
+		"crlf":             {"a\r\n.punt-labs/ethos/sessions/\r\nb\r\n", "a\r\nb\r\n"},
+		"no final newline": {"a\n.punt-labs/ethos/sessions/", "a\n"},
+		"near misses stay": {"!.punt-labs/ethos/sessions/\n.punt-labs/ethos/sessions/x\n#.punt-labs/ethos/sessions/\n .punt-labs/ethos/sessions/\n", "!.punt-labs/ethos/sessions/\n.punt-labs/ethos/sessions/x\n#.punt-labs/ethos/sessions/\n .punt-labs/ethos/sessions/\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := fixtureEnv(t, "corpus/v4.20.4")
+			path := filepath.Join(env.Roots.Checkout, ".gitignore")
+			require.NoError(t, os.WriteFile(path, []byte(singleRuleBlock+c.in), 0o640))
+			require.NoError(t, os.Chmod(path, 0o640)) // WriteFile keeps an existing file's mode
+			out, err := runGitignore(context.Background(), env)
+			require.NoError(t, err)
+			assert.Empty(t, out.Residuals)
+			assert.Equal(t, singleRuleBlock+c.want, readFixture(t, path))
+			fi, err := os.Stat(path)
+			require.NoError(t, err)
+			assert.Equal(t, os.FileMode(0o640), fi.Mode().Perm(), "the mode is kept")
+		})
+	}
+}
+
+// When ethos cannot write the file the condition stays, with its cause.
+func TestGitignoreDeleteUnwritableStaysActionable(t *testing.T) {
+	env := fixtureEnv(t, "corpus/v4.20.4")
+	dir := env.Roots.Checkout
+	path := filepath.Join(dir, ".gitignore")
+	require.NoError(t, os.WriteFile(path, []byte(singleRuleBlock+".punt-labs/ethos/sessions/\n"), 0o644))
+	require.NoError(t, os.Chmod(dir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if f, err := os.CreateTemp(dir, "probe"); err == nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		t.Skip("directory writable despite mode 555 (running as root)")
+	}
+	out, err := runGitignore(context.Background(), env)
+	require.NoError(t, err)
+	require.Len(t, out.Residuals, 1)
+	assert.Equal(t, ClassActionable, out.Residuals[0].Class)
+	assert.Contains(t, out.Residuals[0].Action, "clears when")
+	assert.Contains(t, readFixture(t, path), ".punt-labs/ethos/sessions/", "the line is untouched")
 }
 
 // Another tool's local file must stay ignored: retiring the old patterns
@@ -123,7 +180,7 @@ func TestGitignoreKeepsPatternsOtherToolsFilesDependOn(t *testing.T) {
 	assert.Equal(t, 0, again.Items)
 }
 
-func TestGitignoreSessionsLineInsideBlockIsKept(t *testing.T) {
+func TestGitignoreSessionsLineIsDeleted(t *testing.T) {
 	block := "# ethos runtime (never track) — DES-058 live zone + mission locks\n" +
 		".punt-labs/**/local/**\n" +
 		".punt-labs/ethos/sessions/\n" +
@@ -144,10 +201,9 @@ func TestGitignoreSessionsLineInsideBlockIsKept(t *testing.T) {
 
 		out, err := runGitignore(context.Background(), env)
 		require.NoError(t, err)
-		assert.True(t, ignored(), "ignored after the step")
-		require.Len(t, out.Residuals, 1)
-		assert.Contains(t, out.Residuals[0].ID, ".punt-labs/ethos/sessions/")
-		assert.Contains(t, readFixture(t, path), ".punt-labs/ethos/sessions/\n", "the line is kept")
+		assert.False(t, ignored(), "the sessions records are trackable after the step")
+		assert.Empty(t, out.Residuals)
+		assert.NotContains(t, readFixture(t, path), ".punt-labs/ethos/sessions")
 	})
 	t.Run("outside the block", func(t *testing.T) {
 		env := fixtureEnv(t, "corpus/v4.20.4")
@@ -156,9 +212,8 @@ func TestGitignoreSessionsLineInsideBlockIsKept(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte(block[:strings.Index(block, ".punt-labs/ethos/sessions/")]+user), 0o644))
 		out, err := runGitignore(context.Background(), env)
 		require.NoError(t, err)
-		require.Len(t, out.Residuals, 1)
-		assert.Contains(t, out.Residuals[0].ID, ".punt-labs/ethos/sessions/")
-		assert.Contains(t, readFixture(t, path), user, "a user line outside the block stays")
+		assert.Empty(t, out.Residuals)
+		assert.NotContains(t, readFixture(t, path), ".punt-labs/ethos/sessions")
 	})
 }
 
