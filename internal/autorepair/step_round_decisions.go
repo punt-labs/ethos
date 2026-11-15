@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 
 	"github.com/punt-labs/ethos/v4/internal/mission"
@@ -51,7 +52,7 @@ func runRoundDecisions(ctx context.Context, env Env) (Outcome, error) {
 			out.Deferred = true
 		case errors.As(err, &history):
 			env.Log.Logf("round-decisions", "fence", []string{missionPath(env, id)}, err)
-			out.Residuals = append(out.Residuals, Residual{Class: ClassSettled, Step: "round-decisions", ID: id, Reason: history.Kind.String() + ", mission fenced from lifecycle writes"})
+			out.Residuals = append(out.Residuals, fenceResidual(env, id, history))
 		case err != nil:
 			env.Log.Logf("round-decisions", "refuse", []string{missionPath(env, id)}, err)
 			out.Residuals = append(out.Residuals, Residual{Class: ClassActionable, Step: "round-decisions", ID: id, Reason: writeFailPrefix + fencedSuffix + "; check write permission on the mission directory"})
@@ -68,4 +69,34 @@ func runRoundDecisions(ctx context.Context, env Env) (Outcome, error) {
 
 func missionPath(env Env, id string) string {
 	return filepath.Dir(repositoryContractPath(env, id))
+}
+
+// fenceResidual classifies a fenced mission. Only a validation result about
+// the history itself (incomplete, refused by redaction) is final. An I/O
+// failure under any fence kind, an undecodable contract, and corrupt
+// corrections are things a person can fix, so the reason names the file and
+// the action. Paths stay repository-relative.
+func fenceResidual(env Env, id string, h *mission.LegacyHistoryError) Residual {
+	r := Residual{Step: "round-decisions", ID: id}
+	base := h.Kind.String() + fencedSuffix
+	var pe *fs.PathError
+	switch {
+	case errors.As(h.Err, &pe):
+		r.Class = ClassActionable
+		r.Reason = base + "; check read permission on " + relTo(repoStore(env), pe.Path)
+	case h.Kind == mission.LegacyUnloadable:
+		r.Class = ClassActionable
+		r.Reason = base + "; repair or restore " + missionFileRel(id, "contract.yaml")
+	case h.Kind == mission.LegacyCorruptCorrections:
+		r.Class = ClassActionable
+		r.Reason = base + "; repair or restore " + missionFileRel(id, "corrections.yaml")
+	default:
+		r.Class = ClassSettled
+		r.Reason = base
+	}
+	return r
+}
+
+func missionFileRel(id, name string) string {
+	return ".punt-labs/ethos/missions/" + id + "/" + name
 }

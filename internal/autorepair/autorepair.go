@@ -97,13 +97,16 @@ const (
 	ClassActionable Class = "actionable"
 )
 
-// fencedSuffix ends the reason round-decisions records for a mission whose
-// legacy history cannot be imported. The fence is the final state.
+// fencedSuffix ends every reason round-decisions records for a fenced mission.
 const fencedSuffix = ", mission fenced from lifecycle writes"
 
-// writeFailPrefix starts the one round-decisions reason that also ends in
-// fencedSuffix but records a write failure a person can act on.
+// writeFailPrefix starts the round-decisions reason for a write failure a
+// person can act on.
 const writeFailPrefix = "mission authority cannot be written"
+
+// Reasons, in stamps written before classes existed, that record a final
+// verdict on the history itself. An I/O or corruption fence is not here.
+var settledFencePrefixes = []string{"incomplete legacy history", "legacy evidence refused by redaction"}
 
 // EffectiveClass is r.Class, or, for a residual from a stamp written before
 // classes existed, the class its step and reason imply: the known
@@ -112,9 +115,12 @@ func (r Residual) EffectiveClass() Class {
 	if r.Class != "" {
 		return r.Class
 	}
-	if r.Step == "round-decisions" && strings.HasSuffix(r.Reason, fencedSuffix) &&
-		!strings.HasPrefix(r.Reason, writeFailPrefix) {
-		return ClassSettled
+	if r.Step == "round-decisions" && strings.HasSuffix(r.Reason, fencedSuffix) {
+		for _, p := range settledFencePrefixes {
+			if strings.HasPrefix(r.Reason, p) {
+				return ClassSettled
+			}
+		}
 	}
 	return ClassActionable
 }
