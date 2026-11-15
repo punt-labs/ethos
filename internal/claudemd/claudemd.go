@@ -359,7 +359,7 @@ func scanTopLevel(lines []string) (top []bool, open bool) {
 		m, n, info, ok := parseFence(content)
 		switch {
 		case open:
-			if ok && m == marker && n >= run && strings.TrimSpace(info) == "" {
+			if ok && m == marker && n >= run && strings.Trim(info, " ") == "" {
 				open = false
 			}
 		case ok:

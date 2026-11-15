@@ -219,10 +219,20 @@ func TestFencesCloseOnlyOnAMatchingDelimiter(t *testing.T) {
 		"````\n```\n" + canonical + "\n````\n",
 		"```\n~~~\n" + canonical + "\n```\n",
 		"```\n``` text\n" + canonical + "\n```\n",
+		// Claude Code's lexer closes on trailing spaces only.
+		"~~~\n~~~\t\n" + canonical + "\n",
+		"~~~\n~~~\u00a0\n" + canonical + "\n",
 	} {
 		if got := matchIndices([]byte(body), canonical); len(got) != 0 {
 			t.Errorf("matchIndices(%q) = %v, want none", body, got)
 		}
+	}
+}
+
+func TestTrailingSpacesStillCloseAFence(t *testing.T) {
+	body := "~~~\n~~~  \n" + canonical + "\n"
+	if got := matchIndices([]byte(body), canonical); len(got) != 1 {
+		t.Errorf("matchIndices = %v, want the import matched", got)
 	}
 }
 
