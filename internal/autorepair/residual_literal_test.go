@@ -14,6 +14,57 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/mission"
 )
 
+// residualLiterals returns the positions of Residual composite literals in src
+// outside the two constructors: Residual{...}, and the elided element literals
+// of []Residual{{...}}, []*Residual{{...}} and map[K]Residual{k: {...}}.
+func residualLiterals(t *testing.T, fset *token.FileSet, name string, src any) []token.Position {
+	t.Helper()
+	af, err := parser.ParseFile(fset, name, src, 0)
+	require.NoError(t, err)
+	isResidual := func(e ast.Expr) bool {
+		if st, ok := e.(*ast.StarExpr); ok {
+			e = st.X
+		}
+		id, ok := e.(*ast.Ident)
+		return ok && id.Name == "Residual"
+	}
+	var out []token.Position
+	for _, d := range af.Decls {
+		fn, _ := d.(*ast.FuncDecl)
+		if fn != nil && (fn.Name.Name == "settledResidual" || fn.Name.Name == "actionableResidual") {
+			continue
+		}
+		ast.Inspect(d, func(n ast.Node) bool {
+			cl, ok := n.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			if cl.Type != nil && isResidual(cl.Type) {
+				out = append(out, fset.Position(cl.Pos()))
+			}
+			var elt ast.Expr
+			switch ty := cl.Type.(type) {
+			case *ast.ArrayType:
+				elt = ty.Elt
+			case *ast.MapType:
+				elt = ty.Value
+			}
+			if elt != nil && isResidual(elt) {
+				for _, e := range cl.Elts {
+					if kv, ok := e.(*ast.KeyValueExpr); ok {
+						e = kv.Value
+					}
+					if inner, ok := e.(*ast.CompositeLit); ok && inner.Type == nil {
+						out = append(out, fset.Position(inner.Pos()))
+					}
+				}
+			}
+			return true
+		})
+	}
+	return out
+}
+
 // Every production residual goes through settledResidual or
 // actionableResidual, so none can omit its class or its action.
 func TestNoResidualLiteralOutsideConstructors(t *testing.T) {
@@ -25,25 +76,35 @@ func TestNoResidualLiteralOutsideConstructors(t *testing.T) {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
 		}
-		af, err := parser.ParseFile(fset, f, nil, 0)
-		require.NoError(t, err)
 		checked++
-		for _, d := range af.Decls {
-			fn, _ := d.(*ast.FuncDecl)
-			allowed := fn != nil && (fn.Name.Name == "settledResidual" || fn.Name.Name == "actionableResidual")
-			ast.Inspect(d, func(n ast.Node) bool {
-				cl, ok := n.(*ast.CompositeLit)
-				if !ok {
-					return true
-				}
-				if id, ok := cl.Type.(*ast.Ident); ok && id.Name == "Residual" && !allowed {
-					t.Errorf("%s: Residual literal outside the constructors", fset.Position(cl.Pos()))
-				}
-				return true
-			})
+		for _, pos := range residualLiterals(t, fset, f, nil) {
+			t.Errorf("%s: Residual literal outside the constructors", pos)
 		}
 	}
 	assert.Greater(t, checked, 10)
+}
+
+// The guard sees every spelling of a hand-built residual, elided ones included.
+func TestResidualLiteralGuardCatchesElidedLiterals(t *testing.T) {
+	src := func(body string) string { return "package p\nfunc f() {\n" + body + "\n}\n" }
+	for name, c := range map[string]struct {
+		body string
+		want int
+	}{
+		"explicit":      {"_ = Residual{Step: \"s\"}", 1},
+		"elided slice":  {"_ = []Residual{{Step: \"s\"}, {Step: \"t\"}}", 2},
+		"elided ptr":    {"_ = []*Residual{{Step: \"s\"}}", 1},
+		"elided map":    {"_ = map[string]Residual{\"k\": {Step: \"s\"}}", 1},
+		"constructor":   {"_ = []Residual{settledResidual(\"s\", \"i\", \"r\")}", 0},
+		"other type":    {"_ = []Other{{Step: \"s\"}}", 0},
+		"empty slice":   {"_ = []Residual{}", 0},
+		"nil residuals": {"var r []Residual; _ = r", 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := residualLiterals(t, token.NewFileSet(), "x.go", src(c.body))
+			assert.Len(t, got, c.want)
+		})
+	}
 }
 
 func TestActionableResidualRequiresAction(t *testing.T) {
