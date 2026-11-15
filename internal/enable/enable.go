@@ -601,9 +601,15 @@ func unsealedAuditLines(storeRoot, repoRoot string) (int, error) {
 				continue
 			}
 			sid := strings.TrimSuffix(e.Name(), suffix)
-			if n, err := audit.SessionUnsealedCountAcross(storeRoot, repoRoot, root, sid); err == nil {
+			n, err := audit.SessionUnsealedCountAcross(storeRoot, repoRoot, root, sid)
+			if err == nil {
 				total += n
 				continue
+			}
+			// A live file that cannot be read proves nothing: report it. Only a
+			// failure on the sealed side falls back to counting every live line.
+			if _, rErr := os.ReadFile(filepath.Join(dir, e.Name())); rErr != nil {
+				return 0, fmt.Errorf("reading %s: %w", filepath.Join(dir, e.Name()), rErr)
 			}
 			total += countNonEmptyLines(filepath.Join(dir, e.Name()))
 		}

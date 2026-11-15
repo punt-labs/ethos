@@ -48,8 +48,13 @@ func StoreRootOf(root string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("finding the store of %s: %w", root, err)
 	}
-	if bare || filepath.Base(common) != ".git" {
+	if bare {
 		return root, nil
+	}
+	// Neither bare nor a work tree's .git (a separate git dir, a submodule's
+	// git dir): resolve.storeRoot refuses this, so the store cannot be named.
+	if filepath.Base(common) != ".git" {
+		return "", fmt.Errorf("finding the store of %s: it is a linked worktree of %s, which is neither bare nor the .git of a work tree; set ETHOS_REPO_ROOT", root, common)
 	}
 	return filepath.Dir(common), nil
 }
