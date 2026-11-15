@@ -81,7 +81,7 @@ func runRecordTreeTrace(ctx context.Context, env Env) (Outcome, error) {
 			continue
 		}
 		env.Log.Logf(stepRecordTreeTrace, "unreadable", []string{path}, nil)
-		out.Residuals = append(out.Residuals, actionableResidual(stepRecordTreeTrace, filepath.ToSlash(rel), "cannot be read; left in place", "check read permission on "+filepath.ToSlash(rel)))
+		out.Residuals = append(out.Residuals, actionableResidual(stepRecordTreeTrace, filepath.ToSlash(rel), "cannot be read; left in place", "clears when "+filepath.ToSlash(rel)+" is readable"))
 	}
 	record := func(path, rel string, deferred bool, err error) {
 		switch {
@@ -91,7 +91,7 @@ func runRecordTreeTrace(ctx context.Context, env Env) (Outcome, error) {
 		case errors.Is(err, errKept):
 		case err != nil:
 			env.Log.Logf(stepRecordTreeTrace, "archive", []string{path}, err)
-			out.Residuals = append(out.Residuals, actionableResidual(stepRecordTreeTrace, filepath.ToSlash(rel), err.Error(), "check read and write permission on "+filepath.ToSlash(rel)+", then run ethos doctor"))
+			out.Residuals = append(out.Residuals, actionableResidual(stepRecordTreeTrace, filepath.ToSlash(rel), err.Error(), "clears when "+filepath.ToSlash(rel)+" is readable and writable"))
 		default:
 			out.Items++
 		}

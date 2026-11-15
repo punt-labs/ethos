@@ -54,7 +54,7 @@ func runScrubRecords(ctx context.Context, env Env) (Outcome, error) {
 	if err != nil {
 		env.Log.Logf("scrub-records", "refuse", nil, err)
 		out.Residuals = append(out.Residuals, actionableResidual("scrub-records", "tracked-records", scrubReason(res),
-			"check read and write permission on .punt-labs/ethos/missions, then run ethos doctor"))
+			"clears when .punt-labs/ethos/missions is readable and writable"))
 	}
 	return out, nil
 }

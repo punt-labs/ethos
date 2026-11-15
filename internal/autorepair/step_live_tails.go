@@ -95,7 +95,7 @@ func runLiveTails(ctx context.Context, env Env) (Outcome, error) {
 				// whose ts cannot be parsed, is a property of the file no
 				// later run changes: a residual naming the stream, never
 				// the content.
-				out.Residuals = append(out.Residuals, actionableResidual(stepLiveTails, filepath.Base(live), "a live line cannot be decoded; file left in place", "delete the undecodable line from the live audit file "+filepath.Base(live)+" by hand, then run ethos doctor"))
+				out.Residuals = append(out.Residuals, actionableResidual(stepLiveTails, filepath.Base(live), "a live line cannot be decoded; file left in place", "clears when the undecodable line is gone from the live audit file "+filepath.Base(live)))
 				continue
 			}
 			// Anything else RedactLive refuses is a condition of the archive

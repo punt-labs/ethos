@@ -54,7 +54,7 @@ func runGitignore(ctx context.Context, env Env) (Outcome, error) {
 		for _, k := range kept {
 			out.Residuals = append(out.Residuals, actionableResidual(stepGitignore, k.Pattern+": "+relTo(root, k.Path),
 				"the pattern still ignores another tool's local file; left in place so the file stays untracked",
-				"if "+relTo(root, k.Path)+" should be tracked, delete the pattern "+k.Pattern+" from "+relTo(root, path)+" by hand"))
+				"clears when the pattern "+k.Pattern+" is no longer in "+relTo(root, path)))
 		}
 		if changed {
 			out.Items++

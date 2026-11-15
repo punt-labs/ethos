@@ -68,11 +68,11 @@ func runGlobalMissions(ctx context.Context, env Env) (Outcome, error) {
 	}
 	for _, id := range res.Diverged {
 		env.Log.Logf(stepGlobalMissions, "diverged", []string{filepath.Join(repo, id)}, nil)
-		out.Residuals = append(out.Residuals, actionableResidual(stepGlobalMissions, id, mission.ReasonRepoCopyDiverged, "compare the global copy of "+id+" with the repository copy and delete the global copy by hand once the repository copy is right"))
+		out.Residuals = append(out.Residuals, actionableResidual(stepGlobalMissions, id, mission.ReasonRepoCopyDiverged, "clears when the global copy of "+id+" matches the repository copy or is gone"))
 	}
 	for _, f := range res.Failed {
 		env.Log.Logf(stepGlobalMissions, "import-failed", []string{filepath.Join(global, f.ID+".yaml")}, fmt.Errorf("%s", f.Reason))
-		out.Residuals = append(out.Residuals, actionableResidual(stepGlobalMissions, f.ID, f.Reason, "see the repair log, fix the cause, then run ethos doctor to retry the import"))
+		out.Residuals = append(out.Residuals, actionableResidual(stepGlobalMissions, f.ID, f.Reason, seeLogAction))
 	}
 	return out, nil
 }

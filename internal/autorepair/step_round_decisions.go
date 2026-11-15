@@ -55,7 +55,7 @@ func runRoundDecisions(ctx context.Context, env Env) (Outcome, error) {
 			out.Residuals = append(out.Residuals, fenceResidual(env, id, history))
 		case err != nil:
 			env.Log.Logf("round-decisions", "refuse", []string{missionPath(env, id)}, err)
-			out.Residuals = append(out.Residuals, actionableResidual("round-decisions", id, writeFailPrefix+fencedSuffix, "check write permission on "+missionFileRel(id, "contract.yaml")+", then run ethos doctor"))
+			out.Residuals = append(out.Residuals, actionableResidual("round-decisions", id, writeFailPrefix+fencedSuffix, "clears when "+missionFileRel(id, "contract.yaml")+" is writable"))
 		case upgraded:
 			env.Log.Logf("round-decisions", "import-authority", []string{
 				repositoryContractPath(env, id),
@@ -82,13 +82,13 @@ func fenceResidual(env Env, id string, h *mission.LegacyHistoryError) Residual {
 	switch {
 	case errors.As(h.Err, &pe):
 		rel := relTo(repoStore(env), pe.Path)
-		return actionableResidual("round-decisions", id, base, "check read permission on "+rel+", then run ethos doctor")
+		return actionableResidual("round-decisions", id, base, "clears when "+rel+" is readable")
 	case h.Kind == mission.LegacyUnloadable:
-		return actionableResidual("round-decisions", id, base, "repair or restore "+missionFileRel(id, "contract.yaml"))
+		return actionableResidual("round-decisions", id, base, "clears when "+missionFileRel(id, "contract.yaml")+" is valid or restored")
 	case h.Kind == mission.LegacyDamagedReflections:
-		return actionableResidual("round-decisions", id, base, "repair or restore "+missionFileRel(id, "reflections.yaml"))
+		return actionableResidual("round-decisions", id, base, "clears when "+missionFileRel(id, "reflections.yaml")+" is valid or restored")
 	case h.Kind == mission.LegacyCorruptCorrections:
-		return actionableResidual("round-decisions", id, base, "repair or restore "+missionFileRel(id, "corrections.yaml"))
+		return actionableResidual("round-decisions", id, base, "clears when "+missionFileRel(id, "corrections.yaml")+" is valid or restored")
 	}
 	return settledResidual("round-decisions", id, base)
 }

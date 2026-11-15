@@ -204,4 +204,5 @@ func TestHookSectionsNonShellActionIsNotEnable(t *testing.T) {
 	assert.NotContains(t, got.Action, "ethos enable")
 	assert.Contains(t, got.Action, "shell script")
 	assert.Contains(t, got.Action, "natively")
+	assert.Contains(t, got.Action, "clears when")
 }

@@ -224,7 +224,7 @@ func TestCheckStorageOldActionableGetsFallbackAction(t *testing.T) {
 	require.NoError(t, os.WriteFile(autorepair.GlobalStampPath(g), []byte(raw), 0o600))
 	r := CheckStorage(resolve.Located{}, g)
 	assert.Equal(t, "WARN", r.Status)
-	assert.Contains(t, r.Detail, "repair.log for step gitignore, then run ethos doctor")
+	assert.Contains(t, r.Detail, "repair.log for step gitignore; clears when the condition no longer holds")
 }
 
 // A credential-shaped name in an action does not reach the screen even from a

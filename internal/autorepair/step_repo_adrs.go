@@ -60,7 +60,7 @@ func runRepoADRs(ctx context.Context, env Env) (Outcome, error) {
 		a, err := global.Load(id)
 		if err != nil {
 			env.Log.Logf(stepRepoADRs, "unreadable", []string{src}, err)
-			out.Residuals = append(out.Residuals, actionableResidual(stepRepoADRs, id, "global ADR unreadable: "+err.Error(), "check read permission on the global ADR "+id+", then run ethos doctor"))
+			out.Residuals = append(out.Residuals, actionableResidual(stepRepoADRs, id, "global ADR unreadable: "+err.Error(), "clears when the global ADR "+id+" is readable"))
 			continue
 		}
 		if !linked[id] && !(a.MissionID != "" && missions[a.MissionID]) {

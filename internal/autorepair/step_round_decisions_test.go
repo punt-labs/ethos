@@ -277,7 +277,7 @@ func TestRoundDecisions_UnreadableEvidenceIsActionable(t *testing.T) {
 			require.NotNil(t, got, "residuals: %v", out.Residuals)
 			assert.Equal(t, ClassActionable, got.Class)
 			assert.Contains(t, got.Action, file)
-			assert.Contains(t, got.Action, "check read permission")
+			assert.Contains(t, got.Action, "is readable")
 			assert.NotContains(t, got.Action, env.Roots.Store, "paths stay repository-relative")
 		})
 	}
@@ -299,7 +299,7 @@ func TestRoundDecisions_ClassByFence(t *testing.T) {
 	out = run34(t, "round-decisions", env)
 	require.Len(t, out.Residuals, 1)
 	assert.Equal(t, ClassActionable, out.Residuals[0].Class)
-	assert.Contains(t, out.Residuals[0].Action, "repair or restore")
+	assert.Contains(t, out.Residuals[0].Action, "valid or restored")
 }
 
 // A reflections.yaml that cannot be decoded is damage a person repairs, not a
@@ -317,6 +317,6 @@ func TestRoundDecisions_CorruptReflectionsIsActionable(t *testing.T) {
 	}
 	require.NotNil(t, got, "residuals: %v", out.Residuals)
 	assert.Equal(t, ClassActionable, got.Class)
-	assert.Contains(t, got.Action, "repair or restore")
+	assert.Contains(t, got.Action, "valid or restored")
 	assert.Contains(t, got.Action, "reflections.yaml")
 }

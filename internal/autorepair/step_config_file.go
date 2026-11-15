@@ -37,7 +37,7 @@ func runConfigFile(ctx context.Context, env Env) (Outcome, error) {
 	newRel := ".punt-labs/ethos.yaml"
 	residual := func(id, reason string) (Outcome, error) {
 		env.Log.Logf("config-file", "residual", []string{oldPath, newPath}, errors.New(reason))
-		return Outcome{Residuals: []Residual{actionableResidual("config-file", id, reason, "make "+id+" a regular file or remove it by hand, then run ethos doctor")}}, nil
+		return Outcome{Residuals: []Residual{actionableResidual("config-file", id, reason, "clears when "+id+" is a regular file or absent")}}, nil
 	}
 
 	link, err := symlinkUnder(store, oldPath)

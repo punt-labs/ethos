@@ -108,7 +108,7 @@ func runSessions(ctx context.Context, env Env) (Outcome, error) {
 		// whichever store a recheck happens to serve.
 		rs := actionableResidual(stepSessions, id,
 			"the roster could not be read or proven free of unsealed audit lines; left in place",
-			"end or seal session "+id+" (ethos audit seal), then run ethos doctor")
+			"clears when the roster of session "+id+" is readable and its unsealed audit lines are sealed")
 		rs.Scope = ScopeGlobal
 		out.Residuals = append(out.Residuals, rs)
 	}

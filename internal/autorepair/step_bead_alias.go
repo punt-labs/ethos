@@ -39,7 +39,7 @@ func runBeadAlias(ctx context.Context, env Env) (Outcome, error) {
 		}
 		if err != nil {
 			env.Log.Logf("bead-alias", "read", []string{path}, err)
-			out.Residuals = append(out.Residuals, actionableResidual("bead-alias", id, "contract is unreadable", "check read permission on "+missionFileRel(id, "contract.yaml")))
+			out.Residuals = append(out.Residuals, actionableResidual("bead-alias", id, "contract is unreadable", "clears when "+missionFileRel(id, "contract.yaml")+" is readable"))
 			continue
 		}
 		if mission.BeadAlias(data) == "" {
@@ -68,7 +68,7 @@ func runBeadAlias(ctx context.Context, env Env) (Outcome, error) {
 			out.Deferred = true
 		case err != nil:
 			env.Log.Logf("bead-alias", "refuse", []string{path}, err)
-			out.Residuals = append(out.Residuals, actionableResidual("bead-alias", id, beadAliasReason(stage, err), "check write permission on "+missionFileRel(id, "contract.yaml")+", then run ethos doctor"))
+			out.Residuals = append(out.Residuals, actionableResidual("bead-alias", id, beadAliasReason(stage, err), "clears when "+missionFileRel(id, "contract.yaml")+" is writable"))
 		default:
 			if durability != nil {
 				env.Log.Logf("bead-alias", "durability-unconfirmed", []string{path}, durability)

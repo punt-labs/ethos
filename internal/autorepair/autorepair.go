@@ -153,7 +153,7 @@ func (r Residual) EffectiveAction() string {
 	if r.Action != "" {
 		return r.Action
 	}
-	return "see ~/.punt-labs/ethos/logs/repair.log for step " + r.Step + ", then run ethos doctor"
+	return "cause recorded in ~/.punt-labs/ethos/logs/repair.log for step " + r.Step + "; clears when the condition no longer holds"
 }
 
 // DisplayAction is EffectiveAction through the prose redactor, for a screen.
@@ -161,7 +161,7 @@ func (r Residual) DisplayAction() string { return redact.Prose(r.EffectiveAction
 
 // seeLogAction is the action for a condition whose cause only the repair log
 // names.
-const seeLogAction = "read the cause in ~/.punt-labs/ethos/logs/repair.log, fix it, then run ethos doctor"
+const seeLogAction = "cause recorded in ~/.punt-labs/ethos/logs/repair.log; clears when the condition no longer holds"
 
 // settledResidual is a final, correct state: nothing for a person to do.
 func settledResidual(step, id, reason string) Residual {
