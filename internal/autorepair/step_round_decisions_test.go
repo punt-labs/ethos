@@ -276,9 +276,9 @@ func TestRoundDecisions_UnreadableEvidenceIsActionable(t *testing.T) {
 			}
 			require.NotNil(t, got, "residuals: %v", out.Residuals)
 			assert.Equal(t, ClassActionable, got.Class)
-			assert.Contains(t, got.Reason, file)
-			assert.Contains(t, got.Reason, "check read permission")
-			assert.NotContains(t, got.Reason, env.Roots.Store, "paths stay repository-relative")
+			assert.Contains(t, got.Action, file)
+			assert.Contains(t, got.Action, "check read permission")
+			assert.NotContains(t, got.Action, env.Roots.Store, "paths stay repository-relative")
 		})
 	}
 }
@@ -299,5 +299,5 @@ func TestRoundDecisions_ClassByFence(t *testing.T) {
 	out = run34(t, "round-decisions", env)
 	require.Len(t, out.Residuals, 1)
 	assert.Equal(t, ClassActionable, out.Residuals[0].Class)
-	assert.Contains(t, out.Residuals[0].Reason, "repair or restore")
+	assert.Contains(t, out.Residuals[0].Action, "repair or restore")
 }

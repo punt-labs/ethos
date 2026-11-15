@@ -1339,7 +1339,7 @@ ethos: upgraded storage (N items; see ~/.punt-labs/ethos/logs/repair.log)
 ```
 
 A busy lock defers the upgrade to the next run, which resumes it. Losses are
-logged, never fatal. `ethos doctor` shows the layout in its `Storage` row.
+logged, never fatal. `ethos doctor` shows the layout in its `Storage` row: `PASS` when every residual condition is settled, `WARN` with the action to take otherwise; `ethos doctor --verbose` lists every residual.
 Shared identities, contracts, results, corrections, provenance and ADRs,
 private credentials, configuration, global data and agent-owned files are never
 moved or deleted, and ethos performs no Git staging or commit. Reconnect

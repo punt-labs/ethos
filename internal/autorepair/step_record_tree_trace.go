@@ -53,7 +53,7 @@ func runRecordTreeTrace(ctx context.Context, env Env) (Outcome, error) {
 			return Outcome{Deferred: true}, nil
 		}
 		env.Log.Logf(stepRecordTreeTrace, "inventory", nil, err)
-		out.Residuals = append(out.Residuals, Residual{Class: ClassActionable, Step: stepRecordTreeTrace, ID: "inventory", Reason: err.Error()})
+		out.Residuals = append(out.Residuals, actionableResidual(stepRecordTreeTrace, "inventory", err.Error(), seeLogAction))
 		return out, nil
 	}
 	store, err := env.StoreRoot()
@@ -69,7 +69,7 @@ func runRecordTreeTrace(ctx context.Context, env Env) (Outcome, error) {
 		a.repo = store
 	}
 	if a.red, err = mission.NewPathRedactor(a.repo); err != nil {
-		out.Residuals = append(out.Residuals, Residual{Class: ClassActionable, Step: stepRecordTreeTrace, ID: "redactor", Reason: err.Error()})
+		out.Residuals = append(out.Residuals, actionableResidual(stepRecordTreeTrace, "redactor", err.Error(), seeLogAction))
 		return out, nil
 	}
 	a.sessionGuard = lineguard.SessionLineGuardFor(a.repo)
@@ -81,7 +81,7 @@ func runRecordTreeTrace(ctx context.Context, env Env) (Outcome, error) {
 			continue
 		}
 		env.Log.Logf(stepRecordTreeTrace, "unreadable", []string{path}, nil)
-		out.Residuals = append(out.Residuals, Residual{Class: ClassActionable, Step: stepRecordTreeTrace, ID: filepath.ToSlash(rel), Reason: "cannot be read; left in place"})
+		out.Residuals = append(out.Residuals, actionableResidual(stepRecordTreeTrace, filepath.ToSlash(rel), "cannot be read; left in place", "check read permission on "+filepath.ToSlash(rel)))
 	}
 	record := func(path, rel string, deferred bool, err error) {
 		switch {
@@ -91,7 +91,7 @@ func runRecordTreeTrace(ctx context.Context, env Env) (Outcome, error) {
 		case errors.Is(err, errKept):
 		case err != nil:
 			env.Log.Logf(stepRecordTreeTrace, "archive", []string{path}, err)
-			out.Residuals = append(out.Residuals, Residual{Class: ClassActionable, Step: stepRecordTreeTrace, ID: filepath.ToSlash(rel), Reason: err.Error()})
+			out.Residuals = append(out.Residuals, actionableResidual(stepRecordTreeTrace, filepath.ToSlash(rel), err.Error(), "check read and write permission on "+filepath.ToSlash(rel)+", then run ethos doctor"))
 		default:
 			out.Items++
 		}

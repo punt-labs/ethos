@@ -13,10 +13,10 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/layout"
+	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
@@ -92,37 +92,65 @@ type Class string
 const (
 	// ClassSettled is a final, correct state: there is nothing to do.
 	ClassSettled Class = "settled"
-	// ClassActionable is a condition a person can act on, or one that clears
-	// on its own; the residual's reason names the action.
+	// ClassActionable is a condition a person can act on; its Action says how.
+	// ethos doctor re-runs the owning step, so the residual clears once the
+	// person has acted.
 	ClassActionable Class = "actionable"
 )
 
 // fencedSuffix ends every reason round-decisions records for a fenced mission.
 const fencedSuffix = ", mission fenced from lifecycle writes"
 
-// writeFailPrefix starts the round-decisions reason for a write failure a
-// person can act on.
+// writeFailPrefix starts the round-decisions reason for a write failure.
 const writeFailPrefix = "mission authority cannot be written"
 
-// Reasons, in stamps written before classes existed, that record a final
-// verdict on the history itself. An I/O or corruption fence is not here.
-var settledFencePrefixes = []string{"incomplete legacy history", "legacy evidence refused by redaction"}
+// reasonImportedKept is the global-missions reason for a mission imported
+// with its global copy left in place.
+// (defined in step_global_missions.go)
+
+// settledReasons is the exact set of unclassed reasons, written by binaries
+// before classes existed, that record a final state: step -> reasons. An
+// old residual that is not listed is actionable. Read path only.
+func settledReasons() map[string]map[string]bool {
+	fenced := map[string]bool{}
+	for _, k := range []mission.LegacyFence{mission.LegacyIncomplete, mission.LegacyRedactionRefused, 0} {
+		fenced[k.String()+fencedSuffix] = true
+	}
+	return map[string]map[string]bool{
+		"round-decisions":  fenced,
+		stepGlobalMissions: {reasonImportedKept: true},
+	}
+}
 
 // EffectiveClass is r.Class, or, for a residual from a stamp written before
-// classes existed, the class its step and reason imply: the known
-// round-decisions fenced reason is settled, everything else actionable.
+// classes existed, settled when step and reason exactly match a historical
+// final state and actionable otherwise.
 func (r Residual) EffectiveClass() Class {
 	if r.Class != "" {
 		return r.Class
 	}
-	if r.Step == "round-decisions" && strings.HasSuffix(r.Reason, fencedSuffix) {
-		for _, p := range settledFencePrefixes {
-			if strings.HasPrefix(r.Reason, p) {
-				return ClassSettled
-			}
-		}
+	if settledReasons()[r.Step][r.Reason] {
+		return ClassSettled
 	}
 	return ClassActionable
+}
+
+// seeLogAction is the action for a condition whose cause only the repair log
+// names.
+const seeLogAction = "read the cause in ~/.punt-labs/ethos/logs/repair.log, fix it, then run ethos doctor"
+
+// settledResidual is a final, correct state: nothing for a person to do.
+func settledResidual(step, id, reason string) Residual {
+	return Residual{Class: ClassSettled, Step: step, ID: id, Reason: reason}
+}
+
+// actionableResidual is a condition a person can act on. The action says what
+// to do and is never empty; doctor shows it beside the reason.
+func actionableResidual(step, id, reason, action string) Residual {
+	if action == "" {
+		panic("autorepair: actionable residual without an action: " + step + " " + id)
+	}
+	return Residual{Class: ClassActionable, Step: step, ID: id, Reason: reason, Action: action}
 }
 
 // Residual is a permanent condition a step leaves in place, recorded in the
@@ -134,6 +162,8 @@ type Residual struct {
 	Step   string `yaml:"step"`
 	ID     string `yaml:"id"`
 	Reason string `yaml:"reason"`
+	// Action is what a person does about an actionable residual.
+	Action string `yaml:"action,omitempty"`
 	// Scope names the store the condition is in. A ScopeBoth step sets it; the
 	// zero value means the store the step was running for. It places the
 	// residual and is not recorded. A residual is never written into a stamp

@@ -48,21 +48,15 @@ func refreshHookSections(ctx context.Context, env Env, step string) (Outcome, er
 			case enable.StatusSkippedMalformed:
 				// A permanent condition of the file: a residual, not a failure,
 				// so the stamp is not withheld and the step is not retried forever.
-				out.Residuals = append(out.Residuals, Residual{
-					Class:  ClassActionable,
-					Step:   step,
-					ID:     st.Step + ": " + relTo(checkout, st.Detail),
-					Reason: "hook section cannot be refreshed: " + st.Cause,
-				})
+				out.Residuals = append(out.Residuals, actionableResidual(step, st.Step+": "+relTo(checkout, st.Detail),
+					"hook section cannot be refreshed: "+st.Cause,
+					"fix or remove the malformed section in "+relTo(checkout, st.Detail)+" by hand, then run ethos doctor"))
 				env.Log.Logf(step, "refresh-hook", []string{st.Detail}, errors.New(st.Cause))
 			case enable.StatusSkippedNonShell, enable.StatusSkippedTracked,
 				enable.StatusSkippedShared, enable.StatusSkippedTrackedMissing:
-				out.Residuals = append(out.Residuals, Residual{
-					Class:  ClassActionable,
-					Step:   step,
-					ID:     st.Step + ": " + relTo(checkout, st.Detail),
-					Reason: "hook cannot be rewritten: " + strings.TrimPrefix(st.Status, "skipped-"),
-				})
+				out.Residuals = append(out.Residuals, actionableResidual(step, st.Step+": "+relTo(checkout, st.Detail),
+					"hook cannot be rewritten: "+strings.TrimPrefix(st.Status, "skipped-"),
+					"install the ethos section into "+relTo(checkout, st.Detail)+" by hand, or run ethos enable"))
 			}
 		}
 	}

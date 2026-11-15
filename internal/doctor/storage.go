@@ -87,9 +87,14 @@ func CheckStorage(loc resolve.Located, global string) Result {
 	return Result{Name: name, Status: "PASS", Detail: detail, Lines: lines}
 }
 
-// residualLine is one residual as "step id: reason".
+// residualLine is one residual as "step id: reason; action". A residual from
+// a stamp written before actions existed shows the reason alone.
 func residualLine(r autorepair.Residual) string {
-	return fmt.Sprintf("%s %s: %s", r.Step, r.ID, r.Reason)
+	s := fmt.Sprintf("%s %s: %s", r.Step, r.ID, r.Reason)
+	if r.Action != "" {
+		s += "; " + r.Action
+	}
+	return s
 }
 
 // settledSummary counts settled residuals by what they are.

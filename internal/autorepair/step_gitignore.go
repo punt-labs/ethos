@@ -52,12 +52,9 @@ func runGitignore(ctx context.Context, env Env) (Outcome, error) {
 		path := filepath.Join(root, ".gitignore")
 		changed, kept, err := enable.RepairGitignore(root, env.Policy)
 		for _, k := range kept {
-			out.Residuals = append(out.Residuals, Residual{
-				Class:  ClassActionable,
-				Step:   stepGitignore,
-				ID:     k.Pattern + ": " + relTo(root, k.Path),
-				Reason: "the pattern still ignores another tool's local file; left in place so the file stays untracked",
-			})
+			out.Residuals = append(out.Residuals, actionableResidual(stepGitignore, k.Pattern+": "+relTo(root, k.Path),
+				"the pattern still ignores another tool's local file; left in place so the file stays untracked",
+				"if "+relTo(root, k.Path)+" should be tracked, delete the pattern "+k.Pattern+" from "+relTo(root, path)+" by hand"))
 		}
 		if changed {
 			out.Items++
@@ -90,12 +87,9 @@ func sessionsIgnoreResiduals(root, path string) ([]Residual, error) {
 		text := strings.TrimRight(line, "\r")
 		switch text {
 		case ".punt-labs/ethos/sessions", ".punt-labs/ethos/sessions/", ".punt-labs/ethos/sessions/**":
-			out = append(out, Residual{
-				Class:  ClassActionable,
-				Step:   stepGitignore,
-				ID:     relTo(root, path) + ": " + text,
-				Reason: fmt.Sprintf("%s line %d ignores the sessions record directory, which holds tracked records; the line is safe to delete", relTo(root, path), i+1),
-			})
+			out = append(out, actionableResidual(stepGitignore, relTo(root, path)+": "+text,
+				fmt.Sprintf("%s line %d ignores the sessions record directory, which holds tracked records", relTo(root, path), i+1),
+				fmt.Sprintf("delete line %d of %s; it is safe to delete", i+1, relTo(root, path))))
 		}
 	}
 	return out, nil

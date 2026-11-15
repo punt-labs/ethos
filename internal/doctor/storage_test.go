@@ -168,6 +168,7 @@ func TestResidualEffectiveClass(t *testing.T) {
 	}{
 		{"explicit wins", autorepair.Residual{Class: autorepair.ClassActionable, Step: "round-decisions", Reason: "x, mission fenced from lifecycle writes"}, autorepair.ClassActionable},
 		{"old fenced", autorepair.Residual{Step: "round-decisions", Reason: "legacy evidence refused by redaction, mission fenced from lifecycle writes"}, autorepair.ClassSettled},
+		{"old imported", autorepair.Residual{Step: "global-missions", Reason: "imported; global copy kept"}, autorepair.ClassSettled},
 		{"old unloadable", autorepair.Residual{Step: "round-decisions", Reason: "contract cannot be loaded, mission fenced from lifecycle writes"}, autorepair.ClassActionable},
 		{"old write failure", autorepair.Residual{Step: "round-decisions", Reason: "mission authority cannot be written, mission fenced from lifecycle writes"}, autorepair.ClassActionable},
 		{"old other step", autorepair.Residual{Step: "sessions", Reason: "x, mission fenced from lifecycle writes"}, autorepair.ClassActionable},

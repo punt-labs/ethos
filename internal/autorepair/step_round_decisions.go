@@ -55,7 +55,7 @@ func runRoundDecisions(ctx context.Context, env Env) (Outcome, error) {
 			out.Residuals = append(out.Residuals, fenceResidual(env, id, history))
 		case err != nil:
 			env.Log.Logf("round-decisions", "refuse", []string{missionPath(env, id)}, err)
-			out.Residuals = append(out.Residuals, Residual{Class: ClassActionable, Step: "round-decisions", ID: id, Reason: writeFailPrefix + fencedSuffix + "; check write permission on the mission directory"})
+			out.Residuals = append(out.Residuals, actionableResidual("round-decisions", id, writeFailPrefix+fencedSuffix, "check write permission on "+missionFileRel(id, "contract.yaml")+", then run ethos doctor"))
 		case upgraded:
 			env.Log.Logf("round-decisions", "import-authority", []string{
 				repositoryContractPath(env, id),
@@ -77,24 +77,18 @@ func missionPath(env Env, id string) string {
 // corrections are things a person can fix, so the reason names the file and
 // the action. Paths stay repository-relative.
 func fenceResidual(env Env, id string, h *mission.LegacyHistoryError) Residual {
-	r := Residual{Step: "round-decisions", ID: id}
 	base := h.Kind.String() + fencedSuffix
 	var pe *fs.PathError
 	switch {
 	case errors.As(h.Err, &pe):
-		r.Class = ClassActionable
-		r.Reason = base + "; check read permission on " + relTo(repoStore(env), pe.Path)
+		rel := relTo(repoStore(env), pe.Path)
+		return actionableResidual("round-decisions", id, base, "check read permission on "+rel+", then run ethos doctor")
 	case h.Kind == mission.LegacyUnloadable:
-		r.Class = ClassActionable
-		r.Reason = base + "; repair or restore " + missionFileRel(id, "contract.yaml")
+		return actionableResidual("round-decisions", id, base, "repair or restore "+missionFileRel(id, "contract.yaml"))
 	case h.Kind == mission.LegacyCorruptCorrections:
-		r.Class = ClassActionable
-		r.Reason = base + "; repair or restore " + missionFileRel(id, "corrections.yaml")
-	default:
-		r.Class = ClassSettled
-		r.Reason = base
+		return actionableResidual("round-decisions", id, base, "repair or restore "+missionFileRel(id, "corrections.yaml"))
 	}
-	return r
+	return settledResidual("round-decisions", id, base)
 }
 
 func missionFileRel(id, name string) string {

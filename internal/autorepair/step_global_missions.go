@@ -57,16 +57,16 @@ func runGlobalMissions(ctx context.Context, env Env) (Outcome, error) {
 	}
 	for _, id := range res.Imported {
 		env.Log.Logf(stepGlobalMissions, "import", []string{filepath.Join(global, id+".yaml"), filepath.Join(repo, id)}, nil)
-		out.Residuals = append(out.Residuals, Residual{Class: ClassSettled, Step: stepGlobalMissions, ID: id, Reason: reasonImportedKept})
+		out.Residuals = append(out.Residuals, settledResidual(stepGlobalMissions, id, reasonImportedKept))
 	}
 	out.Items = len(res.Imported)
 	for _, id := range res.Diverged {
 		env.Log.Logf(stepGlobalMissions, "diverged", []string{filepath.Join(repo, id)}, nil)
-		out.Residuals = append(out.Residuals, Residual{Class: ClassActionable, Step: stepGlobalMissions, ID: id, Reason: mission.ReasonRepoCopyDiverged})
+		out.Residuals = append(out.Residuals, actionableResidual(stepGlobalMissions, id, mission.ReasonRepoCopyDiverged, "compare the global copy of "+id+" with the repository copy and delete the global copy by hand once the repository copy is right"))
 	}
 	for _, f := range res.Failed {
 		env.Log.Logf(stepGlobalMissions, "import-failed", []string{filepath.Join(global, f.ID+".yaml")}, fmt.Errorf("%s", f.Reason))
-		out.Residuals = append(out.Residuals, Residual{Class: ClassActionable, Step: stepGlobalMissions, ID: f.ID, Reason: f.Reason})
+		out.Residuals = append(out.Residuals, actionableResidual(stepGlobalMissions, f.ID, f.Reason, "see the repair log, fix the cause, then run ethos doctor to retry the import"))
 	}
 	return out, nil
 }

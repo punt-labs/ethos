@@ -90,7 +90,7 @@ func untrackCandidates(env Env, checkout string) (paths []string, residuals []Re
 	for _, c := range []string{".punt-labs", ".punt-labs/ethos"} {
 		if fi, lerr := os.Lstat(filepath.Join(checkout, filepath.FromSlash(c))); lerr == nil && fi.Mode()&fs.ModeSymlink != 0 {
 			linkedAt = c
-			residuals = append(residuals, Residual{Class: ClassActionable, Step: "untrack-local", ID: c, Reason: "record tree is a symlink: " + c})
+			residuals = append(residuals, actionableResidual("untrack-local", c, "record tree is a symlink: "+c, "replace the symlink "+c+" with a real directory by hand"))
 			break
 		}
 	}
@@ -120,18 +120,18 @@ func untrackCandidates(env Env, checkout string) (paths []string, residuals []Re
 		if err != nil {
 			logStep(env, "untrack-local", "undecided", []string{rel}, err)
 			if errors.Is(err, errNotFile) {
-				residuals = append(residuals, Residual{Class: ClassActionable, Step: "untrack-local", ID: rel, Reason: "tracked entry is not a file: " + rel})
+				residuals = append(residuals, actionableResidual("untrack-local", rel, "tracked entry is not a file: "+rel, "remove or replace "+rel+" by hand, then run ethos doctor"))
 				continue
 			}
 			if errors.Is(err, repair.ErrNotRegular) {
-				residuals = append(residuals, Residual{Class: ClassActionable, Step: "untrack-local", ID: rel, Reason: "tracked entry is not a regular file: " + rel})
+				residuals = append(residuals, actionableResidual("untrack-local", rel, "tracked entry is not a regular file: "+rel, "remove or replace "+rel+" by hand, then run ethos doctor"))
 				continue
 			}
 			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, errUnreadable) {
 				deferred = true
 				continue
 			}
-			residuals = append(residuals, Residual{Class: ClassActionable, Step: "untrack-local", ID: rel, Reason: "publication status unreadable: " + rel})
+			residuals = append(residuals, actionableResidual("untrack-local", rel, "publication status unreadable: "+rel, "check that git status works in this repository, then run ethos doctor"))
 			continue
 		}
 		if untrack {

@@ -104,12 +104,9 @@ func runSessions(ctx context.Context, env Env) (Outcome, error) {
 		env.Log.Logf(stepSessions, "purge-roster", []string{id}, nil)
 	}
 	for _, id := range rep.Refused {
-		out.Residuals = append(out.Residuals, Residual{
-			Class:  ClassActionable,
-			Step:   stepSessions,
-			ID:     id,
-			Reason: "the roster could not be read or proven free of unsealed audit lines; left in place until its audit is sealed or the session is ended",
-		})
+		out.Residuals = append(out.Residuals, actionableResidual(stepSessions, id,
+			"the roster could not be read or proven free of unsealed audit lines; left in place",
+			"end or seal session "+id+" (ethos audit seal), then run ethos doctor"))
 	}
 	if ctx.Err() != nil {
 		out.Deferred = true
