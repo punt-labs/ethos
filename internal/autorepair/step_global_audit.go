@@ -90,7 +90,7 @@ func runGlobalAudit(ctx context.Context, env Env) (Outcome, error) {
 			reason = "import outlived the step budget; global copy kept"
 		}
 		env.Log.Logf(stepGlobalAudit, "import-failed", []string{file(f.Session)}, fmt.Errorf("%s", reason))
-		out.Residuals = append(out.Residuals, Residual{Step: stepGlobalAudit, ID: f.Session, Reason: reason})
+		out.Residuals = append(out.Residuals, Residual{Class: ClassActionable, Step: stepGlobalAudit, ID: f.Session, Reason: reason})
 	}
 	if res.Remaining > 0 {
 		// The budget ran out; the files not attempted are the next run's.

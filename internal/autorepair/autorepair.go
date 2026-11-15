@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/layout"
@@ -85,9 +86,45 @@ type Outcome struct {
 	Residuals []Residual
 }
 
+// Class is the kind of a residual. Doctor warns only about ClassActionable.
+type Class string
+
+const (
+	// ClassSettled is a final, correct state: there is nothing to do.
+	ClassSettled Class = "settled"
+	// ClassActionable is a condition a person can act on, or one that clears
+	// on its own; the residual's reason names the action.
+	ClassActionable Class = "actionable"
+)
+
+// fencedSuffix ends the reason round-decisions records for a mission whose
+// legacy history cannot be imported. The fence is the final state.
+const fencedSuffix = ", mission fenced from lifecycle writes"
+
+// writeFailPrefix starts the one round-decisions reason that also ends in
+// fencedSuffix but records a write failure a person can act on.
+const writeFailPrefix = "mission authority cannot be written"
+
+// EffectiveClass is r.Class, or, for a residual from a stamp written before
+// classes existed, the class its step and reason imply: the known
+// round-decisions fenced reason is settled, everything else actionable.
+func (r Residual) EffectiveClass() Class {
+	if r.Class != "" {
+		return r.Class
+	}
+	if r.Step == "round-decisions" && strings.HasSuffix(r.Reason, fencedSuffix) &&
+		!strings.HasPrefix(r.Reason, writeFailPrefix) {
+		return ClassSettled
+	}
+	return ClassActionable
+}
+
 // Residual is a permanent condition a step leaves in place, recorded in the
 // stamp so Ensure does not retry it and doctor can show it.
 type Residual struct {
+	// Class says whether a person can act on the condition. A stamp written
+	// before classes existed has none; EffectiveClass maps it.
+	Class  Class  `yaml:"class,omitempty"`
 	Step   string `yaml:"step"`
 	ID     string `yaml:"id"`
 	Reason string `yaml:"reason"`

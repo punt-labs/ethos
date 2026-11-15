@@ -53,6 +53,7 @@ func runGitignore(ctx context.Context, env Env) (Outcome, error) {
 		changed, kept, err := enable.RepairGitignore(root, env.Policy)
 		for _, k := range kept {
 			out.Residuals = append(out.Residuals, Residual{
+				Class:  ClassActionable,
 				Step:   stepGitignore,
 				ID:     k.Pattern + ": " + relTo(root, k.Path),
 				Reason: "the pattern still ignores another tool's local file; left in place so the file stays untracked",
@@ -85,14 +86,15 @@ func sessionsIgnoreResiduals(root, path string) ([]Residual, error) {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 	var out []Residual
-	for _, line := range strings.Split(string(b), "\n") {
+	for i, line := range strings.Split(string(b), "\n") {
 		text := strings.TrimRight(line, "\r")
 		switch text {
 		case ".punt-labs/ethos/sessions", ".punt-labs/ethos/sessions/", ".punt-labs/ethos/sessions/**":
 			out = append(out, Residual{
+				Class:  ClassActionable,
 				Step:   stepGitignore,
 				ID:     relTo(root, path) + ": " + text,
-				Reason: "a user rule ignores the sessions record directory; left in place",
+				Reason: fmt.Sprintf("%s line %d ignores the sessions record directory, which holds tracked records; the line is safe to delete", relTo(root, path), i+1),
 			})
 		}
 	}

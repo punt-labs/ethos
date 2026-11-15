@@ -51,10 +51,10 @@ func runRoundDecisions(ctx context.Context, env Env) (Outcome, error) {
 			out.Deferred = true
 		case errors.As(err, &history):
 			env.Log.Logf("round-decisions", "fence", []string{missionPath(env, id)}, err)
-			out.Residuals = append(out.Residuals, Residual{Step: "round-decisions", ID: id, Reason: history.Kind.String() + ", mission fenced from lifecycle writes"})
+			out.Residuals = append(out.Residuals, Residual{Class: ClassSettled, Step: "round-decisions", ID: id, Reason: history.Kind.String() + ", mission fenced from lifecycle writes"})
 		case err != nil:
 			env.Log.Logf("round-decisions", "refuse", []string{missionPath(env, id)}, err)
-			out.Residuals = append(out.Residuals, Residual{Step: "round-decisions", ID: id, Reason: "mission authority cannot be written, mission fenced from lifecycle writes"})
+			out.Residuals = append(out.Residuals, Residual{Class: ClassActionable, Step: "round-decisions", ID: id, Reason: writeFailPrefix + fencedSuffix + "; check write permission on the mission directory"})
 		case upgraded:
 			env.Log.Logf("round-decisions", "import-authority", []string{
 				repositoryContractPath(env, id),

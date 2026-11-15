@@ -50,7 +50,7 @@ func runCorruptChunks(ctx context.Context, env Env) (Outcome, error) {
 		// every command.
 		if reason, ok := permanentScanReason(err); ok {
 			logf(env, stepCorruptChunks, "scan-streams", nil, err)
-			out.Residuals = append(out.Residuals, Residual{Step: stepCorruptChunks, ID: "streams", Reason: reason})
+			out.Residuals = append(out.Residuals, Residual{Class: ClassActionable, Step: stepCorruptChunks, ID: "streams", Reason: reason})
 			return out, nil
 		}
 		return out, fmt.Errorf("listing audit streams: %w", err)
@@ -72,7 +72,7 @@ func runCorruptChunks(ctx context.Context, env Env) (Outcome, error) {
 			if err != nil {
 				logf(env, stepCorruptChunks, "scan-chunks", []string{dir}, err)
 				if reason, ok := permanentScanReason(err); ok {
-					out.Residuals = append(out.Residuals, Residual{Step: stepCorruptChunks, ID: filepath.Base(dir), Reason: reason})
+					out.Residuals = append(out.Residuals, Residual{Class: ClassActionable, Step: stepCorruptChunks, ID: filepath.Base(dir), Reason: reason})
 				} else {
 					out.Deferred = true
 				}
@@ -147,7 +147,7 @@ func repairDir(ctx context.Context, env Env, out *Outcome, s audit.Stream, dir s
 		if err := markerFault(dir, s); err != nil {
 			logf(env, stepCorruptChunks, "scan-markers", []string{dir}, err)
 			if reason, ok := permanentScanReason(err); ok {
-				out.Residuals = append(out.Residuals, Residual{Step: stepCorruptChunks, ID: filepath.Base(dir), Reason: reason})
+				out.Residuals = append(out.Residuals, Residual{Class: ClassActionable, Step: stepCorruptChunks, ID: filepath.Base(dir), Reason: reason})
 			} else {
 				out.Deferred = true
 			}
@@ -185,7 +185,7 @@ func repairDir(ctx context.Context, env Env, out *Outcome, s audit.Stream, dir s
 		default:
 			logf(env, stepCorruptChunks, "scan-chunks", []string{dir}, err)
 			if reason, ok := permanentScanReason(err); ok {
-				out.Residuals = append(out.Residuals, Residual{Step: stepCorruptChunks, ID: filepath.Base(dir), Reason: reason})
+				out.Residuals = append(out.Residuals, Residual{Class: ClassActionable, Step: stepCorruptChunks, ID: filepath.Base(dir), Reason: reason})
 			} else {
 				out.Deferred = true
 			}
@@ -193,7 +193,7 @@ func repairDir(ctx context.Context, env Env, out *Outcome, s audit.Stream, dir s
 		}
 		if out.Items == before {
 			logf(env, stepCorruptChunks, "repair-pass-no-progress", []string{dir}, nil)
-			out.Residuals = append(out.Residuals, Residual{Step: stepCorruptChunks, ID: filepath.Base(dir), Reason: "archive directory still refused after a repair pass that changed nothing"})
+			out.Residuals = append(out.Residuals, Residual{Class: ClassActionable, Step: stepCorruptChunks, ID: filepath.Base(dir), Reason: "archive directory still refused after a repair pass that changed nothing"})
 			return
 		}
 	}
@@ -371,7 +371,7 @@ func failed(env Env, out *Outcome, path, reason string, err error) bool {
 // residual records a permanent condition and stops work on its directory.
 func residual(env Env, out *Outcome, path, reason string, err error) bool {
 	logf(env, stepCorruptChunks, "residual", []string{path}, err)
-	out.Residuals = append(out.Residuals, Residual{Step: stepCorruptChunks, ID: filepath.Base(path), Reason: reason})
+	out.Residuals = append(out.Residuals, Residual{Class: ClassActionable, Step: stepCorruptChunks, ID: filepath.Base(path), Reason: reason})
 	return false
 }
 

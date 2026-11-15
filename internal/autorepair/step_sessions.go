@@ -105,9 +105,10 @@ func runSessions(ctx context.Context, env Env) (Outcome, error) {
 	}
 	for _, id := range rep.Refused {
 		out.Residuals = append(out.Residuals, Residual{
+			Class:  ClassActionable,
 			Step:   stepSessions,
 			ID:     id,
-			Reason: "the roster could not be read or proven free of unsealed audit lines; left in place",
+			Reason: "the roster could not be read or proven free of unsealed audit lines; left in place until its audit is sealed or the session is ended",
 		})
 	}
 	if ctx.Err() != nil {

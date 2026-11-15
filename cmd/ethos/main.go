@@ -182,6 +182,8 @@ var versionCmd = &cobra.Command{
 
 // --- doctor ---
 
+var doctorVerbose bool
+
 var doctorCmd = &cobra.Command{
 	Use:     "doctor",
 	Short:   "Check installation health",
@@ -224,6 +226,7 @@ var serveCmd = &cobra.Command{
 
 func init() {
 	serveCmd.Flags().Bool("opencode-session-metadata", false, "Opt into OpenCode session metadata caller routing (not authentication)")
+	doctorCmd.Flags().BoolVar(&doctorVerbose, "verbose", false, "List every storage residual, settled ones included")
 	whoamiCmd.Flags().BoolVar(&whoamiReference, "reference", false, "Include reference identity data")
 
 	rootCmd.AddCommand(
@@ -305,6 +308,11 @@ func runDoctor(cmd *cobra.Command) error {
 		}
 		for _, r := range results {
 			fmt.Fprintf(out, "  %-*s %s  %s\n", width, r.Name, r.Status, r.Detail)
+			if doctorVerbose {
+				for _, l := range r.Lines {
+					fmt.Fprintf(out, "  %-*s    %s\n", width, "", l)
+				}
+			}
 		}
 	}
 

@@ -49,6 +49,7 @@ func refreshHookSections(ctx context.Context, env Env, step string) (Outcome, er
 				// A permanent condition of the file: a residual, not a failure,
 				// so the stamp is not withheld and the step is not retried forever.
 				out.Residuals = append(out.Residuals, Residual{
+					Class:  ClassActionable,
 					Step:   step,
 					ID:     st.Step + ": " + relTo(checkout, st.Detail),
 					Reason: "hook section cannot be refreshed: " + st.Cause,
@@ -57,6 +58,7 @@ func refreshHookSections(ctx context.Context, env Env, step string) (Outcome, er
 			case enable.StatusSkippedNonShell, enable.StatusSkippedTracked,
 				enable.StatusSkippedShared, enable.StatusSkippedTrackedMissing:
 				out.Residuals = append(out.Residuals, Residual{
+					Class:  ClassActionable,
 					Step:   step,
 					ID:     st.Step + ": " + relTo(checkout, st.Detail),
 					Reason: "hook cannot be rewritten: " + strings.TrimPrefix(st.Status, "skipped-"),

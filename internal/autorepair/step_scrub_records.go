@@ -54,6 +54,7 @@ func runScrubRecords(ctx context.Context, env Env) (Outcome, error) {
 	if err != nil {
 		env.Log.Logf("scrub-records", "refuse", nil, err)
 		out.Residuals = append(out.Residuals, Residual{
+			Class:  ClassActionable,
 			Step:   "scrub-records",
 			ID:     "tracked-records",
 			Reason: scrubReason(res),

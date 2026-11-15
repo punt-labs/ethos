@@ -36,6 +36,8 @@ type Result struct {
 	Name   string `json:"name"`
 	Status string `json:"status"`
 	Detail string `json:"detail"`
+	// Lines is optional extra detail, shown by `ethos doctor --verbose`.
+	Lines []string `json:"lines,omitempty"`
 }
 
 // Passed reports whether the check did not fail. It is explicit about the

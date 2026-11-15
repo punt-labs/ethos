@@ -60,7 +60,7 @@ func runRepoADRs(ctx context.Context, env Env) (Outcome, error) {
 		a, err := global.Load(id)
 		if err != nil {
 			env.Log.Logf(stepRepoADRs, "unreadable", []string{src}, err)
-			out.Residuals = append(out.Residuals, Residual{Step: stepRepoADRs, ID: id, Reason: "global ADR unreadable: " + err.Error()})
+			out.Residuals = append(out.Residuals, Residual{Class: ClassActionable, Step: stepRepoADRs, ID: id, Reason: "global ADR unreadable: " + err.Error()})
 			continue
 		}
 		if !linked[id] && !(a.MissionID != "" && missions[a.MissionID]) {
@@ -69,7 +69,7 @@ func runRepoADRs(ctx context.Context, env Env) (Outcome, error) {
 		res, err := repo.MigrateQuiet([]string{id})
 		if err != nil {
 			env.Log.Logf(stepRepoADRs, "copy-failed", []string{src}, err)
-			out.Residuals = append(out.Residuals, Residual{Step: stepRepoADRs, ID: id, Reason: err.Error()})
+			out.Residuals = append(out.Residuals, Residual{Class: ClassActionable, Step: stepRepoADRs, ID: id, Reason: err.Error()})
 			continue
 		}
 		if len(res) == 1 && res[0].Action == "copied" {

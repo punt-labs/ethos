@@ -57,16 +57,16 @@ func runGlobalMissions(ctx context.Context, env Env) (Outcome, error) {
 	}
 	for _, id := range res.Imported {
 		env.Log.Logf(stepGlobalMissions, "import", []string{filepath.Join(global, id+".yaml"), filepath.Join(repo, id)}, nil)
-		out.Residuals = append(out.Residuals, Residual{Step: stepGlobalMissions, ID: id, Reason: reasonImportedKept})
+		out.Residuals = append(out.Residuals, Residual{Class: ClassSettled, Step: stepGlobalMissions, ID: id, Reason: reasonImportedKept})
 	}
 	out.Items = len(res.Imported)
 	for _, id := range res.Diverged {
 		env.Log.Logf(stepGlobalMissions, "diverged", []string{filepath.Join(repo, id)}, nil)
-		out.Residuals = append(out.Residuals, Residual{Step: stepGlobalMissions, ID: id, Reason: mission.ReasonRepoCopyDiverged})
+		out.Residuals = append(out.Residuals, Residual{Class: ClassActionable, Step: stepGlobalMissions, ID: id, Reason: mission.ReasonRepoCopyDiverged})
 	}
 	for _, f := range res.Failed {
 		env.Log.Logf(stepGlobalMissions, "import-failed", []string{filepath.Join(global, f.ID+".yaml")}, fmt.Errorf("%s", f.Reason))
-		out.Residuals = append(out.Residuals, Residual{Step: stepGlobalMissions, ID: f.ID, Reason: f.Reason})
+		out.Residuals = append(out.Residuals, Residual{Class: ClassActionable, Step: stepGlobalMissions, ID: f.ID, Reason: f.Reason})
 	}
 	return out, nil
 }

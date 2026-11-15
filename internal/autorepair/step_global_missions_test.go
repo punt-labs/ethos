@@ -106,7 +106,7 @@ func TestGlobalMissions(t *testing.T) {
 			assert.Equal(t, 1, out.Items)
 			assert.False(t, out.Deferred)
 			require.Len(t, out.Residuals, 1)
-			assert.Equal(t, Residual{Step: "global-missions", ID: ownedMission, Reason: "imported; global copy kept"}, out.Residuals[0])
+			assert.Equal(t, Residual{Class: ClassSettled, Step: "global-missions", ID: ownedMission, Reason: "imported; global copy kept"}, out.Residuals[0])
 			assert.Contains(t, log.steps, "global-missions:import")
 
 			s := mission.NewStoreWithRoots(env.Roots.Store, filepath.Dir(env.Global))
@@ -193,7 +193,7 @@ func TestGlobalMissionsDivergedRepositoryCopy(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, out.Items)
 	require.Len(t, out.Residuals, 1)
-	assert.Equal(t, Residual{Step: "global-missions", ID: ownedMission, Reason: "repository copy has diverged; global copy kept"}, out.Residuals[0])
+	assert.Equal(t, Residual{Class: ClassActionable, Step: "global-missions", ID: ownedMission, Reason: "repository copy has diverged; global copy kept"}, out.Residuals[0])
 	assert.Equal(t, globalBefore, treeDigest(t, env.Global))
 	assert.Equal(t, repoBefore, treeDigest(t, env.Roots.Store))
 }

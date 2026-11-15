@@ -3,6 +3,7 @@ package doctor
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -44,8 +45,7 @@ func TestCheckStorage(t *testing.T) {
 		}})
 		r := CheckStorage(resolve.Located{}, g)
 		assert.Equal(t, "WARN", r.Status)
-		assert.Contains(t, r.Detail, "2 residual")
-		assert.Contains(t, r.Detail, "repair.log")
+		assert.Contains(t, r.Detail, "2 condition(s) need action")
 	})
 	t.Run("old stamp warns", func(t *testing.T) {
 		g := filepath.Join(phys(t), "g")
@@ -69,7 +69,7 @@ func TestCheckStorage(t *testing.T) {
 		require.NoError(t, autorepair.WriteStamp(path, rs, func(d string) error { return os.MkdirAll(d, 0o700) }))
 		r := CheckStorage(resolve.Located{Store: store, Checkout: store}, g)
 		assert.Equal(t, "WARN", r.Status)
-		assert.Contains(t, r.Detail, "1 residual")
+		assert.Contains(t, r.Detail, "1 condition(s) need action")
 	})
 	t.Run("repository current sums items", func(t *testing.T) {
 		g := filepath.Join(phys(t), "g")
@@ -125,4 +125,52 @@ func TestCheckStorageSettledResidualsPass(t *testing.T) {
 	r := CheckStorage(resolve.Located{}, g)
 	assert.Equal(t, "PASS", r.Status)
 	assert.Contains(t, r.Detail, "2 legacy missions fenced, no action needed")
+}
+
+func TestCheckStorageActionableWarnsWithAction(t *testing.T) {
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	g := filepath.Join(d, "g")
+	writeGlobalStamp(t, g, autorepair.Stamp{Version: autorepair.LayoutVersion, Residual: []autorepair.Residual{
+		{Step: "round-decisions", ID: "m-1", Class: autorepair.ClassSettled, Reason: "incomplete legacy history, mission fenced from lifecycle writes"},
+		{Step: "gitignore", ID: ".gitignore: .punt-labs/ethos/sessions", Class: autorepair.ClassActionable, Reason: ".gitignore line 7 ignores the sessions record directory; the line is safe to delete"},
+	}})
+	r := CheckStorage(resolve.Located{}, g)
+	assert.Equal(t, "WARN", r.Status)
+	assert.Contains(t, r.Detail, "1 condition(s) need action")
+	assert.Contains(t, r.Detail, ".gitignore line 7")
+	assert.Contains(t, r.Detail, "safe to delete")
+	require.Len(t, r.Lines, 2)
+	assert.True(t, strings.HasPrefix(r.Lines[0], "action needed: "))
+	assert.True(t, strings.HasPrefix(r.Lines[1], "settled: "))
+}
+
+// A stamp written by an older binary has no class; the known fenced reason
+// must read as settled so existing repositories pass without a re-repair.
+func TestCheckStorageOldStampFencedPasses(t *testing.T) {
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	g := filepath.Join(d, "g")
+	raw := "version: 5\nresidual:\n- step: round-decisions\n  id: m-1\n  reason: incomplete legacy history, mission fenced from lifecycle writes\n"
+	require.NoError(t, os.MkdirAll(g, 0o700))
+	require.NoError(t, os.WriteFile(autorepair.GlobalStampPath(g), []byte(raw), 0o600))
+	r := CheckStorage(resolve.Located{}, g)
+	assert.Equal(t, "PASS", r.Status)
+	assert.Contains(t, r.Detail, "1 legacy missions fenced, no action needed")
+}
+
+func TestResidualEffectiveClass(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		r    autorepair.Residual
+		want autorepair.Class
+	}{
+		{"explicit wins", autorepair.Residual{Class: autorepair.ClassActionable, Step: "round-decisions", Reason: "x, mission fenced from lifecycle writes"}, autorepair.ClassActionable},
+		{"old fenced", autorepair.Residual{Step: "round-decisions", Reason: "contract cannot be loaded, mission fenced from lifecycle writes"}, autorepair.ClassSettled},
+		{"old write failure", autorepair.Residual{Step: "round-decisions", Reason: "mission authority cannot be written, mission fenced from lifecycle writes"}, autorepair.ClassActionable},
+		{"old other step", autorepair.Residual{Step: "sessions", Reason: "x, mission fenced from lifecycle writes"}, autorepair.ClassActionable},
+		{"old unknown", autorepair.Residual{Step: "gitignore", Reason: "z"}, autorepair.ClassActionable},
+	} {
+		t.Run(c.name, func(t *testing.T) { assert.Equal(t, c.want, c.r.EffectiveClass()) })
+	}
 }
