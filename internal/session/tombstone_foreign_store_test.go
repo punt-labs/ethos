@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -112,4 +113,50 @@ func gitRun(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
 	require.NoError(t, err, string(out))
+}
+
+// Tier B delegation records live under the store S, not the invoking checkout
+// C. A session bound to a mission only by such a record, whose mission live log
+// in C holds unsealed lines, must be kept.
+func TestPurgeTombstoned_DelegationRecordUnderStoreBindsMission(t *testing.T) {
+	s := testStore(t)
+	store, c := t.TempDir(), t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"}
+	require.NoError(t, s.CreateInCheckout("sess-deleg", root, primary, "", c, ""))
+	writeSealedLive(t, store, "sess-deleg")
+	writeDelegationRecordFor(t, store, "m-2026-07-21-009", "sess-deleg")
+	path := audit.LiveMissionLogPath(c, "m-2026-07-21-009", "sess-deleg")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	line := `{"ts":"` + audit.FormatLineTS(100) + `","event":"create"}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(line), 0o600))
+
+	purged, refused, err := s.PurgeTombstoned(store, c, "", false)
+	require.NoError(t, err)
+	assert.NotContains(t, purged, "sess-deleg")
+	assert.Contains(t, refused, "sess-deleg")
+}
+
+// A mission live log that cannot be statted (unreadable parent) is not proof of
+// absence: the purge keeps the roster instead of recording a false loss.
+func TestPurgeTombstoned_UnreadableMissionLiveLogRefuses(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	s := testStore(t)
+	c := gitInitDir(t)
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"}
+	require.NoError(t, s.CreateInCheckout("sess-eacces", root, primary, "", c, ""))
+	writeSealedLive(t, c, "sess-eacces")
+	require.NoError(t, mission.WriteActiveMission(s.root, "sess-eacces", "m-2026-07-21-009"))
+	dir := filepath.Dir(audit.LiveMissionLogPath(c, "m-2026-07-21-009", "sess-eacces"))
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.Chmod(dir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	purged, refused, err := s.PurgeTombstoned(c, c, "", false)
+	require.NoError(t, err)
+	assert.NotContains(t, purged, "sess-eacces")
+	assert.Contains(t, refused, "sess-eacces")
 }
