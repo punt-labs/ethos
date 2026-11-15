@@ -2,19 +2,63 @@ package audit
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
-// storePolicy names the layout of a checkout used as its own store, the view
-// the unsealed-line probes have of a root.
+// storePolicy names the layout of root's repository. root is a checkout, not
+// necessarily the store: in a linked worktree seal writes under the main
+// checkout's .punt-labs/local (DES-079), so the store is found through git's
+// common dir. internal/resolve holds the canonical rule (storeRoot) but imports
+// this package, so the rule is repeated here: a checkout whose git dir is the
+// common dir is its own store; a linked worktree of a non-bare repository uses
+// the work tree holding the common .git; anything else, and a directory outside
+// a repository, is its own store.
 func storePolicy(root string) (layout.Policy, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return layout.Policy{}, fmt.Errorf("resolving %s: %w", root, err)
 	}
-	return layout.NewRepository(abs, abs, layout.RecordBlame)
+	store, err := storeRootOf(abs)
+	if err != nil {
+		return layout.Policy{}, err
+	}
+	return layout.NewRepository(store, abs, layout.RecordBlame)
+}
+
+func storeRootOf(root string) (string, error) {
+	out, absent, err := gitenv.Read(gitenv.Spec{
+		Git: "git", Dir: root, Env: gitenv.Parsed(),
+		Args: []string{"rev-parse", "--absolute-git-dir", "--git-common-dir"},
+	}, gitenv.AbsentNotRepo)
+	if err != nil {
+		return "", fmt.Errorf("finding the store of %s: %w", root, err)
+	}
+	if absent {
+		return root, nil
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 2 {
+		return "", fmt.Errorf("finding the store of %s: git answered %q, not two paths", root, out)
+	}
+	gitDir, common := lines[0], lines[1]
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(root, common)
+	}
+	gi, gerr := os.Stat(gitDir)
+	ci, cerr := os.Stat(common)
+	if gerr == nil && cerr == nil && os.SameFile(gi, ci) {
+		return root, nil
+	}
+	common = filepath.Clean(common)
+	if filepath.Base(common) != ".git" {
+		return root, nil
+	}
+	return filepath.Dir(common), nil
 }
 
 // sealedSessionWatermark is the highest sealed timestamp for a session across
