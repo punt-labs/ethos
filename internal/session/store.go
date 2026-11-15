@@ -732,24 +732,25 @@ func (s *Store) purgeOneTombstoned(roster *Roster, storeRoot, repoRoot, repoID s
 		sealedRoot = trackedRoot
 	}
 	// A roster written by another checkout (empty repo ids match, so the guard
-	// above lets it through) sealed under that checkout's store, not ours.
-	// An unresolvable writer keeps the fail-safe: probe errors refuse the purge.
+	// above lets it through) sealed under that checkout's store, not ours. A
+	// checkout that no longer exists has no store to resolve: keep the caller's,
+	// so the live-file-lost logic below runs and chunks sealed here still count.
 	foreignStoreErr := error(nil)
-	if roster.Checkout != "" && roster.Checkout != repoRoot {
+	if roster.Checkout != "" && roster.Checkout != repoRoot && isDir(roster.Checkout) {
 		if ws, wErr := audit.StoreRootOf(roster.Checkout); wErr != nil {
 			foreignStoreErr = wErr
 		} else if !sameStore(ws, storeRoot) {
 			sealedRoot, trackedRoot = ws, roster.Checkout
 		}
 	}
-	// With no checkout in scope and none recorded, the session's zone lives under
-	// a checkout we cannot name, so its unsealed state is unprovable — fail safe
-	// exactly as a probe error does: flag it and let the refuse/tombstone logic
-	// below handle force.
 	if foreignStoreErr != nil {
 		probeFailed = true
 		s.warnf("ethos: purge: locating the store of %s's checkout: %v\n", roster.Session, foreignStoreErr)
 	}
+	// With no checkout in scope and none recorded, the session's zone lives under
+	// a checkout we cannot name, so its unsealed state is unprovable — fail safe
+	// exactly as a probe error does: flag it and let the refuse/tombstone logic
+	// below handle force.
 	if liveRoot != "" {
 		if n, cErr := audit.SessionUnsealedCountAcross(sealedRoot, trackedRoot, liveRoot, roster.Session); cErr != nil {
 			probeFailed = true
@@ -1145,4 +1146,9 @@ func sameStore(a, b string) bool {
 		return filepath.Clean(a) == filepath.Clean(b)
 	}
 	return os.SameFile(ai, bi)
+}
+
+func isDir(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
 }

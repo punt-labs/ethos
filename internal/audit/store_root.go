@@ -1,8 +1,10 @@
 package audit
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -40,8 +42,29 @@ func StoreRootOf(root string) (string, error) {
 		return root, nil
 	}
 	common = filepath.Clean(common)
-	if filepath.Base(common) != ".git" {
+	// A bare repository has no work tree to hold the store: the linked
+	// worktree is its own.
+	bare, err := commonIsBare(common)
+	if err != nil {
+		return "", fmt.Errorf("finding the store of %s: %w", root, err)
+	}
+	if bare || filepath.Base(common) != ".git" {
 		return root, nil
 	}
 	return filepath.Dir(common), nil
+}
+
+// commonIsBare reports whether the repository at common sets core.bare.
+// `--file` reads exactly that one config; exit 1 with a clean stderr is "unset".
+func commonIsBare(common string) (bool, error) {
+	out, _, err := gitenv.ReadNeutralConfig("git", 0, "--file", filepath.Join(common, "config"), "--bool", "core.bare")
+	var ee *exec.ExitError
+	switch {
+	case err == nil:
+		return strings.TrimSpace(string(out)) == "true", nil
+	case errors.As(err, &ee) && ee.ExitCode() == 1 && gitenv.WithoutTrace(string(ee.Stderr)) == "":
+		return false, nil
+	default:
+		return false, fmt.Errorf("reading core.bare of %s: %w", common, err)
+	}
 }

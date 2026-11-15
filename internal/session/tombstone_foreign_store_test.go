@@ -64,3 +64,52 @@ func TestPurgeTombstoned_SealedInWriterStoreOfOtherCheckout(t *testing.T) {
 		})
 	}
 }
+
+// A roster whose recorded checkout is gone (same repo id) is purged as before,
+// with a loss tombstone: its live file went with the checkout.
+func TestPurgeTombstoned_DeletedCheckoutIsPurgedWithTombstone(t *testing.T) {
+	s := testStore(t)
+	a := gitInitDir(t)
+	gone := filepath.Join(t.TempDir(), "gone")
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"}
+	require.NoError(t, s.CreateInCheckout("sess-gone", root, primary, "", gone, ""))
+	// A sealed chunk under the caller's store names the session, so its live
+	// file is provably lost rather than never written.
+	writeSealedLive(t, a, "sess-gone")
+	require.NoError(t, os.Remove(audit.LiveAuditPath(a, "sess-gone")))
+
+	purged, refused, err := s.PurgeTombstoned(a, a, "", false)
+	require.NoError(t, err)
+	assert.Contains(t, purged, "sess-gone")
+	assert.Empty(t, refused)
+}
+
+// A session sealed in a linked worktree whose worktree was then removed is
+// purged from the main checkout: the chunks live under the main store.
+func TestPurgeTombstoned_RemovedLinkedWorktreePurges(t *testing.T) {
+	s := testStore(t)
+	main := gitInitDir(t)
+	gitRun(t, main, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "x")
+	wt := filepath.Join(t.TempDir(), "wt")
+	gitRun(t, main, "worktree", "add", "-q", "--detach", wt)
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"}
+	require.NoError(t, s.CreateInCheckout("sess-wt", root, primary, "", wt, ""))
+	writeForeignLive(t, wt, "sess-wt", false)
+	// seal under the main store, as the real seal path does
+	writeForeignLive(t, main, "sess-wt", true)
+	require.NoError(t, os.Remove(audit.LiveAuditPath(main, "sess-wt")))
+	gitRun(t, main, "worktree", "remove", "--force", wt)
+
+	purged, refused, err := s.PurgeTombstoned(main, main, "", false)
+	require.NoError(t, err)
+	assert.Contains(t, purged, "sess-wt")
+	assert.Empty(t, refused)
+}
+
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	require.NoError(t, err, string(out))
+}
