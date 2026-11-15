@@ -14,6 +14,11 @@ import (
 // reading or decoding the reflections file, as opposed to validating it.
 var errDamagedReflections = errors.New("reflections file damaged")
 
+// errReflectionsInconsistent marks a reflections file that decoded but whose
+// entries are invalid, for another mission, or out of order. That is a verdict
+// on the history, not damage to the file.
+var errReflectionsInconsistent = errors.New("reflections file inconsistent")
+
 // ErrLockBusy is returned by WithRecordLockTry when another process holds the
 // lock. The caller retries later; it is not a failure.
 var ErrLockBusy = errors.New("mission lock is busy")

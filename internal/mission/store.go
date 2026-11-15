@@ -3084,7 +3084,7 @@ func decodeReflectionsFile(data []byte, missionID string) ([]Reflection, error) 
 			r.Mission = missionID
 		}
 		if err := r.Validate(); err != nil {
-			return nil, fmt.Errorf("reflections[%d] for %q: %w", i, missionID, err)
+			return nil, fmt.Errorf("%w: reflections[%d] for %q: %w", errReflectionsInconsistent, i, missionID, err)
 		}
 		// On-disk trust symmetry with AppendReflection and the results
 		// read path: the write path refuses a reflection whose Mission
@@ -3093,14 +3093,14 @@ func decodeReflectionsFile(data []byte, missionID string) ([]Reflection, error) 
 		// non-blank mismatch reaches here; a blank field was back-filled.
 		if r.Mission != missionID {
 			return nil, fmt.Errorf(
-				"reflections[%d].mission: expected %q, got %q",
-				i, missionID, r.Mission,
+				"%w: reflections[%d].mission: expected %q, got %q",
+				errReflectionsInconsistent, i, missionID, r.Mission,
 			)
 		}
 		if i > 0 && wrapper.Reflections[i-1].Round >= r.Round {
 			return nil, fmt.Errorf(
-				"reflections file %q is out of order or has duplicate round: %d after %d",
-				missionID, r.Round, wrapper.Reflections[i-1].Round,
+				"%w: reflections file %q is out of order or has duplicate round: %d after %d",
+				errReflectionsInconsistent, missionID, r.Round, wrapper.Reflections[i-1].Round,
 			)
 		}
 	}
