@@ -100,10 +100,11 @@ jobs:
           retention-days: 7
 
       - name: Coverage gate (per-package baseline)
-        # The committed baseline is linux, so this runner compares it in full.
-        # On another OS make coverage-check prints SKIP and passes, because
-        # per-package coverage differs per OS; this job is where it is enforced.
-        run: make coverage-check
+        # The enforcing gate: no -skip-os-mismatch here, so a baseline that is
+        # not linux fails this job instead of being skipped. make coverage-check
+        # (local make check) passes the flag and prints SKIP on another OS,
+        # because per-package coverage differs per OS.
+        run: go run ./cmd/coverage-check -profile coverage.out -baseline coverage-baseline.txt
 
       - name: Validate content
         run: go run ./cmd/validate-content
