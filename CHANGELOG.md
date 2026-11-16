@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.1.1] - 2026-11-15
+
 ### Fixed
 
 - **An unclosed code fence in `CLAUDE.md` runs to the end of the file
