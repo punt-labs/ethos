@@ -13,23 +13,17 @@ permissions:
 
 jobs:
   notify:
-    # The event allowlist is a secret-safety boundary, not just a notification
+    # event == 'push' is a secret-safety boundary, not just a notification
     # filter: this step's env: block carries secrets.BIFF_RELAY_TOKEN.
-    # push, schedule, and workflow_dispatch runs execute code from this
-    # repository's own refs (schedule runs on the default branch; dispatch
-    # requires write access), so none of them hands the token to a fork. The
-    # Behavioral workflow runs only on schedule and workflow_dispatch, so
-    # allowing those events is what lets its failures notify.
     # Widening this to include pull_request-sourced workflow_run completions
     # (e.g. to notify on fork-PR CI failures) reopens fork access to that
     # token unless paired with an explicit
     # `github.event.workflow_run.head_repository.full_name ==
     # github.repository` check, per GitHub's workflow_run-with-secrets
-    # guidance. Do not add pull_request events without adding that check.
+    # guidance. Do not relax this filter without adding that check.
     if: >-
       github.event.workflow_run.conclusion == 'failure'
-      && contains(fromJSON('["push","schedule","workflow_dispatch"]'),
-      github.event.workflow_run.event)
+      && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -46,7 +40,7 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           sparse-checkout: .punt-labs/biff
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           enable-cache: true
       - env:
@@ -60,6 +54,6 @@ jobs:
           BIFF_RELAY_TOKEN: ${{ secrets.BIFF_RELAY_TOKEN }}
           BIFF_RELAY_TLS_HANDSHAKE_FIRST: ${{ vars.BIFF_RELAY_TLS_HANDSHAKE_FIRST }}
         run: >-
-          uvx --from punt-biff==1.19.0 biff --user github-actions wall
+          uvx --from punt-biff biff --user github-actions wall
           "CI failed: ${WORKFLOW_NAME} on ${BRANCH} — ${RUN_URL}"
           --duration 2h

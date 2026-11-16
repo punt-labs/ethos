@@ -128,3 +128,4 @@ tests/e2e/.pytest_cache/
 tests/e2e/**/.pytest_cache/
 tests/e2e/.ruff_cache/
 tests/e2e/.mypy_cache/
+*.punt-import.lock
