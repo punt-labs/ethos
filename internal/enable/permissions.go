@@ -1,5 +1,7 @@
 package enable
 
+import "slices"
+
 // PermissionRules are the exact allow and ask rules owned by ethos enable.
 // Broad allows keep future safe operations working; ask rules preserve consent
 // for state-changing surfaces. A global option before the verb runs under the
@@ -70,4 +72,11 @@ var PermissionRules = map[string][]string{
 // ethos holds only the current set. Bash(ethos -*) made ethos --version prompt.
 var legacyPermissionRules = map[string][]string{
 	"ask": {"Bash(ethos -*)"},
+}
+
+// disableRules is what disable removes in one settings write: the current set
+// plus the retired rules, so a failed write never leaves disable half done.
+var disableRules = map[string][]string{
+	"allow": PermissionRules["allow"],
+	"ask":   slices.Concat(PermissionRules["ask"], legacyPermissionRules["ask"]),
 }

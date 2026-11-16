@@ -216,3 +216,17 @@ func TestEnableAndDisableStripTheRetiredFlagRule(t *testing.T) {
 		})
 	}
 }
+
+func TestDisableRemovesCurrentAndRetiredRulesInOneSet(t *testing.T) {
+	if !slices.Contains(disableRules["ask"], "Bash(ethos -*)") {
+		t.Errorf("disable set lacks the retired rule: %v", disableRules["ask"])
+	}
+	if !slices.Equal(disableRules["allow"], PermissionRules["allow"]) {
+		t.Errorf("disable allow = %v, want %v", disableRules["allow"], PermissionRules["allow"])
+	}
+	for _, rule := range PermissionRules["ask"] {
+		if !slices.Contains(disableRules["ask"], rule) {
+			t.Errorf("disable set lacks %s", rule)
+		}
+	}
+}

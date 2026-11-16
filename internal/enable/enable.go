@@ -298,12 +298,9 @@ func DisableTo(repoRoot, storeRoot string, force bool) (*Report, error) {
 	}
 
 	// Settings first: a refusal aborts before anything else changes.
-	revoked, err := claudesettings.Deregister(repoRoot, PermissionRules, p)
+	revoked, err := claudesettings.Deregister(repoRoot, disableRules, p)
 	if err != nil {
 		return rep, fmt.Errorf("removing ethos permission rules from .claude/settings.json: %w", err)
-	}
-	if _, err := claudesettings.Deregister(repoRoot, legacyPermissionRules, p); err != nil {
-		return rep, fmt.Errorf("removing retired ethos permission rules from .claude/settings.json: %w", err)
 	}
 	permissionStep(rep, revoked, "removed ", "no ethos rules present")
 
