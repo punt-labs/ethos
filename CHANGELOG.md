@@ -18,6 +18,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inert copy below the fence alone instead of refusing. Fences now close only
   on a same-marker run at least as long as the opener, and a line such as
   ```` ```x``` ```` is an inline code span, not a fence.
+- **Dead sessions are purged again (PL-1093).** The purge proved "every live
+  audit line is sealed" by reading sealed chunks only from the pre-DES-079
+  tracked directory, so it never saw what `ethos audit seal` writes and kept
+  every dead session forever. It now reads the trace archive under the
+  canonical store and the legacy directory, reads live files under the store
+  even from a linked worktree, and probes a session written by another
+  checkout against that checkout's own store. Anything it cannot verify is
+  kept; nothing unsealed is deleted.
+- **`ethos doctor` Storage is never a permanent WARN (PL-1094).** Ethos now
+  performs every repair it knows instead of reporting it: it deletes a
+  `.gitignore` line that hides the sessions record directory, and it seals a
+  dead session's unsealed audit lines and then purges it. Conditions that
+  need no action, such as pre-v4.21 missions fenced from lifecycle writes,
+  read PASS and are counted ("layout v5; 23 legacy missions fenced, no action
+  needed"). WARN remains only for what ethos must not change itself
+  (permission denied, I/O errors, damaged data, hooks owned by other tools);
+  each states its cause and what clears it. `ethos doctor` re-checks every
+  open condition, so a WARN clears once its cause is gone.
+  `ethos doctor --verbose` lists every recorded condition.
 
 ## [5.1.0] - 2026-11-14
 
