@@ -291,6 +291,22 @@ func TestOSMismatchFails(t *testing.T) {
 	}
 }
 
+// With -skip-os-mismatch a baseline from another OS is not compared (the
+// figures differ per OS) and the gate passes with a SKIP line; without it the
+// mismatch still fails (TestOSMismatchFails). A matching OS still compares.
+func TestOSMismatchSkipsWhenAllowed(t *testing.T) {
+	prof := profile([3]any{"internal/p/p.go", 10, false})
+	root, p, b := setup(t, prof, "# os: linux\noverall-target 10.0\ninternal/p 100.0\n", false)
+	code, out := runTool(t, root, p, b, "-os", "darwin", "-skip-os-mismatch")
+	want := "SKIP coverage: baseline is linux, this host is darwin"
+	if code != 0 || !strings.Contains(out, want) {
+		t.Fatalf("want exit 0 with %q, got %d: %s", want, code, out)
+	}
+	if code, out := runTool(t, root, p, b, "-os", "linux", "-skip-os-mismatch"); code == 0 {
+		t.Fatalf("matching os must still compare and fail the 0%% package: %s", out)
+	}
+}
+
 func TestWriteRejectsEmptyOS(t *testing.T) {
 	root, p, b := setup(t, profile([3]any{"internal/a/a.go", 10, true}), "", false)
 	if code, out := runTool(t, root, p, b, "-write", "-os", ""); code == 0 {

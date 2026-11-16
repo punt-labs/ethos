@@ -123,7 +123,7 @@ test: ## Run tests with race detection and write coverage to coverage.out
 .PHONY: coverage-check coverage-baseline coverage-baseline-from-ci
 
 coverage-check: ## Compare per-package coverage in coverage.out (from make test) with coverage-baseline.txt
-	go run ./cmd/coverage-check -profile coverage.out -baseline coverage-baseline.txt
+	go run ./cmd/coverage-check -skip-os-mismatch -profile coverage.out -baseline coverage-baseline.txt
 
 coverage-baseline: ## Regenerate coverage-baseline.txt from coverage.out (keeps overall-target and comments)
 	go run ./cmd/coverage-check -write -profile coverage.out -baseline coverage-baseline.txt

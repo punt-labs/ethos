@@ -86,6 +86,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	write := fs.Bool("write", false, "regenerate the baseline from the profile")
 	goos := fs.String("os", runtime.GOOS, "GOOS to compare against (and, with -write, to record in) the baseline")
 	exclude := fs.String("exclude", "", "with -write: comma-separated packages whose tests fail on this host; recorded as unmeasured, left out of the baseline and the overall figure")
+	skipOS := fs.Bool("skip-os-mismatch", false, "pass with a SKIP line, without comparing, when the baseline was generated on another OS (coverage differs per OS; CI enforces it on the baseline OS)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -127,6 +128,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "coverage-check: %v\n", err)
 		return 1
+	}
+	if *skipOS && base.os != "" && base.os != *goos {
+		fmt.Fprintf(stdout, "SKIP coverage: baseline is %s, this host is %s; per-package coverage differs per OS and is enforced by CI on %s\n", base.os, *goos, base.os)
+		return 0
 	}
 	return check(stdout, pkgs, overall, base, hasTestFiles(filepath.Join(*root, autorepairPkg)), *goos, *root)
 }
