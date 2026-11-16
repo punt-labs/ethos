@@ -33,3 +33,4 @@ for one-time product setup and `docs/opencode-setup.md` for the native harness.
   changes since it. A failed demo remains a finding until fixed and verified.
 - Tests or documentation alone never establish that a demo actually ran.
 @.punt-labs/punt/CLAUDE.md
+@.punt-labs/biff/CLAUDE.md
