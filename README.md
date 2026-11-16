@@ -21,7 +21,7 @@ locally, with no server, telemetry, or cloud service.
 Install ethos:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/2ef90938/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/cb596af/install.sh | sh
 ```
 
 Create your identity and team:
@@ -47,13 +47,13 @@ For a harness other than Claude Code, or a Claude Code install where
 organization policy blocks plugins:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/2ef90938/install.sh | sh -s -- --no-plugin
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/cb596af/install.sh | sh -s -- --no-plugin
 ```
 
 Where arguments cannot pass through the pipe, set `ETHOS_NO_PLUGIN=1`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/2ef90938/install.sh | ETHOS_NO_PLUGIN=1 sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/cb596af/install.sh | ETHOS_NO_PLUGIN=1 sh
 ```
 
 `--no-plugin` skips only the marketplace registration and plugin install. The
