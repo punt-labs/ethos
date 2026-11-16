@@ -48,19 +48,21 @@ func refreshHookSections(ctx context.Context, env Env, step string) (Outcome, er
 			case enable.StatusSkippedMalformed:
 				// A permanent condition of the file: a residual, not a failure,
 				// so the stamp is not withheld and the step is not retried forever.
-				out.Residuals = append(out.Residuals, Residual{
-					Step:   step,
-					ID:     st.Step + ": " + relTo(checkout, st.Detail),
-					Reason: "hook section cannot be refreshed: " + st.Cause,
-				})
+				out.Residuals = append(out.Residuals, actionableResidual(step, st.Step+": "+relTo(checkout, st.Detail),
+					"hook section cannot be refreshed: "+st.Cause,
+					"clears when the malformed section in "+relTo(checkout, st.Detail)+" is fixed or removed"))
 				env.Log.Logf(step, "refresh-hook", []string{st.Detail}, errors.New(st.Cause))
-			case enable.StatusSkippedNonShell, enable.StatusSkippedTracked,
+			case enable.StatusSkippedNonShell:
+				// ethos enable cannot install a shell section into a hook written
+				// in another language, so it is not the remedy.
+				out.Residuals = append(out.Residuals, actionableResidual(step, st.Step+": "+relTo(checkout, st.Detail),
+					"hook cannot be rewritten: "+strings.TrimPrefix(st.Status, "skipped-"),
+					"ethos cannot add its shell section to a hook in another language; clears when "+relTo(checkout, st.Detail)+" is a shell script that calls ethos or invokes ethos natively"))
+			case enable.StatusSkippedTracked,
 				enable.StatusSkippedShared, enable.StatusSkippedTrackedMissing:
-				out.Residuals = append(out.Residuals, Residual{
-					Step:   step,
-					ID:     st.Step + ": " + relTo(checkout, st.Detail),
-					Reason: "hook cannot be rewritten: " + strings.TrimPrefix(st.Status, "skipped-"),
-				})
+				out.Residuals = append(out.Residuals, actionableResidual(step, st.Step+": "+relTo(checkout, st.Detail),
+					"hook cannot be rewritten: "+strings.TrimPrefix(st.Status, "skipped-"),
+					"clears when the ethos section is present in "+relTo(checkout, st.Detail)))
 			}
 		}
 	}

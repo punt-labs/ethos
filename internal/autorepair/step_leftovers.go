@@ -51,7 +51,7 @@ func runLeftovers(ctx context.Context, env Env) (Outcome, error) {
 				out.Deferred = true
 				return out, nil
 			}
-			out.Residuals = append(out.Residuals, Residual{Step: stepLeftovers, ID: root, Reason: err.Error()})
+			out.Residuals = append(out.Residuals, actionableResidual(stepLeftovers, root, err.Error(), "the directory named in the repair log cannot be swept; clears when its permissions allow it"))
 		}
 	}
 	return out, nil
@@ -152,7 +152,7 @@ func removeStale(env Env, path string, dir bool, out *Outcome) {
 	}
 	env.Log.Logf(stepLeftovers, "delete-staging", []string{path}, err)
 	if err != nil {
-		out.Residuals = append(out.Residuals, Residual{Step: stepLeftovers, ID: path, Reason: fmt.Sprintf("cannot delete: %v", err)})
+		out.Residuals = append(out.Residuals, actionableResidual(stepLeftovers, path, fmt.Sprintf("cannot delete: %v", err), "ethos cannot delete the file named in the repair log; clears when the file is gone or its permissions allow the delete"))
 		return
 	}
 	out.Items++
@@ -167,7 +167,7 @@ func removeObsoleteLock(env Env, path string, out *Outcome) {
 	}
 	if err != nil {
 		env.Log.Logf(stepLeftovers, "probe-lock", []string{path}, err)
-		out.Residuals = append(out.Residuals, Residual{Step: stepLeftovers, ID: path, Reason: fmt.Sprintf("cannot probe lock: %v", err)})
+		out.Residuals = append(out.Residuals, actionableResidual(stepLeftovers, path, fmt.Sprintf("cannot probe lock: %v", err), "the lock file named in the repair log cannot be probed; clears when its permissions allow it"))
 		return
 	}
 	if held {
@@ -178,7 +178,7 @@ func removeObsoleteLock(env Env, path string, out *Outcome) {
 	err = os.Remove(path)
 	env.Log.Logf(stepLeftovers, "delete-lock", []string{path}, err)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		out.Residuals = append(out.Residuals, Residual{Step: stepLeftovers, ID: path, Reason: fmt.Sprintf("cannot delete: %v", err)})
+		out.Residuals = append(out.Residuals, actionableResidual(stepLeftovers, path, fmt.Sprintf("cannot delete: %v", err), "ethos cannot delete the file named in the repair log; clears when the file is gone or its permissions allow the delete"))
 		return
 	}
 	out.Items++

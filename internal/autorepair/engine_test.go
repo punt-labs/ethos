@@ -527,8 +527,8 @@ func TestEnsureScopesStampsIndependently(t *testing.T) {
 
 func TestEnsureRecordsResidualsInStamp(t *testing.T) {
 	r := newRig(t, true)
-	res1 := Residual{Step: "round-decisions", ID: "m-1", Reason: "incomplete history"}
-	res2 := Residual{Step: "global-audit", ID: "s-1", Reason: "unreadable"}
+	res1 := settledResidual("round-decisions", "m-1", "incomplete history")
+	res2 := actionableResidual("global-audit", "s-1", "unreadable", "fix it")
 	r.step("round-decisions", ScopeRepository, Outcome{Residuals: []Residual{res1}}, nil)
 	r.step("global-audit", ScopeGlobal, Outcome{Residuals: []Residual{res2}}, nil)
 	res := r.ensure()

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/autorepair"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -424,4 +425,30 @@ func CollectAuditDiagnosticsWithPolicy(p layout.Policy) (AuditDiagnostics, error
 		}
 	}
 	return diag, nil
+}
+
+// SealSessionWithPolicy archives every stream of one session, session and
+// mission namespaces, under p. It is SealRepoWithPolicy scoped to one session,
+// for the repair step that seals a dead session before purging its roster.
+func SealSessionWithPolicy(p layout.Policy, sessionID string, now time.Time, opts SealOptions) (SealResult, error) {
+	streams, err := audit.ListStreams(p)
+	if err != nil {
+		return SealResult{}, err
+	}
+	var selected []audit.Stream
+	for _, s := range streams {
+		if s.Session == sessionID {
+			selected = append(selected, s)
+		}
+	}
+	return sealPolicyStreams(p, selected, now, opts)
+}
+
+func init() {
+	autorepair.SealSession = func(p layout.Policy, sessionID, startDate string, now time.Time) (int, error) {
+		res, err := SealSessionWithPolicy(p, sessionID, now, SealOptions{
+			StartDate: func(string) string { return startDate },
+		})
+		return res.LinesSealed, err
+	}
 }

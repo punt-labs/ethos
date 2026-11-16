@@ -622,8 +622,11 @@ func (s *Store) finishReflection(in reflectionIntent) error {
 // to the stored IDs.
 func (s *Store) importLegacyDecisions(c *Contract) error {
 	rs, _, err := s.loadReflectionsBytes(c.MissionID)
+	if errors.Is(err, errReflectionsInconsistent) {
+		return fmt.Errorf("legacy reflection history incomplete or inconsistent: %w", err)
+	}
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", errDamagedReflections, err)
 	}
 	d := &RoundDecisions{Version: 1, Entries: []RoundDecision{}}
 	for _, r := range rs {

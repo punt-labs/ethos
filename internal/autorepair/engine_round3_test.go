@@ -157,9 +157,11 @@ func TestEnsureCancelledContextTouchesNothing(t *testing.T) {
 // repository stamp when the step names the repository or, unnamed, ran for it.
 func TestEnsureScopeBothResidualLandsInItsOwnStamp(t *testing.T) {
 	r := newRig(t, true)
-	repoRes := Residual{Step: "both", ID: "repo-thing", Reason: "repo condition", Scope: ScopeRepository}
-	globalRes := Residual{Step: "both", ID: "global-thing", Reason: "global condition", Scope: ScopeGlobal}
-	unnamed := Residual{Step: "both", ID: "unnamed", Reason: "unnamed"}
+	repoRes := settledResidual("both", "repo-thing", "repo condition")
+	repoRes.Scope = ScopeRepository
+	globalRes := settledResidual("both", "global-thing", "global condition")
+	globalRes.Scope = ScopeGlobal
+	unnamed := settledResidual("both", "unnamed", "unnamed")
 	r.step("both", ScopeBoth, Outcome{Residuals: []Residual{repoRes, globalRes, unnamed}}, nil)
 	r.ensure()
 	g, err := r.globalStamp()

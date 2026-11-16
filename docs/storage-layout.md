@@ -428,7 +428,7 @@ lock, and waits at most 2 s. A busy lock, an index lock or an unreadable file
 defers the step: it logs, the stamp is not written, and the next run resumes. A
 lock is never stolen. A step that finds a permanent condition (for example a
 mission whose round history is incomplete) records it as a residual in the
-stamp and counts as finished. Nothing an upgrade step does fails the command,
+stamp and counts as finished. Each residual is settled (final, nothing to do) or actionable (its `action` says what a person does); `ethos doctor` shows `WARN` only for actionable ones, re-runs their steps so an acted-on residual clears, and `ethos doctor --verbose` lists them all. Nothing an upgrade step does fails the command,
 hook or MCP call. Losses are logged, never fatal.
 
 **Never touched.** Shared identities, contract lifecycle fields, accepted

@@ -60,13 +60,15 @@ func TestResidualNeverCrossesStampScope(t *testing.T) {
 	r.ensure()
 	require.NoError(t, os.Remove(GlobalStampPath(r.global)))
 	r.opts.steps, r.opts.order = nil, nil
-	repoRes := Residual{Step: "both", ID: "repo-thing", Reason: "repo", Scope: ScopeRepository}
-	globalRes := Residual{Step: "both", ID: "global-thing", Reason: "global", Scope: ScopeGlobal}
+	repoRes := settledResidual("both", "repo-thing", "repo")
+	repoRes.Scope = ScopeRepository
+	globalRes := settledResidual("both", "global-thing", "global")
+	globalRes.Scope = ScopeGlobal
 	r.step("both", ScopeBoth, Outcome{Residuals: []Residual{repoRes, globalRes}}, nil)
 	res := r.ensure()
 	g, err := r.globalStamp()
 	require.NoError(t, err)
-	assert.Equal(t, []Residual{{Step: "both", ID: "global-thing", Reason: "global"}}, g.Residual)
+	assert.Equal(t, []Residual{settledResidual("both", "global-thing", "global")}, g.Residual)
 	assert.Len(t, res.Residuals, 2)
 }
 

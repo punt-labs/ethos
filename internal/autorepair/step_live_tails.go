@@ -37,7 +37,7 @@ func runLiveTails(ctx context.Context, env Env) (Outcome, error) {
 		// every command.
 		if reason, ok := permanentScanReason(err); ok {
 			logf(env, stepLiveTails, "scan-streams", nil, err)
-			out.Residuals = append(out.Residuals, Residual{Step: stepLiveTails, ID: "streams", Reason: reason})
+			out.Residuals = append(out.Residuals, actionableResidual(stepLiveTails, "streams", reason, seeLogAction))
 			return out, nil
 		}
 		return out, fmt.Errorf("listing audit streams: %w", err)
@@ -60,7 +60,7 @@ func runLiveTails(ctx context.Context, env Env) (Outcome, error) {
 		if err != nil {
 			logf(env, stepLiveTails, "scan-archive", []string{live}, err)
 			if reason, ok := permanentScanReason(err); ok {
-				out.Residuals = append(out.Residuals, Residual{Step: stepLiveTails, ID: filepath.Base(live), Reason: reason})
+				out.Residuals = append(out.Residuals, actionableResidual(stepLiveTails, filepath.Base(live), reason, seeLogAction))
 			} else {
 				out.Deferred = true
 			}
@@ -95,7 +95,7 @@ func runLiveTails(ctx context.Context, env Env) (Outcome, error) {
 				// whose ts cannot be parsed, is a property of the file no
 				// later run changes: a residual naming the stream, never
 				// the content.
-				out.Residuals = append(out.Residuals, Residual{Step: stepLiveTails, ID: filepath.Base(live), Reason: "a live line cannot be decoded; file left in place"})
+				out.Residuals = append(out.Residuals, actionableResidual(stepLiveTails, filepath.Base(live), "a live line cannot be decoded; file left in place", "clears when the undecodable line is gone from the live audit file "+filepath.Base(live)))
 				continue
 			}
 			// Anything else RedactLive refuses is a condition of the archive

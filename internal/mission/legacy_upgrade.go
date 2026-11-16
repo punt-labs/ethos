@@ -10,6 +10,15 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
+// errDamagedReflections marks an importLegacyDecisions failure that came from
+// reading or decoding the reflections file, as opposed to validating it.
+var errDamagedReflections = errors.New("reflections file damaged")
+
+// errReflectionsInconsistent marks a reflections file that decoded but whose
+// entries are invalid, for another mission, or out of order. That is a verdict
+// on the history, not damage to the file.
+var errReflectionsInconsistent = errors.New("reflections file inconsistent")
+
 // ErrLockBusy is returned by WithRecordLockTry when another process holds the
 // lock. The caller retries later; it is not a failure.
 var ErrLockBusy = errors.New("mission lock is busy")
@@ -28,6 +37,9 @@ const (
 	LegacyCorruptCorrections
 	// LegacyUnloadable: the contract cannot be read or decoded.
 	LegacyUnloadable
+	// LegacyDamagedReflections: the reflections file cannot be read or
+	// decoded. A person repairs it; it is not a verdict on the history.
+	LegacyDamagedReflections
 )
 
 // String is a reason a caller can record, derived from the class alone.
@@ -41,6 +53,8 @@ func (f LegacyFence) String() string {
 		return "corrections authority is corrupt"
 	case LegacyUnloadable:
 		return "contract cannot be loaded"
+	case LegacyDamagedReflections:
+		return "reflections file cannot be read or decoded"
 	}
 	return "legacy history cannot be imported"
 }
@@ -166,6 +180,9 @@ func (s *Store) upgradeLegacyAuthority(id string, out *MutationOutcome) (bool, e
 	}
 	upgraded := *c
 	if err := s.importLegacyDecisions(&upgraded); err != nil {
+		if errors.Is(err, errDamagedReflections) {
+			return false, legacyFence(LegacyDamagedReflections, err)
+		}
 		return false, legacyFence(LegacyIncomplete, err)
 	}
 	// Corrections without decisions are the state Correct leaves on a legacy

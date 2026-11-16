@@ -53,11 +53,8 @@ func runScrubRecords(ctx context.Context, env Env) (Outcome, error) {
 	out.Deferred = len(res.Busy) > 0 || res.Interrupted
 	if err != nil {
 		env.Log.Logf("scrub-records", "refuse", nil, err)
-		out.Residuals = append(out.Residuals, Residual{
-			Step:   "scrub-records",
-			ID:     "tracked-records",
-			Reason: scrubReason(res),
-		})
+		out.Residuals = append(out.Residuals, actionableResidual("scrub-records", "tracked-records", scrubReason(res),
+			"clears when .punt-labs/ethos/missions is readable and writable"))
 	}
 	return out, nil
 }

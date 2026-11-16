@@ -253,3 +253,70 @@ func TestRoundDecisions_StoredIDsSurviveTheScrub(t *testing.T) {
 	require.GreaterOrEqual(t, scrub.Items, 1)
 	assert.Equal(t, before, ids(), "the scrub does not change a stored decision ID")
 }
+
+// An unreadable file is not a final fenced state: a person can fix the
+// permission, so the residual must be actionable and name the file.
+func TestRoundDecisions_UnreadableEvidenceIsActionable(t *testing.T) {
+	for _, file := range []string{"reflections.yaml", "contract.yaml"} {
+		t.Run(file, func(t *testing.T) {
+			env := stage34(t, "v4.17.0")
+			dir := filepath.Join(env.Roots.Store, ".punt-labs", "ethos", "missions", "m-2026-11-09-001")
+			p := filepath.Join(dir, file)
+			require.NoError(t, os.Chmod(p, 0o000))
+			t.Cleanup(func() { _ = os.Chmod(p, 0o600) })
+			if _, err := os.ReadFile(p); err == nil {
+				t.Skip("file readable despite mode 000 (running as root)")
+			}
+			out := run34(t, "round-decisions", env)
+			var got *Residual
+			for i := range out.Residuals {
+				if out.Residuals[i].ID == "m-2026-11-09-001" {
+					got = &out.Residuals[i]
+				}
+			}
+			require.NotNil(t, got, "residuals: %v", out.Residuals)
+			assert.Equal(t, ClassActionable, got.Class)
+			assert.Contains(t, got.Action, file)
+			assert.Contains(t, got.Action, "is readable")
+			assert.NotContains(t, got.Action, env.Roots.Store, "paths stay repository-relative")
+		})
+	}
+}
+
+// Genuinely incomplete history is the final state and stays settled; a corrupt
+// corrections file is not.
+func TestRoundDecisions_ClassByFence(t *testing.T) {
+	env := stage34(t, "v4.17.0")
+	dir := filepath.Join(env.Roots.Store, ".punt-labs", "ethos", "missions", "m-2026-11-09-001")
+	require.NoError(t, os.Remove(filepath.Join(dir, "reflections.yaml")))
+	out := run34(t, "round-decisions", env)
+	require.Len(t, out.Residuals, 1)
+	assert.Equal(t, ClassSettled, out.Residuals[0].Class)
+
+	env = stage34(t, "v4.17.0")
+	dir = filepath.Join(env.Roots.Store, ".punt-labs", "ethos", "missions", "m-2026-11-09-001")
+	write34(t, filepath.Join(dir, "corrections.yaml"), "version: 7\n")
+	out = run34(t, "round-decisions", env)
+	require.Len(t, out.Residuals, 1)
+	assert.Equal(t, ClassActionable, out.Residuals[0].Class)
+	assert.Contains(t, out.Residuals[0].Action, "valid or restored")
+}
+
+// A reflections.yaml that cannot be decoded is damage a person repairs, not a
+// final verdict on the history.
+func TestRoundDecisions_CorruptReflectionsIsActionable(t *testing.T) {
+	env := stage34(t, "v4.17.0")
+	dir := filepath.Join(env.Roots.Store, ".punt-labs", "ethos", "missions", "m-2026-11-09-001")
+	write34(t, filepath.Join(dir, "reflections.yaml"), "broken: [yaml")
+	out := run34(t, "round-decisions", env)
+	var got *Residual
+	for i := range out.Residuals {
+		if out.Residuals[i].ID == "m-2026-11-09-001" {
+			got = &out.Residuals[i]
+		}
+	}
+	require.NotNil(t, got, "residuals: %v", out.Residuals)
+	assert.Equal(t, ClassActionable, got.Class)
+	assert.Contains(t, got.Action, "valid or restored")
+	assert.Contains(t, got.Action, "reflections.yaml")
+}

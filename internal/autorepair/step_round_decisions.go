@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 
 	"github.com/punt-labs/ethos/v4/internal/mission"
@@ -51,10 +52,10 @@ func runRoundDecisions(ctx context.Context, env Env) (Outcome, error) {
 			out.Deferred = true
 		case errors.As(err, &history):
 			env.Log.Logf("round-decisions", "fence", []string{missionPath(env, id)}, err)
-			out.Residuals = append(out.Residuals, Residual{Step: "round-decisions", ID: id, Reason: history.Kind.String() + ", mission fenced from lifecycle writes"})
+			out.Residuals = append(out.Residuals, fenceResidual(env, id, history))
 		case err != nil:
 			env.Log.Logf("round-decisions", "refuse", []string{missionPath(env, id)}, err)
-			out.Residuals = append(out.Residuals, Residual{Step: "round-decisions", ID: id, Reason: "mission authority cannot be written, mission fenced from lifecycle writes"})
+			out.Residuals = append(out.Residuals, actionableResidual("round-decisions", id, writeFailPrefix+fencedSuffix, "clears when "+missionFileRel(id, "contract.yaml")+" is writable"))
 		case upgraded:
 			env.Log.Logf("round-decisions", "import-authority", []string{
 				repositoryContractPath(env, id),
@@ -68,4 +69,30 @@ func runRoundDecisions(ctx context.Context, env Env) (Outcome, error) {
 
 func missionPath(env Env, id string) string {
 	return filepath.Dir(repositoryContractPath(env, id))
+}
+
+// fenceResidual classifies a fenced mission. Only a validation result about
+// the history itself (incomplete, refused by redaction) is final. An I/O
+// failure under any fence kind, an undecodable contract, and corrupt
+// corrections are things a person can fix, so the reason names the file and
+// the action. Paths stay repository-relative.
+func fenceResidual(env Env, id string, h *mission.LegacyHistoryError) Residual {
+	base := h.Kind.String() + fencedSuffix
+	var pe *fs.PathError
+	switch {
+	case errors.As(h.Err, &pe):
+		rel := relTo(repoStore(env), pe.Path)
+		return actionableResidual("round-decisions", id, base, "clears when "+rel+" is readable")
+	case h.Kind == mission.LegacyUnloadable:
+		return actionableResidual("round-decisions", id, base, "clears when "+missionFileRel(id, "contract.yaml")+" is valid or restored")
+	case h.Kind == mission.LegacyDamagedReflections:
+		return actionableResidual("round-decisions", id, base, "clears when "+missionFileRel(id, "reflections.yaml")+" is valid or restored")
+	case h.Kind == mission.LegacyCorruptCorrections:
+		return actionableResidual("round-decisions", id, base, "clears when "+missionFileRel(id, "corrections.yaml")+" is valid or restored")
+	}
+	return settledResidual("round-decisions", id, base)
+}
+
+func missionFileRel(id, name string) string {
+	return ".punt-labs/ethos/missions/" + id + "/" + name
 }

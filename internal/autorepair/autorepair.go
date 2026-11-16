@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/layout"
+	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/redact"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
@@ -85,12 +87,107 @@ type Outcome struct {
 	Residuals []Residual
 }
 
+// Class is the kind of a residual. Doctor warns only about ClassActionable.
+type Class string
+
+const (
+	// ClassSettled is a final, correct state: there is nothing to do.
+	ClassSettled Class = "settled"
+	// ClassActionable is a condition a person can act on; its Action says how.
+	// ethos doctor re-runs the owning step, so the residual clears once the
+	// person has acted.
+	ClassActionable Class = "actionable"
+)
+
+// fencedSuffix ends every reason round-decisions records for a fenced mission.
+const fencedSuffix = ", mission fenced from lifecycle writes"
+
+// writeFailPrefix starts the round-decisions reason for a write failure.
+const writeFailPrefix = "mission authority cannot be written"
+
+// reasonImportedKept is the global-missions reason for a mission imported
+// with its global copy left in place.
+// (defined in step_global_missions.go)
+
+// settledReasons is the exact set of unclassed reasons, written by binaries
+// before classes existed, that record a final state: step -> reasons. An
+// old residual that is not listed is actionable. Read path only.
+func settledReasons() map[string]map[string]bool {
+	fenced := map[string]bool{}
+	for _, k := range []mission.LegacyFence{mission.LegacyIncomplete, mission.LegacyRedactionRefused, 0} {
+		fenced[k.String()+fencedSuffix] = true
+	}
+	return map[string]map[string]bool{
+		"round-decisions":  fenced,
+		stepGlobalMissions: {reasonImportedKept: true},
+	}
+}
+
+// EffectiveClass is r.Class, or, for a residual from a stamp written before
+// classes existed, settled when step and reason exactly match a historical
+// final state and actionable otherwise.
+func (r Residual) EffectiveClass() Class {
+	if r.Class != "" {
+		return r.Class
+	}
+	if settledReasons()[r.Step][r.Reason] {
+		return ClassSettled
+	}
+	return ClassActionable
+}
+
+// needsReevaluation is true for an unclassed incomplete-history residual: older
+// binaries wrote that reason for a damaged reflections file too, so it is not
+// trusted as settled until round-decisions has run once more and classed it.
+func (r Residual) needsReevaluation() bool {
+	return r.Class == "" && r.Step == "round-decisions" && r.Reason == mission.LegacyIncomplete.String()+fencedSuffix
+}
+
+// EffectiveAction is what a person does about an actionable residual: its
+// Action, or for one from a stamp written before actions existed, a pointer to
+// the repair log. A settled residual has none.
+func (r Residual) EffectiveAction() string {
+	if r.EffectiveClass() == ClassSettled {
+		return ""
+	}
+	if r.Action != "" {
+		return r.Action
+	}
+	return "cause recorded in ~/.punt-labs/ethos/logs/repair.log for step " + r.Step + "; clears when the condition no longer holds"
+}
+
+// DisplayAction is EffectiveAction through the prose redactor, for a screen.
+func (r Residual) DisplayAction() string { return redact.Prose(r.EffectiveAction()) }
+
+// seeLogAction is the action for a condition whose cause only the repair log
+// names.
+const seeLogAction = "cause recorded in ~/.punt-labs/ethos/logs/repair.log; clears when the condition no longer holds"
+
+// settledResidual is a final, correct state: nothing for a person to do.
+func settledResidual(step, id, reason string) Residual {
+	return Residual{Class: ClassSettled, Step: step, ID: id, Reason: reason}
+}
+
+// actionableResidual is a condition a person can act on. The action says what
+// to do and is never empty; doctor shows it beside the reason.
+func actionableResidual(step, id, reason, action string) Residual {
+	if action == "" {
+		panic("autorepair: actionable residual without an action: " + step + " " + id)
+	}
+	return Residual{Class: ClassActionable, Step: step, ID: id, Reason: reason, Action: action}
+}
+
 // Residual is a permanent condition a step leaves in place, recorded in the
 // stamp so Ensure does not retry it and doctor can show it.
 type Residual struct {
+	// Class says whether a person can act on the condition. A stamp written
+	// before classes existed has none; EffectiveClass maps it.
+	Class  Class  `yaml:"class,omitempty"`
 	Step   string `yaml:"step"`
 	ID     string `yaml:"id"`
 	Reason string `yaml:"reason"`
+	// Action is what a person does about an actionable residual.
+	Action string `yaml:"action,omitempty"`
 	// Scope names the store the condition is in. A ScopeBoth step sets it; the
 	// zero value means the store the step was running for. It places the
 	// residual and is not recorded. A residual is never written into a stamp

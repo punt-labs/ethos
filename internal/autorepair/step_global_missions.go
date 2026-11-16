@@ -57,16 +57,22 @@ func runGlobalMissions(ctx context.Context, env Env) (Outcome, error) {
 	}
 	for _, id := range res.Imported {
 		env.Log.Logf(stepGlobalMissions, "import", []string{filepath.Join(global, id+".yaml"), filepath.Join(repo, id)}, nil)
-		out.Residuals = append(out.Residuals, Residual{Step: stepGlobalMissions, ID: id, Reason: reasonImportedKept})
+		out.Residuals = append(out.Residuals, settledResidual(stepGlobalMissions, id, reasonImportedKept))
 	}
 	out.Items = len(res.Imported)
+	// A copy imported by an earlier run and still equal to its global source is
+	// the same settled state; re-emitting it keeps a doctor recheck, which
+	// replaces this step's residuals, from dropping the record.
+	for _, id := range res.Present {
+		out.Residuals = append(out.Residuals, settledResidual(stepGlobalMissions, id, reasonImportedKept))
+	}
 	for _, id := range res.Diverged {
 		env.Log.Logf(stepGlobalMissions, "diverged", []string{filepath.Join(repo, id)}, nil)
-		out.Residuals = append(out.Residuals, Residual{Step: stepGlobalMissions, ID: id, Reason: mission.ReasonRepoCopyDiverged})
+		out.Residuals = append(out.Residuals, actionableResidual(stepGlobalMissions, id, mission.ReasonRepoCopyDiverged, "clears when the global copy of "+id+" matches the repository copy or is gone"))
 	}
 	for _, f := range res.Failed {
 		env.Log.Logf(stepGlobalMissions, "import-failed", []string{filepath.Join(global, f.ID+".yaml")}, fmt.Errorf("%s", f.Reason))
-		out.Residuals = append(out.Residuals, Residual{Step: stepGlobalMissions, ID: f.ID, Reason: f.Reason})
+		out.Residuals = append(out.Residuals, actionableResidual(stepGlobalMissions, f.ID, f.Reason, seeLogAction))
 	}
 	return out, nil
 }

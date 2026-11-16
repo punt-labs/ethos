@@ -49,6 +49,9 @@ type options struct {
 	lockWait     time.Duration
 	steps        []Step
 	order        []string
+	// recheck makes a pass over current stamps re-run the steps that own a
+	// residual a person can act on, so the residual clears once they have.
+	recheck bool
 }
 
 func (options) globalLockPath(global string) string { return globalLockPath(global) }
@@ -91,6 +94,7 @@ func EnsureUnbounded(ctx context.Context, roots resolve.Located, global string) 
 	o := defaultOptions()
 	o.stepBudget = unbounded
 	o.ensureBudget = unbounded
+	o.recheck = true
 	return ensure(ctx, roots, global, o)
 }
 
@@ -152,6 +156,10 @@ type target struct {
 	blocked  bool // a step errored, deferred, was abandoned or is not registered
 	items    int
 	residual []Residual
+	// prior is the current stamp being rechecked: its residuals of steps the
+	// pass does not re-run are kept.
+	prior *Stamp
+	rerun []string // steps owning a residual that is not settled
 }
 
 // refresh reads the stamp: a stat first, the file only when it is present.
@@ -206,6 +214,8 @@ func ensure(ctx context.Context, roots resolve.Located, global string, o options
 	for _, t := range targets {
 		t.refresh()
 	}
+	// recheckSteps marks targets needed; its step list is recomputed under the lock.
+	_ = recheckSteps(o, targets)
 	if !g.needed && (r == nil || !r.needed) {
 		return Result{}, nil
 	}
@@ -227,6 +237,7 @@ func ensure(ctx context.Context, roots resolve.Located, global string, o options
 	for _, t := range targets {
 		t.refresh() // another process may have finished while we waited
 	}
+	only := recheckSteps(o, targets)
 	if !g.needed && (r == nil || !r.needed) {
 		return Result{}, nil
 	}
@@ -255,7 +266,7 @@ func ensure(ctx context.Context, roots resolve.Located, global string, o options
 	env := Env{Global: global, Now: o.now(), Log: log}
 	var live liveSteps
 	defer live.wait(log, time.Now().Add(o.ensureBudget)) // registered last, so it runs before either lock is released
-	res = runSteps(ctx, env, roots, policy, o, log, g, r, nil, &live)
+	res = runSteps(ctx, env, roots, policy, o, log, g, r, only, &live)
 	for _, t := range targets {
 		if !t.needed || t.blocked {
 			continue
@@ -266,6 +277,10 @@ func ensure(ctx context.Context, roots resolve.Located, global string, o options
 			RepairedAt: env.Now.UTC().Format(time.RFC3339),
 			Items:      t.items,
 			Residual:   t.residual,
+		}
+		if t.prior != nil && only != nil {
+			s.Items += t.prior.Items
+			s.Residual = mergePrior(o, t, g, r, only, s.Residual)
 		}
 		if werr := WriteStamp(t.path, s, t.ensure); werr != nil {
 			log.Logf("engine", "write-stamp", []string{t.path}, werr)
@@ -316,10 +331,7 @@ func cheapPass(ctx context.Context, names []string, roots resolve.Located, globa
 		}
 	}
 	env := Env{Global: global, Now: o.now(), Log: log}
-	only := make(map[string]bool, len(names))
-	for _, n := range names {
-		only[n] = true
-	}
+	only := names
 	var live liveSteps
 	defer live.wait(log, time.Now().Add(o.ensureBudget)) // registered last, so it runs before either lock is released
 	return runSteps(ctx, env, roots, policy, o, log, g, r, only, &live), nil
@@ -391,11 +403,11 @@ func anyRegisteredServes(o options, g, r *target) bool {
 // is abandoned blocks the stamps it serves and contributes nothing to the
 // result; later steps still run, except after an abandoned step: the pass
 // stops there.
-func runSteps(ctx context.Context, base Env, roots resolve.Located, policy layout.Policy, o options, log *FileLog, g, r *target, only map[string]bool, live *liveSteps) (res Result) {
+func runSteps(ctx context.Context, base Env, roots resolve.Located, policy layout.Policy, o options, log *FileLog, g, r *target, only []string, live *liveSteps) (res Result) {
 	ctx, cancel := context.WithTimeout(ctx, o.ensureBudget)
 	defer cancel()
 	for _, name := range o.order {
-		if only != nil && !only[name] {
+		if only != nil && !slices.Contains(only, name) {
 			continue
 		}
 		i := slices.IndexFunc(o.steps, func(s Step) bool { return s.Name == name })
@@ -448,6 +460,18 @@ func runSteps(ctx context.Context, base Env, roots resolve.Located, policy layou
 			t.items += out.Items
 		}
 		for _, rs := range out.Residuals {
+			if rs.Class == "" {
+				// A step built a residual outside settledResidual and
+				// actionableResidual. Never record it as settled.
+				log.Logf(s.Name, "unclassed-residual", nil, fmt.Errorf("residual %q has no class; recorded as actionable", rs.ID))
+				rs.Class = ClassActionable
+			}
+			if rs.Class == ClassActionable && rs.Action == "" {
+				// Constructors forbid this; a step that got here built the
+				// residual by hand. Doctor must still name an action.
+				log.Logf(s.Name, "defect", nil, fmt.Errorf("actionable residual %q has no action", rs.ID))
+				rs.Action = rs.EffectiveAction()
+			}
 			if t := residualTarget(rs, served, r); t != nil {
 				t.residual = append(t.residual, rs)
 			}
@@ -624,10 +648,84 @@ func residualTarget(rs Residual, served []*target, r *target) *target {
 		}
 		return nil
 	}
+	// A recheck can serve both stamps; the stamp that already held this very
+	// condition keeps it rather than it moving to the other store.
+	for _, t := range served {
+		if t.prior != nil && slices.ContainsFunc(t.prior.Residual, func(p Residual) bool { return p.Step == rs.Step && p.ID == rs.ID }) {
+			return t
+		}
+	}
 	for _, t := range served {
 		if t == r {
 			return t
 		}
 	}
 	return served[0]
+}
+
+// mergePrior is the residuals a recheck of t writes: what the re-run steps
+// found, then each earlier residual of t unless t was actually rechecked for
+// its step (the step is registered here, was run, and its scope serves t). A
+// step that did not run, is not carried by this binary, or ran only for the
+// other store still owns its residual.
+func mergePrior(o options, t *target, g, r *target, only []string, found []Residual) []Residual {
+	out := slices.Clone(found)
+	for _, p := range t.prior.Residual {
+		i := slices.IndexFunc(o.steps, func(s Step) bool { return s.Name == p.Step })
+		if i >= 0 && slices.Contains(only, p.Step) && slices.Contains(serves(o.steps[i].Scope, g, r), t) {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// recheckSteps, when o.recheck is set and every target that needs a pass is a
+// current stamp with a residual a person can act on, marks those targets
+// needed and returns the steps that own the residuals. Otherwise it returns
+// nil and the pass is the ordinary one. A stamp that is missing or old gets a
+// full pass, which replaces its residuals.
+func recheckSteps(o options, targets []*target) []string {
+	if !o.recheck {
+		return nil
+	}
+	var steps []string
+	var cands []*target
+	for _, t := range targets {
+		if t.needed {
+			if t.prior == nil {
+				return nil // a full pass is already due
+			}
+			cands = append(cands, t)
+			steps = append(steps, t.rerun...)
+			continue
+		}
+		s, err := ReadStamp(t.path)
+		// A stamp from a newer binary is not this binary's to rewrite.
+		if err != nil || !s.Current() || s.Version > LayoutVersion {
+			continue
+		}
+		var own []string
+		for _, rs := range s.Residual {
+			if rs.EffectiveClass() == ClassSettled && !rs.needsReevaluation() {
+				continue
+			}
+			// Only a step this binary carries can be re-run; the others keep
+			// their residual as it is.
+			carried := slices.ContainsFunc(o.steps, func(st Step) bool { return st.Name == rs.Step })
+			if carried && !slices.Contains(own, rs.Step) {
+				own = append(own, rs.Step)
+			}
+		}
+		if len(own) == 0 {
+			continue
+		}
+		t.needed, t.prior, t.rerun = true, &s, own
+		cands = append(cands, t)
+		steps = append(steps, own...)
+	}
+	if len(cands) == 0 {
+		return nil
+	}
+	return steps
 }
