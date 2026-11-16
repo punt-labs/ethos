@@ -190,6 +190,15 @@ func TestHelperRunGit(t *testing.T) {
 		}
 		limit = d
 	}
+	// ETHOS_HELPER_READY receives the wall-clock time Run's limit starts from,
+	// so a parent can time a signal against the limit itself rather than
+	// against this process's startup.
+	if ready := os.Getenv("ETHOS_HELPER_READY"); ready != "" {
+		stamp := strconv.FormatInt(time.Now().UnixNano(), 10)
+		if err := os.WriteFile(ready, []byte(stamp), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	_, _ = Run(Spec{Git: git, Network: os.Getenv("ETHOS_HELPER_NETWORK") == "1", Limit: limit})
 }
 
@@ -256,20 +265,35 @@ func TestRunHonoursInheritedIgnoredSIGINT(t *testing.T) {
 // that signal; it is not swallowed into ErrTimeout. The fake git ignores TERM, so
 // reaping lasts until WaitDelay (a second) after the limit.
 //
-// The limit runs from the helper's start, and starting a freshly written script
-// can take over 300ms on macOS (first-exec checks), so the limit must exceed the
-// startup cost or the git is killed before it writes its pid. The signal is
-// timed from the helper's start to land mid-reap: after the limit, before
-// WaitDelay ends.
+// The limit starts when the helper calls Run, which it reports through
+// ETHOS_HELPER_READY. Starting a freshly written script can take over 300ms on
+// macOS (first-exec checks), so the limit must exceed that or the git is killed
+// before it writes its pid. The signal is sent at that reported start plus the
+// limit plus half the reap window, on the clock that drives the limit, so
+// neither process's startup time moves it out of the window.
 func TestSignalDuringTimeoutReapEndsTheProcess(t *testing.T) {
 	const limit = 2 * time.Second
-	pidFile := filepath.Join(t.TempDir(), "git.pid")
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "git.pid")
+	readyFile := filepath.Join(dir, "run.start")
 	git := fakeGitScript(t, "trap '' TERM\necho $$ > '"+pidFile+"'\nsleep 60\n")
 	c := exec.Command(os.Args[0], "-test.run=^TestHelperRunGit$")
-	c.Env = append(os.Environ(), "ETHOS_HELPER_GIT="+git, "ETHOS_HELPER_LIMIT="+limit.String())
+	c.Env = append(os.Environ(), "ETHOS_HELPER_GIT="+git, "ETHOS_HELPER_LIMIT="+limit.String(), "ETHOS_HELPER_READY="+readyFile)
 	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	started := time.Now()
 	require.NoError(t, c.Start())
+	var runStart time.Time
+	require.Eventually(t, func() bool {
+		data, err := os.ReadFile(readyFile)
+		if err != nil {
+			return false
+		}
+		ns, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+		if err != nil || ns <= 0 {
+			return false
+		}
+		runStart = time.Unix(0, ns)
+		return true
+	}, 10*time.Second, 10*time.Millisecond, "the helper reached Run")
 	var pid int
 	require.Eventually(t, func() bool {
 		data, err := os.ReadFile(pidFile)
@@ -280,9 +304,9 @@ func TestSignalDuringTimeoutReapEndsTheProcess(t *testing.T) {
 		return pid > 0
 	}, 5*time.Second, 20*time.Millisecond, "the git started")
 	defer func() { _ = syscall.Kill(-pid, syscall.SIGKILL) }()
-	// The limit expires at about started+limit and WaitDelay ends a second
-	// later; signal halfway through that window.
-	time.Sleep(time.Until(started.Add(limit + 500*time.Millisecond)))
+	// The limit expires at runStart+limit and WaitDelay ends a second later;
+	// signal halfway through that window.
+	time.Sleep(time.Until(runStart.Add(limit + 500*time.Millisecond)))
 	require.NoError(t, c.Process.Signal(syscall.SIGTERM))
 	err := waitFor(t, c, 10*time.Second)
 	var ee *exec.ExitError
