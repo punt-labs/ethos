@@ -100,8 +100,9 @@ jobs:
           retention-days: 7
 
       - name: Coverage gate (per-package baseline)
-        # coverage-check fails when the baseline's "# os:" differs from this
-        # runner's GOOS (linux), so the committed baseline must be linux.
+        # The committed baseline is linux, so this runner compares it in full.
+        # On another OS make coverage-check prints SKIP and passes, because
+        # per-package coverage differs per OS; this job is where it is enforced.
         run: make coverage-check
 
       - name: Validate content
