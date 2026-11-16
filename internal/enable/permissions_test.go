@@ -15,7 +15,6 @@ func TestPermissionRulesCoverCLIMCPAndEveryShippedCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantAsk := []string{
-		"Bash(ethos -*)",
 		"Bash(ethos setup:*)",
 		"Bash(ethos seed:*)",
 		"Bash(ethos uninstall:*)",
@@ -99,7 +98,7 @@ func TestEnableDisableRoundTripsPermissionRules(t *testing.T) {
 	}
 	if !slices.ContainsFunc(enabled.Steps, func(s StepResult) bool {
 		return s.Step == "permissions" && strings.Contains(s.Detail, "allow: Bash(ethos:*)") &&
-			strings.Contains(s.Detail, "; ask: Bash(ethos -*)")
+			strings.Contains(s.Detail, "; ask: Bash(ethos setup:*)")
 	}) {
 		t.Errorf("enable report does not separate allow and ask rules: %+v", enabled.Steps)
 	}
@@ -179,4 +178,41 @@ func permissionList(t *testing.T, path, tier string) []string {
 		t.Fatal(err)
 	}
 	return doc.Permissions[tier]
+}
+
+func TestEnableAndDisableStripTheRetiredFlagRule(t *testing.T) {
+	for _, verb := range []string{"enable", "disable"} {
+		t.Run(verb, func(t *testing.T) {
+			dir := gitRepo(t)
+			if verb == "disable" {
+				if _, err := Enable(dir); err != nil {
+					t.Fatalf("Enable: %v", err)
+				}
+			}
+			settings := filepath.Join(dir, ".claude", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			seed := `{"permissions":{"ask":["Bash(ls:*)","Bash(ethos -*)"]}}`
+			if err := os.WriteFile(settings, []byte(seed), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var err error
+			if verb == "enable" {
+				_, err = Enable(dir)
+			} else {
+				_, err = Disable(dir, true)
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", verb, err)
+			}
+			ask := permissionList(t, settings, "ask")
+			if slices.Contains(ask, "Bash(ethos -*)") {
+				t.Errorf("after %s ask still holds the retired rule: %v", verb, ask)
+			}
+			if !slices.Contains(ask, "Bash(ls:*)") {
+				t.Errorf("after %s ask lost an unrelated rule: %v", verb, ask)
+			}
+		})
+	}
 }

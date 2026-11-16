@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ethos --version` and `ethos --help` no longer prompt in an enabled repo
+  (punt-kit DES-039).** `ethos enable` stops granting the `Bash(ethos -*)`
+  ask rule, which matched every command starting with an option; the CLI ask
+  tier is now one rule per unsafe verb. `ethos enable` and `ethos disable`
+  both remove the old rule from a repo an earlier version enabled.
+
 ## [5.1.1] - 2026-11-15
 
 ### Fixed
