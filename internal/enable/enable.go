@@ -242,6 +242,9 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO) (*Report, error) {
 	if err != nil {
 		return rep, fmt.Errorf("adding ethos permission rules to .claude/settings.json: %w", err)
 	}
+	if _, err := claudesettings.Deregister(repoRoot, legacyPermissionRules, p); err != nil {
+		return rep, fmt.Errorf("removing retired ethos permission rules from .claude/settings.json: %w", err)
+	}
 	permissionStep(rep, granted, "added ", "all rules already present")
 
 	hint, warning := configStatus(storeRoot)
@@ -295,7 +298,7 @@ func DisableTo(repoRoot, storeRoot string, force bool) (*Report, error) {
 	}
 
 	// Settings first: a refusal aborts before anything else changes.
-	revoked, err := claudesettings.Deregister(repoRoot, PermissionRules, p)
+	revoked, err := claudesettings.Deregister(repoRoot, disableRules, p)
 	if err != nil {
 		return rep, fmt.Errorf("removing ethos permission rules from .claude/settings.json: %w", err)
 	}

@@ -1,8 +1,12 @@
 package enable
 
+import "slices"
+
 // PermissionRules are the exact allow and ask rules owned by ethos enable.
 // Broad allows keep future safe operations working; ask rules preserve consent
-// for state-changing surfaces. No ethos-dev rule is ever granted.
+// for state-changing surfaces. A global option before the verb runs under the
+// broad allow: the ask tier is a safety net, not a security boundary (punt-kit
+// DES-039). No ethos-dev rule is ever granted.
 var PermissionRules = map[string][]string{
 	"allow": {
 		"Bash(ethos:*)",
@@ -10,7 +14,6 @@ var PermissionRules = map[string][]string{
 		"Skill(ethos:*)",
 	},
 	"ask": {
-		"Bash(ethos -*)",
 		"Bash(ethos setup:*)",
 		"Bash(ethos seed:*)", // msgguard: allow permission rule value, never printed
 		"Bash(ethos uninstall:*)",
@@ -62,4 +65,18 @@ var PermissionRules = map[string][]string{
 		"Skill(ethos:mission)",
 		"Skill(ethos:optimize-team)",
 	},
+}
+
+// legacyPermissionRules are rules an earlier ethos enable granted and this one
+// does not. Enable and disable both remove them, so a repo enabled by an older
+// ethos holds only the current set. Bash(ethos -*) made ethos --version prompt.
+var legacyPermissionRules = map[string][]string{
+	"ask": {"Bash(ethos -*)"},
+}
+
+// disableRules is what disable removes in one settings write: the current set
+// plus the retired rules, so a failed write never leaves disable half done.
+var disableRules = map[string][]string{
+	"allow": PermissionRules["allow"],
+	"ask":   slices.Concat(PermissionRules["ask"], legacyPermissionRules["ask"]),
 }
