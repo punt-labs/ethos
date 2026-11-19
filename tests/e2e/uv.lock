@@ -371,7 +371,6 @@ source = { editable = "." }
 dependencies = [
     { name = "litellm", extra = ["proxy"] },
     { name = "pytest" },
-    { name = "tiktoken" },
 ]
 
 [package.dev-dependencies]
@@ -385,7 +384,6 @@ dev = [
 requires-dist = [
     { name = "litellm", extras = ["proxy"], specifier = "==1.100.4" },
     { name = "pytest", specifier = ">=9.0.3,<10" },
-    { name = "tiktoken", specifier = ">=0.8,<1" },
 ]
 
 [package.metadata.requires-dev]

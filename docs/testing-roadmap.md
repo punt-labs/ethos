@@ -182,9 +182,9 @@ tier.
 ### Tokenizer (blocking prerequisite for baselines)
 
 Design §6 flags the Anthropic first-party Python tokenizer question
-as unverified. Initial land uses `tiktoken` (installed, not yet
-wired to a report field) with a calibration disclaimer; the
-attribution report's token fields are `TODO` until this is resolved.
+as unverified. LiteLLM installs `tiktoken` transitively, but the
+attribution report does not use it: its token fields are `TODO` until
+the tokenizer question is resolved.
 `make baseline-tokens` and `make calibrate-tokens` land as stubs.
 
 ### Testing coverage that Phase 6 adds
