@@ -65,7 +65,10 @@ main-tree changes not committed into a linked checkout. The edited worktree's
 configuration is never consulted. See
 [DES-085's design](design-agent-checks.md) for stage and adapter details.
 
-The same set may define `stage: commit` and `stage: handoff`. Pre-commit runs
+The same set may define `stage: commit` and `stage: handoff`.
+`~/.punt-hooks-kill` makes both hook commands return success silently before
+reading input or storage: no repair, roster leave, sealing, provenance
+verification, or checks. Otherwise pre-commit runs
 after seal/provenance, selects files from the actual committing index, and
 blocks with exit 2 by default. Checks read files on disk, so matched staged files
 with unstaged changes block before any check runs, even for advisory checks.

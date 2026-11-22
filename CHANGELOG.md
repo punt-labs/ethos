@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `ethos hook pre-commit` and `ethos hook subagent-stop` now honor
+  `~/.punt-hooks-kill` before reading input or locating/repairing storage. Both
+  return success silently without roster leave, index or ignore changes, audit
+  sealing, provenance verification, or checks, matching the plugin wrappers.
 - Commit checks refuse matched partially staged files before running commands,
   even for advisory checks, and list every file with stage/stash guidance.
   Detection uses the actual committing index, including custom indexes and linked

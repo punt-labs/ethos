@@ -100,6 +100,9 @@ func logPreCommit(env autorepair.Env, action string, err error) {
 // verifies staged provenance snapshots. Any of them failing blocks the commit
 // with exit 2.
 func runHookPreCommit(ctx context.Context, out, errOut io.Writer) error {
+	if hook.Killed() {
+		return nil
+	}
 	if err := repairPreCommit(ctx, errOut); err != nil {
 		return err
 	}
