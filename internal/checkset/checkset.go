@@ -50,12 +50,16 @@ func (c *Check) UnmarshalYAML(node *yaml.Node) error {
 			known[strings.Split(f.Tag.Get("yaml"), ",")[0]] = true
 		}
 	}
-	var values map[string]yaml.Node
+	var values map[any]yaml.Node
 	if err := node.Decode(&values); err != nil {
 		return err
 	}
 	fields := map[string]bool{}
-	for key, item := range values {
+	for field, item := range values {
+		key, ok := field.(string)
+		if !ok {
+			return fmt.Errorf("invalid check field %v", field)
+		}
 		if !known[key] {
 			return fmt.Errorf("unknown check field %q", key)
 		}

@@ -80,6 +80,17 @@ checks:
 	}
 }
 
+func TestCheckYAMLNullKey(t *testing.T) {
+	for _, key := range []string{"null", "~", "!!null null"} {
+		for _, field := range []string{key + ": ignored", "<<: {" + key + ": ignored}"} {
+			t.Run(field, func(t *testing.T) {
+				_, err := Decode([]byte("name: invalid\nchecks:\n  - name: lint\n    stage: edit\n    files: ['**']\n    run: ['true']\n    " + field + "\n"))
+				require.ErrorContains(t, err, "check field")
+			})
+		}
+	}
+}
+
 func TestAdapterArgv(t *testing.T) {
 	for _, tc := range []struct {
 		name, stage, files, fields string
