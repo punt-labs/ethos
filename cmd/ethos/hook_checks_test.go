@@ -42,6 +42,7 @@ func TestCommitChecks(t *testing.T) {
 func TestCommitSessionChecks(t *testing.T) {
 	se := enabledHookRepo(t)
 	require.NoError(t, os.WriteFile(filepath.Join(se.repo, ".punt-labs/ethos.yaml"), []byte("checks: none\n"), 0600))
+	require.NoError(t, os.MkdirAll(filepath.Join(se.repo, ".punt-labs/ethos/identities"), 0700))
 	require.NoError(t, os.WriteFile(filepath.Join(se.repo, ".punt-labs/ethos/identities/worker.yaml"), []byte("name: Worker\nhandle: worker\nkind: agent\nchecks: project\n"), 0600))
 	dir := filepath.Join(se.repo, ".punt-labs/ethos/checks")
 	require.NoError(t, os.MkdirAll(dir, 0700))
