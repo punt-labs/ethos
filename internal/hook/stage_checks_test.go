@@ -228,7 +228,7 @@ func TestHandoffLinkedWorktree(t *testing.T) {
 		t.Run(fmt.Sprint("fallback=", fallback), func(t *testing.T) {
 			root, bin := postEditFixture(t)
 			t.Setenv("HOME", t.TempDir())
-			linked := filepath.Join(t.TempDir(), "linked")
+			linked := filepath.Join(root, ".claude", "worktrees", "linked")
 			stageGit(t, root, "worktree", "add", "--detach", linked)
 			writeFile(t, filepath.Join(linked, "written.go"), "package linked\n")
 			writeFile(t, filepath.Join(linked, ".punt-labs/ethos.yaml"), "checks: none\n")
@@ -237,9 +237,9 @@ func TestHandoffLinkedWorktree(t *testing.T) {
 			log := filepath.Join(t.TempDir(), "log")
 			t.Setenv("STAGE_LOG", log)
 			postEditTool(t, bin, "probe", "printf '%s|' \"$PWD\" >> \"$STAGE_LOG\"; printf '%s|' \"$@\" >> \"$STAGE_LOG\"; printf '\\n' >> \"$STAGE_LOG\"\n")
-			path := filepath.Join(linked, "written.go")
+			path := "<repo>/.claude/worktrees/linked/written.go"
 			if fallback {
-				path = filepath.Join(linked, "removed.go")
+				path = "<repo>/.claude/worktrees/linked/removed.go"
 			}
 			writeRepoTreeSession(t, root, "2026-11-21", "linked-stop", []auditEntry{{Ts: "2026-11-21T10:00:00Z", Session: "linked-stop", AgentID: "sub", Tool: "Write", ToolInput: map[string]any{"file_path": path}, PathFormat: auditPathFormat}})
 			ss := session.NewStore(t.TempDir())
@@ -256,29 +256,33 @@ func TestHandoffLinkedWorktree(t *testing.T) {
 }
 
 func TestHandoffWithoutGit(t *testing.T) {
-	for _, stage:=range []string{"", "edit", "handoff"} {
-		t.Run(stage,func(t *testing.T) {
-			root,_:=postEditFixture(t)
-			t.Setenv("HOME",t.TempDir())
-			if stage!="" {
-				writeFile(t,filepath.Join(root,".punt-labs/ethos.yaml"),"checks: project\n")
-				files:="all"
-				if stage=="edit" {files="['**/*.go']"}
-				checkPolicy(t,root,"project","  - name: probe\n    stage: "+stage+"\n    files: "+files+"\n    run: [missing]\n")
+	for _, stage := range []string{"", "edit", "handoff"} {
+		t.Run(stage, func(t *testing.T) {
+			root, _ := postEditFixture(t)
+			t.Setenv("HOME", t.TempDir())
+			if stage != "" {
+				writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+				files := "all"
+				if stage == "edit" {
+					files = "['**/*.go']"
+				}
+				checkPolicy(t, root, "project", "  - name: probe\n    stage: "+stage+"\n    files: "+files+"\n    run: [missing]\n")
 			}
-			t.Setenv("PATH",t.TempDir())
-			ss:=session.NewStore(t.TempDir())
-			require.NoError(t,ss.Create("no-git",session.Participant{AgentID:"human"},session.Participant{AgentID:"sub"},"",""))
-			var out,stderr bytes.Buffer
-			require.NoError(t,HandleSubagentStopWithIO(context.Background(),strings.NewReader(`{"session_id":"no-git","agent_id":"sub"}`),ss,&out,&stderr))
-			roster,err:=ss.Load("no-git")
-			require.NoError(t,err)
-			require.Nil(t,roster.FindParticipant("sub"))
-			if stage=="handoff" {require.Contains(t,out.String(),`"decision":"block"`)} else {
-				require.Empty(t,out.String())
-				require.Empty(t,stderr.String())
+			t.Setenv("PATH", t.TempDir())
+			ss := session.NewStore(t.TempDir())
+			require.NoError(t, ss.Create("no-git", session.Participant{AgentID: "human"}, session.Participant{AgentID: "sub"}, "", ""))
+			var out, stderr bytes.Buffer
+			require.NoError(t, HandleSubagentStopWithIO(context.Background(), strings.NewReader(`{"session_id":"no-git","agent_id":"sub"}`), ss, &out, &stderr))
+			roster, err := ss.Load("no-git")
+			require.NoError(t, err)
+			require.Nil(t, roster.FindParticipant("sub"))
+			if stage == "handoff" {
+				require.Contains(t, out.String(), `"decision":"block"`)
+			} else {
+				require.Empty(t, out.String())
+				require.Empty(t, stderr.String())
 			}
-			require.Equal(t,StageFeedback{},RunStageChecks(context.Background(),root,"","commit"))
+			require.Equal(t, StageFeedback{}, RunStageChecks(context.Background(), root, "", "commit"))
 		})
 	}
 }

@@ -42,7 +42,7 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 		return nil
 	}
 	active, _ := input["stop_hook_active"].(bool)
-	checkout, err := postEditCheckout()
+	checkout, err := hookCheckout()
 	if err != nil {
 		stopFeedback(out, errOut, StageFeedback{Blocking: "handoff scope: " + err.Error()}, active)
 		return nil

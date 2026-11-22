@@ -126,6 +126,10 @@ func postEditCheckout() (string, error) {
 	if _, err := gitenv.Output("", "git", "--version"); err != nil {
 		return "", fmt.Errorf("git: %w", err)
 	}
+	return hookCheckout()
+}
+
+func hookCheckout() (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", err
