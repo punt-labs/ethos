@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Per-edit agent hook no longer runs the full `make check` (PL-1275).**
+  Generated write-capable agents now run `make check-edit FILE=<path>` when
+  the repository defines that target, and fall back to `make check` when it
+  does not. ethos gains a `check-edit` target (gofmt + `go vet` on the edited
+  package, shellcheck, content validation): about 0.2 s per Go edit here,
+  down from over 11 minutes.
+
 - **`ethos --version` and `ethos --help` no longer prompt in an enabled repo
   (punt-kit DES-039).** `ethos enable` stops granting the `Bash(ethos -*)`
   ask rule, which matched every command starting with an option; the CLI ask
