@@ -67,7 +67,12 @@ configuration is never consulted. See
 
 The same set may define `stage: commit` and `stage: handoff`. Pre-commit runs
 after seal/provenance, selects files from the actual committing index, and
-blocks with exit 2 by default. SubagentStop leaves the roster before checks,
+blocks with exit 2 by default. Checks read files on disk, so matched staged files
+with unstaged changes block before any check runs, even for advisory checks.
+Stage or stash the listed files first (`git add` / `git stash --keep-index`).
+Unmatched files are unaffected; `files: all` matches every staged file. Without
+commit checks this adds no Git query. Index-snapshot execution is a later slice.
+SubagentStop leaves the roster before checks,
 then selects audited Write/Edit paths for that subagent. When a root has no usable
 attributed paths, changed and untracked files are used only if it is a linked
 worktree and no other agent (including the main thread's empty agent ID) has a
@@ -83,10 +88,6 @@ defaults, and `files: all` runs even when no paths match. Commit and handoff
 defaults are 120s and 10m per check, capped at 15m and 30m per stage. The plugin
 sets its handoff hook timeout to 1800 seconds, matching the 30-minute cap.
 `ethos mission result` integration remains a future slice.
-
-Commit checks select staged paths but read files from the working tree. A
-partially staged file is therefore checked as it is on disk, not as staged.
-An index-snapshot option is deferred to a later slice.
 
 ### Build-system adapters
 

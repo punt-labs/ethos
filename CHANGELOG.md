@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Commit checks refuse matched partially staged files before running commands,
+  even for advisory checks, and list every file with stage/stash guidance.
+  Detection uses the actual committing index, including custom indexes and linked
+  worktrees; unmatched paths and the no-check fast path are unaffected.
+
 - The plugin's SubagentStop hook allows 1800 seconds, matching the handoff
   stage cap so the default 600-second watchdog does not interrupt the full gate.
 

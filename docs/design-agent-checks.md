@@ -282,6 +282,14 @@ agent, with the project default set, or the committing session's resolved
 set when one is found. Exit 2 blocks the commit and prints the failing
 check's tail.
 
+Commit checks read files on disk. Before any check runs, every staged path matched
+by a commit check must have no unstaged changes against the actual committing
+index, including `GIT_INDEX_FILE`. Otherwise the stage blocks with exit 2,
+regardless of `on_fail`, listing every offending file and asking the user to stage
+or stash its changes (`git add` / `git stash --keep-index`). Unmatched paths are
+unaffected; `files: all` counts every staged path as matched. With no commit checks,
+this preflight performs no Git query. Index-snapshot execution is a later slice.
+
 The handoff stage runs in `ethos hook subagent-stop`; `ethos mission result`
 integration is deferred to the next slice. In the binary, roster leave happens
 before checks, including when its kill check skips them or they block. The
@@ -321,10 +329,6 @@ at these stages. In the binary, the kill switch skips checks, not commit
 seal/provenance steps or roster leave; the plugin wrapper instead skips its
 entire SubagentStop hook. Commit file discovery and commands preserve the actual
 committing index while scrubbing other Git selectors and tracing variables.
-
-Commit checks select paths from the index but read working-tree files. A
-partially staged file is checked as it exists on disk, not as staged. An
-index-snapshot execution option is a later slice.
 
 OpenCode generation (`.opencode/agents`) uses the same subcommand from its
 `tool.execute.after` plugin hook, so the two harnesses share one policy.

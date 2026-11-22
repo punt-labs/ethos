@@ -70,6 +70,21 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 		roots = append(roots, root)
 	}
 	sort.Strings(roots)
+	if stage == "commit" {
+		for _, root := range roots {
+			partial, err := partiallyStagedFiles(root, filesByRoot[root], checks, env)
+			if err != nil {
+				blocking = append(blocking, "commit files: "+err.Error())
+				continue
+			}
+			for _, file := range partial {
+				blocking = append(blocking, fmt.Sprintf("ethos: %q has unstaged changes; commit checks read files on disk. Stage or stash them first (git add -- <file> / git stash --keep-index).", file))
+			}
+		}
+		if len(blocking) > 0 {
+			return StageFeedback{Blocking: editRedact(strings.Join(blocking, "\n"))}
+		}
+	}
 	for _, root := range roots {
 		for _, check := range checks {
 			for _, invocation := range stageInvocations(root, filesByRoot[root], check) {
@@ -85,6 +100,33 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 		}
 	}
 	return StageFeedback{Advisory: editRedact(strings.Join(advisory, "\n\n")), Blocking: editRedact(strings.Join(blocking, "\n\n"))}
+}
+
+func partiallyStagedFiles(root string, files []string, checks []checkset.Check, env []string) ([]string, error) {
+	matched := map[string]bool{}
+	for _, file := range files {
+		for _, check := range checks {
+			if check.Files.All || check.Matches(filepath.ToSlash(file)) {
+				matched[file] = true
+				break
+			}
+		}
+	}
+	if len(matched) == 0 {
+		return nil, nil
+	}
+	data, err := gitenv.OutputEnv(root, "git", env, "diff", "--name-only", "-z", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none")
+	if err != nil {
+		return nil, fmt.Errorf("git diff unstaged files: %w", err)
+	}
+	var partial []string
+	for _, file := range strings.Split(string(data), "\x00") {
+		if matched[file] {
+			partial = append(partial, file)
+		}
+	}
+	sort.Strings(partial)
+	return partial, nil
 }
 
 func stageFiles(root, stage string) ([]string, error) {
