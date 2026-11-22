@@ -141,7 +141,7 @@ func killedPreCommit(ctx context.Context, errOut io.Writer) error {
 	}
 	for _, path := range paths {
 		literal := shellQuote(":(top,literal)" + path)
-		fmt.Fprintf(errOut, "ethos: %q is private local data; kill switch leaves the index unchanged. Remove only from the index (files stay on disk) with git rm --cached -r -- %s\n", path, literal) // msgguard: allow operator-selected kill switch forbids automatic index changes
+		fmt.Fprintf(errOut, "ethos: %q is private local data; kill switch leaves the index unchanged. Remove only from the index (files stay on disk) with git rm --cached -f -r -- %s\n", path, literal) // msgguard: allow operator-selected kill switch forbids automatic index changes
 	}
 	if len(paths) > 0 {
 		return failClosed{}

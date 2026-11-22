@@ -17,10 +17,20 @@ import (
 )
 
 func TestKilledPreCommitPrintedRecovery(t *testing.T) {
-	for _, mode := range []string{"unborn", "committed", "already tracked"} {
-		t.Run(mode, func(t *testing.T) {
+	for _, tc := range []struct {
+		name                       string
+		committed, tracked, edited bool
+	}{
+		{name: "unborn"},
+		{name: "committed", committed: true},
+		{name: "already tracked", tracked: true},
+		{name: "unborn staged then edited", edited: true},
+		{name: "committed staged then edited", committed: true, edited: true},
+		{name: "tracked staged then edited", tracked: true, edited: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			se := enableSubprocessRepo(t)
-			if mode == "committed" {
+			if tc.committed {
 				gitRunEnv(t, se.repo, se.env, "commit", "--allow-empty", "-qm", "initial")
 			}
 			local := ".punt-labs/local/ethos/stray ' [data].txt"
@@ -28,8 +38,17 @@ func TestKilledPreCommitPrintedRecovery(t *testing.T) {
 			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 			require.NoError(t, os.WriteFile(path, []byte("private\n"), 0o600))
 			gitRunEnv(t, se.repo, se.env, "add", "-f", "--", local)
-			if mode == "already tracked" {
+			if tc.tracked {
 				gitRunEnv(t, se.repo, se.env, "commit", "-qm", "initial private fixture")
+			}
+			want := "private\n"
+			if tc.edited {
+				if tc.tracked {
+					require.NoError(t, os.WriteFile(path, []byte("staged\n"), 0o600))
+					gitRunEnv(t, se.repo, se.env, "add", "-f", "--", local)
+				}
+				want = "edited private content\n"
+				require.NoError(t, os.WriteFile(path, []byte(want), 0o600))
 			}
 			require.NoError(t, os.WriteFile(filepath.Join(se.home, ".punt-hooks-kill"), nil, 0o600))
 			_, stderr, code := runCLI(t, se, "hook", "pre-commit")
@@ -52,7 +71,7 @@ func TestKilledPreCommitPrintedRecovery(t *testing.T) {
 			require.Empty(t, stderr)
 			data, err := os.ReadFile(path)
 			require.NoError(t, err)
-			require.Equal(t, "private\n", string(data))
+			require.Equal(t, want, string(data))
 		})
 	}
 }
@@ -82,7 +101,7 @@ func TestKilledPreCommitPrivacyGuard(t *testing.T) {
 	require.ErrorAs(t, killedPreCommit(ctx, &stderr), &refused)
 	for _, path := range paths {
 		require.Contains(t, stderr.String(), fmt.Sprintf("%q", path))
-		require.Contains(t, stderr.String(), "git rm --cached -r -- "+shellQuote(":(top,literal)"+path))
+		require.Contains(t, stderr.String(), "git rm --cached -f -r -- "+shellQuote(":(top,literal)"+path))
 	}
 	after, err := os.ReadFile(index)
 	require.NoError(t, err)
@@ -182,7 +201,7 @@ func TestKilledPreCommitIndexSafety(t *testing.T) {
 				require.Contains(t, stderr, "index")
 			} else {
 				require.Contains(t, stderr, local)
-				require.Contains(t, stderr, "git rm --cached -r -- "+shellQuote(":(top,literal)"+local))
+				require.Contains(t, stderr, "git rm --cached -f -r -- "+shellQuote(":(top,literal)"+local))
 			}
 			after, err := os.ReadFile(index)
 			require.NoError(t, err)

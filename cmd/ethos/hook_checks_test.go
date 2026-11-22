@@ -65,7 +65,7 @@ func TestCommitKilledBeforeSideEffects(t *testing.T) {
 	assert.Equal(t, 2, code, stderr)
 	assert.Empty(t, out)
 	assert.Contains(t, stderr, local)
-	assert.Contains(t, stderr, "git rm --cached -r --")
+	assert.Contains(t, stderr, "git rm --cached -f -r --")
 	for path, want := range before {
 		got, err := os.ReadFile(path)
 		require.NoError(t, err)
