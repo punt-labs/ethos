@@ -29,9 +29,13 @@ command. Use absolute paths instead of `cd && command`.
 
 ## Verification
 
-Run `make check` after every file change. Zero violations before
-returning results. `make check` passing is necessary but not
-sufficient — verify the code actually works:
+Do not run the full quality gate (`make check`) after every edit.
+Ethos runs the project's edit checks automatically after each Write or
+Edit; fix what they report. The full gate runs once at handoff when
+you stop, and at commit; fix anything it blocks on. If the project
+configures no handoff check, run its quality gate once before
+returning, with zero violations. A passing gate is necessary but not sufficient — verify the
+code actually works:
 
 - CLI tool: run it with representative arguments
 - Library function: call it in a test and show the result
