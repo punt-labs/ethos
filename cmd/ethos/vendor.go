@@ -11,6 +11,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/mcp"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/vendor"
 	"github.com/spf13/cobra"
 )
@@ -82,17 +83,18 @@ func runVendor(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	checks, err := vendorChecks()
+	checks, checkRoots, err := vendorChecks(vendorRoots(is))
 	if err != nil {
 		return err
 	}
 
 	v, err := vendor.New(vendor.Sources{
-		Checks:     checks,
-		Roots:      vendorRoots(is),
-		Identities: is,
-		Roles:      layeredRoleStore(is),
-		Teams:      layeredTeamStore(is),
+		Checks:             checks,
+		ProjectChecksRoots: checkRoots,
+		Roots:              vendorRoots(is),
+		Identities:         is,
+		Roles:              layeredRoleStore(is),
+		Teams:              layeredTeamStore(is),
 	}, vendor.Options{
 		Handles:      args,
 		Team:         vendorTeam,
@@ -101,6 +103,7 @@ func runVendor(cmd *cobra.Command, args []string) error {
 		Prune:        vendorPrune,
 		Apply:        vendorApply,
 		AllowExtKeys: vendorAllowExtKeys,
+		GuardChecks:  vendorTo == "",
 	})
 	if err != nil {
 		return err
@@ -142,10 +145,11 @@ func vendorRunner() mcp.VendorRunner {
 	// Capture the full source chain and roots when the request handler is built.
 	// Another MCP request can rebuild cmdRoots while this closure is in flight.
 	is := vendorSourceStore()
-	checks, checksErr := vendorChecks()
+	checks, checkRoots, checksErr := vendorChecks(vendorRoots(is))
 	sources := vendor.Sources{
-		Checks: checks,
-		Roots:  vendorRoots(is), Identities: is,
+		Checks:             checks,
+		ProjectChecksRoots: checkRoots,
+		Roots:              vendorRoots(is), Identities: is,
 		Roles: layeredRoleStore(is), Teams: layeredTeamStore(is),
 	}
 	loc := currentRoots().Located
@@ -163,6 +167,7 @@ func vendorRunner() mcp.VendorRunner {
 				return nil, destinationErr
 			}
 			opts.Dest = defaultDest
+			opts.GuardChecks = true
 		}
 		v, err := vendor.New(sources, opts)
 		if err != nil {
@@ -218,15 +223,26 @@ func vendorRoots(is identity.IdentityStore) []string {
 	return roots
 }
 
-func vendorChecks() (string, error) {
+func vendorChecks(roots []string) (string, []string, error) {
 	r := currentRoots()
 	if err := r.StoreFailure(); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	if cfg := r.Config; cfg != nil {
-		return cfg.Checks, nil
+	ref, root, err := resolve.CheckPolicyOf(r.Located)
+	if err != nil || len(roots) == 0 || root == "" || root == roots[0] {
+		return ref, nil, err
 	}
-	return "", nil
+	canonical := r.Ethos
+	if canonical == "" && r.Store != "" {
+		canonical = filepath.Join(r.Store, ".punt-labs", "ethos")
+	}
+	projectRoots := []string{root}
+	for _, candidate := range roots {
+		if candidate != canonical && candidate != root {
+			projectRoots = append(projectRoots, candidate)
+		}
+	}
+	return ref, projectRoots, nil
 }
 
 // writeVendorPlan renders the closure, the blast radius, and what would
