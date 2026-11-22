@@ -61,7 +61,7 @@ func TestVerifyCheckSets(t *testing.T) {
 }
 
 func TestVendorRejectsBrokenCheckSets(t *testing.T) {
-	for _, body := range []string{"", "name: portable\nunknown: true\nchecks: []\n"} {
+	for _, body := range []string{"", "name: portable\nunknown: true\nchecks: []\n", "name: wrong\nchecks: []\n"} {
 		t.Run(body, func(t *testing.T) {
 			f := newFixture(t)
 			f.writeGlobal(t, "identities/agent.yaml", "name: Agent\nhandle: agent\nkind: agent\nchecks: portable\n")
@@ -73,6 +73,33 @@ func TestVendorRejectsBrokenCheckSets(t *testing.T) {
 			require.NoDirExists(t, filepath.Join(f.repo, "identities"))
 		})
 	}
+}
+
+func TestVendorRejectsInvalidCheckReferences(t *testing.T) {
+	for _, kind := range []string{"identity", "role", "config"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newFixture(t)
+			f.seedOrg(t)
+			switch kind {
+			case "identity":
+				f.writeGlobal(t, "identities/bwk.yaml", "name: Brian\nhandle: bwk\nkind: agent\nchecks: '../outside'\n")
+			case "role":
+				f.writeGlobal(t, "roles/go-specialist.yaml", "name: go-specialist\nchecks: '../outside'\n")
+			case "config":
+				f.src.Checks = "../outside"
+			}
+			_, err := f.run(t, Options{Handles: []string{"bwk"}, Apply: true})
+			require.Error(t, err)
+			require.NoDirExists(t, filepath.Join(f.repo, "identities"))
+		})
+	}
+}
+
+func TestVerifyRejectsInvalidCheckSet(t *testing.T) {
+	root := t.TempDir()
+	writeCheckFixture(t, root, "identities/agent.yaml", "name: Agent\nhandle: agent\nkind: agent\nchecks: portable\n")
+	writeCheckFixture(t, root, "checks/portable.yaml", "name: portable\nunknown: field\n")
+	require.Error(t, Verify(root))
 }
 
 func TestVendorRepoCheckSets(t *testing.T) {

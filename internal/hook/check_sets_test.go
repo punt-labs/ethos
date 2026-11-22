@@ -33,6 +33,82 @@ func checkPolicy(t *testing.T, root, slug, checks string) {
 	writeFile(t, filepath.Join(root, ".punt-labs/ethos/checks", slug+".yaml"), "name: "+slug+"\nchecks:\n"+checks)
 }
 
+func TestConfiguredEditEnginePrecedence(t *testing.T) {
+	for _, tc := range []struct{ name, idRef, roleRef, repoRef, want string }{
+		{"identity", "id-policy", "role-policy", "repo-policy", "id-policy"},
+		{"role", "", "role-policy", "repo-policy", "role-policy"},
+		{"repository", "", "", "repo-policy", "repo-policy"},
+		{"identity none", "none", "role-policy", "repo-policy", "none"},
+		{"role none", "", "none", "repo-policy", "none"},
+		{"repository none", "", "", "none", "none"},
+		{"defaults", "", "", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, _ := postEditFixture(t)
+			t.Setenv("HOME", t.TempDir())
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "team: crew\nchecks: '"+tc.repoRef+"'\n")
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos/identities/worker.yaml"), "name: Worker\nhandle: worker\nkind: agent\nchecks: '"+tc.idRef+"'\n")
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos/teams/crew.yaml"), "name: crew\nmembers:\n  - identity: worker\n    role: writer\n")
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos/roles/writer.yaml"), "name: writer\ntools: [Edit]\nchecks: '"+tc.roleRef+"'\n")
+			for _, slug := range []string{"id-policy", "role-policy", "repo-policy"} {
+				checkPolicy(t, root, slug, "  - name: "+slug+"\n    stage: edit\n    files: ['**/*.go']\n    run: [probe, '{file}', '{files}', '{root}', '{package_dir}']\n    cwd: package_dir\n    on_fail: block\n    fail_on_output: true\n  - name: later\n    stage: commit\n    files: all\n    run: [probe]\n  - name: unmatched\n    stage: edit\n    files: ['*.sh']\n    run: [probe]\n")
+			}
+			file := filepath.Join(root, "pkg/- $(x).go")
+			checks, selected, err := configuredEditChecks(root, root, file, "worker")
+			require.NoError(t, err)
+			require.Equal(t, tc.want != "", selected)
+			if tc.want == "none" || tc.want == "" {
+				require.Empty(t, checks)
+				return
+			}
+			require.Len(t, checks, 1)
+			require.Equal(t, tc.want, checks[0].name)
+			require.Equal(t, []string{"probe", file, file, root, "./pkg"}, checks[0].argv)
+			require.Equal(t, filepath.Dir(file), checks[0].cwd)
+			require.Equal(t, "block", checks[0].onFail)
+			require.True(t, checks[0].failOnOutput)
+			require.Equal(t, 10*time.Second, checks[0].timeout)
+		})
+	}
+}
+
+func TestConfiguredEditEngineErrors(t *testing.T) {
+	for _, tc := range []struct{ name, cfg, id, team string }{
+		{"config", "checks: [", "", ""},
+		{"bundle", "active_bundle: absent\n", "", ""},
+		{"identity", "checks: project\n", "[", ""},
+		{"team", "team: crew\n", "name: Worker\nhandle: worker\nkind: agent\n", ""},
+		{"role", "team: crew\n", "name: Worker\nhandle: worker\nkind: agent\n", "name: crew\nmembers: [{identity: worker, role: missing}]\n"},
+		{"set", "checks: missing\n", "", ""},
+		{"repo-only store", "resolution: repo-only\n", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, _ := postEditFixture(t)
+			t.Setenv("HOME", t.TempDir())
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), tc.cfg)
+			if tc.id != "" {
+				writeFile(t, filepath.Join(root, ".punt-labs/ethos/identities/worker.yaml"), tc.id)
+			}
+			if tc.team != "" {
+				writeFile(t, filepath.Join(root, ".punt-labs/ethos/teams/crew.yaml"), tc.team)
+			}
+			_, _, err := configuredEditChecks(root, root, filepath.Join(root, "file.go"), "worker")
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestConfiguredEditEngineBundleIdentity(t *testing.T) {
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "resolution: repo-only\nactive_bundle: ops\nchecks: missing\n")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos-bundles/ops/identities/worker.yaml"), "name: Worker\nhandle: worker\nkind: agent\nchecks: none\n")
+	checks, selected, err := configuredEditChecks(root, root, filepath.Join(root, "file.go"), "worker")
+	require.NoError(t, err)
+	require.True(t, selected)
+	require.Empty(t, checks)
+}
+
 func TestConfiguredEditFeedback(t *testing.T) {
 	for _, tc := range []struct{ name, checks, want, absent string }{
 		{"TDD advisory", "  - name: unit-tests\n    stage: edit\n    files: ['**/*.go']\n    run: [go, test, '{package_dir}']\n", "additionalContext", `"decision"`},

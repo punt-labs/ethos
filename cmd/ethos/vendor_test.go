@@ -4,16 +4,28 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/vendor"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestVendorChecksReportsConfigFailure(t *testing.T) {
+	previous := cmdRoots.Load()
+	t.Cleanup(func() { cmdRoots.Store(previous) })
+	want := errors.New("cannot read repository config")
+	cmdRoots.Store(&repoRoots{Located: resolve.Located{ConfigErr: want}})
+	ref, err := vendorChecks()
+	require.ErrorIs(t, err, want)
+	require.Empty(t, ref)
+}
 
 func TestVendorRunnerKeepsRequestSnapshot(t *testing.T) {
 	home := t.TempDir()

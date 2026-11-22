@@ -12,6 +12,24 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
+func TestConfigCheckReference(t *testing.T) {
+	for _, ref := range []string{"", "none", "project", "bad ref", "../outside"} {
+		t.Run(ref, func(t *testing.T) {
+			var cfg RepoConfig
+			err := yaml.Unmarshal([]byte("checks: '"+ref+"'\n"), &cfg)
+			_, marshalErr := yaml.Marshal(&RepoConfig{Checks: ref})
+			if ref == "bad ref" || ref == "../outside" {
+				require.Error(t, err)
+				require.Error(t, marshalErr)
+			} else {
+				require.NoError(t, err)
+				require.NoError(t, marshalErr)
+				require.Equal(t, ref, cfg.Checks)
+			}
+		})
+	}
+}
+
 func TestConfigRecordingMode(t *testing.T) {
 	for _, rel := range []string{".punt-labs/ethos.yaml", ".punt-labs/ethos/config.yaml"} {
 		for _, tt := range []struct {

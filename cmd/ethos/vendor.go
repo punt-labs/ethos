@@ -82,9 +82,13 @@ func runVendor(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	checks, err := vendorChecks()
+	if err != nil {
+		return err
+	}
 
 	v, err := vendor.New(vendor.Sources{
-		Checks:     vendorChecks(),
+		Checks:     checks,
 		Roots:      vendorRoots(is),
 		Identities: is,
 		Roles:      layeredRoleStore(is),
@@ -138,8 +142,9 @@ func vendorRunner() mcp.VendorRunner {
 	// Capture the full source chain and roots when the request handler is built.
 	// Another MCP request can rebuild cmdRoots while this closure is in flight.
 	is := vendorSourceStore()
+	checks, checksErr := vendorChecks()
 	sources := vendor.Sources{
-		Checks: vendorChecks(),
+		Checks: checks,
 		Roots:  vendorRoots(is), Identities: is,
 		Roles: layeredRoleStore(is), Teams: layeredTeamStore(is),
 	}
@@ -147,6 +152,9 @@ func vendorRunner() mcp.VendorRunner {
 	locationErr := loc.Err()
 	defaultDest, destinationErr := vendorDest(is)
 	return func(opts vendor.Options) (*vendor.Plan, error) {
+		if checksErr != nil {
+			return nil, checksErr
+		}
 		if locationErr != nil {
 			return nil, fmt.Errorf("locating vendor repository: %w", locationErr)
 		}
@@ -210,11 +218,15 @@ func vendorRoots(is identity.IdentityStore) []string {
 	return roots
 }
 
-func vendorChecks() string {
-	if cfg := currentRoots().Config; cfg != nil {
-		return cfg.Checks
+func vendorChecks() (string, error) {
+	r := currentRoots()
+	if err := r.StoreFailure(); err != nil {
+		return "", err
 	}
-	return ""
+	if cfg := r.Config; cfg != nil {
+		return cfg.Checks, nil
+	}
+	return "", nil
 }
 
 // writeVendorPlan renders the closure, the blast radius, and what would
