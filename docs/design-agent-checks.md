@@ -2,12 +2,13 @@
 
 **Status**: SETTLED as DES-085. Linear PL-1275. Supersedes PR #642.
 
-The edit-stage slice implements strict check sets, layered references, argv
-execution, glob selection and advisory/block feedback. Commit and handoff
-stages are validated but not executed yet. Non-exec adapters, shell execution,
+The implementation covers strict check sets, layered references, argv
+execution, glob selection and advisory/block feedback at edit, commit and
+SubagentStop handoff. Mission-result integration is the next slice.
+Non-exec adapters, shell execution,
 cache/coalescing, concurrency tuning, audit metrics and doctor/init commands
 below describe later work, not shipped behavior. Generated commands stay
-unchanged when a check set changes: policy is loaded at edit time.
+unchanged when a check set changes: policy is loaded at hook execution time.
 
 Read first: punt-kit `standards/hooks.md` §6–7 (observation vs mutation hooks,
 fail-open vs fail-closed), DES-055 (exit 2 blocks), DES-073 (identity skills
@@ -265,10 +266,29 @@ agent, with the project default set, or the committing session's resolved
 set when one is found. Exit 2 blocks the commit and prints the failing
 check's tail.
 
-The handoff stage is added to `ethos hook subagent-stop` and to
-`ethos mission result`. A failure returns
-`{"decision":"block","reason":...}` once. On `stop_hook_active` the hook
-allows the stop and records the failure in the mission result.
+The handoff stage runs in `ethos hook subagent-stop`; `ethos mission result`
+integration is deferred to the next slice. Roster leave happens before checks,
+including when checks are killed or block. The payload's agent type/handle
+selects policy. Existing audit union readers select that agent's Write/Edit
+paths from the session; if no usable paths are available, selection falls back
+to the checkout's staged, unstaged and untracked files. An unreadable audit
+fails closed rather than silently narrowing the scope.
+
+A blocking failure or broken policy returns
+`{"decision":"block","reason":...}` with exit zero. On `stop_hook_active`
+the hook allows the stop and sends the failure to stderr instead. Advisory
+failures always use stderr. The plugin currently declares no SubagentStop
+timeout, so its harness timeout does not provide the 30-minute stage window;
+the binary enforces its budgets, but the harness may terminate it earlier.
+
+Commit/handoff checks run sequentially under a shared stage deadline. At
+`cwd: root`, `{files}` expands to all matching paths and `{package_dir}` to
+their deduplicated root-relative directories. A directory cwd runs once per
+matching directory, with that directory's matching files. `files: all` runs
+even with no paths, from the root in that case. There are no marker defaults
+at these stages. The kill switch skips checks, not commit seal/provenance
+steps or roster leave. Commit file discovery and commands preserve the actual
+committing index while scrubbing other Git selectors and tracing variables.
 
 OpenCode generation (`.opencode/agents`) uses the same subcommand from its
 `tool.execute.after` plugin hook, so the two harnesses share one policy.

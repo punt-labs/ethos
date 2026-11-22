@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Configured commit checks run after seal and provenance verification, using
+  the actual staged index and blocking by default. SubagentStop runs configured
+  handoff checks after roster leave, with recursion-safe block feedback. Both
+  stages preserve unconfigured behavior and honor `~/.punt-hooks-kill`.
+
 ### Fixed
 
 - Edit-stage checks support layered project-defined check sets referenced by

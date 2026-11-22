@@ -64,6 +64,18 @@ main-tree changes not committed into a linked checkout. The edited worktree's
 configuration is never consulted. See
 [DES-085's design](design-agent-checks.md) for the future stages and adapters.
 
+The same set may define `stage: commit` and `stage: handoff`. Pre-commit runs
+after seal/provenance, selects files from the actual committing index, and
+blocks with exit 2 by default. SubagentStop leaves the roster before checks,
+then selects audited Write/Edit paths for that subagent, falling back to changed
+and untracked checkout files when no usable audit paths exist. Blocking handoff
+feedback is exit-zero decision JSON; `stop_hook_active` sends failures to stderr
+instead. Advisory failures use stderr at both stages. Neither stage has marker
+defaults, and `files: all` runs even when no paths match. Commit and handoff
+defaults are 120s and 10m per check, capped at 15m and 30m per stage. The plugin
+currently has no explicit handoff timeout; the harness can stop it earlier.
+`ethos mission result` integration remains a future slice.
+
 ## Prerequisites: Agent Definitions
 
 Ethos auto-generates `.claude/agents/<handle>.md` files at **SessionStart**

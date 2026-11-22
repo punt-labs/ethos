@@ -178,3 +178,46 @@ func TestCommitCheckIndexEnvironment(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, index, string(data))
 }
+
+func TestStagePolicyErrorsAndOptOut(t *testing.T) {
+	for _, tc := range []struct {
+		ref    string
+		blocks bool
+	}{{"", false}, {"none", false}, {"absent", true}, {"Go_Default", true}} {
+		t.Run(tc.ref, func(t *testing.T) {
+			root, _ := postEditFixture(t)
+			t.Setenv("HOME", t.TempDir())
+			if tc.ref != "" {
+				writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: "+tc.ref+"\n")
+			}
+			feedback := RunStageChecks(context.Background(), root, "", "commit")
+			require.Equal(t, tc.blocks, feedback.Blocking != "")
+			if tc.blocks {
+				require.Contains(t, feedback.Blocking, tc.ref)
+			}
+		})
+	}
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	require.Contains(t, RunStageChecks(context.Background(), root, "", "unknown").Blocking, "unsupported stage")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	checkPolicy(t, root, "project", "  - name: files\n    stage: commit\n    files: all\n    run: [missing]\n")
+	t.Setenv("GIT_INDEX_FILE", "")
+	require.Contains(t, RunStageChecks(context.Background(), root, "", "commit").Blocking, "GIT_INDEX_FILE")
+}
+
+func TestStageFailureTailAndDeadline(t *testing.T) {
+	root, bin := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	checkPolicy(t, root, "project", "  - name: tail\n    stage: commit\n    files: all\n    run: [probe]\n")
+	postEditTool(t, bin, "probe", "i=0; while [ $i -lt 60 ]; do printf 'line-%02d\\n' \"$i\"; i=$((i+1)); done; exit 1\n")
+	feedback := RunStageChecks(context.Background(), root, "", "commit")
+	require.Contains(t, feedback.Blocking, "line-59")
+	require.NotContains(t, feedback.Blocking, "line-00")
+	postEditTool(t, bin, "probe", "while :; do :; done\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	feedback = RunStageChecks(ctx, root, "", "commit")
+	require.Contains(t, feedback.Blocking, "timed out")
+}

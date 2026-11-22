@@ -21,14 +21,15 @@ func init() {
 		Short: "git pre-commit policy: seal audit lines, verify staged provenance",
 		Long: `Run the commit-time policy the installed pre-commit shim delegates to:
 audit seal in commit context, then verification of the provenance snapshots
-staged in the actual committing index. Before sealing, every path under
+staged in the actual committing index, then configured commit-stage checks.
+Before sealing, every path under
 .punt-labs/local/ is removed from the committing index (files stay on disk).
 
 Exit codes:
   0  sealed, nothing pending, or a blame-mode retained-data warning
   2  invalid policy, archival failure outside that exception, full-mode
      publication failure, a staged snapshot that does not verify, or a git
-     failure while unstaging local paths`,
+     failure while unstaging local paths, or a blocking configured check`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runHookPreCommit(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr())
