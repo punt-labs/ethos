@@ -38,6 +38,7 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 		return nil
 	}
 
+	startState := participantCheckoutState(ss, sessionID, agentID)
 	if leaveErr := ss.Leave(sessionID, agentID); leaveErr != nil {
 		fmt.Fprintf(errOut, "ethos: failed to leave session %s: %v\n", sessionID, leaveErr)
 	}
@@ -47,11 +48,10 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 		stopFeedback(out, errOut, StageFeedback{Blocking: "handoff scope: " + err.Error()}, active)
 		return nil
 	}
-	agent, _ := input["agent_type"].(string)
-	if handle, _ := input["agent_handle"].(string); handle != "" {
-		agent = handle
+	if readOnlyStop(checkout, sessionID, agentID, startState) {
+		return nil
 	}
-	feedback := runStageRootChecks(ctx, checkout, agent, "handoff", func() (map[string][]string, error) {
+	feedback := runStageRootChecks(ctx, checkout, stopAgent(input), "handoff", func() (map[string][]string, error) {
 		return handoffFiles(checkout, sessionID, agentID)
 	})
 	stopFeedback(out, errOut, feedback, active)

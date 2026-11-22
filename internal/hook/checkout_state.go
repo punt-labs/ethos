@@ -1,0 +1,181 @@
+package hook
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/session"
+)
+
+// mutatingTools are the file-writing tools whose audited use by an agent
+// rules out a read-only handoff, even when the checkout looks unchanged.
+var mutatingTools = map[string]bool{"Write": true, "Edit": true, "MultiEdit": true, "NotebookEdit": true}
+
+// stopAgent is the agent name that selects check policy for a subagent.
+func stopAgent(input map[string]any) string {
+	agent, _ := input["agent_type"].(string)
+	if handle, _ := input["agent_handle"].(string); handle != "" {
+		agent = handle
+	}
+	return agent
+}
+
+// subagentStartState fingerprints the session checkout for a starting
+// subagent whose policy has handoff checks. Any failure returns "", which
+// makes the matching stop run its handoff checks.
+func subagentStartState(input map[string]any) string {
+	checkout, err := hookCheckout()
+	if err != nil {
+		return ""
+	}
+	checks, _, err := configuredStageChecks(checkout, stopAgent(input), "handoff")
+	if err != nil || len(checks) == 0 {
+		return ""
+	}
+	state, err := checkoutState(checkout)
+	if err != nil {
+		return ""
+	}
+	return state
+}
+
+func participantCheckoutState(ss *session.Store, sessionID, agentID string) string {
+	roster, err := ss.Load(sessionID)
+	if err != nil {
+		return ""
+	}
+	if p := roster.FindParticipant(agentID); p != nil {
+		return p.CheckoutState
+	}
+	return ""
+}
+
+// readOnlyStop reports whether a stopping subagent provably changed nothing:
+// it has a start fingerprint, made no audited Write/Edit call, and the
+// checkout's fingerprint still matches. Bash edits change the fingerprint.
+func readOnlyStop(checkout, sessionID, agentID, startState string) bool {
+	if startState == "" {
+		return false
+	}
+	entries, err := sessionAuditEntries(checkout, sessionID)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.AgentID == agentID && mutatingTools[entry.Tool] {
+			return false
+		}
+	}
+	current, err := checkoutState(checkout)
+	return err == nil && current == startState
+}
+
+func sessionAuditEntries(checkout, sessionID string) ([]auditEntry, error) {
+	store, err := resolve.StoreOf(checkout)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := resolve.ConfigOf(store)
+	if err != nil {
+		return nil, err
+	}
+	policy, err := (resolve.Located{Store: store, Checkout: checkout, Config: cfg}).Layout()
+	if err != nil {
+		return nil, err
+	}
+	return readSessionAuditWithPolicy(policy, sessionID)
+}
+
+// checkoutState hashes HEAD, the index entries that differ from HEAD and
+// the content of every changed or untracked, non-ignored worktree path.
+// Ethos's own machine-local session and audit files are excluded: hooks
+// write them on every tool call, read-only ones included.
+func checkoutState(checkout string) (string, error) {
+	out, err := gitenv.Output(checkout, "git", "--no-optional-locks", "status", "--porcelain=v2", "-z", "--branch", "--no-ahead-behind", "--untracked-files=all", "--ignore-submodules=none",
+		"--", ":(top)", ":(top,exclude).punt-labs/local", ":(top,exclude).punt-labs/ethos/sessions")
+	if err != nil {
+		return "", fmt.Errorf("git status: %w", err)
+	}
+	h := sha256.New()
+	fmt.Fprintf(h, "%s\x00", checkout)
+	records := strings.Split(string(out), "\x00")
+	for i := 0; i < len(records); i++ {
+		record := records[i]
+		if record == "" || strings.HasPrefix(record, "# ") && !strings.HasPrefix(record, "# branch.oid ") {
+			continue
+		}
+		fmt.Fprintf(h, "%s\x00", record)
+		var path string
+		switch record[0] {
+		case '#':
+			continue
+		case '1':
+			path = statusPath(record, 9)
+		case '2':
+			path = statusPath(record, 10)
+			i++ // the original path of a rename or copy follows
+		case 'u':
+			path = statusPath(record, 11)
+		case '?':
+			path = statusPath(record, 2)
+		default:
+			return "", fmt.Errorf("git status: unexpected record %q", record)
+		}
+		if path == "" {
+			return "", fmt.Errorf("git status: malformed record %q", record)
+		}
+		if err := hashWorktreePath(h, filepath.Join(checkout, filepath.FromSlash(path))); err != nil {
+			return "", err
+		}
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func statusPath(record string, fields int) string {
+	parts := strings.SplitN(record, " ", fields)
+	if len(parts) != fields {
+		return ""
+	}
+	return parts[fields-1]
+}
+
+func hashWorktreePath(h io.Writer, path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		_, err = io.WriteString(h, "absent\x00")
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	switch {
+	case info.Mode()&fs.ModeSymlink != 0:
+		target, err := os.Readlink(path)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(h, "link %s\x00", target)
+		return nil
+	case info.Mode().IsRegular():
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		fmt.Fprintf(h, "file %o %d\x00", info.Mode().Perm(), info.Size())
+		_, err = io.Copy(h, f)
+		return err
+	default:
+		fmt.Fprintf(h, "other %s\x00", info.Mode().Type())
+		return nil
+	}
+}

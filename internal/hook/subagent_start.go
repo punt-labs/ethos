@@ -193,6 +193,7 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 		Parent:    process.FindClaudePID(),
 		AgentType: agentType,
 	}
+	p.CheckoutState = subagentStartState(input)
 
 	if joinErr := deps.Sessions.Join(sessionID, p); joinErr != nil {
 		fmt.Fprintf(os.Stderr, "ethos: failed to join session %s: %v\n", sessionID, joinErr)

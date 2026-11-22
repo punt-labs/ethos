@@ -10,6 +10,9 @@ type Participant struct {
 	Parent    string         `yaml:"parent,omitempty" json:"parent,omitempty"`
 	Joined    string         `yaml:"joined,omitempty" json:"joined,omitempty"`
 	Ext       map[string]any `yaml:"ext,omitempty" json:"ext,omitempty"`
+	// CheckoutState fingerprints the checkout when a subagent started, so its
+	// stop can skip handoff checks if it changed nothing.
+	CheckoutState string `yaml:"checkout_state,omitempty" json:"checkout_state,omitempty"`
 }
 
 // Roster is the session-scoped list of all participants.
