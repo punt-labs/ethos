@@ -306,9 +306,14 @@ there are none; Bash commands are not parsed to discover additional roots.
 Otherwise the root keeps an empty file list: glob checks skip it, but
 `files: all` checks still run. Same-store linked worktrees
 run independently with their own matching paths, cwd and `{root}`, while policy
-still comes from the canonical store. Vanished audited files are omitted, but
-their checkout attribution is retained through the nearest existing physical
-ancestor directory, including when parent directories have disappeared. A path
+still comes from the canonical store. For vanished attributed paths, handoff
+uses Git rename detection against HEAD with a copied temporary index and
+intent-to-add entries for untracked files. A discovered target must still exist
+under the same accepted root and must not be another agent's known path. This
+covers unstaged `mv` and staged `git mv` without changing the real index or
+widening dirty-tree fallback. Lookup failures are advisory and non-blocking;
+outright deletions remain omitted. Checkout attribution is retained through the
+nearest existing physical ancestor, including missing parent directories. A path
 whose root is indeterminate disables dirty-tree fallback without blocking the
 stop; attributed files and `files: all` checks still run. An unreadable audit
 fails closed rather than silently narrowing the scope.

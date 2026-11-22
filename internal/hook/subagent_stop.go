@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -51,9 +52,11 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 	if handle, _ := input["agent_handle"].(string); handle != "" {
 		agent = handle
 	}
+	var notes []string
 	feedback := runStageRootChecks(ctx, checkout, agent, "handoff", func() (map[string][]string, error) {
-		return handoffFiles(checkout, sessionID, agentID)
+		return handoffFilesWithAdvice(checkout, sessionID, agentID, func(note string) { notes = append(notes, note) })
 	})
+	feedback.Advisory = strings.TrimSpace(strings.Join(append(notes, feedback.Advisory), "\n"))
 	stopFeedback(out, errOut, feedback, active)
 	return nil
 }
@@ -73,6 +76,10 @@ func stopFeedback(out, errOut io.Writer, feedback StageFeedback, active bool) {
 }
 
 func handoffFiles(checkout, sessionID, agentID string) (map[string][]string, error) {
+	return handoffFilesWithAdvice(checkout, sessionID, agentID, nil)
+}
+
+func handoffFilesWithAdvice(checkout, sessionID, agentID string, advice func(string)) (map[string][]string, error) {
 	store, err := resolve.StoreOf(checkout)
 	if err != nil {
 		return nil, err
@@ -92,6 +99,8 @@ func handoffFiles(checkout, sessionID, agentID string) (map[string][]string, err
 	seen := map[string]bool{}
 	files := map[string][]string{}
 	otherWriters := map[string]bool{}
+	otherPaths := map[string]bool{}
+	vanished := map[string][]string{}
 	fallbackUncertain := false
 	for _, entry := range entries {
 		if entry.Tool != "Write" && entry.Tool != "Edit" {
@@ -121,21 +130,52 @@ func handoffFiles(checkout, sessionID, agentID string) (map[string][]string, err
 		}
 		if entry.AgentID != agentID {
 			otherWriters[root] = true
+			otherPaths[physical] = true
 			continue
 		}
 		if _, ok := files[root]; !ok {
 			files[root] = nil
 		}
-		if _, err := os.Stat(physical); os.IsNotExist(err) {
-			continue
-		} else if err != nil {
-			return nil, err
-		}
 		rel, err := filepath.Rel(root, physical)
 		if err != nil {
 			return nil, err
 		}
+		if _, err := os.Stat(physical); os.IsNotExist(err) {
+			vanished[root] = append(vanished[root], filepath.ToSlash(rel))
+			continue
+		} else if err != nil {
+			return nil, err
+		}
 		if !seen[physical] {
+			seen[physical] = true
+			files[root] = append(files[root], rel)
+		}
+	}
+	for root, oldPaths := range vanished {
+		renamed, err := handoffRenames(root)
+		if err != nil {
+			if advice != nil {
+				advice("ethos: handoff rename lookup: " + err.Error())
+			}
+			continue
+		}
+		for _, old := range oldPaths {
+			target := renamed[old]
+			if target == "" {
+				continue
+			}
+			accepted, physical, err := postEditScope(root, filepath.Join(root, target))
+			if err != nil || accepted != root || seen[physical] || otherPaths[physical] {
+				continue
+			}
+			info, err := os.Stat(physical)
+			if err != nil || info.IsDir() {
+				continue
+			}
+			rel, err := filepath.Rel(root, physical)
+			if err != nil {
+				continue
+			}
 			seen[physical] = true
 			files[root] = append(files[root], rel)
 		}
