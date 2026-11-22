@@ -50,6 +50,21 @@ func TestFormatVendorApplied(t *testing.T) {
 	assert.NotContains(t, r.HookSpecificOutput.AdditionalContext, "Nothing written")
 }
 
+func TestFormatVendorCheckSets(t *testing.T) {
+	for _, checks := range []string{`["format", "unit-tests"]`, `[]`} {
+		t.Run(checks, func(t *testing.T) {
+			result := `{"seeds":["bwk"],"identities":["bwk"],"checks":` + checks + `}`
+			ctx := parseFormatResult(t, runFormat(t, makeToolPayload("vendor", "", result))).HookSpecificOutput.AdditionalContext
+			if checks == `[]` {
+				assert.NotContains(t, ctx, "checks")
+			} else {
+				assert.Contains(t, ctx, "checks")
+				assert.Contains(t, ctx, "format, unit-tests")
+			}
+		})
+	}
+}
+
 func TestFormatVendorSurfacesWarningsAndPrunes(t *testing.T) {
 	result := `{
 	  "seeds": ["bwk"],

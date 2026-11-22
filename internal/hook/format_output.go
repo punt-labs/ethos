@@ -492,6 +492,7 @@ func formatVendor(w io.Writer, result string) error {
 		{"talents", strings.Join(jsonStringArray(result, "talents"), ", ")},
 		{"roles", strings.Join(jsonStringArray(result, "roles"), ", ")},
 		{"teams", strings.Join(jsonStringArray(result, "teams"), ", ")},
+		{"checks", strings.Join(jsonStringArray(result, "checks"), ", ")},
 	}
 	var nonEmpty [][]string
 	for _, r := range rows {
