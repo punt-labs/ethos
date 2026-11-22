@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -172,4 +173,29 @@ func TestSharedLoggingUnavailable(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, out)
 	require.Equal(t, "ethos: private diagnostics unavailable\n", stderr.String())
+}
+
+func TestSharedLoggingRotationLockTimeout(t *testing.T) {
+	home, cwd := t.TempDir(), t.TempDir()
+	normal := loggingProcess(t, home, cwd, "version")
+	want, err := normal.Output()
+	require.NoError(t, err)
+	lock, err := os.OpenFile(filepath.Join(home, ".punt-labs", "ethos", "logs", "ethos.log.rotate.lock"), os.O_RDWR, 0o600)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = lock.Close() })
+	require.NoError(t, syscall.Flock(int(lock.Fd()), syscall.LOCK_EX))
+	t.Cleanup(func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) })
+	ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, ethosBinary, "version")
+	cmd.Dir, cmd.Env = cwd, normal.Env
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	started := time.Now()
+	require.NoError(t, cmd.Run(), "rotation-lock contention must not prevent the command from running")
+	require.Less(t, time.Since(started), 6*time.Second)
+	require.Equal(t, string(want), stdout.String())
+	require.Equal(t, "ethos: private diagnostics unavailable\n", stderr.String())
+	log := diagnosticLog(t, home)
+	require.Equal(t, 1, strings.Count(log, "Invocation finished"), "the contended invocation uses a discard logger")
 }
