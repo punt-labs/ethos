@@ -11,6 +11,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
 // StageFeedback separates advisory output from failures that block progress.
@@ -43,6 +44,15 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 	}
 	ctx, cancel := context.WithTimeout(ctx, cap)
 	defer cancel()
+	if stage == "handoff" {
+		store, err := resolve.StoreOf(checkout)
+		if err != nil {
+			return StageFeedback{Blocking: editRedact(stage + " policy: " + err.Error())}
+		}
+		if store == "" {
+			return StageFeedback{}
+		}
+	}
 	var checks []checkset.Check
 	var err error
 	var env []string
