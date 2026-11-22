@@ -22,17 +22,21 @@ type Set struct {
 }
 
 type Check struct {
-	Name         string   `yaml:"name" json:"name"`
-	Stage        string   `yaml:"stage" json:"stage"`
-	Files        Patterns `yaml:"files" json:"files"`
-	Exclude      Strings  `yaml:"exclude,omitempty" json:"exclude,omitempty"`
-	Run          Strings  `yaml:"run,omitempty" json:"run,omitempty"`
-	Adapter      string   `yaml:"adapter,omitempty" json:"adapter,omitempty"`
-	Go           string   `yaml:"go,omitempty" json:"go,omitempty"`
-	OnFail       string   `yaml:"on_fail,omitempty" json:"on_fail,omitempty"`
-	FailOnOutput bool     `yaml:"fail_on_output,omitempty" json:"fail_on_output,omitempty"`
-	Timeout      string   `yaml:"timeout,omitempty" json:"timeout,omitempty"`
-	Cwd          string   `yaml:"cwd,omitempty" json:"cwd,omitempty"`
+	Name         string            `yaml:"name" json:"name"`
+	Stage        string            `yaml:"stage" json:"stage"`
+	Files        Patterns          `yaml:"files" json:"files"`
+	Exclude      Strings           `yaml:"exclude,omitempty" json:"exclude,omitempty"`
+	Run          Strings           `yaml:"run,omitempty" json:"run,omitempty"`
+	Adapter      string            `yaml:"adapter,omitempty" json:"adapter,omitempty"`
+	Go           string            `yaml:"go,omitempty" json:"go,omitempty"`
+	Target       string            `yaml:"target,omitempty" json:"target,omitempty"`
+	Vars         map[string]string `yaml:"vars,omitempty" json:"vars,omitempty"`
+	UV           Strings           `yaml:"uv,omitempty" json:"uv,omitempty"`
+	Script       string            `yaml:"script,omitempty" json:"script,omitempty"`
+	OnFail       string            `yaml:"on_fail,omitempty" json:"on_fail,omitempty"`
+	FailOnOutput bool              `yaml:"fail_on_output,omitempty" json:"fail_on_output,omitempty"`
+	Timeout      string            `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	Cwd          string            `yaml:"cwd,omitempty" json:"cwd,omitempty"`
 	fields       map[string]bool
 }
 
@@ -52,8 +56,24 @@ func (c *Check) UnmarshalYAML(node *yaml.Node) error {
 		if !known[key] {
 			return fmt.Errorf("unknown check field %q", key)
 		}
-		if key == "go" && node.Content[i+1].Tag != "!!str" {
-			return fmt.Errorf("go must be a string")
+		value := node.Content[i+1]
+		if value.Kind == yaml.AliasNode {
+			value = value.Alias
+		}
+		switch key {
+		case "go", "target", "script", "adapter":
+			if value.Tag != "!!str" {
+				return fmt.Errorf("%s must be a string", key)
+			}
+		case "vars":
+			if value.Kind != yaml.MappingNode {
+				return fmt.Errorf("vars must be a map of strings")
+			}
+			for _, item := range value.Content {
+				if item.ShortTag() != "!!str" {
+					return fmt.Errorf("vars keys and values must be strings")
+				}
+			}
 		}
 		fields[key] = true
 	}

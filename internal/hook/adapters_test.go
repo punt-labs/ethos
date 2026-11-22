@@ -6,8 +6,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,4 +32,79 @@ func TestGoAdapterExecution(t *testing.T) {
 	args, err := os.ReadFile(filepath.Join(root, "args"))
 	require.NoError(t, err)
 	require.Equal(t, "vet\n./sub\n", string(args))
+}
+
+func TestAdaptersAcrossStages(t *testing.T) {
+	for _, stage := range []string{"edit", "commit", "handoff"} {
+		for _, adapter := range []string{"make", "go", "uv", "npm"} {
+			t.Run(stage+"/"+adapter, func(t *testing.T) {
+				root, bin := postEditFixture(t)
+				t.Setenv("HOME", t.TempDir())
+				postEditTool(t, bin, adapter, "printf '%s\\n' \"$PWD\" \"$@\" > \"$PWD/args\"\n")
+				file := filepath.Join(root, "sub", "$(edited) file.go")
+				writeFile(t, file, "package sub\n")
+				field := map[string]string{"make": "target: check\n    vars: {B: two, A: one}", "go": "go: vet", "uv": "uv: [lint, '{files}']", "npm": "script: lint"}[adapter]
+				set, err := checkset.Decode([]byte("name: adapters\nchecks:\n  - name: probe\n    stage: " + stage + "\n    files: ['**/*.go']\n    cwd: file_dir\n    adapter: " + adapter + "\n    " + field + "\n"))
+				require.NoError(t, err)
+				var checks []editCheck
+				if stage == "edit" {
+					checkPolicy(t, root, "project", "  - name: probe\n    stage: edit\n    files: ['**/*.go']\n    cwd: file_dir\n    adapter: "+adapter+"\n    "+field+"\n")
+					writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+					checks, _, err = configuredEditChecks(root, root, file, "")
+					require.NoError(t, err)
+				} else {
+					checks = stageInvocations(root, []string{"sub/$(edited) file.go"}, set.Checks[0])
+				}
+				require.Len(t, checks, 1)
+				marker := map[string]string{"make": "Makefile", "go": "go.mod", "uv": "pyproject.toml", "npm": "package.json"}[adapter]
+				writeFile(t, filepath.Join(root, marker), `{"scripts":{"lint":"node lint.js"}}`)
+				require.Contains(t, runEditCheck(context.Background(), root, checks[0]), marker, "root marker must not satisfy a directory cwd probe")
+				writeFile(t, filepath.Join(root, "sub", marker), `{"scripts":{"lint":"node lint.js"}}`)
+				require.Empty(t, runEditCheck(context.Background(), root, checks[0]))
+				data, err := os.ReadFile(filepath.Join(root, "sub", "args"))
+				require.NoError(t, err)
+				lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+				require.Equal(t, filepath.Dir(file), lines[0])
+				if adapter == "make" {
+					require.Equal(t, []string{"check", "A=one", "B=two"}, lines[1:])
+				}
+				if adapter == "uv" || adapter == "npm" {
+					require.Equal(t, file, lines[len(lines)-1])
+				}
+			})
+		}
+	}
+}
+
+func TestAdapterProbeFeedback(t *testing.T) {
+	for _, mode := range []string{"advisory", "block"} {
+		t.Run(mode, func(t *testing.T) {
+			root, _ := postEditFixture(t)
+			t.Setenv("HOME", t.TempDir())
+			file := filepath.Join(root, "edited.go")
+			writeFile(t, file, "package test\n")
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+			for _, stage := range []string{"edit", "commit", "handoff"} {
+				checkPolicy(t, root, "project", "  - name: probe\n    stage: "+stage+"\n    files: ['**/*.go']\n    adapter: make\n    target: check\n    on_fail: "+mode+"\n")
+				if stage == "edit" {
+					out := postEditRun(t, file)
+					require.Contains(t, out, "Makefile")
+					if mode == "block" {
+						require.Contains(t, out, `"decision":"block"`)
+					} else {
+						require.NotContains(t, out, `"decision":"block"`)
+					}
+				} else {
+					feedback := runStageChecks(context.Background(), root, "", stage, func() ([]string, error) { return []string{"edited.go"}, nil })
+					if mode == "block" {
+						require.Contains(t, feedback.Blocking, "Makefile")
+						require.Empty(t, feedback.Advisory)
+					} else {
+						require.Contains(t, feedback.Advisory, "Makefile")
+						require.Empty(t, feedback.Blocking)
+					}
+				}
+			}
+		})
+	}
 }
