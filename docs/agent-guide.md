@@ -66,7 +66,12 @@ configuration is never consulted. See
 
 The same set may define `stage: commit` and `stage: handoff`. Pre-commit runs
 after seal/provenance, selects files from the actual committing index, and
-blocks with exit 2 by default. SubagentStop leaves the roster before checks,
+blocks with exit 2 by default. Checks read files on disk, so matched staged files
+with unstaged changes block before any check runs, even for advisory checks.
+Stage or stash the listed files first (`git add` / `git stash --keep-index`).
+Unmatched files are unaffected; `files: all` matches every staged file. Without
+commit checks this adds no Git query. Index-snapshot execution is a later slice.
+SubagentStop leaves the roster before checks,
 then selects audited Write/Edit paths for that subagent. When a root has no usable
 attributed paths, changed and untracked files are used only if it is a linked
 worktree and no other agent (including the main thread's empty agent ID) has a
