@@ -2,8 +2,10 @@ package autorepair
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -73,11 +75,13 @@ func TestFileLogWritesJSONLines(t *testing.T) {
 	assert.Equal(t, "move", first["action"])
 	assert.Equal(t, "v5.0.0", first["ethos"])
 	assert.Equal(t, float64(2), first["path_count"])
+	assert.Equal(t, ".punt-labs/a,.punt-labs/b", first["paths"])
 	assert.Equal(t, "ethos.repair", first["component"])
 	assert.NotContains(t, first, "store")
 	assert.NotContains(t, first, "checkout")
 	assert.NotContains(t, first, "error")
 	assert.Equal(t, "*errors.errorString", lines[1]["error_type"])
+	assert.Equal(t, "boom", lines[1]["error"])
 }
 
 func TestFileLogRedactsHomePaths(t *testing.T) {
@@ -92,7 +96,7 @@ func TestFileLogRedactsHomePaths(t *testing.T) {
 func TestFileLogOmitsRepositoryRoots(t *testing.T) {
 	global := physicalTemp(t)
 	l := newFileLog("/home/ubuntu/private-smoke-store", "/home/ubuntu/private-smoke-checkout", "test", captureRepairLog(global))
-	l.Logf("sessions", "ran", nil, nil)
+	l.Logf("sessions", "ran", []string{"/home/ubuntu/private-smoke-store/sessions/a.json"}, errors.New("open /home/ubuntu/private-smoke-checkout/sessions/a.json: denied"))
 	raw, err := os.ReadFile(LogPath(global))
 	require.NoError(t, err)
 	for _, private := range []string{"ubuntu", "private-smoke-store", "private-smoke-checkout"} {
@@ -100,34 +104,66 @@ func TestFileLogOmitsRepositoryRoots(t *testing.T) {
 	}
 }
 
-func TestFileLogOmitsPathAndErrorContents(t *testing.T) {
+func TestResidualLogNamesRelativePathAndCause(t *testing.T) {
+	r := newRig(t, true)
+	r.store = filepath.Join(r.store, "private-smoke-checkout")
+	r.roots.Store, r.roots.Checkout = r.store, r.store
+	require.NoError(t, os.MkdirAll(filepath.Join(r.store, ".punt-labs"), 0o700))
+	r.opts.order = []string{"gitignore"}
+	r.opts.steps = []Step{{Name: "gitignore", Scope: ScopeRepository, Run: func(_ context.Context, env Env) (Outcome, error) {
+		path := filepath.Join(env.Roots.Store, ".gitignore")
+		env.Log.Logf("gitignore", "blocked", []string{path}, fmt.Errorf("rewriting %s: permission denied", path))
+		return Outcome{Residuals: []Residual{actionableResidual("gitignore", ".gitignore", "cannot rewrite", seeLogAction)}}, nil
+	}}}
+	result := r.ensure()
+	require.Len(t, result.Residuals, 1)
+	require.Contains(t, result.Residuals[0].EffectiveAction(), "ethos.log")
+	var blocked map[string]any
+	for _, entry := range readLog(t, LogPath(r.global)) {
+		if entry["action"] == "blocked" {
+			blocked = entry
+		}
+	}
+	require.NotNil(t, blocked)
+	assert.Equal(t, ".gitignore", blocked["paths"])
+	assert.Equal(t, "rewriting <store>/.gitignore: permission denied", blocked["error"])
+	assert.Equal(t, "*errors.errorString", blocked["error_type"])
+	raw, err := os.ReadFile(LogPath(r.global))
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), r.store)
+	assert.NotContains(t, string(raw), "private-smoke-checkout")
+}
+
+func TestFileLogRelativePaths(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		paths []string
-		err   error
+		name     string
+		store    string
+		checkout string
+		paths    []string
+		want     string
+		omitted  int
 	}{
 		{name: "empty"},
-		{name: "paths", paths: []string{"/home/ubuntu/private-smoke-path"}},
-		{name: "error", err: errors.New("private-smoke-content in /home/ubuntu/private-smoke-path")},
+		{name: "unbound", paths: []string{"/home/ubuntu/private-smoke-path"}, omitted: 1},
+		{name: "outside", store: "/srv/store", checkout: "/srv/checkout", paths: []string{"/srv/store-other/file", "/srv/store/../private-smoke-path"}, omitted: 2},
+		{name: "both roots", store: "/srv/store", checkout: "/srv/checkout", paths: []string{"/srv/store/missions/a.yaml", "/srv/checkout/.gitignore", "/private-smoke-path"}, want: "missions/a.yaml,.gitignore", omitted: 1},
+		{name: "nested checkout", store: "/srv/store", checkout: "/srv/store/private-smoke-checkout", paths: []string{"/srv/store/private-smoke-checkout/.gitignore"}, want: ".gitignore"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			global := physicalTemp(t)
-			l := newFileLog("", "", "test", captureRepairLog(global))
-			l.Logf("gitignore", "rewrite", tc.paths, tc.err)
+			l := newFileLog(tc.store, tc.checkout, "test", captureRepairLog(global))
+			l.Logf("gitignore", "rewrite", tc.paths, nil)
 			raw, err := os.ReadFile(LogPath(global))
 			require.NoError(t, err)
-			for _, private := range []string{"ubuntu", "private-smoke-path", "private-smoke-content"} {
+			for _, private := range []string{"ubuntu", "private-smoke-path", "private-smoke-checkout"} {
 				require.NotContains(t, string(raw), private)
 			}
 			entry := readLog(t, LogPath(global))[0]
 			assert.Equal(t, float64(len(tc.paths)), entry["path_count"])
-			assert.NotContains(t, entry, "paths")
+			assert.Equal(t, tc.want, entry["paths"])
+			assert.Equal(t, float64(tc.omitted), entry["omitted_path_count"])
 			assert.NotContains(t, entry, "error")
-			if tc.err != nil {
-				assert.Equal(t, "*errors.errorString", entry["error_type"])
-			} else {
-				assert.NotContains(t, entry, "error_type")
-			}
+			assert.NotContains(t, entry, "error_type")
 		})
 	}
 }

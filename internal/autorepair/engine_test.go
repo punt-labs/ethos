@@ -201,7 +201,8 @@ func TestEnsureUnregisteredOrderNameBlocksStamps(t *testing.T) {
 	require.Len(t, deferred, 1, "one line for the missing set")
 	assert.Equal(t, "engine", deferred[0]["step"])
 	assert.Equal(t, "*errors.errorString", deferred[0]["error_type"])
-	assert.NotContains(t, deferred[0], "error")
+	assert.Contains(t, deferred[0]["error"], "absent, also-absent")
+	assert.Contains(t, deferred[0]["error"], "not registered")
 }
 
 // A git repository that never used ethos has no .punt-labs directory. Ensure
