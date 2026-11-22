@@ -69,6 +69,47 @@ func TestPostToolUseHook_Execution(t *testing.T) {
 		assert.Empty(t, stdout, "success must be silent on stdout")
 		assert.Empty(t, stderr, "success must be silent on stderr")
 	})
+
+	for _, tt := range []struct {
+		name      string
+		hasTarget bool
+		fails     bool
+	}{
+		{name: "check-edit target receives the edited file", hasTarget: true},
+		{name: "missing check-edit target falls back to check"},
+		{name: "check-edit failure blocks without falling back", hasTarget: true, fails: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			requireTool(t, "jq")
+			probeExit := "1"
+			if tt.hasTarget {
+				probeExit = "0"
+			}
+			body := "if [ \"$1\" = -n ]; then exit " + probeExit + "; fi\n" +
+				"printf '%s\\n' \"$@\" > \"$(dirname \"$0\")/calls\"\n"
+			if tt.fails {
+				body += "echo SCOPED_FAILURE; exit 1\n"
+			}
+			binDir := stubMake(t, body)
+			code, stdout, stderr := runHook(t, command, binDir,
+				`{"tool_input":{"file_path":"internal/file name.go"}}`)
+			calls, err := os.ReadFile(filepath.Join(binDir, "calls"))
+			require.NoError(t, err)
+			if tt.hasTarget {
+				assert.Equal(t, "check-edit\nFILE=internal/file name.go\n", string(calls))
+			} else {
+				assert.Equal(t, "check\n", string(calls))
+			}
+			assert.Empty(t, stdout)
+			if tt.fails {
+				assert.Equal(t, 2, code)
+				assert.Contains(t, stderr, "SCOPED_FAILURE")
+			} else {
+				assert.Equal(t, 0, code)
+				assert.Empty(t, stderr)
+			}
+		})
+	}
 }
 
 // extractPostToolUseCommand parses the agent file's YAML frontmatter
