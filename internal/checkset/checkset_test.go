@@ -1,6 +1,7 @@
 package checkset
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestDecode(t *testing.T) {
@@ -69,6 +71,36 @@ func TestGlobs(t *testing.T) {
 	} {
 		require.Equal(t, tc.want, Match(tc.pattern, tc.file), "%s %s", tc.pattern, tc.file)
 	}
+}
+
+func TestLiteralAllGlob(t *testing.T) {
+	set, err := Decode([]byte("name: literal\nchecks:\n  - name: literal\n    stage: edit\n    files: ['all']\n    run: ['true']\n"))
+	require.NoError(t, err)
+	require.True(t, set.Checks[0].Matches("all"))
+	require.False(t, set.Checks[0].Matches("other"))
+	for _, pattern := range []Patterns{{All: true}, {Globs: []string{"all"}}, {Globs: []string{"**/*.go", "*.sh"}}} {
+		data, err := yaml.Marshal(pattern)
+		require.NoError(t, err)
+		var fromYAML Patterns
+		require.NoError(t, yaml.Unmarshal(data, &fromYAML))
+		require.Equal(t, pattern, fromYAML)
+		data, err = json.Marshal(pattern)
+		require.NoError(t, err)
+		var fromJSON Patterns
+		require.NoError(t, json.Unmarshal(data, &fromJSON))
+		require.Equal(t, pattern, fromJSON)
+	}
+	for _, invalid := range []string{`"other"`, `true`, `null`, `{}`, `[1]`} {
+		var pattern Patterns
+		require.Error(t, json.Unmarshal([]byte(invalid), &pattern))
+	}
+	var empty Patterns
+	require.NoError(t, json.Unmarshal([]byte(`[]`), &empty))
+	require.Empty(t, empty.Globs)
+	set, err = Decode([]byte("name: stage\nchecks:\n  - name: stage\n    stage: commit\n    files: all\n    run: ['true']\n"))
+	require.NoError(t, err)
+	require.True(t, set.Checks[0].Matches("other"))
+	require.False(t, set.Checks[0].Matches(".tmp/other"))
 }
 
 func TestLayeredStore(t *testing.T) {

@@ -3,6 +3,7 @@ package checkset
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"path"
@@ -33,7 +34,42 @@ type Check struct {
 }
 
 // Patterns accepts a list of globs or the scalar "all".
-type Patterns []string
+type Patterns struct {
+	All   bool     `yaml:"-" json:"-"`
+	Globs []string `yaml:"-" json:"-"`
+}
+
+func (p Patterns) MarshalYAML() (any, error) {
+	if p.All {
+		return "all", nil
+	}
+	return p.Globs, nil
+}
+
+func (p Patterns) MarshalJSON() ([]byte, error) {
+	value, err := p.MarshalYAML()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(value)
+}
+
+func (p *Patterns) UnmarshalJSON(data []byte) error {
+	var scalar string
+	if json.Unmarshal(data, &scalar) == nil {
+		if scalar != "all" {
+			return fmt.Errorf("files must be a glob list or all")
+		}
+		*p = Patterns{All: true}
+		return nil
+	}
+	var globs []string
+	if err := json.Unmarshal(data, &globs); err != nil {
+		return err
+	}
+	*p = Patterns{Globs: globs}
+	return nil
+}
 
 // Strings rejects YAML coercions such as an integer argv element.
 type Strings []string
@@ -55,14 +91,14 @@ func (s *Strings) UnmarshalYAML(node *yaml.Node) error {
 
 func (p *Patterns) UnmarshalYAML(node *yaml.Node) error {
 	if node.Kind == yaml.ScalarNode && node.Tag == "!!str" && node.Value == "all" {
-		*p = Patterns{"all"}
+		*p = Patterns{All: true}
 		return nil
 	}
 	var values Strings
 	if err := values.UnmarshalYAML(node); err != nil {
 		return fmt.Errorf("files must be a glob list or all: %w", err)
 	}
-	*p = Patterns(values)
+	*p = Patterns{Globs: []string(values)}
 	return nil
 }
 
@@ -123,15 +159,14 @@ func (c *Check) validate() error {
 	if !ok {
 		return fmt.Errorf("unknown stage %q", c.Stage)
 	}
-	if len(c.Files) == 0 {
+	if !c.Files.All && len(c.Files.Globs) == 0 {
 		return fmt.Errorf("files is required")
 	}
-	for _, glob := range c.Files {
-		if glob == "all" {
-			if c.Stage == "edit" || len(c.Files) != 1 {
-				return fmt.Errorf("files: all is only supported alone at commit or handoff")
-			}
-		} else if err := validateGlob(glob); err != nil {
+	if c.Files.All && (c.Stage == "edit" || len(c.Files.Globs) != 0) {
+		return fmt.Errorf("files: all is only supported alone at commit or handoff")
+	}
+	for _, glob := range c.Files.Globs {
+		if err := validateGlob(glob); err != nil {
 			return err
 		}
 	}
@@ -199,8 +234,11 @@ func (c Check) Matches(file string) bool {
 			return false
 		}
 	}
-	for _, glob := range c.Files {
-		if glob == "all" || Match(glob, file) {
+	if c.Files.All {
+		return true
+	}
+	for _, glob := range c.Files.Globs {
+		if Match(glob, file) {
 			return true
 		}
 	}
