@@ -14,7 +14,7 @@ import (
 
 // entities is the set under guard. Names and required-ness come from
 // reflection; only the overlay is asserted here.
-func entities() []Entity { return []Entity{Identity, Role, Team} }
+func entities() []Entity { return []Entity{Identity, Role, Team, CheckSet, RepoConfig} }
 
 // TestOverlayCoverage proves every persisted field — top-level and nested —
 // has an overlay entry with a non-empty Type and Description. Field names
@@ -138,8 +138,8 @@ func TestTable(t *testing.T) {
 	if want := []string{"FIELD", "REQUIRED", "TYPE", "DESCRIPTION"}; !reflect.DeepEqual(headers, want) {
 		t.Fatalf("headers = %v, want %v", headers, want)
 	}
-	if len(rows) != 7 {
-		t.Fatalf("role table has %d rows, want 7", len(rows))
+	if len(rows) != 8 {
+		t.Fatalf("role table has %d rows, want 8", len(rows))
 	}
 	// name is required; model is not.
 	byName := make(map[string][]string)

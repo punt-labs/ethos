@@ -243,6 +243,26 @@ func TestHandleIdentity_Create_Valid(t *testing.T) {
 	assert.Equal(t, "Alice", loaded.Name)
 }
 
+func TestCheckReferencesRoundTrip(t *testing.T) {
+	h := testHandlerWithRoles(t)
+	created, err := h.handleIdentity(context.Background(), callTool(map[string]interface{}{
+		"method": "create", "name": "Agent", "handle": "agent", "kind": "agent", "checks": "none",
+	}))
+	require.NoError(t, err)
+	require.False(t, created.IsError, "%s", resultText(t, created))
+	id, err := h.store.Load("agent", identity.Reference(true))
+	require.NoError(t, err)
+	require.Equal(t, "none", id.Checks)
+	created, err = h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method": "create", "name": "developer", "checks": "none",
+	}))
+	require.NoError(t, err)
+	require.False(t, created.IsError, "%s", resultText(t, created))
+	r, err := h.roles.Load("developer")
+	require.NoError(t, err)
+	require.Equal(t, "none", r.Checks)
+}
+
 func TestHandleIdentity_Create_ValidationError(t *testing.T) {
 	h := testHandler(t)
 	result, err := h.handleIdentity(context.Background(), callTool(map[string]interface{}{
