@@ -2,8 +2,11 @@ package vendor
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 
+	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 )
 
@@ -12,12 +15,13 @@ import (
 //
 // Edges (DES-057 Part B):
 //
-//	identity → personality, writing style, talents
+//	identity → personality, writing style, talents, checks
 //	identity → its .ext/ base files
 //	identity → teams that CONTAIN it        (the reverse edge)
 //	team     → member identities, member roles
+//	role     → checks
 //
-// Roles are leaves and there is no team→team edge, so the walk
+// Check sets are leaves and there is no team→team edge, so the walk
 // terminates: the node universe is finite and the visited set only
 // grows.
 //
@@ -35,6 +39,18 @@ func (v *Vendorer) closure(seeds []string) (*Plan, error) {
 	p := &Plan{
 		Seeds: append([]string(nil), seeds...),
 		Ext:   map[string][]ExtFile{},
+	}
+	addChecks := func(ref string) error {
+		if err := checkset.ValidateReference(ref); err != nil {
+			return err
+		}
+		if ref != "" && ref != "none" {
+			p.Checks = appendUnique(p.Checks, ref)
+		}
+		return nil
+	}
+	if err := addChecks(v.src.Checks); err != nil {
+		return nil, err
 	}
 
 	seenIdentity := map[string]bool{}
@@ -65,6 +81,9 @@ func (v *Vendorer) closure(seeds []string) (*Plan, error) {
 			return nil, fmt.Errorf("loading identity %q: %w", handle, err)
 		}
 		seenIdentity[handle] = true
+		if err := addChecks(id.Checks); err != nil {
+			return nil, fmt.Errorf("identity %q: %w", handle, err)
+		}
 
 		if id.Personality != "" {
 			p.Personalities = appendUnique(p.Personalities, id.Personality)
@@ -106,6 +125,13 @@ func (v *Vendorer) closure(seeds []string) (*Plan, error) {
 					if !v.src.Roles.Exists(m.Role) {
 						return nil, fmt.Errorf("team %q names role %q, which does not exist in any source layer", name, m.Role)
 					}
+					r, err := v.src.Roles.Load(m.Role)
+					if err != nil {
+						return nil, fmt.Errorf("loading role %q: %w", m.Role, err)
+					}
+					if err := addChecks(r.Checks); err != nil {
+						return nil, fmt.Errorf("role %q: %w", m.Role, err)
+					}
 					seenRole[m.Role] = true
 					p.Roles = appendUnique(p.Roles, m.Role)
 				}
@@ -114,6 +140,24 @@ func (v *Vendorer) closure(seeds []string) (*Plan, error) {
 	}
 
 	p.Identities = sortedKeys(seenIdentity)
+	sort.Strings(p.Checks)
+	for _, ref := range p.Checks {
+		path, ok := v.find(filepath.Join("checks", ref+".yaml"))
+		if !ok {
+			return nil, fmt.Errorf("check set %q not found in any source layer", ref)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		set, err := checkset.Decode(data)
+		if err != nil {
+			return nil, fmt.Errorf("check set %q: %w", ref, err)
+		}
+		if set.Name != ref {
+			return nil, fmt.Errorf("check set %q: name %q does not match filename", ref, set.Name)
+		}
+	}
 	sort.Strings(p.Personalities)
 	sort.Strings(p.WritingStyles)
 	sort.Strings(p.Talents)

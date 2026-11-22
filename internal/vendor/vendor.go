@@ -33,6 +33,7 @@ import (
 // a layered store reports the content it resolved, not which layer the
 // bytes came from, and vendor copies bytes.
 type Sources struct {
+	Checks     string
 	Roots      []string
 	Identities identity.IdentityStore
 	Roles      *role.LayeredStore
@@ -69,6 +70,7 @@ type Plan struct {
 	Talents       []string `json:"talents,omitempty"`
 	Roles         []string `json:"roles,omitempty"`
 	Teams         []string `json:"teams,omitempty"`
+	Checks        []string `json:"checks,omitempty"`
 	// Ext is keyed by handle. It stays out of the wire shape: consumers
 	// need the count, and the authoritative per-file record is the
 	// manifest, not a command response.
@@ -328,6 +330,7 @@ func (v *Vendorer) write(p *Plan) error {
 		{attribute.Talents.DirName, ".md", p.Talents},
 		{"roles", ".yaml", p.Roles},
 		{"teams", ".yaml", p.Teams},
+		{"checks", ".yaml", p.Checks},
 	} {
 		for _, slug := range group.slugs {
 			if err := add(filepath.Join(group.dir, slug+group.ext)); err != nil {
@@ -392,6 +395,7 @@ func copyRegular(src, dst string) error {
 // else under the destination — agents/, missions/, CLAUDE.md — belongs
 // to the repo, not to vendor.
 var managedDirs = []string{
+	"checks",
 	"identities",
 	attribute.Personalities.DirName,
 	attribute.WritingStyles.DirName,
@@ -421,6 +425,7 @@ func (v *Vendorer) prunable(p *Plan) ([]string, error) {
 		{attribute.Talents.DirName, ".md", p.Talents},
 		{"roles", ".yaml", p.Roles},
 		{"teams", ".yaml", p.Teams},
+		{"checks", ".yaml", p.Checks},
 	} {
 		for _, slug := range g.slugs {
 			keep[filepath.Join(v.opts.Dest, g.dir, slug+g.ext)] = true

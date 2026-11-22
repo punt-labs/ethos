@@ -84,6 +84,7 @@ func runVendor(cmd *cobra.Command, args []string) error {
 	}
 
 	v, err := vendor.New(vendor.Sources{
+		Checks:     vendorChecks(),
 		Roots:      vendorRoots(is),
 		Identities: is,
 		Roles:      layeredRoleStore(is),
@@ -138,7 +139,8 @@ func vendorRunner() mcp.VendorRunner {
 	// Another MCP request can rebuild cmdRoots while this closure is in flight.
 	is := vendorSourceStore()
 	sources := vendor.Sources{
-		Roots: vendorRoots(is), Identities: is,
+		Checks: vendorChecks(),
+		Roots:  vendorRoots(is), Identities: is,
 		Roles: layeredRoleStore(is), Teams: layeredTeamStore(is),
 	}
 	loc := currentRoots().Located
@@ -208,6 +210,13 @@ func vendorRoots(is identity.IdentityStore) []string {
 	return roots
 }
 
+func vendorChecks() string {
+	if cfg := currentRoots().Config; cfg != nil {
+		return cfg.Checks
+	}
+	return ""
+}
+
 // writeVendorPlan renders the closure, the blast radius, and what would
 // change. A plan the user cannot read is a plan they will skip.
 func writeVendorPlan(w io.Writer, p *vendor.Plan) {
@@ -229,6 +238,7 @@ func writeVendorPlan(w io.Writer, p *vendor.Plan) {
 		{"talents", strings.Join(p.Talents, ", ")},
 		{"roles", strings.Join(p.Roles, ", ")},
 		{"teams", strings.Join(p.Teams, ", ")},
+		{"checks", strings.Join(p.Checks, ", ")},
 		{"extensions", fmt.Sprintf("%d base files", p.ExtCount())},
 	}
 	var nonEmpty [][]string

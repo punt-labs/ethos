@@ -78,6 +78,39 @@ func runVendorCmd(t *testing.T, args ...string) (string, string, error) {
 	return outBuf.String(), errBuf.String(), err
 }
 
+func TestVendorConfigCheckSets(t *testing.T) {
+	for _, surface := range []string{"cli", "mcp"} {
+		t.Run(surface, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("ETHOS_REPO_ROOT", "")
+			previous := cmdRoots.Load()
+			t.Cleanup(func() { cmdRoots.Store(previous) })
+			root := realPath(t, t.TempDir())
+			runGit(t, root, "init", "-q")
+			files := map[string]string{
+				filepath.Join(root, ".punt-labs/ethos.yaml"):                  "checks: portable\n",
+				filepath.Join(root, ".punt-labs/ethos/identities/agent.yaml"): "name: Agent\nhandle: agent\nkind: human\n",
+				filepath.Join(home, ".punt-labs/ethos/checks/portable.yaml"):  "name: portable\nchecks: []\n",
+			}
+			for path, body := range files {
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+				require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+			}
+			t.Chdir(root)
+			cmdRoots.Store(locateRoots())
+			if surface == "cli" {
+				_, _, err := runVendorCmd(t, "agent", "--apply")
+				require.NoError(t, err)
+			} else {
+				_, err := vendorRunner()(vendor.Options{Handles: []string{"agent"}, Apply: true})
+				require.NoError(t, err)
+			}
+			require.FileExists(t, filepath.Join(root, ".punt-labs/ethos/checks/portable.yaml"))
+		})
+	}
+}
+
 func TestVendorAllAndTeamAreMutuallyExclusive(t *testing.T) {
 	dir := enableGitRepo(t)
 	t.Chdir(dir)
