@@ -234,7 +234,8 @@ Code "skills" (preloaded content injected at startup) are distinct from ethos
 
 - Use dedicated tools: Read over `cat`, Grep over `grep`, Glob over `find`
 - No chained Bash commands (`&&`, `||`, `;`, `$()`, `|`, `for` loops)
-- Run `make check` after every change, zero violations before returning
+- Rely on ethos edit checks after each change; the full gate runs at
+  handoff, or once before returning if none is configured (DES-085)
 - Never commit -- return results to the delegator
 - Never run destructive git commands (reset --hard, checkout ., clean -f)
 - Read neighboring files before writing new code, follow existing patterns

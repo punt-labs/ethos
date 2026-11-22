@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The baseline-ops skill no longer tells sub-agents to run `make check`
+  after every edit. Edit checks run automatically (DES-085); the full gate
+  runs once at handoff or commit.
+
 ### Added
 
 - Check-set adapters for make, go, uv and npm build literal argv and probe
