@@ -153,7 +153,7 @@ func (r Residual) EffectiveAction() string {
 	if r.Action != "" {
 		return r.Action
 	}
-	return "cause recorded in ~/.punt-labs/ethos/logs/ethos.log for step " + r.Step + "; clears when the condition no longer holds"
+	return "cause recorded in ~/.punt-labs/ethos/logs/repair.log for step " + r.Step + "; clears when the condition no longer holds"
 }
 
 // DisplayAction is EffectiveAction through the prose redactor, for a screen.

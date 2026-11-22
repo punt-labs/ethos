@@ -12,7 +12,8 @@ import (
 // still names something to do.
 func TestEffectiveActionFallsBackForOldActionable(t *testing.T) {
 	old := Residual{Step: "gitignore", ID: "x", Reason: "r"}
-	assert.Equal(t, "cause recorded in ~/.punt-labs/ethos/logs/ethos.log for step gitignore; clears when the condition no longer holds", old.EffectiveAction())
+	assert.Equal(t, "cause recorded in ~/.punt-labs/ethos/logs/repair.log for step gitignore; clears when the condition no longer holds", old.EffectiveAction())
+	assert.Equal(t, seeLogAction, Residual{Class: ClassActionable, Step: "gitignore", Action: seeLogAction}.EffectiveAction())
 	assert.Equal(t, "do it", Residual{Class: ClassActionable, Step: "s", Action: "do it"}.EffectiveAction())
 	assert.Empty(t, Residual{Class: ClassSettled, Step: "s"}.EffectiveAction(), "a settled residual has no action")
 }
