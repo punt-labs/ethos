@@ -22,7 +22,7 @@ func TestVendorChecksReportsConfigFailure(t *testing.T) {
 	t.Cleanup(func() { cmdRoots.Store(previous) })
 	want := errors.New("cannot read repository config")
 	cmdRoots.Store(&repoRoots{Located: resolve.Located{ConfigErr: want}})
-	ref, err := vendorChecks()
+	ref, _, err := vendorChecks(nil)
 	require.ErrorIs(t, err, want)
 	require.Empty(t, ref)
 }

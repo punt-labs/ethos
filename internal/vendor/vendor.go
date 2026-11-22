@@ -33,11 +33,13 @@ import (
 // a layered store reports the content it resolved, not which layer the
 // bytes came from, and vendor copies bytes.
 type Sources struct {
-	Checks     string
-	Roots      []string
-	Identities identity.IdentityStore
-	Roles      *role.LayeredStore
-	Teams      *team.LayeredStore
+	Checks string
+	// ProjectChecksRoots applies only to Checks, not identity/role references.
+	ProjectChecksRoots []string
+	Roots              []string
+	Identities         identity.IdentityStore
+	Roles              *role.LayeredStore
+	Teams              *team.LayeredStore
 }
 
 // Options are the command-line surface of a vendor run.
@@ -352,7 +354,15 @@ func (v *Vendorer) write(p *Plan) error {
 // precedence. Only regular files and directories are accepted, and the
 // stat is an lstat, so no link in a source layer can redirect a copy.
 func (v *Vendorer) find(rel string) (string, bool) {
-	for _, root := range v.src.Roots {
+	roots := v.src.Roots
+	if rel == filepath.Join("checks", v.src.Checks+".yaml") && len(v.src.ProjectChecksRoots) > 0 {
+		roots = v.src.ProjectChecksRoots
+	}
+	return findInRoots(roots, rel)
+}
+
+func findInRoots(roots []string, rel string) (string, bool) {
+	for _, root := range roots {
 		if root == "" {
 			continue
 		}

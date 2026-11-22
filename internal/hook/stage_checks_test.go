@@ -541,7 +541,7 @@ func TestHandoffLinkedWorktree(t *testing.T) {
 			linked := filepath.Join(root, ".claude", "worktrees", "linked")
 			stageGit(t, root, "worktree", "add", "--detach", linked)
 			writeFile(t, filepath.Join(linked, "written.go"), "package linked\n")
-			writeFile(t, filepath.Join(linked, ".punt-labs/ethos.yaml"), "checks: none\n")
+			writeFile(t, filepath.Join(linked, ".punt-labs/ethos.yaml"), "checks: ''\n")
 			writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
 			checkPolicy(t, root, "project", "  - name: glob\n    stage: handoff\n    files: ['**/*.go']\n    run: [probe, '{root}', '{files}']\n  - name: all\n    stage: handoff\n    files: all\n    run: [probe, '{root}']\n")
 			log := filepath.Join(t.TempDir(), "log")

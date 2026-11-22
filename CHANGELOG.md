@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Linked checkouts resolve repository check policy from their own `checks:`
+  reference and registry first, falling back to the canonical main checkout only
+  when no local reference is selected. Edit checks use the edited checkout;
+  handoff checks resolve each attributed root separately. Identity/role policy
+  stays canonical, and vendor preview/apply and content validation use the same
+  repository-policy selection.
 - Commit checks refuse matched partially staged files before running commands,
   even for advisory checks, and list every file with stage/stash guidance.
   Detection uses the actual committing index, including custom indexes and linked

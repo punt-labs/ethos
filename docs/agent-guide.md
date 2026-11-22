@@ -60,9 +60,13 @@ to marker checks merely because no glob matches.
 
 Advisory failures inject context. An explicit `on_fail: block` emits
 PostToolUse block feedback, still with exit zero. Policy errors fail open
-with context. The session checkout's canonical store supplies policy, including
-main-tree changes not committed into a linked checkout. The edited worktree's
-configuration is never consulted. See
+with context. Repository checks use the edited/committing checkout's `checks:`
+reference and registry first; handoff resolves policy per attributed checkout.
+Without a local reference, policy falls back to the canonical main checkout,
+including changes not committed into the worktree. `checks: none` opts out; a
+missing selected set is an error, not a fallback. Identity/role policy stays in
+the canonical store. Vendor preview/apply and content validation follow the same
+repository selection. See
 [DES-085's design](design-agent-checks.md) for stage and adapter details.
 
 The same set may define `stage: commit` and `stage: handoff`. Pre-commit runs

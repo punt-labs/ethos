@@ -43,15 +43,17 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 	}
 	ctx, cancel := context.WithTimeout(ctx, cap)
 	defer cancel()
-	checks, _, err := configuredStageChecks(checkout, agent, stage)
-	if err != nil {
-		return StageFeedback{Blocking: editRedact(stage + " policy: " + err.Error())}
-	}
-	if len(checks) == 0 {
-		return StageFeedback{}
-	}
+	var checks []checkset.Check
+	var err error
 	var env []string
 	if stage == "commit" {
+		checks, _, err = configuredStageChecks(checkout, agent, stage)
+		if err != nil {
+			return StageFeedback{Blocking: editRedact(stage + " policy: " + err.Error())}
+		}
+		if len(checks) == 0 {
+			return StageFeedback{}
+		}
 		env, err = gitenv.ActualIndexEnv()
 		if err != nil {
 			return StageFeedback{Blocking: editRedact(stage + " index: " + err.Error())}
@@ -86,7 +88,15 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 		}
 	}
 	for _, root := range roots {
-		for _, check := range checks {
+		rootChecks := checks
+		if stage == "handoff" {
+			rootChecks, _, err = configuredStageChecks(root, agent, stage)
+			if err != nil {
+				blocking = append(blocking, stage+" policy: "+err.Error())
+				continue
+			}
+		}
+		for _, check := range rootChecks {
 			for _, invocation := range stageInvocations(root, filesByRoot[root], check) {
 				invocation.env = env
 				if failure := runEditCheck(ctx, root, invocation); failure != "" {
