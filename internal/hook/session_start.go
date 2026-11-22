@@ -491,7 +491,7 @@ func planSessionAgents(loc resolve.Located, identities identity.IdentityStore, t
 	if active != nil {
 		skills = active.Manifest.DefaultSkills
 	}
-	return PlanGeneratedAgentFilesFromConfig(loc.Config, AgentProjectPatterns(loc.Checkout), skills, AgentIdentities(identities), teams, roles)
+	return PlanGeneratedAgentFilesFromConfig(loc.Config, skills, AgentIdentities(identities), teams, roles)
 }
 
 // resolveHumanIdentity loads the human caller's identity from git config

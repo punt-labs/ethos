@@ -86,6 +86,7 @@ var storeUses = map[string]storeUse{
 	// The shim subcommands report store failures themselves: pre-commit as
 	// audit seal does (exit 2), commit-msg when it has a trailer to write.
 	"ethos hook pre-commit": storeHandlesError, "ethos hook commit-msg": storeHandlesError,
+	"ethos hook post-edit": storeHandlesError,
 
 	"ethos adr create": storeRefuses, "ethos export": storeRefuses,
 	"ethos adr list": storeRefuses, "ethos adr show": storeRefuses,
@@ -165,6 +166,10 @@ func usesGlobalOnly(cmd *cobra.Command) bool {
 // wrong tree and exit 0. Every other class runs on the global stores when a
 // lookup failed: that is the class's explicit choice (repoRoots.Global).
 func establishRoots(cmd *cobra.Command, _ []string) error {
+	// Post-edit reads no Ethos storage; its own scope errors are advisory JSON.
+	if cmd.CommandPath() == "ethos hook post-edit" {
+		return nil
+	}
 	global := exemptFromStoreRefusal(cmd)
 	r := locateRoots()
 	r.Global = global

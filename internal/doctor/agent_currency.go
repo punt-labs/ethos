@@ -78,7 +78,7 @@ func CheckAgentCurrencyFromConfig(checkout, storeRoot string, cfg *resolve.RepoC
 	if b != nil {
 		skills = b.Manifest.DefaultSkills
 	}
-	plan, err := hook.PlanGeneratedAgentFilesFromConfig(cfg, hook.AgentProjectPatterns(checkout), skills, view, teams, roles)
+	plan, err := hook.PlanGeneratedAgentFilesFromConfig(cfg, skills, view, teams, roles)
 	if err != nil {
 		return fail(fmt.Errorf("could not render expected agents: %w", err))
 	}

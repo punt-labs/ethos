@@ -397,7 +397,7 @@ func runSetup(cmd *cobra.Command) error {
 	ts := layeredTeamStore(is)
 	// Config/team selection from the store; agent files into the checkout
 	// (.claude/agents is per-checkout, matching session_start + agent_installer).
-	plan, planErr := hook.PlanGeneratedAgentFilesFromConfig(loc.Config, hook.AgentProjectPatterns(repoRoot), selected.Manifest.DefaultSkills, hook.AgentIdentities(is), ts, rs)
+	plan, planErr := hook.PlanGeneratedAgentFilesFromConfig(loc.Config, selected.Manifest.DefaultSkills, hook.AgentIdentities(is), ts, rs)
 	policy, err := loc.Layout()
 	if err != nil {
 		return fmt.Errorf("setup: constructing agent storage: %w", err)

@@ -10,9 +10,6 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
-// AgentProjectPatterns exposes the generator's checkout-specific project input.
-func AgentProjectPatterns(checkout string) string { return projectFilePatterns(checkout) }
-
 // CheckAgentPath refuses symlinks in a path below its explicit root. Doctor and
 // writers use the same rule: an agent source or destination cannot cross zones.
 // Missing components are allowed; the eventual read or create decides absence.
