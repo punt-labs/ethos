@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The plugin's SubagentStop hook allows 1800 seconds, matching the handoff
   stage cap so the default 600-second watchdog does not interrupt the full gate.
 
+- Handoff glob checks no longer fall back to other agents' dirty files in a
+  shared main checkout. Dirty-tree fallback is limited to linked worktrees
+  without another session agent's Write/Edit paths; `files: all` still runs
+  when no files are attributed to the stopping agent. Vanished audited files
+  retain root attribution through existing ancestors, so deleted parent
+  directories neither abort handoff nor erase another agent's worktree use.
+  Indeterminate roots disable fallback without blocking the stop.
+
 - Edit-stage checks support layered project-defined check sets referenced by
   identities, roles and repo configuration, with glob scopes, literal argv,
   time budgets and explicit advisory or blocking feedback. Unconfigured repos

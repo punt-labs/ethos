@@ -98,6 +98,32 @@ func TestPostEditScope(t *testing.T) {
 	}
 }
 
+func TestPostEditVanishedParentScope(t *testing.T) {
+	root, _ := postEditFixture(t)
+	linked := filepath.Join(root, ".claude", "worktrees", "linked")
+	stageGit(t, root, "worktree", "add", "--detach", linked)
+	require.NoError(t, os.Mkdir(filepath.Join(linked, "deep"), 0700))
+	require.NoError(t, os.Symlink(filepath.Join(linked, "deep"), filepath.Join(root, "alias")))
+	foreign := t.TempDir()
+	initGitRepo(t, foreign)
+	require.NoError(t, os.Mkdir(filepath.Join(foreign, "deep"), 0700))
+	require.NoError(t, os.Symlink(filepath.Join(foreign, "deep"), filepath.Join(root, "escape")))
+	for _, tc := range []struct {
+		path, wantRoot, wantFile string
+	}{
+		{linked + "/removed/deep/file.go", linked, linked + "/removed/deep/file.go"},
+		{root + "/alias/../removed/deep/file.go", linked, linked + "/removed/deep/file.go"},
+		{root + "/escape/../removed/deep/file.go", "", ""},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			gotRoot, gotFile, err := postEditScope(root, tc.path)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantRoot, gotRoot)
+			require.Equal(t, tc.wantFile, gotFile)
+		})
+	}
+}
+
 func TestPostEditNestedWorktreeRoot(t *testing.T) {
 	root, bin := postEditFixture(t)
 	worktree := filepath.Join(root, ".claude", "worktrees", "nested")

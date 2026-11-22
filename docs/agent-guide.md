@@ -68,8 +68,15 @@ configuration is never consulted. See
 The same set may define `stage: commit` and `stage: handoff`. Pre-commit runs
 after seal/provenance, selects files from the actual committing index, and
 blocks with exit 2 by default. SubagentStop leaves the roster before checks,
-then selects audited Write/Edit paths for that subagent, falling back to changed
-and untracked checkout files when no usable audit paths exist. Blocking handoff
+then selects audited Write/Edit paths for that subagent. When a root has no usable
+attributed paths, changed and untracked files are used only if it is a linked
+worktree and no other agent (including the main thread's empty agent ID) has a
+Write/Edit path there in the session audit. The main checkout never uses this
+fallback. Otherwise glob checks skip that root; `files: all` checks still run.
+Vanished audited files are skipped while their roots remain attributed through
+the nearest existing physical ancestor directory. An indeterminate root disables
+dirty-tree fallback without blocking the stop; an unreadable audit still blocks.
+Blocking handoff
 feedback is exit-zero decision JSON; `stop_hook_active` sends failures to stderr
 instead. Advisory failures use stderr at both stages. Neither stage has marker
 defaults, and `files: all` runs even when no paths match. Commit and handoff
