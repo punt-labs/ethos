@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 )
 
 type terminationWatcher struct {
@@ -24,10 +25,14 @@ func (w *terminationWatcher) Start(finish func(int, error)) {
 	if w.role == "mcp" {
 		return // ServeStdio already handles SIGINT and SIGTERM gracefully.
 	}
-	if w.role == "ui" {
-		signal.Notify(w.signals, syscall.SIGTERM)
-	} else {
-		signal.Notify(w.signals, os.Interrupt, syscall.SIGTERM)
+	caught := []os.Signal{syscall.SIGTERM}
+	if w.role != "ui" {
+		caught = append(caught, os.Interrupt)
+	}
+	for _, received := range caught {
+		if !signal.Ignored(received) {
+			signal.Notify(w.signals, received)
+		}
 	}
 	go func() {
 		select {
@@ -35,10 +40,13 @@ func (w *terminationWatcher) Start(finish func(int, error)) {
 			code := 128 + int(received.(syscall.Signal))
 			logServerTermination()
 			finish(code, nil)
-			signal.Reset(received)
+			signal.Stop(w.signals)
 			if err := syscall.Kill(os.Getpid(), received.(syscall.Signal)); err != nil {
 				os.Exit(code)
 			}
+			// Allow gitenv's 1s WaitDelay, 1s groupGrace and 250ms dieWait.
+			time.Sleep(3 * time.Second)
+			os.Exit(code)
 		case <-w.done:
 		}
 	}()
