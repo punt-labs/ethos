@@ -153,7 +153,7 @@ func (r Residual) EffectiveAction() string {
 	if r.Action != "" {
 		return r.Action
 	}
-	return "cause recorded in ~/.punt-labs/ethos/logs/repair.log for step " + r.Step + "; clears when the condition no longer holds"
+	return "cause recorded in ~/.punt-labs/ethos/logs/ethos.log for step " + r.Step + "; clears when the condition no longer holds"
 }
 
 // DisplayAction is EffectiveAction through the prose redactor, for a screen.
@@ -161,7 +161,7 @@ func (r Residual) DisplayAction() string { return redact.Prose(r.EffectiveAction
 
 // seeLogAction is the action for a condition whose cause only the repair log
 // names.
-const seeLogAction = "cause recorded in ~/.punt-labs/ethos/logs/repair.log; clears when the condition no longer holds"
+const seeLogAction = "cause recorded in ~/.punt-labs/ethos/logs/ethos.log; clears when the condition no longer holds"
 
 // settledResidual is a final, correct state: nothing for a person to do.
 func settledResidual(step, id, reason string) Residual {
@@ -219,7 +219,7 @@ const (
 	ScopeBoth                        // global and repository
 )
 
-// Logger appends one JSON line per action to the repair log. The engine
+// Logger records one diagnostic per repair action. The engine
 // supplies it; steps call it for every file they change, move or delete.
 // Every string passes through the DES-080 prose redactor (credentials,
 // addresses, home paths) before writing; still, never pass file contents.

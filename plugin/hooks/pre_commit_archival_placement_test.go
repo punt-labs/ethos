@@ -127,7 +127,7 @@ func traceInstalledArchive(t *testing.T, strace, hook, checkout string, env []st
 	cmd := exec.Command(strace, args...)
 	cmd.Dir = checkout
 	// Even an adversarial TMPDIR cannot authorize record-adjacent stages.
-	cmd.Env = append(env, "TMPDIR="+filepath.Join(checkout, ".punt-labs", "ethos"))
+	cmd.Env = append(env, "TMPDIR="+filepath.Join(checkout, ".punt-labs", "ethos"), "ETHOS_TELEMETRY=off")
 	out, hookErr := cmd.CombinedOutput()
 	calls, err := os.ReadFile(trace)
 	require.NoError(t, err)

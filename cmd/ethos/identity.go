@@ -173,5 +173,7 @@ func sessionStore() *session.Store {
 		fmt.Fprintf(os.Stderr, "ethos: cannot determine home directory: %v\n", err)
 		exitProcess(1, err)
 	}
-	return session.NewStore(home + "/.punt-labs/ethos")
+	ss := session.NewStore(home + "/.punt-labs/ethos")
+	ss.SetLogger(processLogger.With("component", "ethos.session"))
+	return ss
 }

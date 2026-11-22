@@ -145,13 +145,19 @@ func testRepositoryLeafActualCLI(t *testing.T, kinds []string) {
 	}
 }
 
-func auditLeafCLISnapshot(t *testing.T, root string) map[string]string {
+func auditLeafCLISnapshot(t *testing.T, root string, home ...string) map[string]string {
 	t.Helper()
 	// Exclude fixture Git metadata; include all product paths and link targets.
 	out := map[string]string{}
 	require.NoError(t, filepath.WalkDir(root, func(path string, e os.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if len(home) > 0 && privateObservabilityPath(home[0], path) {
+			if e.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if e.IsDir() && e.Name() == ".git" {
 			return filepath.SkipDir

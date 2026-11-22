@@ -10,14 +10,16 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/diagnostic"
+	"github.com/spf13/cobra"
 )
 
 var processLogger = diagnostic.Discard()
+var processUsage *diagnostic.Usage
 var finishProcess = func(int, error) {}
 
 func startLogging() {
 	command := rootCmd
-	if found, _, err := rootCmd.Find(os.Args[1:]); err == nil {
+	if found, _, _ := rootCmd.Find(os.Args[1:]); found != nil {
 		command = found
 	}
 	path := strings.TrimPrefix(command.CommandPath(), "ethos ")
@@ -39,6 +41,16 @@ func startLogging() {
 		fmt.Fprintln(os.Stderr, "ethos: private diagnostics unavailable")
 	}
 	processLogger = logger
+	var commands []diagnostic.Command
+	var collect func(*cobra.Command)
+	collect = func(cmd *cobra.Command) {
+		commands = append(commands, diagnostic.Command(strings.TrimPrefix(cmd.CommandPath(), "ethos ")))
+		for _, child := range cmd.Commands() {
+			collect(child)
+		}
+	}
+	collect(rootCmd)
+	processUsage = diagnostic.NewUsage(logger.With("component", "ethos.telemetry"), commands)
 	rootCmd.SetContext(diagnostic.WithLogger(context.Background(), logger))
 	started := time.Now()
 	var once sync.Once
@@ -55,6 +67,10 @@ func startLogging() {
 				}
 				logger.Info("Invocation finished", attrs...)
 			}
+			if role != "mcp" {
+				processUsage.Invocation(role, diagnostic.Invocation{Command: diagnostic.Command(path), ExitCode: code, Duration: time.Since(started)})
+			}
+			processUsage.Close()
 			closeLog()
 		})
 	}

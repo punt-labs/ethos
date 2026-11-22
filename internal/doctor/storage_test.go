@@ -105,12 +105,12 @@ func TestCheckStorageMessagesPromiseNothing(t *testing.T) {
 	d, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 	missing := CheckStorage(resolve.Located{}, filepath.Join(d, "g"))
-	assert.Equal(t, "no layout stamp for the global store; see ~/.punt-labs/ethos/logs/repair.log", missing.Detail)
+	assert.Equal(t, "no layout stamp for the global store; see ~/.punt-labs/ethos/logs/ethos.log", missing.Detail)
 
 	g := filepath.Join(d, "old")
 	writeGlobalStamp(t, g, autorepair.Stamp{Version: 4})
 	old := CheckStorage(resolve.Located{}, g)
-	assert.Equal(t, "the global store is at layout v4, not v5; see ~/.punt-labs/ethos/logs/repair.log", old.Detail)
+	assert.Equal(t, "the global store is at layout v4, not v5; see ~/.punt-labs/ethos/logs/ethos.log", old.Detail)
 }
 
 // A repository whose only residuals are the final state of pre-v4.21 mission
@@ -224,7 +224,7 @@ func TestCheckStorageOldActionableGetsFallbackAction(t *testing.T) {
 	require.NoError(t, os.WriteFile(autorepair.GlobalStampPath(g), []byte(raw), 0o600))
 	r := CheckStorage(resolve.Located{}, g)
 	assert.Equal(t, "WARN", r.Status)
-	assert.Contains(t, r.Detail, "repair.log for step gitignore; clears when the condition no longer holds")
+	assert.Contains(t, r.Detail, "ethos.log for step gitignore; clears when the condition no longer holds")
 }
 
 // A credential-shaped name in an action does not reach the screen even from a

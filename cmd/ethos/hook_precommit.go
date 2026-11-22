@@ -80,7 +80,7 @@ func preCommitEnv(checkout string) autorepair.Env {
 	}
 	env := autorepair.Env{Roots: roots, Global: defaultGlobalRoot(), Now: time.Now().UTC()}
 	if env.Global != "" {
-		env.Log = autorepair.NewAppendLog(env.Global, store, checkout, version)
+		env.Log = autorepair.NewAppendLog(store, checkout, version, processLogger)
 	}
 	if cause != nil {
 		logPreCommit(env, action, cause)

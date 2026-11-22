@@ -4,14 +4,42 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
+	"sync"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// LogPath names the injected JSON capture, not the production diagnostic sink.
+func LogPath(global string) string { return filepath.Join(global, "logs", "captured.jsonl") }
+
+type captureLogWriter struct {
+	path string
+	mu   sync.Mutex
+}
+
+func (w *captureLogWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(w.path), 0o700); err != nil {
+		return 0, err
+	}
+	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	return f.Write(p)
+}
+
+func captureRepairLog(global string) *slog.Logger {
+	return slog.New(slog.NewJSONHandler(&captureLogWriter{path: LogPath(global)}, nil))
+}
 
 func readLog(t *testing.T, path string) []map[string]any {
 	t.Helper()
@@ -31,7 +59,7 @@ func readLog(t *testing.T, path string) []map[string]any {
 
 func TestFileLogWritesJSONLines(t *testing.T) {
 	global := physicalTemp(t)
-	l := newFileLog(global, "/repo/store", "/repo/checkout", "v5.0.0")
+	l := newFileLog("/repo/store", "/repo/checkout", "v5.0.0", captureRepairLog(global))
 	l.Logf("overlays", "move", []string{"/repo/store/.punt-labs/a", "/repo/store/.punt-labs/b"}, nil)
 	l.Logf("overlays", "move", nil, errors.New("boom"))
 
@@ -44,14 +72,15 @@ func TestFileLogWritesJSONLines(t *testing.T) {
 	assert.Equal(t, "overlays", first["step"])
 	assert.Equal(t, "move", first["action"])
 	assert.Equal(t, "v5.0.0", first["ethos"])
-	assert.Len(t, first["paths"], 2)
+	assert.Equal(t, "/repo/store/.punt-labs/a, /repo/store/.punt-labs/b", first["paths"])
+	assert.Equal(t, "ethos.repair", first["component"])
 	assert.NotContains(t, first, "error")
 	assert.Equal(t, "boom", lines[1]["error"])
 }
 
 func TestFileLogRedactsHomePaths(t *testing.T) {
 	global := physicalTemp(t)
-	l := newFileLog(global, "", "", "v5.0.0")
+	l := newFileLog("", "", "v5.0.0", captureRepairLog(global))
 	l.Logf("s", "delete", []string{"/Users/alice/secret-project/x"}, errors.New("open /Users/alice/secret-project/x: denied"))
 	raw, err := os.ReadFile(LogPath(global))
 	require.NoError(t, err)
@@ -63,7 +92,7 @@ func TestFileLogRedactsHomePaths(t *testing.T) {
 // and addresses as well as home paths, in paths, store, checkout and error.
 func TestFileLogRedactsSecretsAndEmails(t *testing.T) {
 	global := physicalTemp(t)
-	l := newFileLog(global, "/Users/alice/repo", "/Users/alice/repo", "v5.0.0")
+	l := newFileLog("/Users/alice/repo", "/Users/alice/repo", "v5.0.0", captureRepairLog(global))
 	err := errors.New(`yaml: cannot decode "token: ghp_abcdefghijklmnopqrstuvwxyz0123456789" for alice@example.com in /Users/alice/repo/x`)
 	l.Logf("overlays", "move", []string{"/Users/alice/repo/ghp_abcdefghijklmnopqrstuvwxyz0123456789"}, err)
 	raw, rerr := os.ReadFile(LogPath(global))
@@ -76,20 +105,35 @@ func TestFileLogRedactsSecretsAndEmails(t *testing.T) {
 	assert.Contains(t, s, "[redacted-email]")
 }
 
-func TestFileLogRotatesOnce(t *testing.T) {
+func TestFileLogWithoutInjectedLoggerWritesNothing(t *testing.T) {
 	global := physicalTemp(t)
-	l := newFileLog(global, "", "", "v5.0.0")
-	l.max = 400
-	pad := []string{strings.Repeat("p", 150)}
-	for range 20 {
-		l.Logf("s", "a", pad, nil)
-	}
-	info, err := os.Stat(LogPath(global))
+	l := newFileLog("", "", "v5.0.0", nil)
+	l.Logf("s", "a", nil, nil)
+	entries, err := os.ReadDir(global)
 	require.NoError(t, err)
-	assert.LessOrEqual(t, info.Size(), int64(l.max)+400, "live log stays near the cap")
-	_, err = os.Stat(LogPath(global) + ".1")
-	require.NoError(t, err, "rotated copy exists")
-	entries, err := os.ReadDir(filepath.Dir(LogPath(global)))
+	assert.Empty(t, entries, "only the process entry point owns diagnostic files")
+}
+
+func TestRepairSharedSinkLeavesLegacyFileUntouched(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".punt-labs", "ethos", "logs")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	legacy := filepath.Join(dir, "repair.log")
+	require.NoError(t, os.WriteFile(legacy, []byte("legacy evidence\n"), 0o600))
+	logger, closeLog, err := diagnostic.Open("cli")
 	require.NoError(t, err)
-	assert.Len(t, entries, 2, "one rotation only")
+	t.Cleanup(closeLog)
+	l := newFileLog("/Users/alice/repo", "", "test", logger)
+	l.Logf("gitignore", "repair", []string{"/Users/alice/repo/a"}, errors.New("failed at /Users/alice/repo/a"))
+	l.Logf("sessions", "note", nil, nil)
+	closeLog()
+	old, err := os.ReadFile(legacy)
+	require.NoError(t, err)
+	require.Equal(t, "legacy evidence\n", string(old))
+	raw, err := os.ReadFile(filepath.Join(dir, "ethos.log"))
+	require.NoError(t, err)
+	require.Contains(t, string(raw), "[INFO] ethos.repair: Repair action")
+	require.Contains(t, string(raw), "[WARNING] ethos.repair: Roster purge warning")
+	require.NotContains(t, string(raw), "/Users/alice")
 }

@@ -182,7 +182,9 @@ Two metrics:
   within 7 days.
 
 Both metrics are measurable from local state (identity files, mission
-files) without telemetry. Reporting is not yet implemented --
+files) without network telemetry. Private local usage records under
+`~/.punt-labs/ethos` never leave the machine; disable them with
+`ETHOS_TELEMETRY=off` or `PUNT_TELEMETRY=off`. Reporting is not yet implemented --
 `ethos doctor` currently checks installation health only.
 
 ### 4. What does this cost to build?

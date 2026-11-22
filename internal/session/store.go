@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/redact"
 	"gopkg.in/yaml.v3"
 )
 
@@ -19,8 +21,9 @@ import (
 // Rosters are stored as YAML files in the sessions subdirectory.
 // Write operations use flock for concurrency safety.
 type Store struct {
-	root string // e.g. ~/.punt-labs/ethos
-	warn io.Writer
+	root   string // e.g. ~/.punt-labs/ethos
+	warn   io.Writer
+	logger *slog.Logger
 }
 
 // NewStore creates a Store rooted at the given directory. Purge diagnostics go
@@ -33,8 +36,15 @@ func NewStore(root string) *Store {
 // repair steps pass a sink that logs them: a step never prints.
 func (s *Store) SetWarnings(w io.Writer) { s.warn = w }
 
+// SetLogger routes purge warnings to the logger unless a writer is injected.
+func (s *Store) SetLogger(logger *slog.Logger) { s.logger = logger }
+
 // warnf writes one purge diagnostic line.
 func (s *Store) warnf(format string, args ...any) {
+	if s.warn == nil && s.logger != nil {
+		s.logger.Warn("Roster purge warning", "detail", redact.Prose(fmt.Sprintf(format, args...)))
+		return
+	}
 	w := s.warn
 	if w == nil {
 		w = os.Stderr

@@ -264,7 +264,7 @@ Free and open-source under the MIT license. Ethos is infrastructure, designed fo
 \end{faqpair}
 
 \begin{faqpair}{What happens to my data?}\label{faq:data}
-Ethos itself makes no network calls and has no server, no telemetry, and no cloud sync. Ethos's own storage leaves your machine only through git, which you control. Context that ethos supplies to an agent (for example the persona and team context injected at session start) is subject to the data policies of the harness and model provider you run. Where data is stored depends on what it is:
+Ethos itself makes no network calls and has no server, no network telemetry, and no cloud sync. Private local usage records under {\small\texttt{\textasciitilde/.punt-labs/ethos/}} never leave the machine; disable them with {\small\texttt{ETHOS\_TELEMETRY=off}} or {\small\texttt{PUNT\_TELEMETRY=off}}. Ethos's own storage leaves your machine only through git, which you control. Context that ethos supplies to an agent (for example the persona and team context injected at session start) is subject to the data policies of the harness and model provider you run. Where data is stored depends on what it is:
 
 \begin{itemize}[nosep]
   \item \textbf{In the repository, shared through ordinary git staging and commits.} Repo-local or vendored identity graph content lives in {\small\texttt{.punt-labs/ethos/}}. The DES-079 blame record includes contracts with compact round decisions, all accepted results, delegation records, shared corrections, summaries and repo ADRs. A file at an intended source path is not automatically staged or committed. Global content and global bundles do not travel with git; a fresh clone has the complete identity graph only when the repository vendors it ({\small\texttt{ethos vendor}}). Identity files remain plain YAML with their intended email bindings.
@@ -580,7 +580,7 @@ Three scenarios would cause ethos to fail:
   \featureitem{Authentication or authorization}{ethos provides identity (who is this?), not access control (what can they do?). A different layer. A team service (ethosd) is under design in DES-081; this item changes only through an amendment to this PR/FAQ.}\label{feat:no-auth}
   \featureitem{Consumer-specific fields}{the extension model exists for per-tool data. Ethos will never add fields for one consumer.}\label{feat:no-consumer}
   \featureitem{Runtime delegation enforcement}{write-set and safety constraints are surfaced to the agent and verified in review, not enforced at the filesystem level. Kernel-level sandboxing is a different product.}\label{feat:no-runtime-enforce}
-  \featureitem{Telemetry or analytics}{no usage data collected. Metrics measured externally.}\label{feat:no-telemetry}
+  \featureitem{Network telemetry or analytics}{private local usage records under {\small\texttt{\textasciitilde/.punt-labs/ethos/}} never leave the machine. Disable them with {\small\texttt{ETHOS\_TELEMETRY=off}} or {\small\texttt{PUNT\_TELEMETRY=off}}.}\label{feat:no-telemetry}
 \end{enumerate}
 
 % ══════════════════════════════════════════════════════════════════════════════

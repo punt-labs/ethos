@@ -43,6 +43,19 @@ func diagnosticLog(t *testing.T, home string) string {
 	return string(b)
 }
 
+func privateObservabilityPath(home, path string) bool {
+	root := filepath.Join(home, ".punt-labs", "ethos")
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	switch rel {
+	case "logs", "telemetry.db", "telemetry.db-journal", "telemetry.db-wal", "telemetry.db-shm", ".telemetry.lock":
+		return true
+	}
+	return false
+}
+
 func TestSharedLoggingCLI(t *testing.T) {
 	for _, failed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "success", true: "failure"}[failed], func(t *testing.T) {
@@ -90,8 +103,22 @@ func TestSharedLoggingHook(t *testing.T) {
 }
 
 func TestSharedLoggingMCP(t *testing.T) {
+	runLoggingMCP(t)
+}
+
+func runLoggingMCP(t *testing.T) string {
+	home, _ := runLoggingMCPEnv(t, "")
+	return home
+}
+
+func runLoggingMCPEnv(t *testing.T, veto string) (string, []byte) {
+	t.Helper()
 	home, cwd := t.TempDir(), t.TempDir()
 	cmd := loggingProcess(t, home, cwd, "serve")
+	if veto != "" {
+		cmd.Env = append(cmd.Env, veto+"=off")
+	}
+	var transcript []byte
 	stdin, err := cmd.StdinPipe()
 	require.NoError(t, err)
 	stdout, err := cmd.StdoutPipe()
@@ -109,6 +136,8 @@ func TestSharedLoggingMCP(t *testing.T) {
 		_, err = stdin.Write([]byte(request + "\n"))
 		require.NoError(t, err)
 		require.True(t, scanner.Scan(), "server must answer each request: %v", scanner.Err())
+		transcript = append(transcript, scanner.Bytes()...)
+		transcript = append(transcript, '\n')
 		var response map[string]json.RawMessage
 		require.NoError(t, json.Unmarshal(scanner.Bytes(), &response), scanner.Text())
 		require.JSONEq(t, `"2.0"`, string(response["jsonrpc"]))
@@ -116,6 +145,8 @@ func TestSharedLoggingMCP(t *testing.T) {
 	}
 	require.NoError(t, stdin.Close())
 	for scanner.Scan() {
+		transcript = append(transcript, scanner.Bytes()...)
+		transcript = append(transcript, '\n')
 		var response map[string]json.RawMessage
 		require.NoError(t, json.Unmarshal(scanner.Bytes(), &response))
 		require.JSONEq(t, `"2.0"`, string(response["jsonrpc"]))
@@ -128,6 +159,7 @@ func TestSharedLoggingMCP(t *testing.T) {
 	}
 	require.Equal(t, 1, strings.Count(log, "Tool call finished"))
 	require.False(t, regexp.MustCompile(`(?m)^.*(logging-private-login|private-content).*$`).MatchString(log))
+	return home, transcript
 }
 
 func TestSharedLoggingUnavailable(t *testing.T) {

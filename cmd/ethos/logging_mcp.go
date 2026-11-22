@@ -27,6 +27,7 @@ func toolLoggingHooks(logger *slog.Logger, lookup func(string) *server.ServerToo
 			outcome = "failed"
 		}
 		name := "unknown"
+		action := ""
 		attrs := []any{}
 		if tool := lookup(req.Params.Name); tool != nil {
 			name = tool.Tool.Name
@@ -36,6 +37,7 @@ func toolLoggingHooks(logger *slog.Logger, lookup func(string) *server.ServerToo
 				value, _ := req.GetArguments()[key].(string)
 				for _, allowed := range values {
 					if value == allowed {
+						action = allowed
 						attrs = append(attrs, "action", allowed)
 					}
 				}
@@ -46,6 +48,7 @@ func toolLoggingHooks(logger *slog.Logger, lookup func(string) *server.ServerToo
 			attrs = append(attrs, "error_type", diagnostic.ErrorType(err))
 		}
 		logger.Info("Tool call finished", attrs...)
+		processUsage.ToolCall(diagnostic.ToolCall{Tool: diagnostic.Tool(name), Action: diagnostic.Action(action), Failed: outcome == "failed", Duration: time.Since(started)})
 	}
 	hooks.AddAfterCallTool(func(_ context.Context, _ any, req *mcp.CallToolRequest, result any) {
 		finish(req, result, nil)
