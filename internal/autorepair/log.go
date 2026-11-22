@@ -37,6 +37,9 @@ func newFileLog(store, checkout, ethos string, logger *slog.Logger) *FileLog {
 }
 
 func (l *FileLog) relativePath(path string) (string, bool) {
+	if filepath.IsLocal(path) {
+		return redact.Prose(filepath.ToSlash(path)), true
+	}
 	for _, root := range l.roots {
 		rel, err := filepath.Rel(root, path)
 		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {

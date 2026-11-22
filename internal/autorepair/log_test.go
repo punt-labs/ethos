@@ -203,6 +203,8 @@ func TestFileLogRelativePaths(t *testing.T) {
 		omitted  int
 	}{
 		{name: "empty"},
+		{name: "empty path", store: "/srv/store", paths: []string{""}, omitted: 1},
+		{name: "escaping relative", store: "/srv/store", paths: []string{"../private-smoke-path", "nested/../../private-smoke-path"}, omitted: 2},
 		{name: "unbound", paths: []string{"/home/ubuntu/private-smoke-path"}, omitted: 1},
 		{name: "outside", store: "/srv/store", checkout: "/srv/checkout", paths: []string{"/srv/store-other/file", "/srv/store/../private-smoke-path"}, omitted: 2},
 		{name: "both roots", store: "/srv/store", checkout: "/srv/checkout", paths: []string{"/srv/store/missions/a.yaml", "/srv/checkout/.gitignore", "/private-smoke-path"}, want: "missions/a.yaml,.gitignore", omitted: 1},
@@ -224,6 +226,24 @@ func TestFileLogRelativePaths(t *testing.T) {
 			assert.NotContains(t, entry, "error")
 			assert.NotContains(t, entry, "error_type")
 		})
+	}
+}
+
+func TestFileLogKeepsScrubRecordPaths(t *testing.T) {
+	const path = ".punt-labs/ethos/missions/m1/contract.yaml"
+	for _, roots := range [][2]string{{"/srv/store", "/srv/checkout"}, {"", ""}} {
+		global := physicalTemp(t)
+		l := newFileLog(roots[0], roots[1], "test", captureRepairLog(global))
+		for _, action := range []string{"redact-in-place", "defer-busy"} {
+			l.Logf("scrub-records", action, []string{path}, nil)
+		}
+		entries := readLog(t, LogPath(global))
+		require.Len(t, entries, 2)
+		for _, entry := range entries {
+			assert.Equal(t, path, entry["paths"])
+			assert.Equal(t, float64(1), entry["path_count"])
+			assert.Equal(t, float64(0), entry["omitted_path_count"])
+		}
 	}
 }
 
