@@ -34,7 +34,7 @@ var tempAllowed = map[string]allowance{
 	"internal/session/store.go:writeRoster":                     {1, "writes under $HOME/.punt-labs/ethos/sessions, outside any working tree"},
 	"internal/mission/active.go:writeSidecarFile":               {1, "writes under the global root, outside any working tree"},
 	"internal/mission/id.go:writeCounterAtomic":                 {1, "writes the per-user mission counter under $HOME, outside any working tree"},
-	"internal/hook/generate_agents.go:buildAgentFile":           {1, "a shell command in generated agent frontmatter that skips .tmp/ scratch paths; no file is created"},
+	"internal/hook/post_edit.go:postEditScope":                  {2, "excludes .tmp scratch paths from edit checks; no file is created"},
 	"internal/mission/delegation.go:writeAtomicFile":            {1, "forwards its pattern parameter to writeAtomicFileWithOutcome; callers are checked by helperArgs"},
 	"internal/mission/delegation.go:writeAtomicFileWithOutcome": {1, "forwards its pattern parameter to writeAtomicFileWithWarning; callers are checked by helperArgs"},
 	"internal/mission/delegation.go:writeAtomicFileWithWarning": {1, "forwards its guarded pattern parameter to installAtomicFile; callers are checked by helperArgs"},
