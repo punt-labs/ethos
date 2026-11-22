@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Ethos dogfoods `go-default`: advisory file/package checks on edits, blocking
+  staged Go formatting at commit, and the full `make check` gate at handoff
+  with a 30-minute budget.
+
 - Configured commit checks run after seal and provenance verification, using
   the actual staged index and blocking by default. SubagentStop runs configured
   handoff checks after roster leave, with recursion-safe block feedback. Both
