@@ -6345,7 +6345,7 @@ unannounced and post-hoc undetectable).
 **Status**: Settled. Design ratified 2026-07-22 (bead `ethos-ik4j`, missions
 `m-2026-07-22-001` design, `-005` document). Conforms to punt-kit
 `standards/tool-enable-disable.md` (§2.1–2.13) and `standards/punt-labs-dir.md`
-(§7 zones, §9 migration). Full design and the operator-rulings appendix:
+(PLD-7 zones, PLD-9 replacement, PLD-10 relocation). Full design and the operator-rulings appendix:
 `docs/enable-disable.md`.
 
 ### Problem
@@ -6375,9 +6375,9 @@ resolver with `doctor`), and `internal/enable` (orchestration). The git-hook
 scripts are embedded by a separate `hooks` package so one shellcheck-linted
 copy serves both the shell test suite and the Go chainer.
 
-The `.punt-labs/ethos/` subtree is carved into punt-labs-dir §7 zones: the
+The `.punt-labs/ethos/` subtree is carved into punt-labs-dir PLD-7 zones: the
 Vendored zone is a **two-file allowlist** (`CLAUDE.md` + `.vendored-manifest`),
-and the §7 manifest collision rule makes an overwrite of any identity, team,
+and the PLD-9 manifest collision rule makes an overwrite of any identity, team,
 role, or sealed-chunk path a hard error that deposits nothing. The marker is
 written **last**, after the deposit completes, so a marker present implies a
 complete deposit. Both embedded hooks gate on `.punt-labs/ethos/enabled`, so a

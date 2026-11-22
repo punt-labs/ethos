@@ -2,8 +2,9 @@
 
 **Status**: Draft. Bead `ethos-ik4j`. Mission `m-2026-07-22-001`.
 Conforms to punt-kit `standards/tool-enable-disable.md` (§2.1–2.13) and
-`standards/punt-labs-dir.md` (§7 zones, §9 migration). Section numbers
-below cite those two standards unless prefixed with a doc name.
+`standards/punt-labs-dir.md` (PLD-7 zones, PLD-9 replacement, PLD-10
+relocation). Bare section numbers below cite tool-enable-disable; `PLD-n`
+cites punt-labs-dir clauses.
 
 This is a **conformance** design. The external contract — the import
 line, the `enabled` marker, the vendored user guide, the write rules — is
@@ -48,7 +49,7 @@ chunks), and `ethos.yaml`. The standard's model — the tool owns
 `.punt-labs/<tool>/` and overwrites it **wholesale** on every enable
 (§2.2) — would destroy all of that. The vendored zone must be carved down
 to the two files ethos actually deposits, and everything else must be
-provably out of reach of the overwrite. punt-labs-dir §7 provides the
+provably out of reach of the overwrite. punt-labs-dir PLD-7 provides the
 carve-out mechanism (four zones + a vendored-zone manifest); this design
 applies it to ethos's dense subtree.
 
@@ -58,7 +59,7 @@ applies it to ethos's dense subtree.
 new internal packages, each owning one correctness contract. Nothing in
 the enable path reads, merges, or overwrites repo config or seal-managed
 data; the vendored zone is a two-file manifest and the collision rule
-(§7) guards everything else.
+(PLD-9) guards everything else.
 
 ### Package layout
 
@@ -87,25 +88,25 @@ returns "installed / chained / refreshed / skipped-non-shell / aborted";
 
 ## Zone map
 
-This is the load-bearing table. It carves `.punt-labs/ethos/` per §7 so
+This is the load-bearing table. It carves `.punt-labs/ethos/` per PLD-7 so
 `enable` / `disable` touch only the Vendored and Marker zones and provably
 never touch Config, Local, or seal-managed data.
 
-| Path | Zone (§7) | Owner | `enable`/`disable` behavior |
+| Path | Zone (PLD-7) | Owner | `enable`/`disable` behavior |
 |------|-----------|-------|-----------------------------|
 | `.punt-labs/ethos/CLAUDE.md` | Vendored | ethos | Deposited wholesale by `enable`; left dormant by `disable` |
-| `.punt-labs/ethos/.vendored-manifest` | Vendored | ethos | The §7 vendored-zone manifest (lists exactly the two vendored paths); deposited by `enable` |
+| `.punt-labs/ethos/.vendored-manifest` | Vendored | ethos | The PLD-9 vendored-zone manifest (lists exactly the two vendored paths); deposited by `enable` |
 | `.punt-labs/ethos/enabled` | Marker | ethos | Written by `enable`, deleted by `disable` (§2.7) |
 | `.punt-labs/ethos/identities/` | Config | repo | **Never touched** |
 | `.punt-labs/ethos/teams/` | Config | repo | **Never touched** |
 | `.punt-labs/ethos/roles/` | Config | repo | **Never touched** |
 | `.punt-labs/ethos/agents/` | Config | repo | **Never touched** |
 | `.punt-labs/ethos/personalities/`, `talents/`, `writing-styles/` | Config | repo | **Never touched** |
-| `.punt-labs/ethos.yaml` (today) → `.punt-labs/ethos/config.yaml` (planned, punt-labs-dir §9/§10 identity-pointer row = *Planned*) | Config | repo (via `setup`) | **Never touched** — enable interacts with neither the bare pointer today nor its future config-zone home |
+| `.punt-labs/ethos.yaml` (today) → `.punt-labs/ethos/config.yaml` (planned, punt-labs-dir PLD-10) | Config | repo (via `setup`) | **Never touched** — enable interacts with neither the bare pointer today nor its future config-zone home |
 | `.punt-labs/ethos/sessions/<date>-<sid>/audit-*.jsonl` | Seal-managed (audit-seal.md) | ethos audit | **Never touched** — sealed chunks are add-only, written by the seal, not by enable |
 | `.punt-labs/ethos/missions/<id>/log-*.jsonl`, `missions.jsonl` | Seal-managed / tracked | ethos mission | **Never touched** |
 | `.punt-labs/ethos/local/`, `*.local`, `*.local.*` | Local | user | **Never touched** |
-| `.punt-labs/local/ethos/` | top-level local zone (punt-labs-dir §2) | ethos runtime | **Never touched** — live audit/mission writes, gitignored |
+| `.punt-labs/local/ethos/` | top-level local zone (punt-labs-dir PLD-2) | ethos runtime | **Never touched** — live audit/mission writes, gitignored |
 | `<repo>/CLAUDE.md` | host file | user | One import line added/removed (§2.4) |
 | git hooks dir `pre-commit`, `commit-msg` | outside subtree | shared | Marker section chained/unchained (§2.8, DES-058/DES-054) |
 
@@ -114,9 +115,9 @@ rules to `permissions.allow` and `permissions.ask`; `disable` removes exactly
 those values (§2.8) — see "`.claude/settings.json` (§2.8)" below.
 
 **The carve-out is enforced by the manifest, not by good intentions.** Per
-§7, `enable` writes **exactly** the vendored-zone-manifest set
+PLD-9, `enable` writes **exactly** the vendored-zone-manifest set
 (`CLAUDE.md` + `.vendored-manifest`) and removes any path in the previous
-manifest but not the current one. The §7 collision rule makes this safe:
+manifest but not the current one. The PLD-9 collision rule makes this safe:
 `enable` may overwrite only a path the *previous* manifest also listed; a
 new-manifest path that already exists but is **not** in the previous
 manifest — every identity, team, role, sealed chunk — is a **collision**
@@ -127,7 +128,7 @@ construction.
 
 **Gitlink hazard (ratified — see Ratified decisions #1):**
 in consuming repos `.punt-labs/ethos` is a **gitlink** (submodule, mode
-`160000`; punt-labs-dir §10 ethos(registry), status *Deprecating*). You
+`160000`; punt-labs-dir PLD-12). You
 cannot deposit `.punt-labs/ethos/CLAUDE.md` or the `enabled` marker into a
 foreign git repo. `enable` in a gitlinked repo cannot write the vendored
 zone at all — the same `ethos-e29s` vendor-first dependency the audit seal
@@ -152,13 +153,13 @@ Steps, in order:
    **before** the enable rollout reaches them (`ethos-e29s`), so the
    conversion is the migration plan and `enable`'s error is only the
    backstop for a repo that slipped through.
-3. **Deposit the vendored zone** from the embedded manifest, §7 semantics:
+3. **Deposit the vendored zone** from the embedded manifest, PLD-9 semantics:
    write `.punt-labs/ethos/CLAUDE.md` and `.punt-labs/ethos/.vendored-manifest`
    wholesale; apply old-manifest-minus-new removal; **collision-error** on
    any new-manifest path outside the previous manifest (bootstrap: on the
    first manifest-aware run with no previous manifest, treat the new
    manifest's own paths as the previous set, but a collision with a
-   Config-zone path errors unconditionally, §7 bootstrap).
+   Config-zone path errors unconditionally, PLD-9 bootstrap).
 4. **Write the marker** `.punt-labs/ethos/enabled` (§2.7). A zero-byte
    file is sufficient; the standard defines presence, not content.
    **Marker-last invariant (NIT-3):** the marker is always written **after**
@@ -514,7 +515,7 @@ the marker is.
 
 ## `punt audit` checks ethos must satisfy (acceptance criteria)
 
-From §2.11 (and punt-labs-dir §8, keyed by the marker):
+From §2.11 (and punt-labs-dir PLD-11, keyed by the marker):
 
 - **AC1 — import present iff enabled.** For a repo with
   `.punt-labs/ethos/enabled`, `<repo>/CLAUDE.md` contains exactly one
@@ -530,7 +531,7 @@ From §2.11 (and punt-labs-dir §8, keyed by the marker):
   to strip.
 - **AC6 — well-formed line.** The line is the exact canonical string,
   top-level, no trailing whitespace (§2.11).
-- **AC7 — zone carve-out holds (punt-labs-dir §8).** The vendored-zone
+- **AC7 — zone carve-out holds (punt-labs-dir PLD-11).** The vendored-zone
   manifest write never clobbers a Config-zone or seal path; the gitignore
   probes pass for `.punt-labs/ethos/local/x`, `foo.local`,
   `config.local.yaml` (ignored) and `CLAUDE.md`, `config.yaml`,
@@ -595,10 +596,10 @@ is nothing to retire — the migration is pure convergence:
   user-scope line to add at `install` or remove at `uninstall`. This closes
   the §2.6 obligation affirmatively rather than leaving it open.
 - **Ordering dependency.** The gitlink → inline-vendored registry
-  migration (`ethos-e29s`, punt-labs-dir §10 ethos(registry)) must precede
+  migration (`ethos-e29s`, punt-labs-dir PLD-12) must precede
   reliance on `enable` in consuming repos — you cannot deposit the guide
   into a submodule (Ratified decisions #1). The `.punt-labs/ethos.yaml` →
-  `config.yaml` move (punt-labs-dir §9) is sequenced behind the same
+  `config.yaml` move (punt-labs-dir PLD-10) is sequenced behind the same
   de-gitlink and is **not** enable's job — it is a separate config-zone
   migration.
 

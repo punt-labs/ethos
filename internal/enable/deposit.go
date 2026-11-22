@@ -31,7 +31,7 @@ const (
 //
 // It returns any warnings — on first contact (bootstrap), overwriting an
 // existing vendored file whose content differs from what we deposit is
-// grandfathered by punt-labs-dir §7, but the overwrite is surfaced by naming
+// grandfathered by punt-labs-dir PLD-9, but the overwrite is surfaced by naming
 // the path so the (git-tracked, recoverable) clobber is not silent (S2).
 func deposit(repoRoot string, guide, setup []byte, policies ...layout.Policy) ([]string, error) {
 	p, err := layout.NewRepository(repoRoot, repoRoot, layout.RecordBlame)
@@ -73,7 +73,7 @@ func deposit(repoRoot string, guide, setup []byte, policies ...layout.Policy) ([
 			if bootstrap {
 				if existing, err := os.ReadFile(filepath.Join(repoRoot, rel)); err == nil && !bytes.Equal(existing, want[rel]) {
 					warnings = append(warnings, fmt.Sprintf(
-						"%s existed with different content and was overwritten by the vendored guide (punt-labs-dir §7 first-enable grandfather; the prior file is recoverable from git)", rel))
+						"%s existed with different content and was overwritten by the vendored guide (punt-labs-dir PLD-9 first-enable grandfather; the prior file is recoverable from git)", rel))
 				}
 			}
 			continue
