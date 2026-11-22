@@ -20,6 +20,9 @@ import (
 
 // PostEdit provides advisory feedback only; errors never block the next edit.
 func PostEdit(ctx context.Context, input io.Reader, output io.Writer) {
+	if postEditKilled() {
+		return
+	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			postEditAdvice(output, fmt.Sprintf("post-edit: %v", recovered))
@@ -66,6 +69,16 @@ func PostEdit(ctx context.Context, input io.Reader, output io.Writer) {
 	if len(failures) > 0 {
 		postEditAdvice(output, strings.Join(failures, "\n\n"))
 	}
+}
+
+// postEditKilled honours the operator kill switch every punt hook obeys.
+func postEditKilled() bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(home, ".punt-hooks-kill"))
+	return err == nil
 }
 
 func postEditAdvice(out io.Writer, message string) {
