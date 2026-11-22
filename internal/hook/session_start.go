@@ -559,7 +559,7 @@ func upgradedStorageLine(n int) string {
 	if n == 0 {
 		return ""
 	}
-	return fmt.Sprintf("ethos: upgraded storage (%d items; see ~/.punt-labs/ethos/logs/repair.log)", n)
+	return fmt.Sprintf("ethos: upgraded storage (%d items; see ~/.punt-labs/ethos/logs/ethos.log)", n)
 }
 
 // createSessionRoster creates the session roster entry when a session ID
