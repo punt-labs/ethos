@@ -59,8 +59,9 @@ to marker checks merely because no glob matches.
 
 Advisory failures inject context. An explicit `on_fail: block` emits
 PostToolUse block feedback, still with exit zero. Policy errors fail open
-with context. The session checkout supplies policy even for linked-worktree
-edits; the edited worktree's configuration is never consulted. See
+with context. The session checkout's canonical store supplies policy, including
+main-tree changes not committed into a linked checkout. The edited worktree's
+configuration is never consulted. See
 [DES-085's design](design-agent-checks.md) for the future stages and adapters.
 
 ## Prerequisites: Agent Definitions
