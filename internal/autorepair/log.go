@@ -2,7 +2,6 @@ package autorepair
 
 import (
 	"log/slog"
-	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/punt-labs/ethos/v4/internal/redact"
@@ -20,15 +19,11 @@ func newFileLog(_, _, ethos string, logger *slog.Logger) *FileLog {
 	return &FileLog{logger: logger.With("component", "ethos.repair", "ethos", ethos)}
 }
 
-// Logf records a repair decision after applying the existing prose redactor.
+// Logf records repair metadata after applying the existing prose redactor.
 func (l *FileLog) Logf(step, action string, paths []string, err error) {
-	rp := make([]string, len(paths))
-	for i, p := range paths {
-		rp[i] = redact.Prose(p)
-	}
-	attrs := []any{"step", redact.Prose(step), "action", redact.Prose(action), "paths", strings.Join(rp, ", ")}
+	attrs := []any{"step", redact.Prose(step), "action", redact.Prose(action), "path_count", len(paths)}
 	if err != nil {
-		attrs = append(attrs, "error", redact.Prose(err.Error()))
+		attrs = append(attrs, "error_type", diagnostic.ErrorType(err))
 	}
 	if action == "note" {
 		l.logger.Warn("Roster purge warning", attrs...)

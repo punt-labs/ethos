@@ -66,18 +66,18 @@ func TestFileLogWritesJSONLines(t *testing.T) {
 	lines := readLog(t, LogPath(global))
 	require.Len(t, lines, 2)
 	first := lines[0]
-	for _, k := range []string{"time", "ethos", "step", "action", "paths"} {
+	for _, k := range []string{"time", "ethos", "step", "action", "path_count"} {
 		assert.Contains(t, first, k)
 	}
 	assert.Equal(t, "overlays", first["step"])
 	assert.Equal(t, "move", first["action"])
 	assert.Equal(t, "v5.0.0", first["ethos"])
-	assert.Equal(t, "/repo/store/.punt-labs/a, /repo/store/.punt-labs/b", first["paths"])
+	assert.Equal(t, float64(2), first["path_count"])
 	assert.Equal(t, "ethos.repair", first["component"])
 	assert.NotContains(t, first, "store")
 	assert.NotContains(t, first, "checkout")
 	assert.NotContains(t, first, "error")
-	assert.Equal(t, "boom", lines[1]["error"])
+	assert.Equal(t, "*errors.errorString", lines[1]["error_type"])
 }
 
 func TestFileLogRedactsHomePaths(t *testing.T) {
@@ -100,14 +100,43 @@ func TestFileLogOmitsRepositoryRoots(t *testing.T) {
 	}
 }
 
-// A step error can quote file contents (a yaml decode error includes the
-// value), so the whole line goes through the DES-080 prose redactor: secrets
-// and addresses as well as home paths, in paths and error.
+func TestFileLogOmitsPathAndErrorContents(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		paths []string
+		err   error
+	}{
+		{name: "empty"},
+		{name: "paths", paths: []string{"/home/ubuntu/private-smoke-path"}},
+		{name: "error", err: errors.New("private-smoke-content in /home/ubuntu/private-smoke-path")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			global := physicalTemp(t)
+			l := newFileLog("", "", "test", captureRepairLog(global))
+			l.Logf("gitignore", "rewrite", tc.paths, tc.err)
+			raw, err := os.ReadFile(LogPath(global))
+			require.NoError(t, err)
+			for _, private := range []string{"ubuntu", "private-smoke-path", "private-smoke-content"} {
+				require.NotContains(t, string(raw), private)
+			}
+			entry := readLog(t, LogPath(global))[0]
+			assert.Equal(t, float64(len(tc.paths)), entry["path_count"])
+			assert.NotContains(t, entry, "paths")
+			assert.NotContains(t, entry, "error")
+			if tc.err != nil {
+				assert.Equal(t, "*errors.errorString", entry["error_type"])
+			} else {
+				assert.NotContains(t, entry, "error_type")
+			}
+		})
+	}
+}
+
 func TestFileLogRedactsSecretsAndEmails(t *testing.T) {
 	global := physicalTemp(t)
 	l := newFileLog("/Users/alice/repo", "/Users/alice/repo", "v5.0.0", captureRepairLog(global))
 	err := errors.New(`yaml: cannot decode "token: ghp_abcdefghijklmnopqrstuvwxyz0123456789" for alice@example.com in /Users/alice/repo/x`)
-	l.Logf("overlays", "move", []string{"/Users/alice/repo/ghp_abcdefghijklmnopqrstuvwxyz0123456789"}, err)
+	l.Logf("overlays alice@example.com", "move ghp_abcdefghijklmnopqrstuvwxyz0123456789", []string{"/Users/alice/repo/ghp_abcdefghijklmnopqrstuvwxyz0123456789"}, err)
 	raw, rerr := os.ReadFile(LogPath(global))
 	require.NoError(t, rerr)
 	s := string(raw)
