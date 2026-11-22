@@ -74,6 +74,9 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 	}
 	filesByRoot, err := filesForStage()
 	if err != nil {
+		if stage == "handoff" && !handoffPolicySelected(checkout, agent) {
+			return StageFeedback{}
+		}
 		return StageFeedback{Blocking: editRedact(stage + " files: " + err.Error())}
 	}
 	var advisory, blocking []string
@@ -120,6 +123,35 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 		}
 	}
 	return StageFeedback{Advisory: editRedact(strings.Join(advisory, "\n\n")), Blocking: editRedact(strings.Join(blocking, "\n\n"))}
+}
+
+func handoffPolicySelected(checkout, agent string) bool {
+	selected := func(root string) bool {
+		checks, _, err := configuredStageChecks(root, agent, "handoff")
+		return err != nil || len(checks) > 0
+	}
+	if selected(checkout) {
+		return true
+	}
+	store, err := resolve.StoreOf(checkout)
+	if err != nil || store == "" {
+		return false
+	}
+	data, err := gitenv.Output(checkout, "git", "worktree", "list", "--porcelain", "-z")
+	if err != nil {
+		return false
+	}
+	for _, field := range strings.Split(string(data), "\x00") {
+		root, ok := strings.CutPrefix(field, "worktree ")
+		if !ok || root == checkout {
+			continue
+		}
+		candidateStore, err := resolve.StoreOf(root)
+		if err == nil && candidateStore == store && selected(root) {
+			return true
+		}
+	}
+	return false
 }
 
 func partiallyStagedFiles(root string, files []string, checks []checkset.Check, env []string) ([]string, error) {

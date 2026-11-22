@@ -282,6 +282,10 @@ agent, with the project default set, or the committing session's resolved
 set when one is found. Exit 2 blocks the commit and prints the failing
 check's tail.
 
+Unconfigured handoffs remain non-blocking when audit or file discovery fails.
+Policies selected only in another linked worktree of the same store still count;
+file-discovery failures block when such a handoff policy applies.
+
 Commit checks read files on disk. Before any check runs, every staged path matched
 by a commit check must have no unstaged changes against the actual committing
 index, including `GIT_INDEX_FILE`. Otherwise the stage blocks with exit 2,

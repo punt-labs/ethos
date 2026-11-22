@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Unconfigured handoffs do not block on audit or file-discovery failures;
+  handoff policies found only in a linked worktree still apply.
 - Vendor preview and apply refuse to overwrite a different project-only check
   set at the default canonical destination from a linked worktree. Both paths
   are reported; an explicit destination remains available through CLI and MCP.
