@@ -157,7 +157,9 @@ func handoffFilesWithAdvice(checkout, sessionID, agentID string, advice func(str
 			if advice != nil {
 				advice("ethos: handoff rename lookup: " + err.Error())
 			}
-			continue
+			if renamed == nil {
+				continue
+			}
 		}
 		for _, old := range oldPaths {
 			target := renamed[old]
@@ -184,7 +186,7 @@ func handoffFilesWithAdvice(checkout, sessionID, agentID string, advice func(str
 		files[checkout] = nil
 	}
 	for root, paths := range files {
-		if len(paths) == 0 && root != store && !otherWriters[root] && !fallbackUncertain {
+		if len(paths) == 0 && len(vanished[root]) == 0 && root != store && !otherWriters[root] && !fallbackUncertain {
 			paths, err = stageFiles(root, "handoff")
 			if err != nil {
 				return nil, err

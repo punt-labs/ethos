@@ -79,6 +79,7 @@ func parseHandoffRenames(data string) (map[string]string, error) {
 		return nil, fmt.Errorf("unterminated git rename status")
 	}
 	result := map[string]string{}
+	var rejected []string
 	fields := strings.Split(data, "\x00")
 	for i := 0; i < len(fields)-1; {
 		status := fields[i]
@@ -95,10 +96,15 @@ func parseHandoffRenames(data string) (map[string]string, error) {
 				return nil, fmt.Errorf("empty git rename path")
 			}
 		}
-		if strings.HasPrefix(status, "R") {
+		if status == "R100" {
 			result[fields[i]] = fields[i+1]
+		} else if strings.HasPrefix(status, "R") {
+			rejected = append(rejected, fmt.Sprintf("%q to %q", fields[i], fields[i+1]))
 		}
 		i += count
+	}
+	if len(rejected) > 0 {
+		return result, fmt.Errorf("non-exact renames ignored: %s", strings.Join(rejected, "; "))
 	}
 	return result, nil
 }

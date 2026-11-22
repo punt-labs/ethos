@@ -309,11 +309,14 @@ run independently with their own matching paths, cwd and `{root}`, while policy
 still comes from the canonical store. For vanished attributed paths, handoff
 uses Git rename detection against HEAD with a copied temporary index below the
 canonical store's untracked `.punt-labs/local/ethos/tmp/` (not ambient `TMPDIR`) and
-intent-to-add entries for untracked files. A discovered target must still exist
+intent-to-add entries for untracked files. Only exact-content (`R100`) renames
+count as attribution. Similarity alone, including edits since HEAD, is insufficient
+and produces advisory feedback instead. A discovered target must still exist
 under the same accepted root and must not be another agent's known path. This
 covers unstaged `mv` and staged `git mv` without changing the real index or
 widening dirty-tree fallback. Lookup failures are advisory and non-blocking;
-outright deletions remain omitted. The temporary candidate directory is removed
+outright deletions remain omitted. Roots with vanished attributed paths do not
+fall back to unrelated dirty files when no target is accepted. The temporary candidate directory is removed
 on success and failure. Checkout attribution is retained through the
 nearest existing physical ancestor, including missing parent directories. A path
 whose root is indeterminate disables dirty-tree fallback without blocking the

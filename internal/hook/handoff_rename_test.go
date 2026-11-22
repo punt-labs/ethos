@@ -19,7 +19,7 @@ import (
 
 func TestHandoffRenamedFiles(t *testing.T) {
 	for _, linked := range []bool{false, true} {
-		for _, kind := range []string{"mv", "git mv", "delete", "lookup failure", "weird names", "split index", "borrowed index", "target owned by other agent"} {
+		for _, kind := range []string{"mv", "git mv", "delete", "lookup failure", "weird names", "split index", "borrowed index", "target owned by other agent", "modified mv", "similar target", "unattributed similar target", "unattributed delete"} {
 			t.Run(fmt.Sprintf("linked=%t/%s", linked, kind), func(t *testing.T) {
 				store, bin := postEditFixture(t)
 				t.Setenv("HOME", t.TempDir())
@@ -40,9 +40,16 @@ func TestHandoffRenamedFiles(t *testing.T) {
 				if kind == "split index" {
 					stageGit(t, root, "update-index", "--split-index")
 				}
-				writeFile(t, filepath.Join(root, old), body+"// agent edit\n")
-				if kind == "delete" {
+				content := body
+				if kind == "modified mv" || strings.Contains(kind, "similar target") {
+					content += "// agent edit\n"
+				}
+				writeFile(t, filepath.Join(root, old), content)
+				if kind == "delete" || kind == "unattributed delete" {
 					require.NoError(t, os.Remove(filepath.Join(root, old)))
+				} else if strings.Contains(kind, "similar target") {
+					require.NoError(t, os.Remove(filepath.Join(root, old)))
+					writeFile(t, filepath.Join(root, target), body+"// unrelated generated file\n")
 				} else if kind == "git mv" {
 					stageGit(t, root, "mv", "--", old, target)
 				} else {
@@ -60,10 +67,13 @@ func TestHandoffRenamedFiles(t *testing.T) {
 				if kind == "target owned by other agent" {
 					otherPath = target
 				}
-				writeRepoTreeSession(t, store, "2026-11-22", "rename", []auditEntry{
+				entries := []auditEntry{
 					{Ts: "2026-11-22T10:00:00Z", Session: "rename", AgentID: "sub", Tool: "Edit", ToolInput: map[string]any{"file_path": "<repo>/" + old}, PathFormat: auditPathFormat},
-					{Ts: "2026-11-22T10:00:01Z", Session: "rename", AgentID: "other", Tool: "Write", ToolInput: map[string]any{"file_path": "<repo>/" + otherPath}, PathFormat: auditPathFormat},
-				})
+				}
+				if !strings.HasPrefix(kind, "unattributed ") {
+					entries = append(entries, auditEntry{Ts: "2026-11-22T10:00:01Z", Session: "rename", AgentID: "other", Tool: "Write", ToolInput: map[string]any{"file_path": "<repo>/" + otherPath}, PathFormat: auditPathFormat})
+				}
+				writeRepoTreeSession(t, store, "2026-11-22", "rename", entries)
 				data, err := gitenv.Output(root, "git", "rev-parse", "--path-format=absolute", "--git-path", "index")
 				require.NoError(t, err)
 				indexPath, err := gitenv.IndexPathOutput(data)
@@ -95,10 +105,12 @@ func TestHandoffRenamedFiles(t *testing.T) {
 				require.Empty(t, out.String())
 				if kind == "lookup failure" {
 					require.Contains(t, stderr.String(), "handoff rename lookup")
+				} else if kind == "modified mv" || strings.Contains(kind, "similar target") {
+					require.Contains(t, stderr.String(), "non-exact")
 				} else {
 					require.Empty(t, stderr.String())
 				}
-				if kind == "delete" || kind == "lookup failure" || kind == "target owned by other agent" {
+				if kind == "delete" || kind == "unattributed delete" || kind == "lookup failure" || kind == "target owned by other agent" || kind == "modified mv" || strings.Contains(kind, "similar target") {
 					require.NoFileExists(t, log)
 				} else {
 					data, err := os.ReadFile(log)
@@ -115,12 +127,15 @@ func TestHandoffRenamedFiles(t *testing.T) {
 }
 
 func TestParseHandoffRenames(t *testing.T) {
-	got, err := parseHandoffRenames("M\x00changed.go\x00R093\x00old name.go\x00-new\nname.go\x00C100\x00copy.go\x00copied.go\x00D\x00deleted.go\x00")
+	got, err := parseHandoffRenames("M\x00changed.go\x00R100\x00old name.go\x00-new\nname.go\x00C100\x00copy.go\x00copied.go\x00D\x00deleted.go\x00")
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{"old name.go": "-new\nname.go"}, got)
 	got, err = parseHandoffRenames("")
 	require.NoError(t, err)
 	require.Empty(t, got)
+	got, err = parseHandoffRenames("R093\x00deleted.go\x00unrelated.go\x00R100\x00old.go\x00new.go\x00")
+	require.ErrorContains(t, err, "non-exact")
+	require.Equal(t, map[string]string{"old.go": "new.go"}, got)
 	for _, input := range []string{"R100", "R100\x00old\x00", "M\x00", "R100\x00old\x00new", "M\x00\x00"} {
 		_, err := parseHandoffRenames(input)
 		require.Error(t, err)

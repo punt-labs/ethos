@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Handoff rename attribution accepts only exact-content renames, not Git
+  similarity alone. Modified or unrelated similar targets are skipped with
+  advice; vanished paths do not trigger a broader dirty-tree fallback.
 - Handoff glob checks follow an agent's vanished Write/Edit paths to Git rename
   targets in the same checkout, including untracked `mv` destinations and staged
   `git mv` renames. Discovery uses a private index, excludes other agents' known
