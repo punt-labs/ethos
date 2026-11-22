@@ -274,8 +274,13 @@ that skips the whole hook, including roster leave, as before this change.
 The payload's agent type/handle
 selects policy. Existing audit union readers select that agent's Write/Edit
 paths from the session; if no usable paths are available, selection falls back
-to staged, unstaged and untracked files in each accepted touched root (or the
-session checkout when the audit identifies none). Same-store linked worktrees
+to staged, unstaged and untracked files only in linked worktrees, never in the
+store's main checkout. Fallback also requires that no other agent ID, including
+the main thread's empty ID, has a Write/Edit path under that root in the session
+audit. Roots come from this agent's accepted paths, or the session checkout when
+there are none; Bash commands are not parsed to discover additional roots.
+Otherwise the root keeps an empty file list: glob checks skip it, but
+`files: all` checks still run. Same-store linked worktrees
 run independently with their own matching paths, cwd and `{root}`, while policy
 still comes from the canonical store. An unreadable audit
 fails closed rather than silently narrowing the scope.

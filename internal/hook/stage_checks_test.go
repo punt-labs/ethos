@@ -122,7 +122,113 @@ func TestHandoffAuditFiles(t *testing.T) {
 	require.Equal(t, map[string][]string{root: {"written.go"}}, files)
 	files, err = handoffFiles(root, "missing", "sub")
 	require.NoError(t, err)
-	require.Contains(t, files[root], "other.go")
+	require.Empty(t, files[root])
+}
+
+func TestHandoffFallbackIsolation(t *testing.T) {
+	for _, tc := range []struct {
+		name, writer, tool, otherFile string
+		linked, fallback              bool
+	}{
+		{name: "main no edits"},
+		{name: "main other agent", writer: "other", tool: "Write"},
+		{name: "main unattributed edit", tool: "Edit"},
+		{name: "main Bash only", writer: "sub", tool: "Bash"},
+		{name: "linked Bash only", writer: "sub", tool: "Bash", linked: true, fallback: true},
+		{name: "linked other agent", writer: "other", tool: "Write", linked: true},
+		{name: "linked main thread", tool: "Edit", linked: true},
+		{name: "linked other scratch write", writer: "other", tool: "Write", linked: true, otherFile: ".tmp/other.go"},
+		{name: "linked other local write", writer: "other", tool: "Write", linked: true, otherFile: ".punt-labs/local/other.go"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, bin := postEditFixture(t)
+			t.Setenv("HOME", t.TempDir())
+			root := store
+			path := "<repo>/broken.go"
+			if tc.linked {
+				root = filepath.Join(store, ".claude", "worktrees", "linked")
+				stageGit(t, store, "worktree", "add", "--detach", root)
+				t.Setenv("CLAUDE_PROJECT_DIR", root)
+			}
+			writeFile(t, filepath.Join(root, "broken.go"), "broken Go source\n")
+			if tc.otherFile != "" {
+				path = "<repo>/" + tc.otherFile
+				writeFile(t, filepath.Join(root, tc.otherFile), "package other\n")
+			}
+			writeFile(t, filepath.Join(store, ".punt-labs/ethos.yaml"), "checks: project\n")
+			checkPolicy(t, store, "project", "  - name: glob\n    stage: handoff\n    files: ['**/*.go']\n    run: [glob-probe, '{files}']\n  - name: all\n    stage: handoff\n    files: all\n    run: [all-probe]\n")
+			log := filepath.Join(t.TempDir(), "log")
+			t.Setenv("STAGE_LOG", log)
+			postEditTool(t, bin, "glob-probe", "printf 'glob|%s\\n' \"$@\" >> \"$STAGE_LOG\"; exit 1\n")
+			postEditTool(t, bin, "all-probe", "printf 'all|%s\\n' \"$PWD\" >> \"$STAGE_LOG\"\n")
+			if tc.tool != "" {
+				input := map[string]any{"file_path": path}
+				if tc.tool == "Bash" {
+					input = map[string]any{"command": "printf broken > broken.go"}
+				}
+				writeRepoTreeSession(t, store, "2026-11-22", "isolation", []auditEntry{{Ts: "2026-11-22T10:00:00Z", Session: "isolation", AgentID: tc.writer, Tool: tc.tool, ToolInput: input, PathFormat: auditPathFormat}})
+			}
+			ss := session.NewStore(t.TempDir())
+			require.NoError(t, ss.Create("isolation", session.Participant{AgentID: "human"}, session.Participant{AgentID: "sub"}, "", ""))
+			var out, stderr bytes.Buffer
+			require.NoError(t, HandleSubagentStopWithIO(context.Background(), strings.NewReader(`{"session_id":"isolation","agent_id":"sub"}`), ss, &out, &stderr))
+			require.Empty(t, stderr.String())
+			data, err := os.ReadFile(log)
+			require.NoError(t, err)
+			want := "all|" + root + "\n"
+			if tc.fallback {
+				want = "glob|" + filepath.Join(root, "broken.go") + "\n" + want
+				require.Contains(t, out.String(), `"decision":"block"`)
+			} else {
+				require.Empty(t, out.String())
+			}
+			require.Equal(t, want, string(data))
+		})
+	}
+}
+
+func TestHandoffConcurrentAgents(t *testing.T) {
+	root, bin := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	checkPolicy(t, root, "project", "  - name: glob\n    stage: handoff\n    files: ['**/*.go']\n    run: [probe, '{files}']\n")
+	log := filepath.Join(t.TempDir(), "log")
+	t.Setenv("STAGE_LOG", log)
+	postEditTool(t, bin, "probe", "printf '%s\\n' \"$@\" > \"$STAGE_LOG\"\n")
+	var entries []auditEntry
+	ss := session.NewStore(t.TempDir())
+	require.NoError(t, ss.Create("concurrent", session.Participant{AgentID: "human"}, session.Participant{AgentID: "one"}, "", ""))
+	require.NoError(t, ss.Join("concurrent", session.Participant{AgentID: "two"}))
+	for i, agent := range []string{"one", "two"} {
+		writeFile(t, filepath.Join(root, agent+".go"), "package example\n")
+		entries = append(entries, auditEntry{Ts: fmt.Sprintf("2026-11-22T10:00:0%dZ", i), Session: "concurrent", AgentID: agent, Tool: "Edit", ToolInput: map[string]any{"file_path": "<repo>/" + agent + ".go"}, PathFormat: auditPathFormat})
+	}
+	writeRepoTreeSession(t, root, "2026-11-22", "concurrent", entries)
+	for _, agent := range []string{"one", "two"} {
+		var out, stderr bytes.Buffer
+		payload := fmt.Sprintf(`{"session_id":"concurrent","agent_id":%q}`, agent)
+		require.NoError(t, HandleSubagentStopWithIO(context.Background(), strings.NewReader(payload), ss, &out, &stderr))
+		require.Empty(t, out.String())
+		require.Empty(t, stderr.String())
+		data, err := os.ReadFile(log)
+		require.NoError(t, err)
+		require.Equal(t, filepath.Join(root, agent+".go")+"\n", string(data))
+	}
+}
+
+func TestHandoffUnreadableAudit(t *testing.T) {
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	checkPolicy(t, root, "project", "  - name: all\n    stage: handoff\n    files: all\n    run: [missing]\n")
+	path := writeRepoTreeSession(t, root, "2026-11-22", "unreadable", nil)
+	require.NoError(t, os.Mkdir(path, 0700))
+	ss := session.NewStore(t.TempDir())
+	require.NoError(t, ss.Create("unreadable", session.Participant{AgentID: "human"}, session.Participant{AgentID: "sub"}, "", ""))
+	var out, stderr bytes.Buffer
+	require.NoError(t, HandleSubagentStopWithIO(context.Background(), strings.NewReader(`{"session_id":"unreadable","agent_id":"sub"}`), ss, &out, &stderr))
+	require.Contains(t, out.String(), `"decision":"block"`)
+	require.Contains(t, out.String(), "handoff files:")
 }
 
 func TestStageRuntime(t *testing.T) {

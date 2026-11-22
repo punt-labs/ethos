@@ -148,7 +148,7 @@ func hookCheckout() (string, error) {
 	return filepath.EvalSymlinks(checkout)
 }
 
-func postEditScope(checkout, file string) (string, string, error) {
+func postEditRoot(checkout, file string) (string, string, error) {
 	if !filepath.IsAbs(file) {
 		// Preserve link/.. until EvalSymlinks has resolved it physically.
 		file = checkout + string(filepath.Separator) + file
@@ -190,6 +190,14 @@ func postEditScope(checkout, file string) (string, string, error) {
 		if common != otherCommon {
 			return "", "", nil
 		}
+	}
+	return root, physical, nil
+}
+
+func postEditScope(checkout, file string) (string, string, error) {
+	root, physical, err := postEditRoot(checkout, file)
+	if err != nil || root == "" {
+		return root, physical, err
 	}
 	rel, err := filepath.Rel(root, physical)
 	if err != nil {
