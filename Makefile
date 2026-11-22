@@ -54,10 +54,33 @@ GOBIN := $(shell go env GOPATH)/bin
 endif
 GOLANGCI_LINT := $(GOBIN)/golangci-lint
 
-.PHONY: help lint docs docs-pdf test check validate-content fuzz-check sync-embed format build install dev clean clean-latex dist tools doctor undev test-behavioral test-e2e test-e2e-smoke e2e-bin baseline-tokens calibrate-tokens
+.PHONY: help lint docs docs-pdf test check check-edit validate-content fuzz-check sync-embed format build install dev clean clean-latex dist tools doctor undev test-behavioral test-e2e test-e2e-smoke e2e-bin baseline-tokens calibrate-tokens
+
+override FILE := $(value FILE)
+export FILE
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
+
+check-edit: ## Run cheap checks for one edited file (FILE required)
+	@set -e; \
+	test -n "$$FILE" || { echo "check-edit: FILE is required" >&2; exit 1; }; \
+	dir=$$(cd "$$(dirname "$$FILE")" && pwd); \
+	file="$$dir/$$(basename "$$FILE")"; \
+	case "$$file" in \
+		*.go) \
+			unformatted=$$(gofmt -l "$$file"); \
+			if [ -n "$$unformatted" ]; then printf 'gofmt required: %s\n' "$$unformatted" >&2; exit 1; fi; \
+			(cd "$$dir" && go vet .) ;; \
+		*/go.mod|*/go.sum|*/go.work) go build ./... ;; \
+		*.sh) shellcheck "$$file" ;; \
+		*.yaml|*.yml) \
+			case "$$file" in \
+				"$$PWD"/*) go run ./cmd/validate-content ;; \
+				*) echo "check-edit: YAML file must be under the repository" >&2; exit 1 ;; \
+			esac ;; \
+		*Makefile) make -n check >/dev/null ;; \
+	esac
 
 lint: ## Lint (golangci-lint + windows vet + shellcheck + ruff + mypy)
 	@test -x $(GOLANGCI_LINT) || { echo "golangci-lint not found at $(GOLANGCI_LINT) — run 'make tools' to install $(GOLANGCI_LINT_VERSION)"; exit 1; }

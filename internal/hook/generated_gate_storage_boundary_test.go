@@ -55,7 +55,7 @@ func TestGeneratedGateStorageBoundary(t *testing.T) {
 				require.NoError(t, os.MkdirAll(bin, 0o700))
 				scripts := map[string]string{
 					"jq":   "#!/bin/sh\nIFS= read -r _input\n[ \"$_input\" = \"$GATE_TEST_PAYLOAD\" ] || exit 65\nprintf '%s\\n' \"$GATE_TEST_PATH\"\n",
-					"make": "#!/bin/sh\nprintf '%s|%s\\n' \"$PWD\" \"$*\" >> \"$GATE_TEST_CALLS\"\nprintf 'GATE_FIXTURE_DIAGNOSTIC\\n'\nexit \"$GATE_TEST_EXIT\"\n",
+					"make": "#!/bin/sh\n[ \"$1\" != -n ] || exit 1\nprintf '%s|%s\\n' \"$PWD\" \"$*\" >> \"$GATE_TEST_CALLS\"\nprintf 'GATE_FIXTURE_DIAGNOSTIC\\n'\nexit \"$GATE_TEST_EXIT\"\n",
 					"git":  "#!/bin/sh\n[ \"$1\" = -C ] && [ \"$3\" = rev-parse ] && [ \"$4\" = --show-toplevel ] || exit 66\nprintf '%s\\n' \"$CLAUDE_PROJECT_DIR\"\n",
 				}
 				for name, script := range scripts {

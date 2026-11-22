@@ -112,6 +112,74 @@ func TestPostToolUseHook_Execution(t *testing.T) {
 	}
 }
 
+func TestCheckEditTarget(t *testing.T) {
+	requireTool(t, "make")
+	makefile, err := os.ReadFile(filepath.Join("..", "..", "Makefile"))
+	require.NoError(t, err)
+	for _, tt := range []struct {
+		name      string
+		file      string
+		absolute  bool
+		env       string
+		want      string
+		wantError string
+	}{
+		{name: "Go relative", file: "source file.go", want: "go vet .\n"},
+		{name: "Go absolute", file: "source file.go", absolute: true, want: "go vet .\n"},
+		{name: "literal make syntax", file: "$(error FILE must stay literal).go", want: "go vet .\n"},
+		{name: "unformatted Go", file: "source.go", env: "UNFORMATTED=1", wantError: "gofmt required:"},
+		{name: "gofmt error", file: "source.go", env: "FORMAT_ERROR=1", wantError: "format failed"},
+		{name: "vet error", file: "source.go", env: "TOOL_ERROR=1", want: "go vet .\n", wantError: "tool failed"},
+		{name: "module", file: "go.mod", want: "go build ./...\n"},
+		{name: "checksums", file: "go.sum", want: "go build ./...\n"},
+		{name: "workspace", file: "go.work", want: "go build ./...\n"},
+		{name: "shell", file: "script.sh", want: "shellcheck"},
+		{name: "shell error", file: "script.sh", env: "TOOL_ERROR=1", want: "shellcheck", wantError: "tool failed"},
+		{name: "YAML", file: "content.yaml", want: "go run ./cmd/validate-content\n"},
+		{name: "YML", file: "content.yml", want: "go run ./cmd/validate-content\n"},
+		{name: "Makefile", file: "Makefile"},
+		{name: "empty", wantError: "FILE is required"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, filepath.Join(root, "Makefile"), string(makefile))
+			require.NoError(t, os.Mkdir(filepath.Join(root, "docs"), 0o755))
+			bin := t.TempDir()
+			for name, body := range map[string]string{
+				"go":         "[ \"$1\" != env ] || exit 0\nprintf 'go %s\\n' \"$*\" >> \"$CHECK_EDIT_LOG\"\n[ -z \"$TOOL_ERROR\" ] || { echo 'tool failed' >&2; exit 1; }\n",
+				"gofmt":      "[ -z \"$FORMAT_ERROR\" ] || { echo 'format failed' >&2; exit 1; }\nif [ -n \"$UNFORMATTED\" ]; then printf '%s\\n' \"$2\"; fi\n",
+				"shellcheck": "printf 'shellcheck %s\\n' \"$*\" >> \"$CHECK_EDIT_LOG\"\n[ -z \"$TOOL_ERROR\" ] || { echo 'tool failed' >&2; exit 1; }\n",
+			} {
+				require.NoError(t, os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"+body), 0o755))
+			}
+			log := filepath.Join(root, "calls")
+			writeFile(t, log, "")
+			file := tt.file
+			if tt.absolute {
+				file = filepath.Join(root, file)
+			}
+			cmd := exec.Command("make", "check-edit", "FILE="+file)
+			cmd.Dir = root
+			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"CHECK_EDIT_LOG="+log, tt.env)
+			out, err := cmd.CombinedOutput()
+			if tt.wantError != "" {
+				require.Error(t, err)
+				assert.Contains(t, string(out), tt.wantError)
+			} else {
+				require.NoError(t, err, "%s", out)
+			}
+			calls, err := os.ReadFile(log)
+			require.NoError(t, err)
+			if tt.want == "shellcheck" {
+				assert.Equal(t, "shellcheck "+filepath.Join(root, tt.file)+"\n", string(calls))
+			} else {
+				assert.Equal(t, tt.want, string(calls))
+			}
+		})
+	}
+}
+
 // extractPostToolUseCommand parses the agent file's YAML frontmatter
 // and returns the PostToolUse hook command with YAML escaping undone.
 func extractPostToolUseCommand(t *testing.T, agentPath string) string {
