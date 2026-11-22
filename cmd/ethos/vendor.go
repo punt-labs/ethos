@@ -103,6 +103,7 @@ func runVendor(cmd *cobra.Command, args []string) error {
 		Prune:        vendorPrune,
 		Apply:        vendorApply,
 		AllowExtKeys: vendorAllowExtKeys,
+		GuardChecks:  vendorTo == "",
 	})
 	if err != nil {
 		return err
@@ -166,6 +167,7 @@ func vendorRunner() mcp.VendorRunner {
 				return nil, destinationErr
 			}
 			opts.Dest = defaultDest
+			opts.GuardChecks = true
 		}
 		v, err := vendor.New(sources, opts)
 		if err != nil {

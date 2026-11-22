@@ -363,6 +363,9 @@ edit check over the last 50 runs exceeds half its timeout.
   invalid selected sets are errors, not a reason to use another checkout's set.
   Vendor preview/apply and content validation use the same repository selection;
   vendor refuses conflicting project and identity/role definitions of one slug.
+  Preview and apply also refuse to replace a different project check file at the
+  default canonical destination, naming both paths. An explicit `--to` destination
+  authorizes the selected snapshot without changing checkout policy resolution.
   Every configured check chooses `advisory` or `block`; edit defaults to
   advisory. A block is exit-zero PostToolUse decision feedback, never exit 2.
 - **`ethos checks init`.** Writes a starter set from marker files:
