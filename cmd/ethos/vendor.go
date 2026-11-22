@@ -230,7 +230,17 @@ func vendorChecks(roots []string) (string, []string, error) {
 	if err != nil || len(roots) == 0 || root == "" || root == roots[0] {
 		return ref, nil, err
 	}
-	return ref, append([]string{root}, roots[1:]...), nil
+	canonical := r.Ethos
+	if canonical == "" && r.Store != "" {
+		canonical = filepath.Join(r.Store, ".punt-labs", "ethos")
+	}
+	projectRoots := []string{root}
+	for _, candidate := range roots {
+		if candidate != canonical && candidate != root {
+			projectRoots = append(projectRoots, candidate)
+		}
+	}
+	return ref, projectRoots, nil
 }
 
 // writeVendorPlan renders the closure, the blast radius, and what would
