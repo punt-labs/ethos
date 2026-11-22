@@ -35,12 +35,25 @@ func configuredEditChecks(checkout, root, file, agent string) ([]editCheck, bool
 		return nil, false, err
 	}
 	global := filepath.Join(home, ".punt-labs", "ethos")
-	bundleRoot, _, err := bundle.ResolveRootFromConfig(checkout, global, cfg)
+	bundleRoot, active, err := bundle.ResolveRootFromConfig(checkout, global, cfg)
 	if err != nil {
 		return nil, false, err
 	}
 	repo := filepath.Join(checkout, ".punt-labs", "ethos")
 	repoOnly := policy == resolve.ResolutionRepoOnly
+	if repoOnly {
+		storeRoot := ""
+		if info, err := os.Stat(repo); err == nil {
+			if info.IsDir() {
+				storeRoot = repo
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, false, err
+		}
+		if err := bundle.VerifyRepoOnly(storeRoot, bundleRoot, active); err != nil {
+			return nil, false, err
+		}
+	}
 	sets := checkset.NewLayeredStoreWithBundle(repo, bundleRoot, global, repoOnly)
 	ref := cfg.Checks
 	if agent != "" && attribute.ValidateSlug(agent) == nil {

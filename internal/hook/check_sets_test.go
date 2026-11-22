@@ -184,6 +184,41 @@ func TestConfiguredEditLayeredResolution(t *testing.T) {
 	}
 }
 
+func TestConfiguredEditRepoOnlyBundle(t *testing.T) {
+	root, bin := postEditFixture(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeFile(t, filepath.Join(root, "file.txt"), "")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "resolution: repo-only\nactive_bundle: ops\nchecks: project\n")
+	globalBundle := filepath.Join(home, ".punt-labs/ethos/bundles/ops")
+	policy := "name: project\nchecks:\n  - name: bundle-check\n    stage: edit\n    files: ['**']\n    run: [probe]\n    on_fail: block\n"
+	writeFile(t, filepath.Join(globalBundle, "checks/project.yaml"), policy)
+	marker := filepath.Join(root, "probe-marker")
+	t.Setenv("POST_EDIT_LOG", marker)
+	postEditTool(t, bin, "probe", "printf executed > \"$POST_EDIT_LOG\"; exit 1\n")
+	out := configuredEdit(t, "file.txt", "")
+	require.NoFileExists(t, marker)
+	require.Contains(t, out, "additionalContext")
+	require.Contains(t, out, "repo-only cannot use the global bundle")
+	require.NotContains(t, out, `"decision"`)
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos-bundles/ops/checks/project.yaml"), policy)
+	out = configuredEdit(t, "file.txt", "")
+	require.FileExists(t, marker)
+	require.Contains(t, out, `"decision":"block"`)
+	require.Contains(t, out, "bundle-check")
+}
+
+func TestConfiguredEditRepoOnlyMissingStore(t *testing.T) {
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, "file.txt"), "")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "resolution: repo-only\nchecks: none\n")
+	out := configuredEdit(t, "file.txt", "")
+	require.Contains(t, out, "additionalContext")
+	require.Contains(t, out, "no identity store")
+	require.NotContains(t, out, `"decision"`)
+}
+
 func TestConfiguredEditUsesGeneratorRoleBinding(t *testing.T) {
 	root, bin := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())
