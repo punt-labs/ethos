@@ -282,6 +282,10 @@ agent, with the project default set, or the committing session's resolved
 set when one is found. Exit 2 blocks the commit and prints the failing
 check's tail.
 
+Unconfigured handoffs remain non-blocking when audit or file discovery fails.
+Policies selected only in another linked worktree of the same store still count;
+file-discovery failures block when such a handoff policy applies.
+
 Commit checks read files on disk. Before any check runs, every staged path matched
 by a commit check must have no unstaged changes against the actual committing
 index, including `GIT_INDEX_FILE`. Otherwise the stage blocks with exit 2,
@@ -291,10 +295,10 @@ unaffected; `files: all` counts every staged path as matched. With no commit che
 this preflight performs no Git query. Index-snapshot execution is a later slice.
 
 The handoff stage runs in `ethos hook subagent-stop`; `ethos mission result`
-integration is deferred to the next slice. In the binary, roster leave happens
-before checks, including when its kill check skips them or they block. The
-plugin wrapper exits before invoking the binary when the kill switch exists;
-that skips the whole hook, including roster leave, as before this change.
+integration is deferred to the next slice. The binary and plugin wrapper honor
+`~/.punt-hooks-kill` before reading input or storage, skipping the whole hook,
+including roster leave. Otherwise roster leave happens before checks, including
+when they block.
 The payload's agent type/handle
 selects policy. Existing audit union readers select that agent's Write/Edit
 paths from the session; if no usable paths are available, selection falls back
@@ -306,7 +310,7 @@ there are none; Bash commands are not parsed to discover additional roots.
 Otherwise the root keeps an empty file list: glob checks skip it, but
 `files: all` checks still run. Same-store linked worktrees
 run independently with their own matching paths, cwd and `{root}`, while policy
-still comes from the canonical store. For vanished attributed paths, handoff
+is resolved separately for each attributed checkout. For vanished attributed paths, handoff
 uses Git rename detection against HEAD with a copied temporary index below the
 canonical store's untracked `.punt-labs/local/ethos/tmp/` (not ambient `TMPDIR`) and
 intent-to-add entries for untracked files. Only exact-content (`R100`) renames
@@ -323,8 +327,8 @@ of path output. Enumeration, intent-to-add and diff each have a one-second Git
 budget; exhaustion skips inference with advice. Checkout attribution is retained through the
 nearest existing physical ancestor, including missing parent directories. A path
 whose root is indeterminate disables dirty-tree fallback without blocking the
-stop; attributed files and `files: all` checks still run. An unreadable audit
-fails closed rather than silently narrowing the scope.
+stop; attributed files and `files: all` checks still run. With selected handoff
+checks, an unreadable audit fails closed rather than silently narrowing the scope.
 
 A blocking failure or broken policy returns
 `{"decision":"block","reason":...}` with exit zero. On `stop_hook_active`
@@ -338,9 +342,16 @@ Commit/handoff checks run sequentially under a shared stage deadline. At
 their deduplicated root-relative directories. A directory cwd runs once per
 matching directory, with that directory's matching files. `files: all` runs
 even with no paths, from the root in that case. There are no marker defaults
-at these stages. In the binary, the kill switch skips checks, not commit
-seal/provenance steps or roster leave; the plugin wrapper instead skips its
-entire SubagentStop hook. Commit file discovery and commands preserve the actual
+at these stages. The kill switch skips input, storage resolution/repair, roster
+leave, commit sealing, provenance verification, and checks. SubagentStop succeeds
+silently. Pre-commit makes a read-only query of the actual committing index and
+refuses with exit 2 if it contains `.punt-labs/local/` paths or cannot be read.
+It names each private path with `git rm --cached -f -r --` guidance, which removes
+only the index entry and keeps the file on disk, including edits made after
+staging. It works before the first commit as well as with an existing HEAD.
+A safe index succeeds silently. No index,
+ignore file, or other storage is changed under the kill switch. Commit file
+discovery and commands preserve the actual
 committing index while scrubbing other Git selectors and tracing variables.
 
 OpenCode generation (`.opencode/agents`) uses the same subcommand from its
@@ -368,8 +379,17 @@ edit check over the last 50 runs exceeds half its timeout.
 - **Configured policies.** Identity, then the generator-bound role, then repo
   config selects a check-set slug. `none` at any level stops inheritance.
   An unresolved handle uses the repo setting, then the advisory defaults.
-  Policy comes from the session checkout's canonical store root S (resolved
-  through Git's common directory), never the edited worktree's config.
+  Repository policy comes from the edited checkout at edit, the committing
+  checkout at commit, and each attributed root at handoff. Its `checks:` reference
+  and repository registry stay together; absent a local reference, both fall back
+  to the canonical store root S. Explicit `none` disables repository inheritance.
+  Identity/role references and their registries remain canonical. Missing or
+  invalid selected sets are errors, not a reason to use another checkout's set.
+  Vendor preview/apply and content validation use the same repository selection;
+  vendor refuses conflicting project and identity/role definitions of one slug.
+  Preview and apply also refuse to replace a different project check file at the
+  default canonical destination, naming both paths. An explicit `--to` destination
+  authorizes the selected snapshot without changing checkout policy resolution.
   Every configured check chooses `advisory` or `block`; edit defaults to
   advisory. A block is exit-zero PostToolUse decision feedback, never exit 2.
 - **`ethos checks init`.** Writes a starter set from marker files:

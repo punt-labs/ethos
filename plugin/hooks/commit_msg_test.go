@@ -543,6 +543,14 @@ func TestEnabledInstalledHooksTransientWrites(t *testing.T) {
 				writeFile(t, filepath.Join(bin, "mktemp"), "#!/bin/sh\ntouch '"+mktempCall+"'\nexit 99\n")
 				require.NoError(t, os.Chmod(filepath.Join(bin, "mktemp"), 0o700))
 				env = append(env, "TMPDIR="+tmp, "PATH="+bin+":"+ethosBinDir(t)+":"+os.Getenv("PATH"), "GIT_TRACE="+filepath.Join(tmp, "trace"), "GIT_TRACE2_EVENT="+filepath.Join(tmp, "trace-event"))
+				// Keep injected fsync failures targeted at commit-message staging.
+				env = append(env, "ETHOS_TELEMETRY=off")
+				var logs string
+				for _, value := range env {
+					if home, ok := strings.CutPrefix(value, "HOME="); ok {
+						logs = filepath.Join(home, ".punt-labs", "ethos", "logs")
+					}
+				}
 				msg := filepath.Join(checkout, "MSG")
 				for _, tc := range []struct{ hook, inject, want string }{
 					{"pre-commit", "", ""},
@@ -558,7 +566,7 @@ func TestEnabledInstalledHooksTransientWrites(t *testing.T) {
 						}
 						writeFile(t, msg, "original\n")
 						trace := filepath.Join(t.TempDir(), "syscalls")
-						args := []string{"-f", "-s", "4096", "-o", trace, "-e", "trace=%file,fsync"}
+						args := []string{"-f", "-yy", "-s", "4096", "-o", trace, "-e", "trace=%file,fsync"}
 						if tc.inject != "" {
 							args = append(args, "-e", "inject="+tc.inject)
 						}
@@ -587,6 +595,12 @@ func TestEnabledInstalledHooksTransientWrites(t *testing.T) {
 						staged := false
 						for _, line := range strings.Split(string(calls), "\n") {
 							if strings.Contains(line, "O_CREAT") && !strings.Contains(line, `"/dev/null"`) {
+								if strings.Contains(line, "<"+logs+`>, "ethos.log",`) || strings.Contains(line, "<"+logs+`>, "ethos.log.rotate.lock",`) {
+									continue
+								}
+								if strings.Contains(line, "<"+filepath.Join(logs, "ethos.log")+">") || strings.Contains(line, "<"+filepath.Join(logs, "ethos.log.rotate.lock")+">") {
+									continue
+								}
 								assert.Contains(t, line, local+"/", "every transient created file must be S-local: %s", line)
 								t.Log(line)
 							}

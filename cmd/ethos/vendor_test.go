@@ -10,7 +10,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/role"
+	"github.com/punt-labs/ethos/v4/internal/team"
 	"github.com/punt-labs/ethos/v4/internal/vendor"
 
 	"github.com/stretchr/testify/assert"
@@ -22,9 +25,56 @@ func TestVendorChecksReportsConfigFailure(t *testing.T) {
 	t.Cleanup(func() { cmdRoots.Store(previous) })
 	want := errors.New("cannot read repository config")
 	cmdRoots.Store(&repoRoots{Located: resolve.Located{ConfigErr: want}})
-	ref, err := vendorChecks()
+	ref, _, err := vendorChecks(nil)
 	require.ErrorIs(t, err, want)
 	require.Empty(t, ref)
+}
+
+func TestVendorChecksKeepsFallbacksWithoutRepoStore(t *testing.T) {
+	for _, withBundle := range []bool{false, true} {
+		name := "global only"
+		if withBundle {
+			name = "bundle before global"
+		}
+		t.Run(name, func(t *testing.T) {
+			previous := cmdRoots.Load()
+			t.Cleanup(func() { cmdRoots.Store(previous) })
+			repo, global, bundled, dest := realPath(t, t.TempDir()), realPath(t, t.TempDir()), realPath(t, t.TempDir()), realPath(t, t.TempDir())
+			runGit(t, repo, "init", "-q")
+			write := func(root, rel, body string) {
+				path := filepath.Join(root, rel)
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+				require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+			}
+			write(repo, ".punt-labs/ethos.yaml", "checks: portable\n")
+			write(global, "identities/worker.yaml", "name: Worker\nhandle: worker\nkind: human\n")
+			globalPolicy := "name: portable\nchecks: []\ndescription: global policy\n"
+			bundlePolicy := "name: portable\nchecks: []\ndescription: bundle policy\n"
+			write(global, "checks/portable.yaml", globalPolicy)
+			var bundleStore *identity.Store
+			bundleRoot := ""
+			want := globalPolicy
+			if withBundle {
+				write(bundled, "checks/portable.yaml", bundlePolicy)
+				bundleStore = identity.NewStore(bundled)
+				bundleRoot = bundled
+				want = bundlePolicy
+			}
+			ids := identity.NewLayeredStoreWithBundle(nil, bundleStore, identity.NewStore(global), false)
+			cmdRoots.Store(&repoRoots{Located: resolve.Located{Store: repo, Checkout: repo, Config: &resolve.RepoConfig{Checks: "portable"}}})
+			roots := vendorRoots(ids)
+			ref, checkRoots, err := vendorChecks(roots)
+			require.NoError(t, err)
+			v, err := vendor.New(vendor.Sources{Checks: ref, ProjectChecksRoots: checkRoots, Roots: roots, Identities: ids, Roles: role.NewLayeredStoreWithBundle("", bundleRoot, global, false), Teams: team.NewLayeredStoreWithBundle("", bundleRoot, global, false)}, vendor.Options{Handles: []string{"worker"}, Dest: dest, Apply: true})
+			require.NoError(t, err)
+			_, err = v.Run()
+			require.NoError(t, err)
+			got, err := os.ReadFile(filepath.Join(dest, "checks/portable.yaml"))
+			require.NoError(t, err)
+			require.Equal(t, want, string(got))
+			require.NoDirExists(t, filepath.Join(repo, ".punt-labs/ethos"))
+		})
+	}
 }
 
 func TestVendorRunnerKeepsRequestSnapshot(t *testing.T) {

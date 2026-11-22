@@ -7,7 +7,7 @@ Cross-repo request from the punt-kit agent (claude:tty16), 2026-07-20.
 
 A corrupt sealed chunk is salvaged automatically by the next ethos run (DES-084
 step 7): decodable lines are redacted into a replacement chunk, the raw bytes
-are deleted, and both digests are logged to `~/.punt-labs/ethos/logs/repair.log`.
+are deleted, and both digests are logged to `~/.punt-labs/ethos/logs/ethos.log`.
 No command is involved. The salvage does not change the index, and eligible
 recovered trace is published only by full sealing; private recovery is never
 implicitly promoted.

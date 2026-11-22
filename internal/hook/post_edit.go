@@ -21,7 +21,7 @@ import (
 
 // PostEdit emits edit feedback. Ethos errors are always advisory and fail open.
 func PostEdit(ctx context.Context, input io.Reader, output io.Writer, agent ...string) {
-	if postEditKilled() {
+	if Killed() {
 		return
 	}
 	defer func() {
@@ -98,8 +98,8 @@ func editRedact(message string) string {
 	return redact.EmailPattern.ReplaceAllString(message, redact.EmailToken)
 }
 
-// postEditKilled honours the operator kill switch every punt hook obeys.
-func postEditKilled() bool {
+// Killed reports whether the operator kill switch disables punt hooks.
+func Killed() bool {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return false

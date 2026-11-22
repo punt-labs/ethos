@@ -60,12 +60,23 @@ to marker checks merely because no glob matches.
 
 Advisory failures inject context. An explicit `on_fail: block` emits
 PostToolUse block feedback, still with exit zero. Policy errors fail open
-with context. The session checkout's canonical store supplies policy, including
-main-tree changes not committed into a linked checkout. The edited worktree's
-configuration is never consulted. See
+with context. Repository checks use the edited/committing checkout's `checks:`
+reference and registry first; handoff resolves policy per attributed checkout.
+Without a local reference, policy falls back to the canonical main checkout,
+including changes not committed into the worktree. `checks: none` opts out; a
+missing selected set is an error, not a fallback. Identity/role policy stays in
+the canonical store. Vendor preview/apply and content validation follow the same
+repository selection. See
 [DES-085's design](design-agent-checks.md) for stage and adapter details.
 
-The same set may define `stage: commit` and `stage: handoff`. Pre-commit runs
+The same set may define `stage: commit` and `stage: handoff`.
+`~/.punt-hooks-kill` disables input, storage repair, roster leave, sealing,
+provenance verification, and checks without changing the index or ignore files.
+SubagentStop succeeds silently. Pre-commit still reads the actual committing
+index: any private `.punt-labs/local/` path or query failure blocks with exit 2;
+a safe index succeeds silently. Remove the named paths with the printed
+`git rm --cached -f -r --` command; it keeps working files and their unstaged edits
+on disk and also works before the first commit. Otherwise pre-commit runs
 after seal/provenance, selects files from the actual committing index, and
 blocks with exit 2 by default. Checks read files on disk, so matched staged files
 with unstaged changes block before any check runs, even for advisory checks.
@@ -1452,16 +1463,28 @@ The `agent` field is a channel binding — like email or GitHub. Ethos defines *
 
 ## Automatic storage upgrade
 
+Private diagnostics live in `~/.punt-labs/ethos/logs/ethos.log` (directory `0700`,
+file `0600`), rotating at 5 MiB with five backups. Invocation and tool outcomes
+contain no arguments, flag values or user content. Repair diagnostics retain
+redacted paths and errors. Old `repair.log` files are left untouched. Audit and
+session streams remain separate; shell hook wrappers still use `hook-errors.log`.
+
+Private local usage records live in `~/.punt-labs/ethos/telemetry.db` (`0600`),
+with 90-day retention. They never leave the machine and contain only validated
+command, hook and tool enums, outcomes, exit codes and durations, not content or
+identifiers. Command-path enums use hyphens between words. Set
+`ETHOS_TELEMETRY=off` or `PUNT_TELEMETRY=off` to disable capture entirely.
+
 Ethos upgrades its own storage; no command exists for it. Every CLI command,
 hook and MCP call first checks a stamp, one at
 `S/.punt-labs/local/ethos/layout.yaml` and one at
 `~/.punt-labs/ethos/layout.yaml`. When a stamp is missing, ethos converts older
 layouts into the shared local zone and appends what it did to
-`~/.punt-labs/ethos/logs/repair.log`. The only output is one line, and only when
+`~/.punt-labs/ethos/logs/ethos.log`. The only output is one line, and only when
 something changed:
 
 ```text
-ethos: upgraded storage (N items; see ~/.punt-labs/ethos/logs/repair.log)
+ethos: upgraded storage (N items; see ~/.punt-labs/ethos/logs/ethos.log)
 ```
 
 A busy lock defers the upgrade to the next run, which resumes it. Losses are

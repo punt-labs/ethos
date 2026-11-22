@@ -18,7 +18,7 @@ func globalStore() *identity.Store {
 	s, err := identity.DefaultStore()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		exitProcess(1, err)
 	}
 	return s
 }
@@ -171,7 +171,9 @@ func sessionStore() *session.Store {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: cannot determine home directory: %v\n", err)
-		os.Exit(1)
+		exitProcess(1, err)
 	}
-	return session.NewStore(home + "/.punt-labs/ethos")
+	ss := session.NewStore(home + "/.punt-labs/ethos")
+	ss.SetLogger(processLogger.With("component", "ethos.session"))
+	return ss
 }

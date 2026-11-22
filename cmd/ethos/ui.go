@@ -34,7 +34,7 @@ func init() {
 	rootCmd.AddCommand(uiCmd)
 }
 
-func runUI() error {
+func runUI() (uiErr error) {
 	loc := currentRoots()
 	if loc.CheckoutErr != nil {
 		return fmt.Errorf("ethos ui: locating the checkout: %w", loc.CheckoutErr)
@@ -72,6 +72,8 @@ func runUI() error {
 	}
 
 	url := fmt.Sprintf("http://%s", ln.Addr())
+	stopLogging := beginServerLogging(processLogger)
+	defer func() { stopLogging(uiErr) }()
 	fmt.Fprintf(os.Stdout, "ethos ui: %s\n", url)
 
 	// Open browser.

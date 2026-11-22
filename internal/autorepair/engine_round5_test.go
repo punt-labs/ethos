@@ -83,7 +83,7 @@ func TestAbandonedStepLateResultIsLogged(t *testing.T) {
 	<-done
 	n := 0
 	for _, l := range repairLogLines(t, r.global) {
-		if strings.Contains(l, "late result for abandoned step a") && strings.Contains(l, "late kaboom") {
+		if strings.Contains(l, `"action":"late"`) && strings.Contains(l, `"error_type":"*errors.errorString"`) {
 			n++
 		}
 	}

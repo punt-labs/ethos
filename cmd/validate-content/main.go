@@ -405,10 +405,24 @@ func runFor(loc resolve.Located, globalRoot string) (report, error) {
 			results = append(results, fail("checks: validate", err.Error()))
 		}
 	}
-	if loc.Config != nil {
-		if err := checkStore.ValidateRef(loc.Config.Checks); err != nil {
-			results = append(results, fail("checks: project reference", err.Error()))
+	projectRef, projectRoot, err := resolve.CheckPolicyOf(loc)
+	if err != nil {
+		return report{}, err
+	}
+	projectStore := checkset.NewLayeredStoreWithBundle(projectRoot, bundleRoot, globalRoot, repoAuthoritative)
+	if projectRoot != ethosRoot {
+		names, err := projectStore.List()
+		if err != nil {
+			return report{}, err
 		}
+		for _, name := range names {
+			if _, err := projectStore.Load(name); err != nil {
+				results = append(results, fail("checks: validate", err.Error()))
+			}
+		}
+	}
+	if err := projectStore.ValidateRef(projectRef); err != nil {
+		results = append(results, fail("checks: project reference", err.Error()))
 	}
 	allRoles, err := roleLayered.List()
 	if err != nil {

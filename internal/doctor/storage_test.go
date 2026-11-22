@@ -105,12 +105,12 @@ func TestCheckStorageMessagesPromiseNothing(t *testing.T) {
 	d, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 	missing := CheckStorage(resolve.Located{}, filepath.Join(d, "g"))
-	assert.Equal(t, "no layout stamp for the global store; see ~/.punt-labs/ethos/logs/repair.log", missing.Detail)
+	assert.Equal(t, "no layout stamp for the global store; see ~/.punt-labs/ethos/logs/ethos.log", missing.Detail)
 
 	g := filepath.Join(d, "old")
 	writeGlobalStamp(t, g, autorepair.Stamp{Version: 4})
 	old := CheckStorage(resolve.Located{}, g)
-	assert.Equal(t, "the global store is at layout v4, not v5; see ~/.punt-labs/ethos/logs/repair.log", old.Detail)
+	assert.Equal(t, "the global store is at layout v4, not v5; see ~/.punt-labs/ethos/logs/ethos.log", old.Detail)
 }
 
 // A repository whose only residuals are the final state of pre-v4.21 mission

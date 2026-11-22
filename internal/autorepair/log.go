@@ -1,101 +1,86 @@
 package autorepair
 
 import (
-	"encoding/json"
+	"errors"
+	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
-	"sync"
-	"time"
+	"sort"
+	"strings"
+	"syscall"
 
+	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/punt-labs/ethos/v4/internal/redact"
 )
 
-// maxLogBytes is the size at which the log rotates to repair.log.1.
-const maxLogBytes = 1 << 20
-
-// LogPath is the repair log under the global store root.
-func LogPath(global string) string { return filepath.Join(global, "logs", "repair.log") }
-
-// FileLog is the Logger the engine supplies: one JSON line per action,
-// appended with O_APPEND. Rotation happens under the log's own mutex and
-// the engine only builds one while holding the global repair lock, so no
-// two processes rotate at once; the constructor is unexported to keep it
-// that way. Every string field passes through the DES-080 prose redactor
-// (credentials, addresses, home paths): a step error can quote file
-// contents, and file contents are never an argument. The redactor does not
-// recognise Windows home paths (C:\Users\name\...); Windows is not a shipped
-// target.
+// FileLog adapts repair actions to the process-owned shared diagnostic sink.
 type FileLog struct {
-	path     string
-	store    string
-	checkout string
-	ethos    string
-	max      int64
-	mu       sync.Mutex
+	logger *slog.Logger
+	roots  []string
 }
 
-// newFileLog returns the repair log for the global store root, tagged with
-// the repository roots (empty outside one) and the binary version.
-func newFileLog(global, store, checkout, ethos string) *FileLog {
-	return &FileLog{path: LogPath(global), store: store, checkout: checkout, ethos: ethos, max: maxLogBytes}
+func newFileLog(store, checkout, ethos string, logger *slog.Logger) *FileLog {
+	if logger == nil {
+		logger = diagnostic.Discard()
+	}
+	roots := []string{store, checkout}
+	sort.SliceStable(roots, func(i, j int) bool { return len(roots[i]) > len(roots[j]) })
+	l := &FileLog{logger: logger.With("component", "ethos.repair", "ethos", ethos)}
+	for _, root := range roots {
+		if !filepath.IsAbs(root) {
+			continue
+		}
+		l.roots = append(l.roots, filepath.Clean(root))
+	}
+	return l
 }
 
-type logLine struct {
-	Time     string   `json:"time"`
-	Store    string   `json:"store"`
-	Checkout string   `json:"checkout"`
-	Ethos    string   `json:"ethos"`
-	Step     string   `json:"step"`
-	Action   string   `json:"action"`
-	Paths    []string `json:"paths"`
-	Error    string   `json:"error,omitempty"`
+func (l *FileLog) relativePath(path string) (string, bool) {
+	if filepath.IsLocal(path) {
+		return redact.Prose(filepath.ToSlash(path)), true
+	}
+	for _, root := range l.roots {
+		rel, err := filepath.Rel(root, path)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return redact.Prose(filepath.ToSlash(rel)), true
+		}
+	}
+	return "", false
 }
 
-// Logf appends one line. A log that cannot be written is dropped: a repair
-// problem never fails the command that triggered the repair.
+// Logf records repair metadata after applying the existing prose redactor.
 func (l *FileLog) Logf(step, action string, paths []string, err error) {
-	rp := make([]string, len(paths))
-	for i, p := range paths {
-		rp[i] = redact.Prose(p)
+	relative := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if rel, ok := l.relativePath(path); ok {
+			relative = append(relative, rel)
+		}
 	}
-	line := logLine{
-		Time:     time.Now().UTC().Format(time.RFC3339),
-		Store:    redact.Prose(l.store),
-		Checkout: redact.Prose(l.checkout),
-		Ethos:    l.ethos,
-		Step:     step,
-		Action:   action,
-		Paths:    rp,
-	}
+	attrs := []any{"step", redact.Prose(step), "action", redact.Prose(action), "paths", strings.Join(relative, ","), "path_count", len(paths), "omitted_path_count", len(paths) - len(relative)}
 	if err != nil {
-		line.Error = redact.Prose(err.Error())
+		attrs = append(attrs, "error_type", diagnostic.ErrorType(err))
+		var pathErr *fs.PathError
+		var linkErr *os.LinkError
+		var op string
+		switch {
+		case errors.As(err, &pathErr):
+			op = pathErr.Op
+		case errors.As(err, &linkErr):
+			op = linkErr.Op
+		}
+		switch op {
+		case "open", "read", "write", "close", "stat", "lstat", "mkdir", "remove", "unlink", "rename", "link", "symlink", "readlink", "chmod", "chown", "lchown", "truncate", "sync", "readdir", "seek", "chtimes", "chdir":
+			attrs = append(attrs, "error_op", op)
+		}
+		var errno syscall.Errno
+		if errors.As(err, &errno) {
+			attrs = append(attrs, "error_cause", errno.Error())
+		}
 	}
-	data, merr := json.Marshal(line)
-	if merr != nil {
+	if action == "note" {
+		l.logger.Warn("Roster purge warning", attrs...)
 		return
 	}
-	data = append(data, '\n')
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(l.path), 0o700); err != nil {
-		return
-	}
-	l.rotate()
-	f, err := os.OpenFile(l.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return
-	}
-	_, _ = f.Write(data)
-	_ = f.Close()
-}
-
-// rotate moves a log at or past the cap to repair.log.1, replacing the
-// previous rotation.
-func (l *FileLog) rotate() {
-	info, err := os.Stat(l.path)
-	if err != nil || info.Size() < l.max {
-		return
-	}
-	_ = os.Rename(l.path, l.path+".1")
+	l.logger.Info("Repair action", attrs...)
 }

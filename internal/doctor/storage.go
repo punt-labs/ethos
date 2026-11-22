@@ -136,11 +136,11 @@ func settledSummary(rs []autorepair.Residual) string {
 func stampProblem(which string, s autorepair.Stamp, err error) string {
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return fmt.Sprintf("no layout stamp for the %s store; see ~/.punt-labs/ethos/logs/repair.log", which)
+		return fmt.Sprintf("no layout stamp for the %s store; see ~/.punt-labs/ethos/logs/ethos.log", which)
 	case err != nil:
 		return fmt.Sprintf("the %s layout stamp is unreadable: %v", which, err)
 	case !s.Current():
-		return fmt.Sprintf("the %s store is at layout v%d, not v%d; see ~/.punt-labs/ethos/logs/repair.log", which, s.Version, autorepair.LayoutVersion)
+		return fmt.Sprintf("the %s store is at layout v%d, not v%d; see ~/.punt-labs/ethos/logs/ethos.log", which, s.Version, autorepair.LayoutVersion)
 	}
 	return ""
 }

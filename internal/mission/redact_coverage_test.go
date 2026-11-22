@@ -143,8 +143,7 @@ var writerRegistry = map[string]writerEntry{
 	// installed-hook tests cover the callback rename and message bytes.
 	"internal/hook.installCommitMessage": checkpoint("CreateLocalTemp"),
 	// internal/autorepair: the repair log (machine-local, global root).
-	"internal/autorepair.FileLog.Logf":   checkpoint("Prose"),
-	"internal/autorepair.FileLog.rotate": exempt("renames the repair log to repair.log.1; writes no content"),
+	"internal/autorepair.FileLog.Logf": checkpoint("Prose"),
 	// internal/mission: records.
 
 	"internal/mission.migrateOneMissionLockedQ": exempt(

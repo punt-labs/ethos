@@ -74,6 +74,9 @@ var hookSubagentStopCmd = &cobra.Command{
 	Short: "SubagentStop hook handler",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if hook.Killed() {
+			return nil
+		}
 		return hook.HandleSubagentStopWithIO(cmd.Context(), cmd.InOrStdin(), sessionStore(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
@@ -193,7 +196,7 @@ func repairSessions(loc resolve.Located) func(ctx context.Context) (int, error) 
 			return 0, nil
 		}
 		defer release()
-		env, err := autorepair.HookEnv(loc, global)
+		env, err := autorepair.HookEnv(loc, global, processLogger)
 		if err != nil {
 			return 0, fmt.Errorf("building the repair environment: %w", err)
 		}

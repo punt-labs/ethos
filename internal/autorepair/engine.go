@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
@@ -36,7 +38,7 @@ func (r Result) Line() string {
 	if !r.Repaired {
 		return ""
 	}
-	return fmt.Sprintf("ethos: upgraded storage (%d items; see ~/.punt-labs/ethos/logs/repair.log)", r.Items)
+	return fmt.Sprintf("ethos: upgraded storage (%d items; see ~/.punt-labs/ethos/logs/ethos.log)", r.Items)
 }
 
 // options is Ensure's dependency set; the tests replace the steps and the
@@ -52,6 +54,7 @@ type options struct {
 	// recheck makes a pass over current stamps re-run the steps that own a
 	// residual a person can act on, so the residual clears once they have.
 	recheck bool
+	logger  *slog.Logger
 }
 
 func (options) globalLockPath(global string) string { return globalLockPath(global) }
@@ -84,7 +87,9 @@ func defaultOptions() options {
 // pass: no later step runs, since the abandoned one may hold inner locks the
 // next would contend for.
 func Ensure(ctx context.Context, roots resolve.Located, global string) (Result, error) {
-	return ensure(ctx, roots, global, defaultOptions())
+	o := defaultOptions()
+	o.logger = diagnostic.FromContext(ctx)
+	return ensure(ctx, roots, global, o)
 }
 
 // EnsureUnbounded is Ensure with no step or pass budget: every step runs to
@@ -92,6 +97,7 @@ func Ensure(ctx context.Context, roots resolve.Located, global string) (Result, 
 // many runs. Only `ethos doctor` calls it (operator ruling 2026-11-11).
 func EnsureUnbounded(ctx context.Context, roots resolve.Located, global string) (Result, error) {
 	o := defaultOptions()
+	o.logger = diagnostic.FromContext(ctx)
 	o.stepBudget = unbounded
 	o.ensureBudget = unbounded
 	o.recheck = true
@@ -119,7 +125,9 @@ const unbounded = 100 * 365 * 24 * time.Hour
 // are registered, in StepOrder, logs under the lock, and returns Ensure's
 // Result shape. A name no unit registers is skipped, not an error.
 func CheapPass(ctx context.Context, names []string, env Env) (Result, error) {
-	return cheapPass(ctx, names, env.Roots, env.Global, defaultOptions())
+	o := defaultOptions()
+	o.logger = diagnostic.FromContext(ctx)
+	return cheapPass(ctx, names, env.Roots, env.Global, o)
 }
 
 // HookEnv is the Env a hook passes to CheapPass: the same one Ensure builds
@@ -127,8 +135,12 @@ func CheapPass(ctx context.Context, names []string, env Env) (Result, error) {
 // (zero unless a repository that has used ethos was located cleanly), the
 // global root, the clock and the repair log. It writes nothing. A step sees
 // the repository only inside CheapPass, under the repository repair lock.
-func HookEnv(roots resolve.Located, global string) (Env, error) {
-	return hookEnv(roots, global, defaultOptions())
+func HookEnv(roots resolve.Located, global string, loggers ...*slog.Logger) (Env, error) {
+	o := defaultOptions()
+	if len(loggers) > 0 {
+		o.logger = loggers[0]
+	}
+	return hookEnv(roots, global, o)
 }
 
 func hookEnv(roots resolve.Located, global string, o options) (Env, error) {
@@ -140,7 +152,7 @@ func hookEnv(roots resolve.Located, global string, o options) (Env, error) {
 	if roots.Err() == nil {
 		store, checkout = roots.Store, roots.Checkout
 	}
-	env := Env{Global: global, Now: o.now(), Log: newFileLog(global, store, checkout, o.ethos)}
+	env := Env{Global: global, Now: o.now(), Log: newFileLog(store, checkout, o.ethos, o.logger)}
 	if r != nil {
 		env.Roots, env.Policy = roots, policy
 	}
@@ -242,7 +254,7 @@ func ensure(ctx context.Context, roots resolve.Located, global string, o options
 		return Result{}, nil
 	}
 
-	log = openLog(global, roots, o.ethos)
+	log = openLog(roots, o.ethos, o.logger)
 	if r != nil && r.needed {
 		// A step is shown the repository only while this Ensure holds its
 		// lock; a busy lock drops the repository pass.
@@ -320,7 +332,7 @@ func cheapPass(ctx context.Context, names []string, roots resolve.Located, globa
 	}
 	defer release()
 
-	log = openLog(global, roots, o.ethos)
+	log = openLog(roots, o.ethos, o.logger)
 	if r != nil {
 		r.needed = true
 		if rel, rerr := repositoryLock(policy, 0); rerr != nil {
@@ -341,8 +353,8 @@ func cheapPass(ctx context.Context, names []string, roots resolve.Located, globa
 // location carries an error is not served (repositoryTarget returns nil for
 // it); the failure is written to the log so the skip is visible, not read as
 // "no repository".
-func openLog(global string, roots resolve.Located, ethos string) *FileLog {
-	log := newFileLog(global, roots.Store, roots.Checkout, ethos)
+func openLog(roots resolve.Located, ethos string, logger *slog.Logger) *FileLog {
+	log := newFileLog(roots.Store, roots.Checkout, ethos, logger)
 	if err := roots.Err(); err != nil {
 		log.Logf("engine", "skip-repository", nil, err)
 	}

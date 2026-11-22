@@ -11,6 +11,7 @@
 package vendor
 
 import (
+	"bytes"
 	"fmt"
 	"io/fs"
 	"os"
@@ -33,14 +34,16 @@ import (
 // a layered store reports the content it resolved, not which layer the
 // bytes came from, and vendor copies bytes.
 type Sources struct {
-	Checks     string
-	Roots      []string
-	Identities identity.IdentityStore
-	Roles      *role.LayeredStore
-	Teams      *team.LayeredStore
+	Checks string
+	// ProjectChecksRoots applies only to Checks, not identity/role references.
+	ProjectChecksRoots []string
+	Roots              []string
+	Identities         identity.IdentityStore
+	Roles              *role.LayeredStore
+	Teams              *team.LayeredStore
 }
 
-// Options are the command-line surface of a vendor run.
+// Options control a vendor run.
 type Options struct {
 	Handles      []string // explicit seeds
 	Team         string   // seed from a team's members
@@ -49,6 +52,7 @@ type Options struct {
 	Prune        bool     // remove managed files the closure does not contain
 	Apply        bool     // write; without it the run only plans
 	AllowExtKeys []string // per-key credential-guard overrides, "<ns>/<key>"
+	GuardChecks  bool     // refuse replacing different project checks at the default destination
 }
 
 // ExtFile is one extension base file in the closure.
@@ -140,6 +144,9 @@ func (v *Vendorer) Run() (*Plan, error) {
 	p.Dest = v.opts.Dest
 	p.Prune = v.opts.Prune
 	p.ExtFiles = p.ExtCount()
+	if err := v.guardProjectChecks(); err != nil {
+		return nil, err
+	}
 
 	// The guard runs before anything is written, on the plan, so a
 	// blocked key stops a dry run too. A warning that fires only after
@@ -267,6 +274,40 @@ func (v *Vendorer) extFiles(handle string) ([]ExtFile, error) {
 	return out, nil
 }
 
+func (v *Vendorer) guardProjectChecks() error {
+	if !v.opts.GuardChecks || v.src.Checks == "" || v.src.Checks == "none" {
+		return nil
+	}
+	rel := filepath.Join("checks", v.src.Checks+".yaml")
+	dest := filepath.Join(v.opts.Dest, rel)
+	info, err := os.Lstat(dest)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("vendor: project check destination %s is not a regular file", dest)
+	}
+	source, ok := v.find(rel)
+	if !ok {
+		return fmt.Errorf("vendor: %s not found in any source layer", rel)
+	}
+	want, err := os.ReadFile(source)
+	if err != nil {
+		return err
+	}
+	existing, err := os.ReadFile(dest)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(want, existing) {
+		return fmt.Errorf("vendor: project check %s differs from %s; refusing to replace the default destination; choose an explicit --to destination", source, dest)
+	}
+	return nil
+}
+
 // guard classifies every ext key name in the closure and refuses the run
 // when any is credential-named. Returns the WARN-class findings.
 func (v *Vendorer) guard(p *Plan) ([]Finding, error) {
@@ -352,7 +393,15 @@ func (v *Vendorer) write(p *Plan) error {
 // precedence. Only regular files and directories are accepted, and the
 // stat is an lstat, so no link in a source layer can redirect a copy.
 func (v *Vendorer) find(rel string) (string, bool) {
-	for _, root := range v.src.Roots {
+	roots := v.src.Roots
+	if rel == filepath.Join("checks", v.src.Checks+".yaml") && len(v.src.ProjectChecksRoots) > 0 {
+		roots = v.src.ProjectChecksRoots
+	}
+	return findInRoots(roots, rel)
+}
+
+func findInRoots(roots []string, rel string) (string, bool) {
+	for _, root := range roots {
 		if root == "" {
 			continue
 		}

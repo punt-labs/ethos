@@ -16,6 +16,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/punt-labs/ethos/v4/internal/session"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,6 +25,36 @@ func stageGit(t *testing.T, root string, args ...string) {
 	cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
+}
+
+func TestHandoffWithoutRepositoryOrChecks(t *testing.T) {
+	for _, repository := range []bool{false, true} {
+		t.Run(fmt.Sprintf("repository=%t", repository), func(t *testing.T) {
+			root := testhelpers.OutsideRepo(t)
+			if repository {
+				initGitRepo(t, root)
+			}
+			t.Chdir(root)
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("CLAUDE_PROJECT_DIR", root)
+			ss := session.NewStore(t.TempDir())
+			require.NoError(t, ss.Create("plain", session.Participant{AgentID: "human"}, session.Participant{AgentID: "sub"}, "", ""))
+			var out, stderr bytes.Buffer
+			require.NoError(t, HandleSubagentStopWithIO(context.Background(), strings.NewReader(`{"session_id":"plain","agent_id":"sub"}`), ss, &out, &stderr))
+			require.Empty(t, out.String())
+			require.Empty(t, stderr.String())
+			require.Equal(t, StageFeedback{}, RunStageChecks(context.Background(), root, "", "handoff"))
+			if !repository {
+				called := false
+				feedback := runStageRootChecks(context.Background(), root, "", "handoff", func() (map[string][]string, error) {
+					called = true
+					return nil, nil
+				})
+				require.Equal(t, StageFeedback{}, feedback)
+				require.False(t, called, "non-Git handoffs cannot have repository checks and must not discover files")
+			}
+		})
+	}
 }
 
 func TestStageFileSelection(t *testing.T) {
@@ -91,12 +122,13 @@ func TestHandoffChecks(t *testing.T) {
 			require.NoError(t, HandleSubagentStopWithIO(context.Background(), bytes.NewReader(payload), ss, &out, &stderr))
 			roster, err := ss.Load("stop")
 			require.NoError(t, err)
-			require.Nil(t, roster.FindParticipant("sub"))
 			if tc.killed {
+				require.NotNil(t, roster.FindParticipant("sub"))
 				require.Empty(t, out.String())
 				require.Empty(t, stderr.String())
 				return
 			}
+			require.Nil(t, roster.FindParticipant("sub"))
 			if tc.active || tc.mode != "" {
 				require.Empty(t, out.String())
 				require.NotEmpty(t, stderr.String())
@@ -105,6 +137,17 @@ func TestHandoffChecks(t *testing.T) {
 				require.True(t, strings.Contains(out.String(), "handoff-probe") || strings.Contains(out.String(), "absent"))
 			}
 		})
+	}
+}
+
+func TestHandoffKilledBeforeInput(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(os.Getenv("HOME"), ".punt-hooks-kill"), "")
+	for _, payload := range []string{"", "{"} {
+		var out, stderr bytes.Buffer
+		require.NoError(t, HandleSubagentStopWithIO(context.Background(), strings.NewReader(payload), nil, &out, &stderr))
+		require.Empty(t, out.String())
+		require.Empty(t, stderr.String())
 	}
 }
 
@@ -541,7 +584,7 @@ func TestHandoffLinkedWorktree(t *testing.T) {
 			linked := filepath.Join(root, ".claude", "worktrees", "linked")
 			stageGit(t, root, "worktree", "add", "--detach", linked)
 			writeFile(t, filepath.Join(linked, "written.go"), "package linked\n")
-			writeFile(t, filepath.Join(linked, ".punt-labs/ethos.yaml"), "checks: none\n")
+			writeFile(t, filepath.Join(linked, ".punt-labs/ethos.yaml"), "checks: ''\n")
 			writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
 			checkPolicy(t, root, "project", "  - name: glob\n    stage: handoff\n    files: ['**/*.go']\n    run: [probe, '{root}', '{files}']\n  - name: all\n    stage: handoff\n    files: all\n    run: [probe, '{root}']\n")
 			log := filepath.Join(t.TempDir(), "log")

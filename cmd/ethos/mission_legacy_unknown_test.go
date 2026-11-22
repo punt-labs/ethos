@@ -80,7 +80,7 @@ func TestCLIMissionLegacyUnknown(t *testing.T) {
 			// before the first command; a read-only command adds nothing to
 			// either tree.
 			localBefore := auditLeafCLISnapshot(t, filepath.Join(se.repo, ".punt-labs", "local"))
-			homeBefore := auditLeafCLISnapshot(t, filepath.Join(se.home, ".punt-labs"))
+			homeBefore := auditLeafCLISnapshot(t, filepath.Join(se.home, ".punt-labs"), se.home)
 			stdout, stderr, exit := runCLI(t, se, "mission", "reflections", id, "--json")
 			require.Equal(t, 0, exit, stderr)
 			t.Logf("JSON: %s", stdout)
@@ -119,7 +119,7 @@ func TestCLIMissionLegacyUnknown(t *testing.T) {
 			require.NoError(t, err)
 			assert.Nil(t, loaded.RoundDecisions)
 			assert.Equal(t, localBefore, auditLeafCLISnapshot(t, filepath.Join(se.repo, ".punt-labs", "local")), "read-only entry points must not initialize local state")
-			assert.Equal(t, homeBefore, auditLeafCLISnapshot(t, filepath.Join(se.home, ".punt-labs")), "read-only entry points must not initialize global state")
+			assert.Equal(t, homeBefore, auditLeafCLISnapshot(t, filepath.Join(se.home, ".punt-labs"), se.home), "read-only entry points must not initialize global state")
 		})
 	}
 }

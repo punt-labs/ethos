@@ -36,13 +36,19 @@ func cliExtOwnershipFixture(t *testing.T, se *cliSubprocessEnv) string {
 	return filepath.Join(record, "identities", "test-agent.yaml")
 }
 
-func cliExtOwnershipSnapshot(t *testing.T, roots ...string) map[string][sha256.Size]byte {
+func cliExtOwnershipSnapshot(t *testing.T, home string, roots ...string) map[string][sha256.Size]byte {
 	t.Helper()
 	result := make(map[string][sha256.Size]byte)
 	for _, root := range roots {
 		require.NoError(t, filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
 				return err
+			}
+			if privateObservabilityPath(home, path) {
+				if entry.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
 			}
 			result[path] = sha256.Sum256([]byte(entry.Type().String()))
 			if entry.Type().IsRegular() {
@@ -102,7 +108,7 @@ func TestCLI_ExtensionOwnershipRefusal(t *testing.T) {
 					require.NoError(t, os.Symlink(target, badPath))
 				}
 			}
-			before := cliExtOwnershipSnapshot(t, se.repo, se.home)
+			before := cliExtOwnershipSnapshot(t, se.home, se.repo, se.home)
 			for _, args := range [][]string{
 				{"identity", "show", "test-agent"},
 				{"ext", "get", "test-agent", "quarry"},
@@ -121,7 +127,7 @@ func TestCLI_ExtensionOwnershipRefusal(t *testing.T) {
 				assert.NotContains(t, stderr, "active bundle", "the error must retain the rejected owner")
 				assert.False(t, strings.Contains(stdout+stderr, "repo-overlay"), "private fixture value must not appear")
 			}
-			assert.Equal(t, before, cliExtOwnershipSnapshot(t, se.repo, se.home), "all layers and redirected targets must remain unchanged")
+			assert.Equal(t, before, cliExtOwnershipSnapshot(t, se.home, se.repo, se.home), "all layers and redirected targets must remain unchanged")
 		})
 	}
 }
@@ -228,7 +234,7 @@ func TestCLI_ExtensionListCheckedOwnership(t *testing.T) {
 							require.NoError(t, os.Symlink(target, badPath))
 						}
 					}
-					before := cliExtOwnershipSnapshot(t, se.repo, se.home)
+					before := cliExtOwnershipSnapshot(t, se.home, se.repo, se.home)
 					for _, output := range []string{"human", "json"} {
 						t.Run(output, func(t *testing.T) {
 							args := []string{"ext", "list", "test-agent"}
@@ -245,7 +251,7 @@ func TestCLI_ExtensionListCheckedOwnership(t *testing.T) {
 							}
 						})
 					}
-					assert.Equal(t, before, cliExtOwnershipSnapshot(t, se.repo, se.home), "listing must not mutate any layer or redirected target")
+					assert.Equal(t, before, cliExtOwnershipSnapshot(t, se.home, se.repo, se.home), "listing must not mutate any layer or redirected target")
 				})
 			}
 		}
@@ -293,7 +299,7 @@ func TestCLI_ExtensionListOwnershipControls(t *testing.T) {
 						require.NoError(t, os.Remove(filepath.Join(roots[1].root, "identities", "test-agent.yaml")))
 					}
 				}
-				before := cliExtOwnershipSnapshot(t, se.repo, se.home)
+				before := cliExtOwnershipSnapshot(t, se.home, se.repo, se.home)
 				for _, output := range []string{"human", "json"} {
 					t.Run(output, func(t *testing.T) {
 						args := []string{"ext", "list", "test-agent"}
@@ -338,7 +344,7 @@ func TestCLI_ExtensionListOwnershipControls(t *testing.T) {
 						assert.ElementsMatch(t, []string{marker, "quarry"}, names)
 					})
 				}
-				assert.Equal(t, before, cliExtOwnershipSnapshot(t, se.repo, se.home), "listing must not migrate legacy voice or create locks")
+				assert.Equal(t, before, cliExtOwnershipSnapshot(t, se.home, se.repo, se.home), "listing must not migrate legacy voice or create locks")
 			})
 		}
 	}

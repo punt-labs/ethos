@@ -11,6 +11,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
 // StageFeedback separates advisory output from failures that block progress.
@@ -32,7 +33,7 @@ func runStageChecks(ctx context.Context, checkout, agent, stage string, filesFor
 }
 
 func runStageRootChecks(ctx context.Context, checkout, agent, stage string, filesForStage func() (map[string][]string, error)) StageFeedback {
-	if postEditKilled() {
+	if Killed() {
 		return StageFeedback{}
 	}
 	cap := 15 * time.Minute
@@ -43,15 +44,26 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 	}
 	ctx, cancel := context.WithTimeout(ctx, cap)
 	defer cancel()
-	checks, _, err := configuredStageChecks(checkout, agent, stage)
-	if err != nil {
-		return StageFeedback{Blocking: editRedact(stage + " policy: " + err.Error())}
+	if stage == "handoff" {
+		store, err := resolve.StoreOf(checkout)
+		if err != nil {
+			return StageFeedback{Blocking: editRedact(stage + " policy: " + err.Error())}
+		}
+		if store == "" {
+			return StageFeedback{}
+		}
 	}
-	if len(checks) == 0 {
-		return StageFeedback{}
-	}
+	var checks []checkset.Check
+	var err error
 	var env []string
 	if stage == "commit" {
+		checks, _, err = configuredStageChecks(checkout, agent, stage)
+		if err != nil {
+			return StageFeedback{Blocking: editRedact(stage + " policy: " + err.Error())}
+		}
+		if len(checks) == 0 {
+			return StageFeedback{}
+		}
 		env, err = gitenv.ActualIndexEnv()
 		if err != nil {
 			return StageFeedback{Blocking: editRedact(stage + " index: " + err.Error())}
@@ -62,6 +74,9 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 	}
 	filesByRoot, err := filesForStage()
 	if err != nil {
+		if stage == "handoff" && !handoffPolicySelected(checkout, agent) {
+			return StageFeedback{}
+		}
 		return StageFeedback{Blocking: editRedact(stage + " files: " + err.Error())}
 	}
 	var advisory, blocking []string
@@ -86,7 +101,15 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 		}
 	}
 	for _, root := range roots {
-		for _, check := range checks {
+		rootChecks := checks
+		if stage == "handoff" {
+			rootChecks, _, err = configuredStageChecks(root, agent, stage)
+			if err != nil {
+				blocking = append(blocking, stage+" policy: "+err.Error())
+				continue
+			}
+		}
+		for _, check := range rootChecks {
 			for _, invocation := range stageInvocations(root, filesByRoot[root], check) {
 				invocation.env = env
 				if failure := runEditCheck(ctx, root, invocation); failure != "" {
@@ -100,6 +123,35 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 		}
 	}
 	return StageFeedback{Advisory: editRedact(strings.Join(advisory, "\n\n")), Blocking: editRedact(strings.Join(blocking, "\n\n"))}
+}
+
+func handoffPolicySelected(checkout, agent string) bool {
+	selected := func(root string) bool {
+		checks, _, err := configuredStageChecks(root, agent, "handoff")
+		return err != nil || len(checks) > 0
+	}
+	if selected(checkout) {
+		return true
+	}
+	store, err := resolve.StoreOf(checkout)
+	if err != nil || store == "" {
+		return false
+	}
+	data, err := gitenv.Output(checkout, "git", "worktree", "list", "--porcelain", "-z")
+	if err != nil {
+		return false
+	}
+	for _, field := range strings.Split(string(data), "\x00") {
+		root, ok := strings.CutPrefix(field, "worktree ")
+		if !ok || root == checkout {
+			continue
+		}
+		candidateStore, err := resolve.StoreOf(root)
+		if err == nil && candidateStore == store && selected(root) {
+			return true
+		}
+	}
+	return false
 }
 
 func partiallyStagedFiles(root string, files []string, checks []checkset.Check, env []string) ([]string, error) {

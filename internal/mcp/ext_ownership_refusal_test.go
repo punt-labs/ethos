@@ -14,13 +14,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func mcpExtOwnershipSnapshot(t *testing.T, roots ...string) map[string][sha256.Size]byte {
+func mcpExtOwnershipSnapshot(t *testing.T, home string, roots ...string) map[string][sha256.Size]byte {
 	t.Helper()
 	result := make(map[string][sha256.Size]byte)
 	for _, root := range roots {
 		require.NoError(t, filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
 				return err
+			}
+			rel, _ := filepath.Rel(filepath.Join(home, ".punt-labs", "ethos"), path)
+			switch rel {
+			case "logs":
+				return filepath.SkipDir
+			case "telemetry.db", "telemetry.db-journal", "telemetry.db-wal", "telemetry.db-shm", ".telemetry.lock":
+				return nil
 			}
 			result[path] = sha256.Sum256([]byte(entry.Type().String()))
 			if entry.Type().IsRegular() {
@@ -103,7 +110,7 @@ func TestMCP_ExtensionOwnershipRefusal(t *testing.T) {
 					require.NoError(t, os.Symlink(target, badPath))
 				}
 			}
-			before := mcpExtOwnershipSnapshot(t, env.repo, env.home)
+			before := mcpExtOwnershipSnapshot(t, env.home, env.repo, env.home)
 			for _, method := range []string{"get", "list", "set", "del"} {
 				result := callTool(t, c, "ext", map[string]interface{}{
 					"method": method, "handle": "test-agent", "namespace": "quarry", "key": "collection", "value": "changed",
@@ -117,7 +124,7 @@ func TestMCP_ExtensionOwnershipRefusal(t *testing.T) {
 					assert.False(t, strings.Contains(text, value), "refusal must not include extension data")
 				}
 			}
-			assert.Equal(t, before, mcpExtOwnershipSnapshot(t, env.repo, env.home), "all layers and redirected targets must remain unchanged")
+			assert.Equal(t, before, mcpExtOwnershipSnapshot(t, env.home, env.repo, env.home), "all layers and redirected targets must remain unchanged")
 		})
 	}
 }
