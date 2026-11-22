@@ -4,8 +4,8 @@
 
 The implementation covers strict check sets, layered references, argv
 execution, glob selection and advisory/block feedback at edit, commit and
-SubagentStop handoff. Mission-result integration is the next slice.
-Non-exec adapters, shell execution,
+SubagentStop handoff, with exec, make, go, uv and npm adapters. Mission-result
+integration is the next slice. Shell execution,
 cache/coalescing, concurrency tuning, audit metrics and doctor/init commands
 below describe later work, not shipped behavior. Generated commands stay
 unchanged when a check set changes: policy is loaded at hook execution time.
@@ -203,9 +203,8 @@ Qodo found in #642.
 
 ```go
 type Adapter interface {
-    Name() string
-    Validate(c Check, root string) error            // static: target exists, tool found
-    Command(c Check, root string, files []string) ([]string, error)
+    Argv(Check) ([]string, error)
+    Probe(Check, string) error // invocation cwd; filesystem-only
 }
 ```
 
@@ -214,10 +213,26 @@ Built-in adapters:
 | Adapter | Fields | Command | Probe |
 |---|---|---|---|
 | `exec` (implicit when `run` is set) | `run` | `run` with placeholders filled | `exec.LookPath(run[0])` |
-| `make` | `target`, `vars` | `make <target> FILE=<path>` | `make -pq <sentinel>` rule database; never runs a recipe (the Devin Review finding on #642) |
-| `go` | `go: vet\|test\|build` | `go <verb> <package_dir>` | `go.mod` present |
+| `make` | `target`, optional `vars` | `make <target> NAME=value…` (sorted) | `Makefile`, `makefile` or `GNUmakefile` present |
+| `go` | `go: vet\|test\|build` | `go <verb> {package_dir}`; `./...` for `all` | `go.mod` present |
 | `uv` | `uv: <tool args>` | `uv run <args>` | `pyproject.toml` present |
-| `npm` | `script` | `npm run <script> -- <files>` | `package.json` scripts key |
+| `npm` | `script` | `npm run <script> -- {file}` at edit, `-- {files}` at later stages; no `--` for `all` | `package.json` with the named string script |
+
+These adapters are shipped. An omitted or empty adapter means `exec`, which
+requires `run`. Every other adapter forbids `run` and requires its own field;
+fields belonging to a different adapter are errors. `Check.Argv()` computes
+effective argv without writing it into `Run`, preserving YAML/JSON and vendor
+round trips. Whole-element placeholder validation applies to effective argv.
+
+Unlike the original table, make never receives `FILE=<path>`: edited paths
+containing `$` would be expanded by make, the #642 defect class. Targets match
+`[A-Za-z0-9_][A-Za-z0-9_.:/-]*`; variable names match
+`[A-Za-z_][A-Za-z0-9_]*`, and values are literal strings without dollars or
+placeholders. Probing only checks marker files in the actual invocation cwd;
+it never invokes `make -n`, `make -p`, or a recipe, and does not promise that a
+target exists. A missing marker, invalid package JSON or absent npm script is
+a named check failure under `on_fail`, not a silent skip. Executable lookup and
+command failures use the same feedback path.
 
 Adding an adapter is a Go change plus a registry entry. A project that needs
 something else uses `exec`. The design rejects loading third-party adapters
@@ -296,6 +311,10 @@ at these stages. In the binary, the kill switch skips checks, not commit
 seal/provenance steps or roster leave; the plugin wrapper instead skips its
 entire SubagentStop hook. Commit file discovery and commands preserve the actual
 committing index while scrubbing other Git selectors and tracing variables.
+
+Commit checks select paths from the index but read working-tree files. A
+partially staged file is checked as it exists on disk, not as staged. An
+index-snapshot execution option is a later slice.
 
 OpenCode generation (`.opencode/agents`) uses the same subcommand from its
 `tool.execute.after` plugin hook, so the two harnesses share one policy.
