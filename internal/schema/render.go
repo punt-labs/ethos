@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/punt-labs/ethos/v4/internal/checkset"
 )
 
 // requiredLabel renders the required bit for the human tables.
@@ -68,8 +70,51 @@ func (e Entity) JSONSchema() map[string]any {
 		items["then"] = map[string]any{"properties": map[string]any{"files": map[string]any{"type": "array"}}}
 		timeout := items["properties"].(map[string]any)["timeout"].(map[string]any)
 		timeout["allOf"] = []any{map[string]any{"pattern": "[1-9]"}}
+		adapterSchema(items)
 	}
 	return obj
+}
+
+func adapterSchema(items map[string]any) {
+	props := items["properties"].(map[string]any)
+	argv := func(file bool) map[string]any {
+		placeholders := "files|root|package_dir"
+		if file {
+			placeholders = "file|" + placeholders
+		}
+		pattern := `^([^{}]*|\{(` + placeholders + `)\})$`
+		return map[string]any{"type": "array", "minItems": 1, "items": map[string]any{"type": "string", "pattern": pattern}, "prefixItems": []any{map[string]any{"type": "string", "pattern": pattern, "allOf": []any{map[string]any{"pattern": `\S`}}}}}
+	}
+	props["run"] = argv(true)
+	props["uv"] = argv(true)
+	props["vars"] = map[string]any{"type": "object", "propertyNames": map[string]any{"pattern": checkset.MakeVariablePattern}, "additionalProperties": map[string]any{"type": "string", "pattern": `^[^${}]*$`}}
+	props["script"] = map[string]any{"type": "string", "pattern": `^[^{}-][^{}]*$`, "allOf": []any{map[string]any{"pattern": `\S`}}}
+	items["else"] = map[string]any{"properties": map[string]any{"run": argv(false), "uv": argv(false)}}
+	var choices []any
+	for _, adapter := range []string{"exec", "make", "go", "uv", "npm"} {
+		own := map[string][]string{"exec": {"run"}, "make": {"target", "vars"}, "go": {"go"}, "uv": {"uv"}, "npm": {"script"}}[adapter]
+		p := map[string]any{}
+		required := []string{own[0]}
+		if adapter == "exec" {
+			p["adapter"] = map[string]any{"enum": []string{"", "exec"}}
+		} else {
+			p["adapter"] = map[string]any{"const": adapter}
+			required = append(required, "adapter")
+		}
+		for _, field := range []string{"run", "target", "vars", "go", "uv", "script"} {
+			allowed := false
+			for _, v := range own {
+				if v == field {
+					allowed = true
+				}
+			}
+			if !allowed {
+				p[field] = false
+			}
+		}
+		choices = append(choices, map[string]any{"properties": p, "required": required})
+	}
+	items["oneOf"] = choices
 }
 
 // fieldSchema renders one field as a JSON Schema property. A field with an

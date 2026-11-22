@@ -146,7 +146,10 @@ func configuredEditChecks(checkout, root, file, agent string) ([]editCheck, bool
 		if check.Stage != "edit" || !check.Matches(filepath.ToSlash(rel)) {
 			continue
 		}
-		argv := append([]string(nil), check.Run...)
+		argv, err := check.Argv()
+		if err != nil {
+			return nil, true, err
+		}
 		values := map[string]string{"{file}": file, "{files}": file, "{root}": root, "{package_dir}": packageDir}
 		for i, arg := range argv {
 			if value, ok := values[arg]; ok {
@@ -157,7 +160,7 @@ func configuredEditChecks(checkout, root, file, agent string) ([]editCheck, bool
 		if check.Cwd == "file_dir" || check.Cwd == "package_dir" {
 			cwd = filepath.Dir(file)
 		}
-		checks = append(checks, editCheck{name: check.Name, argv: argv, failOnOutput: check.FailOnOutput, onFail: check.OnFail, timeout: check.Duration(), cwd: cwd})
+		checks = append(checks, editCheck{name: check.Name, argv: argv, failOnOutput: check.FailOnOutput, onFail: check.OnFail, timeout: check.Duration(), cwd: cwd, policy: &check})
 	}
 	return checks, true, nil
 }

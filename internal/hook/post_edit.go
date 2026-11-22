@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/redact"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -234,6 +235,7 @@ type editCheck struct {
 	timeout      time.Duration
 	cwd          string
 	env          []string
+	policy       *checkset.Check
 }
 
 func defaultEditChecks(root, file string) []editCheck {
@@ -302,6 +304,11 @@ func runEditCheck(stage context.Context, root string, check editCheck) string {
 	cmd.Dir = root
 	if check.cwd != "" {
 		cmd.Dir = check.cwd
+	}
+	if check.policy != nil {
+		if err := check.policy.Probe(cmd.Dir); err != nil {
+			return check.name + ": " + err.Error()
+		}
 	}
 	cmd.Env = gitenv.Parsed()
 	if check.env != nil {
