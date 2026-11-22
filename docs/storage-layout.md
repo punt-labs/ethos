@@ -409,14 +409,14 @@ locks and staging leftovers; refresh stale hook sections; retire dead session
 rosters. Pre-commit runs the untrack, live-tail and hook steps on every commit,
 before the seal; session start runs the roster step.
 
-**Log and notice.** Each step appends JSON lines to
-`~/.punt-labs/ethos/logs/repair.log`: step, action, redacted paths and any
-error, never file contents. The log is capped at 1 MB with one rotation
-(`repair.log.1`). The only user-visible output is one line, printed only when
+**Log and notice.** Each step writes through the shared private diagnostic sink to
+`~/.punt-labs/ethos/logs/ethos.log`: step, action, redacted paths and any
+error, never file contents. The log rotates at 5 MiB with five backups;
+existing `repair.log` files remain untouched. The only user-visible output is one line, printed only when
 something was repaired:
 
 ```text
-ethos: upgraded storage (N items; see ~/.punt-labs/ethos/logs/repair.log)
+ethos: upgraded storage (N items; see ~/.punt-labs/ethos/logs/ethos.log)
 ```
 
 Session start puts it in the hook's system message; pre-commit prints it to

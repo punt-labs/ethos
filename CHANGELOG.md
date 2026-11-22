@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The baseline-ops skill no longer tells sub-agents to run `make check`
+  after every edit. Edit checks run automatically (DES-085); the full gate
+  runs once at handoff or commit.
+
 ### Added
+
+- Private shared diagnostic logging for CLI, hooks, MCP tools and the UI, with
+  redaction and multi-process-safe rotation in `~/.punt-labs/ethos/logs/ethos.log`.
+  Repair diagnostics now use this sink; existing `repair.log` files are left
+  untouched. Audit and session streams remain separate.
+- Private, local-only usage records in `~/.punt-labs/ethos/telemetry.db`, with
+  typed metadata schemas and 90-day retention. Nothing is exported. Either
+  `ETHOS_TELEMETRY=off` or `PUNT_TELEMETRY=off` disables capture.
 
 - Check-set adapters for make, go, uv and npm build literal argv and probe
   project markers in the check cwd. Adapter policies round-trip without
@@ -36,6 +50,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handoff checks resolve each attributed root separately. Identity/role policy
   stays canonical, and vendor preview/apply and content validation use the same
   repository-policy selection.
+- `ethos hook pre-commit` and `ethos hook subagent-stop` now honor
+  `~/.punt-hooks-kill` before reading input or locating/repairing storage. Neither
+  writes data, leaves the roster, changes the index or ignore files, seals audit
+  data, verifies provenance, or runs checks. Pre-commit only reads the actual
+  committing index: private `.punt-labs/local/` paths or a failed query refuse
+  with exit 2 and index-only unstaging guidance that works without HEAD or after
+  further edits; a safe index succeeds silently. SubagentStop
+  returns success silently as before.
 - Commit checks refuse matched partially staged files before running commands,
   even for advisory checks, and list every file with stage/stash guidance.
   Detection uses the actual committing index, including custom indexes and linked

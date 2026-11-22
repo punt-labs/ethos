@@ -47,7 +47,7 @@ func missionStore() *mission.Store {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission: cannot determine home directory: %v\n", err)
-		os.Exit(1)
+		exitProcess(1, err)
 	}
 	root := filepath.Join(home, ".punt-labs", "ethos")
 	repoRoot := storeRootForStores()
@@ -66,7 +66,7 @@ func missionStoreAtCurrentRoots(repoRoot, globalRoot string) *mission.Store {
 	p, err := currentRoots().Layout()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission: invalid repository policy: %v\n", err)
-		os.Exit(1)
+		exitProcess(1, err)
 	}
 	return mission.NewRepositoryStore(p, globalRoot)
 }
@@ -174,7 +174,7 @@ func missionStoreForCreate() *mission.Store {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission: cannot determine home directory: %v\n", err)
-		os.Exit(1)
+		exitProcess(1, err)
 	}
 	root := filepath.Join(home, ".punt-labs", "ethos")
 	// NewStoreWithRoots activates the DES-054 two-tree storage layout:
@@ -193,7 +193,7 @@ func missionStoreForCreate() *mission.Store {
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos: mission: cannot wire role overlap check: %v\n", err)
-		os.Exit(1)
+		exitProcess(1, err)
 	}
 	repoRoot := ethosRootForStores()
 	as := mission.NewArchetypeStore(repoRoot, root)
@@ -2595,7 +2595,7 @@ func printContract(c *mission.Contract) {
 	fmt.Fprintf(tw, "Round:\t%d of %d\n", c.CurrentRound, c.Budget.Rounds)
 	if err := tw.Flush(); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission show: %v\n", err)
-		os.Exit(1)
+		exitProcess(1, err)
 	}
 
 	if len(c.Inputs.Files) > 0 || c.Inputs.Ticket != "" || len(c.Inputs.References) > 0 {

@@ -38,6 +38,7 @@ func newRig(t *testing.T, inRepo bool) *rig {
 		require.NoError(t, os.MkdirAll(filepath.Join(r.store, ".punt-labs"), 0o755))
 	}
 	r.opts = options{
+		logger:       captureRepairLog(r.global),
 		ethos:        "v5.0.0",
 		now:          func() time.Time { return time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC) },
 		stepBudget:   2 * time.Second,
@@ -199,8 +200,8 @@ func TestEnsureUnregisteredOrderNameBlocksStamps(t *testing.T) {
 	}
 	require.Len(t, deferred, 1, "one line for the missing set")
 	assert.Equal(t, "engine", deferred[0]["step"])
-	assert.Contains(t, deferred[0]["error"], "absent, also-absent")
-	assert.Contains(t, deferred[0]["error"], "not registered")
+	assert.Equal(t, "*errors.errorString", deferred[0]["error_type"])
+	assert.NotContains(t, deferred[0], "error")
 }
 
 // A git repository that never used ethos has no .punt-labs directory. Ensure
@@ -260,7 +261,7 @@ func TestEnsureLocateFailureSkipsRepositoryAndLogsIt(t *testing.T) {
 	raw, err := os.ReadFile(LogPath(r.global))
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"action":"skip-repository"`)
-	assert.Contains(t, string(raw), "dangling store symlink")
+	assert.Contains(t, string(raw), `"error_type":"*errors.errorString"`)
 }
 
 // A step that ignores its deadline is abandoned at the budget: the stamp is
@@ -302,9 +303,9 @@ func TestEnsureStepIgnoringDeadlineIsAbandoned(t *testing.T) {
 	raw, err := os.ReadFile(LogPath(r.global))
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"step":"hang"`)
-	assert.Contains(t, string(raw), "budget")
-	assert.Contains(t, string(raw), "waiting for abandoned step hang")
-	assert.Contains(t, string(raw), "pass stopped after abandoned step hang")
+	assert.Contains(t, string(raw), `"action":"defer"`)
+	assert.Contains(t, string(raw), `"action":"wait"`)
+	assert.Contains(t, string(raw), `"action":"stop"`)
 	<-finished
 }
 
@@ -379,7 +380,8 @@ func TestEnsureStepErrorAndPanicLeaveNoStamp(t *testing.T) {
 			raw, err := os.ReadFile(LogPath(r.global))
 			require.NoError(t, err)
 			assert.Contains(t, string(raw), `"step":"bad"`)
-			assert.Contains(t, string(raw), "boom")
+			assert.Contains(t, string(raw), `"action":"error"`)
+			assert.Contains(t, string(raw), `"error_type":"*errors.errorString"`)
 		})
 	}
 }
@@ -399,7 +401,7 @@ func TestEnsureStepPastBudgetIsLoggedAndLeavesNoStamp(t *testing.T) {
 	assert.ErrorIs(t, err, os.ErrNotExist)
 	raw, err := os.ReadFile(LogPath(r.global))
 	require.NoError(t, err)
-	assert.Contains(t, string(raw), "budget")
+	assert.Contains(t, string(raw), `"action":"defer"`)
 }
 
 func TestEnsureTotalBudgetStopsRemainingSteps(t *testing.T) {
@@ -568,9 +570,9 @@ func TestEnsureStepSeesEnvironment(t *testing.T) {
 func TestResultLine(t *testing.T) {
 	assert.Equal(t, "", Result{}.Line())
 	assert.Equal(t, "", Result{Items: 0}.Line())
-	assert.Equal(t, "ethos: upgraded storage (3 items; see ~/.punt-labs/ethos/logs/repair.log)",
+	assert.Equal(t, "ethos: upgraded storage (3 items; see ~/.punt-labs/ethos/logs/ethos.log)",
 		Result{Items: 3, Repaired: true}.Line())
-	assert.Equal(t, "ethos: upgraded storage (1 items; see ~/.punt-labs/ethos/logs/repair.log)",
+	assert.Equal(t, "ethos: upgraded storage (1 items; see ~/.punt-labs/ethos/logs/ethos.log)",
 		Result{Items: 1, Repaired: true}.Line())
 }
 

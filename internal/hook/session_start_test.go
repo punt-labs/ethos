@@ -1138,7 +1138,7 @@ func TestHandleSessionStart_RepairNote(t *testing.T) {
 		{
 			name:     "repaired items are told once, naming what ethos did",
 			repair:   func(context.Context) (int, error) { return 3, nil },
-			wantNote: "ethos: upgraded storage (3 items; see ~/.punt-labs/ethos/logs/repair.log)",
+			wantNote: "ethos: upgraded storage (3 items; see ~/.punt-labs/ethos/logs/ethos.log)",
 		},
 		{
 			name:     "nothing repaired says nothing",

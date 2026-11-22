@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -13,18 +12,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Two commits in two worktrees share one global root. Every line from every
-// writer survives, even past the rotation cap, because the append log never
-// rotates.
+// Hook repair adapters share the injected sink without dropping actions.
 func TestAppendLogsSharingOneFileLoseNoLines(t *testing.T) {
 	global := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Dir(LogPath(global)), 0o700))
-	// Start past the rotation cap so a rotating log would move the file aside.
-	filler := strings.Repeat("filler ", 100) + "\n"
-	require.NoError(t, os.WriteFile(LogPath(global),
-		[]byte(strings.Repeat(filler, maxLogBytes/len(filler)+2)), 0o600))
-	a := NewAppendLog(global, "/s1", "/c1", "v")
-	b := NewAppendLog(global, "/s2", "/c2", "v")
+	logger := captureRepairLog(global)
+	a := NewAppendLog("/s1", "/c1", "v", logger)
+	b := NewAppendLog("/s2", "/c2", "v", logger)
 	const n = 200
 	var wg sync.WaitGroup
 	for w, l := range []*FileLog{a, b} {
@@ -48,13 +41,11 @@ func TestAppendLogsSharingOneFileLoseNoLines(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 2*n, count)
-	_, err = os.Stat(filepath.Join(global, "logs", "repair.log.1"))
-	assert.True(t, os.IsNotExist(err), "the append log never rotates")
 }
 
 func TestFileLogRedactsCredentialsAndAddresses(t *testing.T) {
 	global := t.TempDir()
-	l := NewAppendLog(global, "", "", "v")
+	l := NewAppendLog("", "", "v", captureRepairLog(global))
 	l.Logf("s", "failed", nil, fmt.Errorf("read: mail jim@punt-labs.com token ghp_abcdefghijklmnopqrstuvwxyz0123456789"))
 	b, err := os.ReadFile(LogPath(global))
 	require.NoError(t, err)

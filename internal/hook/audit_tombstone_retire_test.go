@@ -13,6 +13,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/autorepair"
+	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
@@ -24,6 +25,10 @@ func TestSessionStartPassSilencesFlaggedTombstoneWarning(t *testing.T) {
 	repo := t.TempDir()
 	gitRepoWithOrigin(t, repo, vacuumTestRepoID)
 	home := t.TempDir()
+	t.Setenv("HOME", home)
+	logger, closeLog, err := diagnostic.Open("hook")
+	require.NoError(t, err)
+	t.Cleanup(closeLog)
 	global := filepath.Join(home, ".punt-labs", "ethos")
 	require.NoError(t, audit.WriteTombstone(globalSessionsDir(t, global), audit.Tombstone{
 		Session: "sess-lost", Repo: vacuumTestRepoID, LiveFileGone: true,
@@ -40,7 +45,7 @@ func TestSessionStartPassSilencesFlaggedTombstoneWarning(t *testing.T) {
 	assert.Contains(t, seal(), "sess-lost", "the warning repeats until the tombstone is retired")
 
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs"), 0o755))
-	env, err := autorepair.HookEnv(resolve.Located{Store: repo, Checkout: repo}, global)
+	env, err := autorepair.HookEnv(resolve.Located{Store: repo, Checkout: repo}, global, logger)
 	require.NoError(t, err)
 	require.True(t, env.InRepository(), "the repository pass is active")
 	n, err := autorepair.SessionStart(context.Background(), env)
@@ -50,7 +55,7 @@ func TestSessionStartPassSilencesFlaggedTombstoneWarning(t *testing.T) {
 	assert.Empty(t, seal(), "after the pass the seal prints nothing")
 	assert.FileExists(t, filepath.Join(global, "sessions", "sess-lost.purged.acked"), "the loss record is kept")
 
-	logged, err := os.ReadFile(autorepair.LogPath(global))
+	logged, err := os.ReadFile(filepath.Join(global, "logs", "ethos.log"))
 	require.NoError(t, err)
 	assert.Equal(t, 1, strings.Count(string(logged), "retire-tombstone"), "retired with one log line")
 }

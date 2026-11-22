@@ -197,21 +197,23 @@ func Run(s Spec) ([]byte, error) {
 		cmd.Stdout, cmd.Stderr = s.Stdout, s.Stderr
 		err = cmd.Run()
 	}
-	// Stop the notifications and join the watcher, then take a signal that was
-	// buffered but not yet stored: after this, interrupted is final and read
-	// without a race.
-	signal.Stop(sig)
+	// Join the watcher before reading interrupted. Keep notifications registered
+	// until a canceled git's group is gone.
 	close(done)
 	<-watched
-	select {
-	case got := <-sig:
-		interrupted = &got
-	default:
+	interrupted = pendingSignal(sig, interrupted)
+	groupStopped := interrupted != nil || (group && ctx.Err() == context.DeadlineExceeded)
+	if groupStopped {
+		endGroup(cmd, groupGrace)
 	}
+	signal.Stop(sig)
+	interrupted = pendingSignal(sig, interrupted)
 	// A signal outranks the deadline: one that arrived while a timed-out git
 	// was being reaped must still end ethos.
 	if interrupted != nil {
-		endGroup(cmd, groupGrace)
+		if !groupStopped {
+			endGroup(cmd, groupGrace)
+		}
 		// The signal was consumed to stop git. A caller must not go on as if
 		// nothing happened (a probe error reads as "no git", and enable would
 		// write), so the process ends as the signal demands.
@@ -219,12 +221,23 @@ func Run(s Spec) ([]byte, error) {
 		return nil, fmt.Errorf("%w: %s %s", ErrInterrupted, s.Git, strings.Join(s.Args, " "))
 	}
 	if ctx.Err() == context.DeadlineExceeded {
-		if group {
+		if group && !groupStopped {
 			endGroup(cmd, groupGrace)
 		}
 		return nil, timeoutError(s.Git, s.Args, s.Dir, limit)
 	}
 	return out, err
+}
+
+func pendingSignal(signals <-chan os.Signal, received *os.Signal) *os.Signal {
+	select {
+	case got := <-signals:
+		if received == nil {
+			return &got
+		}
+	default:
+	}
+	return received
 }
 
 // timeoutError names the command and where it ran; an empty dir is reported

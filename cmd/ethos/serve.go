@@ -15,8 +15,10 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-func runServeImpl(opencodeSessionMetadata bool) error {
-	s := server.NewMCPServer(
+func runServeImpl(opencodeSessionMetadata bool) (serveErr error) {
+	var s *server.MCPServer
+	hooks := toolLoggingHooks(processLogger, func(name string) *server.ServerTool { return s.GetTool(name) })
+	s = server.NewMCPServer(
 		"ethos",
 		// resolveVersion, not the raw `version` var: `version` is only
 		// non-empty when the Makefile's ldflags set it (main.go,
@@ -24,6 +26,7 @@ func runServeImpl(opencodeSessionMetadata bool) error {
 		// `go install`-built binary as `ethos version` is.
 		resolveVersion(),
 		server.WithToolCapabilities(true),
+		server.WithHooks(hooks),
 	)
 
 	home, err := os.UserHomeDir()
@@ -43,6 +46,8 @@ func runServeImpl(opencodeSessionMetadata bool) error {
 		return buildServeHandler(home, loc, metadata)
 	})
 	h.RegisterTools(s)
+	stopLogging := beginServerLogging(processLogger)
+	defer func() { stopLogging(serveErr) }()
 
 	if err := server.ServeStdio(s); err != nil {
 		return fmt.Errorf("MCP server error: %w", err)
