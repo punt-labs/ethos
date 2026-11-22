@@ -19,7 +19,7 @@ import (
 
 func TestHandoffRenamedFiles(t *testing.T) {
 	for _, linked := range []bool{false, true} {
-		for _, kind := range []string{"mv", "git mv", "delete", "lookup failure", "weird names", "split index", "borrowed index"} {
+		for _, kind := range []string{"mv", "git mv", "delete", "lookup failure", "weird names", "split index", "borrowed index", "target owned by other agent"} {
 			t.Run(fmt.Sprintf("linked=%t/%s", linked, kind), func(t *testing.T) {
 				store, bin := postEditFixture(t)
 				t.Setenv("HOME", t.TempDir())
@@ -56,9 +56,13 @@ func TestHandoffRenamedFiles(t *testing.T) {
 				t.Setenv("RENAME_ALL", all)
 				postEditTool(t, bin, "probe", "printf '%s\\000' \"$@\" >> \"$RENAME_LOG\"\n")
 				postEditTool(t, bin, "all-probe", "printf all >> \"$RENAME_ALL\"\n")
+				otherPath := "other.go"
+				if kind == "target owned by other agent" {
+					otherPath = target
+				}
 				writeRepoTreeSession(t, store, "2026-11-22", "rename", []auditEntry{
 					{Ts: "2026-11-22T10:00:00Z", Session: "rename", AgentID: "sub", Tool: "Edit", ToolInput: map[string]any{"file_path": "<repo>/" + old}, PathFormat: auditPathFormat},
-					{Ts: "2026-11-22T10:00:01Z", Session: "rename", AgentID: "other", Tool: "Write", ToolInput: map[string]any{"file_path": "<repo>/other.go"}, PathFormat: auditPathFormat},
+					{Ts: "2026-11-22T10:00:01Z", Session: "rename", AgentID: "other", Tool: "Write", ToolInput: map[string]any{"file_path": "<repo>/" + otherPath}, PathFormat: auditPathFormat},
 				})
 				data, err := gitenv.Output(root, "git", "rev-parse", "--path-format=absolute", "--git-path", "index")
 				require.NoError(t, err)
@@ -94,7 +98,7 @@ func TestHandoffRenamedFiles(t *testing.T) {
 				} else {
 					require.Empty(t, stderr.String())
 				}
-				if kind == "delete" || kind == "lookup failure" {
+				if kind == "delete" || kind == "lookup failure" || kind == "target owned by other agent" {
 					require.NoFileExists(t, log)
 				} else {
 					data, err := os.ReadFile(log)
