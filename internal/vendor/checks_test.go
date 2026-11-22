@@ -38,6 +38,44 @@ func TestVendorCheckSets(t *testing.T) {
 	require.NoError(t, Verify(f.repo))
 }
 
+func TestVendorProjectCheckSources(t *testing.T) {
+	for _, mode := range []string{"preview", "apply", "missing", "conflict", "same source"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newFixture(t)
+			f.writeGlobal(t, "identities/worker.yaml", "name: Worker\nhandle: worker\nkind: agent\n")
+			f.writeGlobal(t, "checks/portable.yaml", portableChecks)
+			branch := t.TempDir()
+			body := portableChecks + "description: branch policy\n"
+			if mode == "same source" {
+				body = portableChecks
+			}
+			if mode != "missing" {
+				writeCheckFixture(t, branch, "checks/portable.yaml", body)
+			}
+			if mode == "conflict" || mode == "same source" {
+				f.writeGlobal(t, "identities/worker.yaml", "name: Worker\nhandle: worker\nkind: agent\nchecks: portable\n")
+			}
+			f.src.Checks = "portable"
+			f.src.ProjectChecksRoots = []string{branch}
+			p, err := f.run(t, Options{Handles: []string{"worker"}, Apply: mode != "preview"})
+			if mode == "missing" || mode == "conflict" {
+				require.Error(t, err)
+				require.NoDirExists(t, filepath.Join(f.repo, "identities"))
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, []string{"portable"}, p.Checks)
+			if mode == "preview" {
+				require.NoFileExists(t, filepath.Join(f.repo, "checks/portable.yaml"))
+				return
+			}
+			got, err := os.ReadFile(filepath.Join(f.repo, "checks/portable.yaml"))
+			require.NoError(t, err)
+			require.Equal(t, body, string(got))
+		})
+	}
+}
+
 func TestVerifyCheckSets(t *testing.T) {
 	for _, kind := range []string{"identity", "role", "manifest"} {
 		t.Run(kind, func(t *testing.T) {

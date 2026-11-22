@@ -39,6 +39,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Unconfigured handoffs do not block on audit or file-discovery failures;
+  handoff policies found only in a linked worktree still apply.
+- Vendor preview and apply refuse to overwrite a different project-only check
+  set at the default canonical destination from a linked worktree. Both paths
+  are reported; an explicit destination remains available through CLI and MCP.
+- Linked checkouts resolve repository check policy from their own `checks:`
+  reference and registry first, falling back to the canonical main checkout only
+  when no local reference is selected. Edit checks use the edited checkout;
+  handoff checks resolve each attributed root separately. Identity/role policy
+  stays canonical, and vendor preview/apply and content validation use the same
+  repository-policy selection.
 - `ethos hook pre-commit` and `ethos hook subagent-stop` now honor
   `~/.punt-hooks-kill` before reading input or locating/repairing storage. Neither
   writes data, leaves the roster, changes the index or ignore files, seals audit

@@ -63,9 +63,8 @@ func TestRunSnapshot_CheckoutEmbedSync(t *testing.T) {
 
 			// Neither a new cwd/override nor replacement config may retarget the
 			// captured checkout or change the store's repo-only content selection.
-			for _, root := range []string{store, checkout} {
-				require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte("resolution: [invalid\n"), 0o600))
-			}
+			require.NoError(t, os.WriteFile(filepath.Join(store, ".punt-labs", "ethos.yaml"), []byte("resolution: [invalid\n"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(checkout, ".punt-labs", "ethos.yaml"), []byte("resolution: invalid-checkout-policy\nactive_bundle: missing-checkout-bundle\n"), 0o600))
 			other := t.TempDir()
 			t.Setenv("ETHOS_REPO_ROOT", other)
 			t.Chdir(other)

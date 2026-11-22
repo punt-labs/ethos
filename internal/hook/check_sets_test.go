@@ -95,7 +95,11 @@ func TestConfiguredEditMainStoreFromLinkedSession(t *testing.T) {
 			t.Setenv("CLAUDE_PROJECT_DIR", worktree)
 			require.Contains(t, configuredEdit(t, filepath.Join(worktree, "file.txt"), tc.agent), "main-only-check")
 			writeFile(t, filepath.Join(worktree, ".punt-labs/ethos.yaml"), "checks: none\n")
-			require.Contains(t, configuredEdit(t, filepath.Join(worktree, "file.txt"), tc.agent), "main-only-check")
+			if tc.name == "identity" || tc.name == "role" {
+				require.Contains(t, configuredEdit(t, filepath.Join(worktree, "file.txt"), tc.agent), "main-only-check")
+			} else {
+				require.Empty(t, configuredEdit(t, filepath.Join(worktree, "file.txt"), tc.agent))
+			}
 		})
 	}
 }
@@ -274,13 +278,16 @@ func TestConfiguredEditPolicyScope(t *testing.T) {
 	cmd.Dir = root
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
-	writeFile(t, filepath.Join(worktree, ".punt-labs/ethos.yaml"), "checks: none\n")
+	writeFile(t, filepath.Join(worktree, ".punt-labs/ethos.yaml"), "agent: worker\n")
 	writeFile(t, filepath.Join(worktree, "file.txt"), "")
 	require.Contains(t, configuredEdit(t, filepath.Join(worktree, "file.txt"), ""), "session-check")
 	data, err := os.ReadFile(marker)
 	require.NoError(t, err)
 	require.Equal(t, worktree, string(data))
 	require.NoError(t, os.Remove(marker))
+	writeFile(t, filepath.Join(worktree, ".punt-labs/ethos.yaml"), "checks: none\n")
+	require.Empty(t, configuredEdit(t, filepath.Join(worktree, "file.txt"), ""))
+	require.NoFileExists(t, marker)
 	foreign := t.TempDir()
 	initGitRepo(t, foreign)
 	writeFile(t, filepath.Join(foreign, "file.txt"), "")

@@ -27,7 +27,12 @@ func configuredStageChecks(checkout, agent, stage string) ([]checkset.Check, boo
 	if err != nil {
 		return nil, false, err
 	}
-	if cfg == nil && agent == "" {
+	repo := filepath.Join(store, ".punt-labs", "ethos")
+	ref, projectRepo, err := resolve.CheckPolicyOf(resolve.Located{Store: store, Checkout: checkout, Ethos: repo, Config: cfg})
+	if err != nil {
+		return nil, false, err
+	}
+	if cfg == nil && agent == "" && ref == "" {
 		return nil, false, nil
 	}
 	if cfg == nil {
@@ -46,7 +51,6 @@ func configuredStageChecks(checkout, agent, stage string) ([]checkset.Check, boo
 	if err != nil {
 		return nil, false, err
 	}
-	repo := filepath.Join(store, ".punt-labs", "ethos")
 	repoOnly := policy == resolve.ResolutionRepoOnly
 	if repoOnly {
 		storeRoot := ""
@@ -62,7 +66,7 @@ func configuredStageChecks(checkout, agent, stage string) ([]checkset.Check, boo
 		}
 	}
 	sets := checkset.NewLayeredStoreWithBundle(repo, bundleRoot, global, repoOnly)
-	ref := cfg.Checks
+	project := true
 	if agent != "" && attribute.ValidateSlug(agent) == nil {
 		var bundleIDs *identity.Store
 		if bundleRoot != "" {
@@ -76,6 +80,7 @@ func configuredStageChecks(checkout, agent, stage string) ([]checkset.Check, boo
 		if err == nil {
 			if id.Checks != "" {
 				ref = id.Checks
+				project = false
 			} else if cfg.Team != "" && agent != cfg.Agent && id.Kind == "agent" {
 				teams := team.NewLayeredStoreWithBundle(repo, bundleRoot, global, repoOnly)
 				selected, err := teams.Load(cfg.Team)
@@ -98,6 +103,7 @@ func configuredStageChecks(checkout, agent, stage string) ([]checkset.Check, boo
 				}
 				if bound != nil && bound.Checks != "" {
 					ref = bound.Checks
+					project = false
 				}
 			}
 		}
@@ -110,6 +116,9 @@ func configuredStageChecks(checkout, agent, stage string) ([]checkset.Check, boo
 	}
 	if err := checkset.ValidateReference(ref); err != nil {
 		return nil, true, err
+	}
+	if project {
+		sets = checkset.NewLayeredStoreWithBundle(projectRepo, bundleRoot, global, repoOnly)
 	}
 	set, err := sets.Load(ref)
 	if err != nil {
@@ -125,7 +134,7 @@ func configuredStageChecks(checkout, agent, stage string) ([]checkset.Check, boo
 }
 
 func configuredEditChecks(checkout, root, file, agent string) ([]editCheck, bool, error) {
-	configured, selected, err := configuredStageChecks(checkout, agent, "edit")
+	configured, selected, err := configuredStageChecks(root, agent, "edit")
 	if err != nil || !selected {
 		return nil, selected, err
 	}

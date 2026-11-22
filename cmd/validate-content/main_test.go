@@ -11,6 +11,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/enable"
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/stretchr/testify/require"
 )
 
@@ -97,6 +98,30 @@ func TestInvalidProjectCheckReferenceIsContentError(t *testing.T) {
 		}
 	}
 	require.True(t, found)
+}
+
+func TestValidateContentWorktreeChecks(t *testing.T) {
+	repo, root := minimalRepo(t, "")
+	checkout := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(checkout, ".punt-labs/ethos/checks"), 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(checkout, ".punt-labs/ethos.yaml"), []byte("checks: branch\n"), 0600))
+	file := filepath.Join(checkout, ".punt-labs/ethos/checks/branch.yaml")
+	for _, valid := range []bool{false, true} {
+		if valid {
+			require.NoError(t, os.WriteFile(file, []byte("name: branch\nchecks: []\n"), 0600))
+		}
+		cfg, err := resolve.ConfigOf(repo)
+		require.NoError(t, err)
+		rep, err := runFor(resolve.Located{Store: repo, Checkout: checkout, Ethos: root, Config: cfg}, t.TempDir())
+		require.NoError(t, err)
+		failed := false
+		for _, result := range rep.results {
+			if result.label == "checks: project reference" && !result.pass {
+				failed = true
+			}
+		}
+		require.Equal(t, !valid, failed)
+	}
 }
 
 func TestValidateContent_RepoOnlyExcludesGlobal(t *testing.T) {

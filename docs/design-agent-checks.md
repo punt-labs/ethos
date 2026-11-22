@@ -282,6 +282,10 @@ agent, with the project default set, or the committing session's resolved
 set when one is found. Exit 2 blocks the commit and prints the failing
 check's tail.
 
+Unconfigured handoffs remain non-blocking when audit or file discovery fails.
+Policies selected only in another linked worktree of the same store still count;
+file-discovery failures block when such a handoff policy applies.
+
 Commit checks read files on disk. Before any check runs, every staged path matched
 by a commit check must have no unstaged changes against the actual committing
 index, including `GIT_INDEX_FILE`. Otherwise the stage blocks with exit 2,
@@ -306,7 +310,7 @@ there are none; Bash commands are not parsed to discover additional roots.
 Otherwise the root keeps an empty file list: glob checks skip it, but
 `files: all` checks still run. Same-store linked worktrees
 run independently with their own matching paths, cwd and `{root}`, while policy
-still comes from the canonical store. Vanished audited files are omitted, but
+is resolved separately for each attributed checkout. Vanished audited files are omitted, but
 their checkout attribution is retained through the nearest existing physical
 ancestor directory, including when parent directories have disappeared. A path
 whose root is indeterminate disables dirty-tree fallback without blocking the
@@ -362,8 +366,17 @@ edit check over the last 50 runs exceeds half its timeout.
 - **Configured policies.** Identity, then the generator-bound role, then repo
   config selects a check-set slug. `none` at any level stops inheritance.
   An unresolved handle uses the repo setting, then the advisory defaults.
-  Policy comes from the session checkout's canonical store root S (resolved
-  through Git's common directory), never the edited worktree's config.
+  Repository policy comes from the edited checkout at edit, the committing
+  checkout at commit, and each attributed root at handoff. Its `checks:` reference
+  and repository registry stay together; absent a local reference, both fall back
+  to the canonical store root S. Explicit `none` disables repository inheritance.
+  Identity/role references and their registries remain canonical. Missing or
+  invalid selected sets are errors, not a reason to use another checkout's set.
+  Vendor preview/apply and content validation use the same repository selection;
+  vendor refuses conflicting project and identity/role definitions of one slug.
+  Preview and apply also refuse to replace a different project check file at the
+  default canonical destination, naming both paths. An explicit `--to` destination
+  authorizes the selected snapshot without changing checkout policy resolution.
   Every configured check chooses `advisory` or `block`; edit defaults to
   advisory. A block is exit-zero PostToolUse decision feedback, never exit 2.
 - **`ethos checks init`.** Writes a starter set from marker files:

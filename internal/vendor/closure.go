@@ -1,6 +1,7 @@
 package vendor
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,18 +41,21 @@ func (v *Vendorer) closure(seeds []string) (*Plan, error) {
 		Seeds: append([]string(nil), seeds...),
 		Ext:   map[string][]ExtFile{},
 	}
+	canonicalChecks := map[string]bool{}
 	addChecks := func(ref string) error {
 		if err := checkset.ValidateReference(ref); err != nil {
 			return err
 		}
 		if ref != "" && ref != "none" {
 			p.Checks = appendUnique(p.Checks, ref)
+			canonicalChecks[ref] = true
 		}
 		return nil
 	}
 	if err := addChecks(v.src.Checks); err != nil {
 		return nil, err
 	}
+	delete(canonicalChecks, v.src.Checks)
 
 	seenIdentity := map[string]bool{}
 	seenTeam := map[string]bool{}
@@ -149,6 +153,19 @@ func (v *Vendorer) closure(seeds []string) (*Plan, error) {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil, err
+		}
+		if canonicalChecks[ref] && ref == v.src.Checks && len(v.src.ProjectChecksRoots) > 0 {
+			canonicalPath, ok := findInRoots(v.src.Roots, filepath.Join("checks", ref+".yaml"))
+			if !ok {
+				return nil, fmt.Errorf("check set %q not found for identity/role policy", ref)
+			}
+			canonical, err := os.ReadFile(canonicalPath)
+			if err != nil {
+				return nil, err
+			}
+			if !bytes.Equal(data, canonical) {
+				return nil, fmt.Errorf("check set %q has conflicting checkout and identity/role sources", ref)
+			}
 		}
 		set, err := checkset.Decode(data)
 		if err != nil {
