@@ -6,15 +6,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 // LogPath names the injected JSON capture, not the production diagnostic sink.
@@ -81,7 +84,61 @@ func TestFileLogWritesJSONLines(t *testing.T) {
 	assert.NotContains(t, first, "checkout")
 	assert.NotContains(t, first, "error")
 	assert.Equal(t, "*errors.errorString", lines[1]["error_type"])
-	assert.Equal(t, "boom", lines[1]["error"])
+	assert.NotContains(t, lines[1], "error")
+}
+
+func TestFileLogOmitsYAMLRecordContents(t *testing.T) {
+	const sentinel = "C0NFID"
+	var record struct {
+		Count int `yaml:"count"`
+	}
+	err := yaml.Unmarshal([]byte("count: "+sentinel+"\n"), &record)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), sentinel)
+	global := physicalTemp(t)
+	l := newFileLog("/repo/store", "/repo/checkout", "test", captureRepairLog(global))
+	l.Logf("bead-alias", "rename", nil, fmt.Errorf("renaming contract: %w", err))
+	raw, readErr := os.ReadFile(LogPath(global))
+	require.NoError(t, readErr)
+	assert.NotContains(t, string(raw), sentinel)
+	entry := readLog(t, LogPath(global))[0]
+	assert.NotContains(t, entry, "error")
+	assert.Equal(t, "*yaml.TypeError", entry["error_type"])
+}
+
+func TestFileLogSafeErrorCauses(t *testing.T) {
+	const sentinel = "PRIVATE_RECORD_CONTENT"
+	for _, tc := range []struct {
+		name  string
+		err   error
+		op    string
+		cause string
+	}{
+		{name: "empty"},
+		{name: "untyped", err: errors.New(sentinel)},
+		{name: "path", err: fmt.Errorf("%s: %w", sentinel, &fs.PathError{Op: "open", Path: sentinel, Err: syscall.EACCES}), op: "open", cause: syscall.EACCES.Error()},
+		{name: "link", err: fmt.Errorf("%s: %w", sentinel, &os.LinkError{Op: "rename", Old: sentinel, New: sentinel, Err: syscall.ENOENT}), op: "rename", cause: syscall.ENOENT.Error()},
+		{name: "unsafe op", err: &fs.PathError{Op: sentinel, Path: sentinel, Err: syscall.EACCES}, cause: syscall.EACCES.Error()},
+		{name: "unsafe cause", err: &fs.PathError{Op: "read", Path: sentinel, Err: errors.New(sentinel)}, op: "read"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			global := physicalTemp(t)
+			l := newFileLog("", "", "test", captureRepairLog(global))
+			l.Logf("gitignore", "rewrite", nil, tc.err)
+			raw, err := os.ReadFile(LogPath(global))
+			require.NoError(t, err)
+			assert.NotContains(t, string(raw), sentinel)
+			entry := readLog(t, LogPath(global))[0]
+			assert.NotContains(t, entry, "error")
+			for key, want := range map[string]string{"error_op": tc.op, "error_cause": tc.cause} {
+				if want == "" {
+					assert.NotContains(t, entry, key)
+				} else {
+					assert.Equal(t, want, entry[key])
+				}
+			}
+		})
+	}
 }
 
 func TestFileLogRedactsHomePaths(t *testing.T) {
@@ -112,7 +169,7 @@ func TestResidualLogNamesRelativePathAndCause(t *testing.T) {
 	r.opts.order = []string{"gitignore"}
 	r.opts.steps = []Step{{Name: "gitignore", Scope: ScopeRepository, Run: func(_ context.Context, env Env) (Outcome, error) {
 		path := filepath.Join(env.Roots.Store, ".gitignore")
-		env.Log.Logf("gitignore", "blocked", []string{path}, fmt.Errorf("rewriting %s: permission denied", path))
+		env.Log.Logf("gitignore", "blocked", []string{path}, fmt.Errorf("rewriting %s: %w", path, &fs.PathError{Op: "open", Path: path, Err: syscall.EACCES}))
 		return Outcome{Residuals: []Residual{actionableResidual("gitignore", ".gitignore", "cannot rewrite", seeLogAction)}}, nil
 	}}}
 	result := r.ensure()
@@ -126,8 +183,10 @@ func TestResidualLogNamesRelativePathAndCause(t *testing.T) {
 	}
 	require.NotNil(t, blocked)
 	assert.Equal(t, ".gitignore", blocked["paths"])
-	assert.Equal(t, "rewriting <store>/.gitignore: permission denied", blocked["error"])
-	assert.Equal(t, "*errors.errorString", blocked["error_type"])
+	assert.NotContains(t, blocked, "error")
+	assert.Equal(t, "open", blocked["error_op"])
+	assert.Equal(t, syscall.EACCES.Error(), blocked["error_cause"])
+	assert.Equal(t, "syscall.Errno", blocked["error_type"])
 	raw, err := os.ReadFile(LogPath(r.global))
 	require.NoError(t, err)
 	assert.NotContains(t, string(raw), r.store)
