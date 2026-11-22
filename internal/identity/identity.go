@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/punt-labs/ethos/v4/internal/repomiss"
 )
 
@@ -23,6 +24,7 @@ type Identity struct {
 	Email        string   `yaml:"email,omitempty" json:"email,omitempty"`
 	GitHub       string   `yaml:"github,omitempty" json:"github,omitempty"`
 	Agent        string   `yaml:"agent,omitempty" json:"agent,omitempty"`
+	Checks       string   `yaml:"checks,omitempty" json:"checks,omitempty"`
 	WritingStyle string   `yaml:"writing_style,omitempty" json:"writing_style,omitempty"`
 	Personality  string   `yaml:"personality,omitempty" json:"personality,omitempty"`
 	Talents      []string `yaml:"talents,omitempty" json:"talents,omitempty"`
@@ -62,6 +64,9 @@ type Identity struct {
 
 // Validate checks that required fields are present and valid.
 func (id *Identity) Validate() error {
+	if err := checkset.ValidateReference(id.Checks); err != nil {
+		return &ValidationError{Field: "checks", Message: err.Error()}
+	}
 	if id.Name == "" {
 		return &ValidationError{Field: "name", Message: "required"}
 	}

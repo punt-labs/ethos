@@ -70,6 +70,15 @@ func (e Entity) JSONSchema() map[string]any {
 // closed-enum half and the pattern half, per ValidateModel. A field with
 // nested fields is an object; a list wraps it in an array.
 func fieldSchema(f Field) map[string]any {
+	if f.Type == "glob list or all" {
+		return withDescription(map[string]any{"anyOf": []any{
+			map[string]any{"const": "all"},
+			map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "minItems": 1},
+		}}, f.Description)
+	}
+	if f.Type == "boolean" || f.Type == "integer" {
+		return withDescription(map[string]any{"type": f.Type}, f.Description)
+	}
 	if len(f.Fields) > 0 {
 		obj := objectSchema(f.Fields)
 		if f.List {

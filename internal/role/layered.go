@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+
+	"github.com/punt-labs/ethos/v4/internal/checkset"
 )
 
 // LayeredStore reads from repo-local, bundle, and user-global role stores.
@@ -61,6 +63,15 @@ func (ls *LayeredStore) writeStore() (*Store, error) {
 
 // Save writes a role to the global store (the repo store under repo-only).
 func (ls *LayeredStore) Save(r *Role) error {
+	root := func(s *Store) string {
+		if s == nil {
+			return ""
+		}
+		return s.root
+	}
+	if err := checkset.NewLayeredStoreWithBundle(root(ls.repo), root(ls.bundle), root(ls.global), ls.repoAuthoritative).ValidateRef(r.Checks); err != nil {
+		return err
+	}
 	s, err := ls.writeStore()
 	if err != nil {
 		return err

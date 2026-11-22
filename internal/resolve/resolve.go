@@ -52,6 +52,7 @@ type RepoConfig struct {
 	Agent              string `yaml:"agent,omitempty"`                // default agent identity handle
 	Team               string `yaml:"team,omitempty"`                 // team that owns this repo
 	ActiveBundle       string `yaml:"active_bundle,omitempty"`        // currently active team bundle name
+	Checks             string `yaml:"checks,omitempty"`               // check-set slug, or none
 	Resolution         string `yaml:"resolution,omitempty"`           // DES-057 layer policy; "" == layered
 	Record             string `yaml:"record,omitempty"`               // DES-079 trace placement; "" == blame
 	MaxDelegationDepth int    `yaml:"max_delegation_depth,omitempty"` // DES-054 v5 depth ceiling; 0 == default

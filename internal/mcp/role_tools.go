@@ -87,6 +87,10 @@ func (h *Handler) handleCreateRole(req mcplib.CallToolRequest) (*mcplib.CallTool
 		SafetyConstraints: constraints,
 		OutputFormat:      outputFormat,
 	}
+	r.Checks, err = stringArgStrict(req, "checks")
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
 
 	if err := h.roles.Save(r); err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to create role: %v", err)), nil

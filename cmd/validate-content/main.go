@@ -13,6 +13,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/bundle"
+	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/punt-labs/ethos/v4/internal/doctor"
 	"github.com/punt-labs/ethos/v4/internal/enable"
 	"github.com/punt-labs/ethos/v4/internal/identity"
@@ -394,6 +395,34 @@ func runFor(loc resolve.Located, globalRoot string) (report, error) {
 	teamStore := team.NewLayeredStoreWithBundle(ethosRoot, bundleRoot, globalRoot, repoAuthoritative)
 	roleRepo := role.NewStore(ethosRoot)
 	roleLayered := role.NewLayeredStoreWithBundle(ethosRoot, bundleRoot, globalRoot, repoAuthoritative)
+	checkStore := checkset.NewLayeredStoreWithBundle(ethosRoot, bundleRoot, globalRoot, repoAuthoritative)
+	checkNames, err := checkStore.List()
+	if err != nil {
+		return report{}, err
+	}
+	for _, name := range checkNames {
+		if _, err := checkStore.Load(name); err != nil {
+			results = append(results, fail("checks: validate", err.Error()))
+		}
+	}
+	if loc.Config != nil {
+		if err := checkStore.ValidateRef(loc.Config.Checks); err != nil {
+			results = append(results, fail("checks: project reference", err.Error()))
+		}
+	}
+	allRoles, err := roleLayered.List()
+	if err != nil {
+		return report{}, err
+	}
+	for _, name := range allRoles {
+		r, err := roleLayered.Load(name)
+		if err == nil {
+			err = checkStore.ValidateRef(r.Checks)
+		}
+		if err != nil {
+			results = append(results, fail("checks: role reference", fmt.Sprintf("%s: %v", name, err)))
+		}
+	}
 	identityExists := func(h string) bool {
 		return layeredID.Exists(h)
 	}

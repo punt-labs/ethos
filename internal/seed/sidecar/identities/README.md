@@ -25,6 +25,7 @@ validate-content. Edit `internal/schema` and rebuild — do not hand-edit.
 | `email` | no | string | Email address; must contain @ and no whitespace. Beadle binding. |
 | `github` | no | string | GitHub handle. Biff binding. |
 | `agent` | no | string (path) | Path to the Claude Code agent .md file. |
+| `checks` | no | string (slug) | Check-set slug from checks/, or none to disable inherited checks. |
 | `writing_style` | no | string (slug) | Slug referencing writing-styles/; e.g. concise-quantified. |
 | `personality` | no | string (slug) | Slug referencing personalities/; e.g. principal-engineer. |
 | `talents` | no | list of string (slug) | Slugs referencing talents/; e.g. engineering. |
