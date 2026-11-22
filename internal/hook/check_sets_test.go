@@ -33,6 +33,23 @@ func checkPolicy(t *testing.T, root, slug, checks string) {
 	writeFile(t, filepath.Join(root, ".punt-labs/ethos/checks", slug+".yaml"), "name: "+slug+"\nchecks:\n"+checks)
 }
 
+func TestConfiguredEditKillSwitch(t *testing.T) {
+	root, bin := postEditFixture(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeFile(t, filepath.Join(home, ".punt-hooks-kill"), "")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	writeFile(t, filepath.Join(root, "file.txt"), "")
+	checkPolicy(t, root, "project", "  - name: configured\n    stage: edit\n    files: ['**']\n    run: [probe]\n    on_fail: block\n")
+	marker := filepath.Join(root, "must-not-run")
+	t.Setenv("POST_EDIT_MARKER", marker)
+	postEditTool(t, bin, "probe", "printf ran > \"$POST_EDIT_MARKER\"; exit 1\n")
+	require.Empty(t, configuredEdit(t, "file.txt", ""))
+	require.NoFileExists(t, marker)
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: [")
+	require.Empty(t, configuredEdit(t, "file.txt", ""))
+}
+
 func TestConfiguredEditEnginePrecedence(t *testing.T) {
 	for _, tc := range []struct{ name, idRef, roleRef, repoRef, want string }{
 		{"identity", "id-policy", "role-policy", "repo-policy", "id-policy"},

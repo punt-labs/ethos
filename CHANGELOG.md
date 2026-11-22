@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Generated agents now use fast, advisory post-edit checks instead of running
   the full `make check` gate after every edit. Checks stay within the session's
-  checkout or its linked worktrees, time out promptly, and never block edits.
+  checkout or its linked worktrees, time out promptly, never block edits, and are skipped when
+  `~/.punt-hooks-kill` exists.
 
 - **`ethos --version` and `ethos --help` no longer prompt in an enabled repo
   (punt-kit DES-039).** `ethos enable` stops granting the `Bash(ethos -*)`

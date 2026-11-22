@@ -210,3 +210,17 @@ func TestPostEditTimeout(t *testing.T) {
 	require.Contains(t, out, "timed out")
 	require.Less(t, time.Since(start), 15*time.Second)
 }
+
+func TestPostEditKillSwitch(t *testing.T) {
+	root, bin := postEditFixture(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".punt-hooks-kill"), nil, 0o600))
+	marker := filepath.Join(t.TempDir(), "ran")
+	t.Setenv("POST_EDIT_MARKER", marker)
+	postEditTool(t, bin, "shellcheck", "printf 'ran' > \"$POST_EDIT_MARKER\"\nexit 1\n")
+	require.NoError(t, os.WriteFile(filepath.Join(root, "file.sh"), []byte("#!/bin/sh\n"), 0o600))
+	require.Empty(t, postEditRun(t, "file.sh"))
+	_, err := os.Stat(marker)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}

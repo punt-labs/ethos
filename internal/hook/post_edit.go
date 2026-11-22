@@ -20,6 +20,9 @@ import (
 
 // PostEdit emits edit feedback. Ethos errors are always advisory and fail open.
 func PostEdit(ctx context.Context, input io.Reader, output io.Writer, agent ...string) {
+	if postEditKilled() {
+		return
+	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			postEditAdvice(output, fmt.Sprintf("post-edit: %v", recovered))
@@ -92,6 +95,16 @@ func PostEdit(ctx context.Context, input io.Reader, output io.Writer, agent ...s
 func editRedact(message string) string {
 	message = redact.HomePaths(redact.SecretsString(message))
 	return redact.EmailPattern.ReplaceAllString(message, redact.EmailToken)
+}
+
+// postEditKilled honours the operator kill switch every punt hook obeys.
+func postEditKilled() bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(home, ".punt-hooks-kill"))
+	return err == nil
 }
 
 func postEditAdvice(out io.Writer, message string) {
