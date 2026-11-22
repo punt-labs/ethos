@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Edit-stage checks support layered project-defined check sets referenced by
+  identities, roles and repo configuration, with glob scopes, literal argv,
+  time budgets and explicit advisory or blocking feedback. Unconfigured repos
+  retain advisory defaults; invalid policies fail open.
+
 - Generated agents now use fast, advisory post-edit checks instead of running
   the full `make check` gate after every edit. Checks stay within the session's
   checkout or its linked worktrees, time out promptly, and never block edits.

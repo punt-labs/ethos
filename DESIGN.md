@@ -14279,3 +14279,55 @@ What the implementation settled beyond the decision above. Each item is enforced
 - **Lazy per-reader compatibility** (the status quo). Every reader decides what a legacy file means, so each new reader re-opens the question. DES-075 found three worktree-state bugs of that shape (DESIGN.md:9663-9722, 9724-9775). It leaves about 4,300 lines of union readers and no point at which the old layout is known to be gone.
 - **A versioned migration framework** (a script per release, replayed in order). More machinery than one layout number: steps here are idempotent by observed state, so no step needs to know which release wrote the data. DES-065 and DES-054 rejected per-file and per-release stamps for the same reason (DESIGN.md:6914-6916, 4974).
 - **Repair only at session start.** Repositories are committed to, queried and served over MCP without a session start, and the pre-commit seal is where the stuck warning appears.
+
+## DES-085: Project-defined agent check sets (SETTLED; edit stage implemented)
+
+**Status:** Jim's PL-1275 decisions: policy belongs in the identity schema,
+commands and file scope are project-defined, each check is advisory or
+blocking, and unconfigured repositories receive advisory defaults immediately.
+Stacks on the binary post-edit shim in #643. Detail and the later-stage plan
+are in `docs/design-agent-checks.md`. Amends DES-055's edit feedback mechanism
+and follows DES-083's binary-owned policy rule.
+
+**Context.** Generated Write/Edit hooks ran the full `make check` on every
+matched edit, taking about twelve minutes in ethos and defeating TDD. Moving
+the command into the binary made feedback cheap and scoped; projects still
+needed to choose commands without changing the generator or assuming make.
+
+**Decision.** A strict YAML check-set entity lives in
+`.punt-labs/ethos/checks/<slug>.yaml`, resolved repo, active bundle, then global
+(without global under repo-only resolution). Identity `checks` overrides its
+generator-bound role, then project `checks`, then advisory marker defaults.
+`none` stops inheritance. Missing or unresolved handles use project policy.
+
+The session checkout owns policy. An edited file's checkout owns matching
+paths, `{root}`, package paths and execution cwd, but never supplies policy.
+Foreign checkouts are silent; linked worktrees must share the git common
+directory. Exclusions always include `.tmp/**` and `.punt-labs/local/**`.
+Commands are argv, with whole-element placeholders and no shell field.
+Doublestar globs need no additional dependency.
+
+**Feedback and budgets.** Edit checks default to advisory, have individual
+timeouts and run in parallel under a sixty-second stage cap. A project's
+blocking failure emits PostToolUse `decision: block` and `reason`; advisory
+failures use `hookSpecificOutput.additionalContext`. Both may share one JSON
+response, and all paths exit zero. Ethos/config errors are advisory, with
+redacted diagnostics. There is no blocking compatibility release and no
+implicit make command.
+
+**Implementation boundary.** Only edit executes. Commit and handoff definitions
+are validated for future use, but their hooks are unchanged. Only `run` argv
+and the optional `exec` adapter are accepted. Build-system adapters, shell,
+caching/coalescing, audit metrics and check-set management commands are deferred.
+The generated hook command and timeout remain byte-identical to #643.
+
+**Verification.** Strict decoding, stage/default/budget rules, placeholders,
+layered loading, reference precedence and opt-outs, glob exclusion, worktree
+policy isolation, literal filenames and mixed advisory/block responses are
+covered by tests through the hidden CLI hook. TDD checks explicitly prove that
+a failing advisory test command does not block.
+
+**Rejected alternatives.** Inline shell or a hardcoded make adapter puts policy
+back into generated files. Blocking defaults break deliberately red edit
+states. Trusting the edited worktree's config lets an edit change which
+commands the session executes.

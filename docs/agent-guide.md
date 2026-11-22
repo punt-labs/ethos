@@ -13,6 +13,56 @@ The [storage and publication contract](storage-layout.md) supersedes older path
 and tracked-by-default seal descriptions in linked historical references and
 names the test that proves each promise.
 
+## Edit check sets
+
+Check sets sit beside identities, roles and teams at
+`.punt-labs/ethos/checks/<slug>.yaml`. Lookup is repo, active bundle, then
+global `~/.punt-labs/ethos/checks/`; repo-only omits global. Inspect the
+strict schema with `ethos checks schema --json`.
+
+```yaml
+name: quick-go
+description: Formatting and package-local feedback
+checks:
+  - name: formatting
+    stage: edit
+    files: ['**/*.go']
+    run: [gofmt, -l, '{file}']
+    fail_on_output: true
+  - name: tests
+    stage: edit
+    files: ['**/*.go']
+    run: [go, test, '{package_dir}']
+    timeout: 60s
+    on_fail: advisory
+```
+
+Set `checks: quick-go` on an identity, its team-bound role, or in
+`.punt-labs/ethos.yaml`, in that precedence order. `checks: none` stops
+inheritance at any level. An unknown or absent agent uses the repo setting.
+Without a selected set the existing marker-based checks remain advisory.
+
+Only edit stages execute currently. Each command requires `run` argv; the
+only optional adapter is `exec`. There is no shell field or interpolation.
+Whole argv placeholders are `{file}` and `{files}` (the absolute edited
+file), `{root}` (the edited file's checkout), and `{package_dir}` (a `./`
+package path relative to that root). `cwd` defaults to `root`, or may select
+`file_dir` or `package_dir`. A package directory is the directory holding
+the edited file; cwd does not change placeholder values.
+
+Globs match root-relative paths: `**` spans zero or more whole path segments.
+`exclude` augments the mandatory `.tmp/**` and `.punt-labs/local/**` exclusions.
+`files: all` is reserved for commit/handoff definitions. Edit checks run in
+parallel with a default 10s timeout, individually at most the 60s stage cap.
+An empty set deliberately runs nothing; a configured set never falls back
+to marker checks merely because no glob matches.
+
+Advisory failures inject context. An explicit `on_fail: block` emits
+PostToolUse block feedback, still with exit zero. Policy errors fail open
+with context. The session checkout supplies policy even for linked-worktree
+edits; the edited worktree's configuration is never consulted. See
+[DES-085's design](design-agent-checks.md) for the future stages and adapters.
+
 ## Prerequisites: Agent Definitions
 
 Ethos auto-generates `.claude/agents/<handle>.md` files at **SessionStart**
