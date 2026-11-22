@@ -148,22 +148,38 @@ func hookCheckout() (string, error) {
 	return filepath.EvalSymlinks(checkout)
 }
 
-func postEditScope(checkout, file string) (string, string, error) {
+func postEditRoot(checkout, file string) (string, string, error) {
 	if !filepath.IsAbs(file) {
 		// Preserve link/.. until EvalSymlinks has resolved it physically.
 		file = checkout + string(filepath.Separator) + file
 	}
-	physical, err := filepath.EvalSymlinks(file)
-	if os.IsNotExist(err) {
-		index := strings.LastIndexAny(file, string(filepath.Separator))
-		var parent string
-		parent, err = filepath.EvalSymlinks(file[:index+1])
-		physical = filepath.Join(parent, file[index+1:])
+	ancestor := file
+	physical, err := filepath.EvalSymlinks(ancestor)
+	for os.IsNotExist(err) {
+		raw := strings.TrimRight(ancestor, string(filepath.Separator))
+		if _, linkErr := os.Lstat(raw); !os.IsNotExist(linkErr) {
+			return "", "", err
+		}
+		index := strings.LastIndexAny(raw, string(filepath.Separator))
+		if index < 0 || raw[index+1:] == ".." {
+			return "", "", err
+		}
+		parent := raw[:index+1]
+		if parent == ancestor {
+			return "", "", err
+		}
+		ancestor = parent
+		physical, err = filepath.EvalSymlinks(ancestor)
 	}
 	if err != nil {
 		return "", "", err
 	}
-	root, err := resolve.CheckoutOf(filepath.Dir(physical))
+	dir := filepath.Dir(physical)
+	if ancestor != file {
+		dir = physical
+		physical = filepath.Join(physical, file[len(ancestor):])
+	}
+	root, err := resolve.CheckoutOf(dir)
 	if err != nil {
 		return "", "", err
 	}
@@ -173,7 +189,7 @@ func postEditScope(checkout, file string) (string, string, error) {
 	if root != checkout {
 		_, common, commonErr := resolve.HandGitDirs(checkout)
 		if commonErr != nil {
-			return "", "", nil
+			return "", "", commonErr
 		}
 		_, otherCommon, otherErr := resolve.HandGitDirs(root)
 		if otherErr != nil {
@@ -190,6 +206,14 @@ func postEditScope(checkout, file string) (string, string, error) {
 		if common != otherCommon {
 			return "", "", nil
 		}
+	}
+	return root, physical, nil
+}
+
+func postEditScope(checkout, file string) (string, string, error) {
+	root, physical, err := postEditRoot(checkout, file)
+	if err != nil || root == "" {
+		return root, physical, err
 	}
 	rel, err := filepath.Rel(root, physical)
 	if err != nil {
