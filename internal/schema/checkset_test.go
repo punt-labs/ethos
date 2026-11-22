@@ -126,12 +126,8 @@ func TestAdapterSchemaRuntimeParity(t *testing.T) {
 		})
 	}
 	for _, c := range []map[string]any{
-		{"adapter": "npm", "script": "{file}"},
-		{"adapter": "npm", "script": "{root}", "stage": "handoff", "files": "all"},
-	} {
-		t.Run(fmt.Sprint(c), func(t *testing.T) { validate(t, c, true) })
-	}
-	for _, c := range []map[string]any{
+		{"adapter": "npm", "script": "{file}"}, {"adapter": "npm", "script": "{root}", "stage": "handoff", "files": "all"},
+		{"adapter": "npm", "script": "-s"}, {"adapter": "npm", "script": "--help"},
 		{}, {"adapter": "exec"}, {"adapter": "go"}, {"adapter": "go", "go": "run"},
 		{"adapter": "make"}, {"adapter": "uv"}, {"adapter": "npm"}, {"adapter": "other", "run": []string{"true"}},
 		{"adapter": "make", "target": "--eval=x"}, {"adapter": "make", "target": "a b"}, {"adapter": "make", "target": 123},

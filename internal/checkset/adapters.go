@@ -102,6 +102,9 @@ func (npmAdapter) Argv(c Check) ([]string, error) {
 	if strings.TrimSpace(c.Script) == "" {
 		return nil, fmt.Errorf("npm script is required")
 	}
+	if strings.HasPrefix(c.Script, "-") || strings.ContainsAny(c.Script, "{}") {
+		return nil, fmt.Errorf("npm script must be a literal name without braces or a leading -")
+	}
 	argv := []string{"npm", "run", c.Script}
 	if !c.Files.All {
 		files := "{files}"

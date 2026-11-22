@@ -88,13 +88,8 @@ func adapterSchema(items map[string]any) {
 	props["run"] = argv(true)
 	props["uv"] = argv(true)
 	props["vars"] = map[string]any{"type": "object", "propertyNames": map[string]any{"pattern": checkset.MakeVariablePattern}, "additionalProperties": map[string]any{"type": "string", "pattern": `^[^${}]*$`}}
-	script := func(file bool) map[string]any {
-		value := argv(file)["items"].(map[string]any)
-		value["allOf"] = []any{map[string]any{"pattern": `\S`}}
-		return value
-	}
-	props["script"] = script(true)
-	items["else"] = map[string]any{"properties": map[string]any{"run": argv(false), "uv": argv(false), "script": script(false)}}
+	props["script"] = map[string]any{"type": "string", "pattern": `^[^{}-][^{}]*$`, "allOf": []any{map[string]any{"pattern": `\S`}}}
+	items["else"] = map[string]any{"properties": map[string]any{"run": argv(false), "uv": argv(false)}}
 	var choices []any
 	for _, adapter := range []string{"exec", "make", "go", "uv", "npm"} {
 		own := map[string][]string{"exec": {"run"}, "make": {"target", "vars"}, "go": {"go"}, "uv": {"uv"}, "npm": {"script"}}[adapter]
