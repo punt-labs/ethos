@@ -13,14 +13,14 @@ import (
 
 // The vendored zone is exactly these three repo-relative paths. enable writes
 // them wholesale and never any other path under .punt-labs/ethos/, so the
-// overwrite is bounded to the vendored zone by construction (§7).
+// overwrite is bounded to the vendored zone by construction (punt-labs-dir PLD-7).
 const (
 	guideRel    = ".punt-labs/ethos/CLAUDE.md"
 	setupRel    = ".punt-labs/ethos/ETHOS-SETUP.md"
 	manifestRel = ".punt-labs/ethos/.vendored-manifest"
 )
 
-// deposit writes the vendored zone under §7 manifest semantics: it writes
+// deposit writes the vendored zone under punt-labs-dir PLD-9 manifest semantics: it writes
 // exactly the new-manifest set (the guide, the setup playbook, and the
 // manifest itself), validates the entire previous manifest against the owned
 // paths, and collision-errors on any new-manifest path that already
