@@ -377,6 +377,103 @@ func TestStageEmptyExecutable(t *testing.T) {
 	require.Contains(t, feedback.Blocking, "empty-command")
 }
 
+func TestCommitPartialStaging(t *testing.T) {
+	for _, tc := range []struct {
+		name, pattern, index                        string
+		stagedBad, diskBad, partial, linked, blocks bool
+	}{
+		{name: "staged bad disk good", partial: true, stagedBad: true, blocks: true},
+		{name: "staged good disk bad", partial: true, diskBad: true, blocks: true},
+		{name: "unmatched", pattern: "['**/*.sh']", partial: true},
+		{name: "fully staged"},
+		{name: "all", pattern: "all", partial: true, blocks: true},
+		{name: "linked", partial: true, linked: true, blocks: true},
+		{name: "absolute custom index", index: "absolute", partial: true, blocks: true},
+		{name: "relative custom index", index: "relative", partial: true, linked: true, blocks: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, bin := postEditFixture(t)
+			t.Setenv("HOME", t.TempDir())
+			root := store
+			if tc.linked {
+				root = filepath.Join(store, ".claude", "worktrees", "linked")
+				stageGit(t, store, "worktree", "add", "--detach", root)
+			}
+			if tc.index != "" {
+				index := filepath.Join(root, "custom-index")
+				if tc.index == "relative" {
+					index = "custom-index"
+				}
+				t.Setenv("GIT_INDEX_FILE", index)
+				stageGit(t, root, "read-tree", "HEAD")
+			}
+			pattern := tc.pattern
+			if pattern == "" {
+				pattern = "['**/*.go']"
+			}
+			writeFile(t, filepath.Join(store, ".punt-labs/ethos.yaml"), "checks: project\n")
+			checkPolicy(t, store, "project", "  - name: formatting\n    stage: commit\n    files: "+pattern+"\n    on_fail: advisory\n    run: [probe]\n")
+			log := filepath.Join(t.TempDir(), "ran")
+			t.Setenv("STAGE_LOG", log)
+			postEditTool(t, bin, "probe", "printf ran > \"$STAGE_LOG\"\n")
+			formatted, bad := "package probe\n\nvar probe = 1\n", "package probe\nvar  probe=1\n"
+			for _, name := range []string{"one.go", "two space.go"} {
+				staged := formatted
+				if tc.stagedBad {
+					staged = bad
+				}
+				writeFile(t, filepath.Join(root, name), staged)
+				stageGit(t, root, "add", "--", name)
+				if tc.partial {
+					disk := formatted
+					if tc.diskBad {
+						disk = bad
+					} else if !tc.stagedBad {
+						disk += "// unstaged\n"
+					}
+					writeFile(t, filepath.Join(root, name), disk)
+				}
+			}
+			if tc.pattern == "['**/*.sh']" {
+				writeFile(t, filepath.Join(root, "matched.sh"), "#!/bin/sh\n")
+				stageGit(t, root, "add", "matched.sh")
+			}
+			feedback := RunStageChecks(context.Background(), root, "", "commit")
+			require.Empty(t, feedback.Advisory)
+			_, ran := os.Stat(log)
+			if tc.blocks {
+				require.Contains(t, feedback.Blocking, "has unstaged changes")
+				require.Contains(t, feedback.Blocking, "Stage or stash")
+				require.Contains(t, feedback.Blocking, "git stash --keep-index")
+				require.Contains(t, feedback.Blocking, "one.go")
+				require.Contains(t, feedback.Blocking, "two space.go")
+				require.ErrorIs(t, ran, os.ErrNotExist)
+			} else {
+				require.Empty(t, feedback.Blocking)
+				require.NoError(t, ran)
+			}
+		})
+	}
+}
+
+func TestCommitPartialStagingQueryFailure(t *testing.T) {
+	root, bin := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	checkPolicy(t, root, "project", "  - name: probe\n    stage: commit\n    files: all\n    on_fail: advisory\n    run: [probe]\n")
+	log := filepath.Join(t.TempDir(), "ran")
+	t.Setenv("STAGE_LOG", log)
+	postEditTool(t, bin, "probe", "printf ran > \"$STAGE_LOG\"\n")
+	feedback := runStageChecks(context.Background(), root, "", "commit", func() ([]string, error) {
+		writeFile(t, filepath.Join(root, ".git", "HEAD"), "invalid\n")
+		return []string{"one.go"}, nil
+	})
+	require.Contains(t, feedback.Blocking, "git diff unstaged files")
+	require.Empty(t, feedback.Advisory)
+	_, err := os.Stat(log)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestCommitCheckIndexEnvironment(t *testing.T) {
 	root, bin := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())

@@ -266,6 +266,14 @@ agent, with the project default set, or the committing session's resolved
 set when one is found. Exit 2 blocks the commit and prints the failing
 check's tail.
 
+Commit checks read files on disk. Before any check runs, every staged path matched
+by a commit check must have no unstaged changes against the actual committing
+index, including `GIT_INDEX_FILE`. Otherwise the stage blocks with exit 2,
+regardless of `on_fail`, listing every offending file and asking the user to stage
+or stash its changes (`git add` / `git stash --keep-index`). Unmatched paths are
+unaffected; `files: all` counts every staged path as matched. With no commit checks,
+this preflight performs no Git query. Index-snapshot execution is a later slice.
+
 The handoff stage runs in `ethos hook subagent-stop`; `ethos mission result`
 integration is deferred to the next slice. In the binary, roster leave happens
 before checks, including when its kill check skips them or they block. The
@@ -292,9 +300,9 @@ fails closed rather than silently narrowing the scope.
 A blocking failure or broken policy returns
 `{"decision":"block","reason":...}` with exit zero. On `stop_hook_active`
 the hook allows the stop and sends the failure to stderr instead. Advisory
-failures always use stderr. The plugin currently declares no SubagentStop
-timeout, so its harness timeout does not provide the 30-minute stage window;
-the binary enforces its budgets, but the harness may terminate it earlier.
+failures always use stderr. The plugin declares a SubagentStop timeout of
+1800 seconds, matching the 30-minute handoff stage cap instead of relying on
+the harness's default 600-second timeout. The binary enforces its budgets.
 
 Commit/handoff checks run sequentially under a shared stage deadline. At
 `cwd: root`, `{files}` expands to all matching paths and `{package_dir}` to
@@ -315,7 +323,7 @@ OpenCode generation (`.opencode/agents`) uses the same subcommand from its
 |---|---|---|---|
 | edit | 10 s | 60 s total wall time | cap + 10 s |
 | commit | 120 s | 15 min | not applicable (git) |
-| handoff | 10 min | 30 min | cap + 30 s |
+| handoff | 10 min | 30 min | 1800 s (30 min) |
 
 The edit cap is far below the 600 s watchdog. Ethos records each check's
 duration in the local audit trace. `ethos doctor` WARNs when the p95 of an
