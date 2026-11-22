@@ -4,7 +4,9 @@ package hook
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +14,27 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGoAdapterNestedCwd(t *testing.T) {
+	goBin, err := exec.LookPath("go")
+	require.NoError(t, err)
+	for _, cwd := range []string{"package_dir", "file_dir"} {
+		for _, stage := range []string{"edit", "commit", "handoff"} {
+			t.Run(cwd+"/"+stage, func(t *testing.T) {
+				root, bin := postEditFixture(t)
+				t.Setenv("HOME", t.TempDir())
+				postEditTool(t, bin, "go", fmt.Sprintf("exec %q \"$@\"\n", goBin))
+				writeFile(t, filepath.Join(root, "nested", "go.mod"), "module example.com/nested\n\ngo 1.26\n")
+				writeFile(t, filepath.Join(root, "nested", "edited.go"), "package nested\n")
+				set, err := checkset.Decode([]byte("name: nested\nchecks:\n  - name: vet\n    stage: " + stage + "\n    files: ['**/*.go']\n    cwd: " + cwd + "\n    adapter: go\n    go: vet\n"))
+				require.NoError(t, err)
+				checks := stageInvocations(root, []string{"nested/edited.go"}, set.Checks[0])
+				require.Len(t, checks, 1)
+				require.Empty(t, runEditCheck(context.Background(), root, checks[0]))
+			})
+		}
+	}
+}
 
 func TestGoAdapterExecution(t *testing.T) {
 	root, bin := postEditFixture(t)

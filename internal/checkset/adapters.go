@@ -153,6 +153,9 @@ func (goAdapter) Argv(c Check) ([]string, error) {
 		return nil, fmt.Errorf("go must be vet, test or build")
 	}
 	pkg := "{package_dir}"
+	if c.Cwd == "package_dir" || c.Cwd == "file_dir" {
+		pkg = "."
+	}
 	if c.Files.All {
 		pkg = "./..."
 	}
