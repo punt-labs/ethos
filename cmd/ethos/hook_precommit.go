@@ -4,11 +4,15 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/punt-labs/ethos/v4/internal/autorepair"
+	"github.com/punt-labs/ethos/v4/internal/hook"
+	"github.com/punt-labs/ethos/v4/internal/process"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
 func init() {
@@ -105,5 +109,37 @@ func runHookPreCommit(ctx context.Context, out, errOut io.Writer) error {
 		fmt.Fprintf(errOut, "ethos: provenance verify-index: %v\n", err)
 		return failClosed{}
 	}
+	checkout, err := requireCheckout(errOut, "hook pre-commit")
+	if err != nil {
+		return err
+	}
+	feedback := hook.RunStageChecks(ctx, checkout, committingAgent(), "commit")
+	if feedback.Advisory != "" {
+		fmt.Fprintln(errOut, feedback.Advisory)
+	}
+	if feedback.Blocking != "" {
+		fmt.Fprintln(errOut, feedback.Blocking)
+		return failClosed{}
+	}
 	return nil
+}
+
+func committingAgent() string {
+	ss := sessionStore()
+	id, _, err := resolve.SessionID(ss)
+	if err != nil {
+		return ""
+	}
+	roster, err := ss.Load(id)
+	if err != nil {
+		return ""
+	}
+	agent := os.Getenv("ETHOS_AGENT_ID")
+	if agent == "" {
+		agent = process.FindClaudePID()
+	}
+	if participant := roster.FindParticipant(agent); participant != nil {
+		return participant.Persona
+	}
+	return ""
 }
