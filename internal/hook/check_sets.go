@@ -108,6 +108,9 @@ func configuredEditChecks(checkout, root, file, agent string) ([]editCheck, bool
 	if ref == "" {
 		return nil, false, nil
 	}
+	if err := checkset.ValidateReference(ref); err != nil {
+		return nil, true, err
+	}
 	set, err := sets.Load(ref)
 	if err != nil {
 		return nil, true, err

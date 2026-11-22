@@ -50,6 +50,17 @@ func TestConfiguredEditKillSwitch(t *testing.T) {
 	require.Empty(t, configuredEdit(t, "file.txt", ""))
 }
 
+func TestConfiguredEditInvalidRepoReference(t *testing.T) {
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: Go_Default\n")
+	writeFile(t, filepath.Join(root, "file.txt"), "")
+	out := configuredEdit(t, "file.txt", "")
+	require.Contains(t, out, "additionalContext")
+	require.Contains(t, out, "Go_Default")
+	require.NotContains(t, out, `"decision"`)
+}
+
 func TestConfiguredEditMainStoreFromLinkedSession(t *testing.T) {
 	for _, tc := range []struct{ name, agent, config, identity, role string }{
 		{"repository", "", "checks: project\n", "", ""},
