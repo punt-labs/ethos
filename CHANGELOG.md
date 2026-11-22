@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Handoff rename inference bounds untracked discovery to 512 paths and 64 KiB,
+  with one-second Git enumeration, intent-to-add and diff budgets. Exhaustion
+  skips inference with advisory feedback instead of delaying handoff.
 - Handoff rename attribution accepts only exact-content renames, not Git
   similarity alone. Modified or unrelated similar targets are skipped with
   advice; vanished paths do not trigger a broader dirty-tree fallback.

@@ -315,9 +315,12 @@ and produces advisory feedback instead. A discovered target must still exist
 under the same accepted root and must not be another agent's known path. This
 covers unstaged `mv` and staged `git mv` without changing the real index or
 widening dirty-tree fallback. Lookup failures are advisory and non-blocking;
-outright deletions remain omitted. Roots with vanished attributed paths do not
-fall back to unrelated dirty files when no target is accepted. The temporary candidate directory is removed
-on success and failure. Checkout attribution is retained through the
+outright deletions remain omitted. Known deletions, rejected targets and lookup
+failures do not activate dirty-tree fallback. Historical paths absent from Git
+retain the existing exclusive-linked-worktree fallback. The temporary candidate directory is removed
+on success and failure. Untracked discovery accepts at most 512 paths and 64 KiB
+of path output. Enumeration, intent-to-add and diff each have a one-second Git
+budget; exhaustion skips inference with advice. Checkout attribution is retained through the
 nearest existing physical ancestor, including missing parent directories. A path
 whose root is indeterminate disables dirty-tree fallback without blocking the
 stop; attributed files and `files: all` checks still run. An unreadable audit

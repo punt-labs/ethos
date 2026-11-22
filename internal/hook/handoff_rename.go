@@ -1,15 +1,38 @@
 package hook
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
+
+const (
+	handoffUntrackedPaths = 512
+	handoffUntrackedBytes = 64 << 10
+	handoffRenameTimeout  = time.Second
+)
+
+type handoffUntrackedBuffer struct {
+	data     bytes.Buffer
+	exceeded bool
+}
+
+func (b *handoffUntrackedBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	keep := min(n, handoffUntrackedBytes-b.data.Len())
+	if keep < n {
+		b.exceeded = true
+	}
+	_, _ = b.data.Write(p[:keep])
+	return n, nil
+}
 
 func handoffRenames(root string) (map[string]string, error) {
 	store, err := resolve.StoreOf(root)
@@ -54,20 +77,30 @@ func handoffRenames(root string) (map[string]string, error) {
 	} else {
 		return nil, err
 	}
-	untracked, err := gitenv.OutputEnv(root, "git", env, "ls-files", "--others", "--exclude-standard", "--exclude=/.punt-labs/local/", "-z")
+	var untracked handoffUntrackedBuffer
+	_, err = gitenv.Run(gitenv.Spec{
+		Git: "git", Dir: root, Env: env, Stdout: &untracked, Limit: handoffRenameTimeout,
+		Args: []string{"ls-files", "--others", "--exclude-standard", "--exclude=/.punt-labs/local/", "-z"},
+	})
 	if err != nil {
 		return nil, err
 	}
-	if len(untracked) > 0 {
+	if untracked.exceeded || bytes.Count(untracked.data.Bytes(), []byte{0}) > handoffUntrackedPaths {
+		return nil, fmt.Errorf("untracked rename budget exceeded (%d paths or %d bytes); inference skipped", handoffUntrackedPaths, handoffUntrackedBytes)
+	}
+	if untracked.data.Len() > 0 {
 		_, err = gitenv.Run(gitenv.Spec{
-			Git: "git", Dir: root, Env: env, Stdin: strings.NewReader(string(untracked)),
+			Git: "git", Dir: root, Env: env, Stdin: bytes.NewReader(untracked.data.Bytes()), Limit: handoffRenameTimeout,
 			Args: []string{"--literal-pathspecs", "-c", "core.splitIndex=false", "add", "--intent-to-add", "--pathspec-from-file=-", "--pathspec-file-nul"},
 		})
 		if err != nil {
 			return nil, err
 		}
 	}
-	data, err = gitenv.OutputEnv(root, "git", env, "diff", "--find-renames", "--name-status", "-z", "--no-ext-diff", "--no-textconv", "HEAD", "--")
+	data, err = gitenv.Run(gitenv.Spec{
+		Git: "git", Dir: root, Env: env, Limit: handoffRenameTimeout,
+		Args: []string{"diff", "--find-renames", "--name-status", "-z", "--no-ext-diff", "--no-textconv", "HEAD", "--"},
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +132,10 @@ func parseHandoffRenames(data string) (map[string]string, error) {
 		if status == "R100" {
 			result[fields[i]] = fields[i+1]
 		} else if strings.HasPrefix(status, "R") {
+			result[fields[i]] = ""
 			rejected = append(rejected, fmt.Sprintf("%q to %q", fields[i], fields[i+1]))
+		} else if status == "D" {
+			result[fields[i]] = ""
 		}
 		i += count
 	}
