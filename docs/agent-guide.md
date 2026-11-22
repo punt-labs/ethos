@@ -118,10 +118,12 @@ Each example is a complete check entry within a set's `checks` list:
 Make runs `make lint MODE=fast`; it never injects a `FILE` variable or edited
 path. Names in `vars` must match `[A-Za-z_][A-Za-z0-9_]*`; values are strings
 without `$` or placeholders. Variables are sorted by name. The Go adapter
-uses `{package_dir}`, or `./...` for `files: all`. uv prefixes its argv with
+uses `{package_dir}` at root cwd, `.` at `package_dir` or `file_dir` cwd,
+or `./...` for `files: all`. uv prefixes its argv with
 `uv run` and supports the same whole-element placeholders as exec. npm appends
 `-- {file}` at edit or `-- {files}` for later glob checks, but passes no file
 arguments for `files: all`.
+Script names must be literal, without braces or a leading `-`.
 
 Adapters probe their actual cwd before execution: a makefile, `go.mod`,
 `pyproject.toml`, or `package.json` containing the named npm script. Missing

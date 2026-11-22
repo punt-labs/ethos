@@ -183,7 +183,7 @@ checks: none
 | `stage` | enum `edit\|commit\|handoff` | required | |
 | `files` | list of glob, or `all` | required | Doublestar globs relative to checkout C. `all` is invalid at `edit` |
 | `exclude` | list of glob | `[".tmp/**", ".punt-labs/local/**"]` | Always added to, never replaced |
-| `run` | argv list | one of `run`/`adapter` | Executed without a shell |
+| `run` | argv list | required for explicit or implicit `exec` | Executed without a shell; forbidden for other adapters |
 | `adapter` | string | none | §4 |
 | `on_fail` | `advisory\|block` | `advisory` at edit, `block` elsewhere | |
 | `fail_on_output` | bool | false | Non-empty stdout counts as a failure |
@@ -214,7 +214,7 @@ Built-in adapters:
 |---|---|---|---|
 | `exec` (implicit when `run` is set) | `run` | `run` with placeholders filled | `exec.LookPath(run[0])` |
 | `make` | `target`, optional `vars` | `make <target> NAME=value…` (sorted) | `Makefile`, `makefile` or `GNUmakefile` present |
-| `go` | `go: vet\|test\|build` | `go <verb> {package_dir}`; `./...` for `all` | `go.mod` present |
+| `go` | `go: vet\|test\|build` | `go <verb> {package_dir}` at root cwd; `.` at directory cwd; `./...` for `all` | `go.mod` present |
 | `uv` | `uv: <tool args>` | `uv run <args>` | `pyproject.toml` present |
 | `npm` | `script` | `npm run <script> -- {file}` at edit, `-- {files}` at later stages; no `--` for `all` | `package.json` with the named string script |
 
@@ -223,6 +223,7 @@ requires `run`. Every other adapter forbids `run` and requires its own field;
 fields belonging to a different adapter are errors. `Check.Argv()` computes
 effective argv without writing it into `Run`, preserving YAML/JSON and vendor
 round trips. Whole-element placeholder validation applies to effective argv.
+An npm script name is literal: braces and a leading `-` are rejected.
 
 Unlike the original table, make never receives `FILE=<path>`: edited paths
 containing `$` would be expanded by make, the #642 defect class. Targets match
@@ -391,7 +392,8 @@ overlays in `internal/schema/registry.go`. Errors:
 
 - an unknown stage, adapter or placeholder;
 - `files: all` at `edit`;
-- both or neither of `run` and `adapter`;
+- an explicit or implicit `exec` adapter without `run`, or any other adapter
+  paired with `run`;
 - an empty argv;
 - a timeout above the stage cap;
 - `{file}` at `commit` or `handoff` (use `{files}`);
