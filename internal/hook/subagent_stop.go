@@ -92,27 +92,29 @@ func handoffFiles(checkout, sessionID, agentID string) (map[string][]string, err
 	seen := map[string]bool{}
 	files := map[string][]string{}
 	otherWriters := map[string]bool{}
+	fallbackUncertain := false
 	for _, entry := range entries {
 		if entry.Tool != "Write" && entry.Tool != "Edit" {
 			continue
 		}
 		file, _ := entry.ToolInput["file_path"].(string)
 		if file == "" || file == redactedPath || entry.RawPlaceholder || entry.PathFormat < auditPathFormat && mission.HasHomePlaceholder(file) {
+			fallbackUncertain = true
 			continue
 		}
 		file, err = mission.ExpandPath(file, checkout)
 		if err != nil {
-			return nil, err
+			fallbackUncertain = true
+			continue
 		}
 		scope := postEditScope
 		if entry.AgentID != agentID {
 			scope = postEditRoot
 		}
 		root, physical, err := scope(checkout, file)
-		if os.IsNotExist(err) {
+		if err != nil {
+			fallbackUncertain = true
 			continue
-		} else if err != nil {
-			return nil, err
 		}
 		if root == "" {
 			continue
@@ -142,7 +144,7 @@ func handoffFiles(checkout, sessionID, agentID string) (map[string][]string, err
 		files[checkout] = nil
 	}
 	for root, paths := range files {
-		if len(paths) == 0 && root != store && !otherWriters[root] {
+		if len(paths) == 0 && root != store && !otherWriters[root] && !fallbackUncertain {
 			paths, err = stageFiles(root, "handoff")
 			if err != nil {
 				return nil, err

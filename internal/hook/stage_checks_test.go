@@ -258,6 +258,71 @@ func TestHandoffVanishedPaths(t *testing.T) {
 	}
 }
 
+func TestHandoffVanishedRootAttribution(t *testing.T) {
+	for _, tc := range []struct {
+		name, otherPath string
+		fromMain, own   bool
+		other, glob     bool
+	}{
+		{name: "own linked root from main", fromMain: true, own: true, glob: true},
+		{name: "other vanished parent", other: true},
+		{name: "own and other linked roots from main", fromMain: true, own: true, other: true},
+		{name: "unresolved symlink", other: true, otherPath: "loop/gone.go"},
+		{name: "dangling symlink", other: true, otherPath: "dangling/gone.go"},
+		{name: "redacted path", other: true, otherPath: redactedPath},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, bin := postEditFixture(t)
+			t.Setenv("HOME", t.TempDir())
+			root := filepath.Join(store, ".claude", "worktrees", "linked")
+			stageGit(t, store, "worktree", "add", "--detach", root)
+			if !tc.fromMain {
+				t.Setenv("CLAUDE_PROJECT_DIR", root)
+			}
+			writeFile(t, filepath.Join(root, "dirty.go"), "package dirty\n")
+			require.NoError(t, os.Symlink("loop", filepath.Join(root, "loop")))
+			require.NoError(t, os.Symlink("missing", filepath.Join(root, "dangling")))
+			writeFile(t, filepath.Join(store, ".punt-labs/ethos.yaml"), "checks: project\n")
+			checkPolicy(t, store, "project", "  - name: glob\n    stage: handoff\n    files: ['**/*.go']\n    run: [glob-probe, '{files}']\n  - name: all\n    stage: handoff\n    files: all\n    run: [all-probe]\n")
+			log := filepath.Join(t.TempDir(), "log")
+			t.Setenv("STAGE_LOG", log)
+			postEditTool(t, bin, "glob-probe", "printf 'glob|%s\\n' \"$@\" >> \"$STAGE_LOG\"\n")
+			postEditTool(t, bin, "all-probe", "printf 'all|%s\\n' \"$PWD\" >> \"$STAGE_LOG\"\n")
+			prefix := "<repo>/"
+			if tc.fromMain {
+				prefix += ".claude/worktrees/linked/"
+			}
+			var entries []auditEntry
+			if tc.own {
+				entries = append(entries, auditEntry{Ts: "2026-11-22T10:00:00Z", Session: "roots", AgentID: "sub", Tool: "Write", ToolInput: map[string]any{"file_path": prefix + "removed/deep/own.go"}, PathFormat: auditPathFormat})
+			}
+			if tc.other {
+				path := prefix + "removed/deep/other.go"
+				if tc.otherPath == redactedPath {
+					path = redactedPath
+				} else if tc.otherPath != "" {
+					path = prefix + tc.otherPath
+				}
+				entries = append(entries, auditEntry{Ts: "2026-11-22T10:00:01Z", Session: "roots", AgentID: "other", Tool: "Edit", ToolInput: map[string]any{"file_path": path}, PathFormat: auditPathFormat})
+			}
+			writeRepoTreeSession(t, store, "2026-11-22", "roots", entries)
+			ss := session.NewStore(t.TempDir())
+			require.NoError(t, ss.Create("roots", session.Participant{AgentID: "human"}, session.Participant{AgentID: "sub"}, "", ""))
+			var out, stderr bytes.Buffer
+			require.NoError(t, HandleSubagentStopWithIO(context.Background(), strings.NewReader(`{"session_id":"roots","agent_id":"sub"}`), ss, &out, &stderr))
+			require.Empty(t, out.String())
+			require.Empty(t, stderr.String())
+			data, err := os.ReadFile(log)
+			require.NoError(t, err)
+			want := "all|" + root + "\n"
+			if tc.glob {
+				want = "glob|" + filepath.Join(root, "dirty.go") + "\n" + want
+			}
+			require.Equal(t, want, string(data))
+		})
+	}
+}
+
 func TestHandoffUnreadableAudit(t *testing.T) {
 	root, _ := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())
