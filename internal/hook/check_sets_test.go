@@ -184,6 +184,22 @@ func TestConfiguredEditLayeredResolution(t *testing.T) {
 	}
 }
 
+func TestConfiguredEditUsesGeneratorRoleBinding(t *testing.T) {
+	root, bin := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, "file.txt"), "")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "team: engineering\n")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos/identities/bwk.yaml"), "name: Agent\nhandle: bwk\nkind: agent\n")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos/teams/engineering.yaml"), "name: engineering\nmembers:\n  - identity: bwk\n    role: writer\n  - identity: bwk\n    role: metadata\n")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos/roles/writer.yaml"), "name: writer\ntools: [Edit]\nchecks: writer\n")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos/roles/metadata.yaml"), "name: metadata\nchecks: none\n")
+	checkPolicy(t, root, "writer", "  - name: writer-check\n    stage: edit\n    files: ['**']\n    run: [probe]\n")
+	postEditTool(t, bin, "probe", "exit 1\n")
+	require.Contains(t, configuredEdit(t, "file.txt", "bwk"), "writer-check")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "agent: bwk\nteam: engineering\n")
+	require.Empty(t, configuredEdit(t, "file.txt", "bwk"))
+}
+
 func TestConfiguredEditPrecedence(t *testing.T) {
 	for _, tc := range []struct{ identity, role, repo, want string }{
 		{"identity-set", "role-set", "repo-set", "identity-set"},
@@ -198,7 +214,7 @@ func TestConfiguredEditPrecedence(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
 			writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "team: engineering\nchecks: "+tc.repo+"\n")
 			writeFile(t, filepath.Join(root, ".punt-labs/ethos/identities/bwk.yaml"), "name: Brian\nhandle: bwk\nkind: agent\nchecks: '"+tc.identity+"'\n")
-			writeFile(t, filepath.Join(root, ".punt-labs/ethos/roles/worker.yaml"), "name: worker\nchecks: '"+tc.role+"'\n")
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos/roles/worker.yaml"), "name: worker\ntools: [Edit]\nchecks: '"+tc.role+"'\n")
 			writeFile(t, filepath.Join(root, ".punt-labs/ethos/teams/engineering.yaml"), "name: engineering\nmembers:\n  - identity: bwk\n    role: worker\n")
 			for _, slug := range []string{"identity-set", "role-set", "repo-set"} {
 				checkPolicy(t, root, slug, "  - name: "+slug+"\n    stage: edit\n    files: ['**/*.txt']\n    run: [probe]\n")

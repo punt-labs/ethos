@@ -56,27 +56,28 @@ func configuredEditChecks(checkout, root, file, agent string) ([]editCheck, bool
 		if err == nil {
 			if id.Checks != "" {
 				ref = id.Checks
-			} else if cfg.Team != "" {
+			} else if cfg.Team != "" && agent != cfg.Agent && id.Kind == "agent" {
 				teams := team.NewLayeredStoreWithBundle(repo, bundleRoot, global, repoOnly)
 				selected, err := teams.Load(cfg.Team)
 				if err != nil {
 					return nil, false, err
 				}
-				roleName := ""
-				// Generation overwrites a handle on each binding: the last wins.
+				roles := role.NewLayeredStoreWithBundle(repo, bundleRoot, global, repoOnly)
+				var bound *role.Role
 				for _, member := range selected.Members {
-					if member.Identity == agent {
-						roleName = member.Role
+					if member.Identity != agent {
+						continue
 					}
-				}
-				if roleName != "" {
-					r, err := role.NewLayeredStoreWithBundle(repo, bundleRoot, global, repoOnly).Load(roleName)
+					r, err := roles.Load(member.Role)
 					if err != nil {
 						return nil, false, err
 					}
-					if r.Checks != "" {
-						ref = r.Checks
+					if len(normalizedAgentTools(r.Tools)) > 0 {
+						bound = r
 					}
+				}
+				if bound != nil && bound.Checks != "" {
+					ref = bound.Checks
 				}
 			}
 		}
