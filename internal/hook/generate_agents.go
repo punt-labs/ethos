@@ -650,7 +650,7 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		b.WriteString("      hooks:\n")
 		b.WriteString("        - type: command\n")
 		// The binary owns edit policy and advisory output (agent checks design §5).
-		fmt.Fprintf(&b, "          command: %q\n", "ethos hook post-edit --agent "+id.Handle)
+		fmt.Fprintf(&b, "          command: %q\n", postEditShellCommand(id.Handle))
 		b.WriteString("          timeout: 70\n")
 	}
 	b.WriteString("---\n")
@@ -797,6 +797,10 @@ func normalizedAgentTools(tools []string) []string {
 // headings, bullets, and other non-prose lines.
 func extractDescription(content string) string {
 	return firstContentSentence(content)
+}
+
+func postEditShellCommand(handle string) string {
+	return `if [ -f "$HOME/.punt-hooks-kill" ]; then exit 0; fi; cat | ethos hook post-edit --agent '` + strings.ReplaceAll(handle, "'", `'"'"'`) + `'`
 }
 
 // yamlQuote wraps s in double quotes, escaping internal backslashes

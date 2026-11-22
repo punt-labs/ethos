@@ -249,9 +249,14 @@ hooks:
     - matcher: "Write|Edit"
       hooks:
         - type: command
-          command: "ethos hook post-edit --agent bwk"
+          command: "if [ -f \"$HOME/.punt-hooks-kill\" ]; then exit 0; fi; cat | ethos hook post-edit --agent 'bwk'"
           timeout: 70          # edit-stage budget + 10 s
 ```
+
+The POSIX-shell pipe avoids DES-029's inherited-stdin hazard on Linux without
+requiring a plugin-root environment variable in project agent hooks. The kill
+switch exits before `cat` reads input; the handle is shell-quoted. Empty or
+malformed input remains fail-open and the hook's existing timeout is unchanged.
 
 An agent whose resolved set has no edit checks gets no `hooks:` block.
 `ethos hook post-edit`:

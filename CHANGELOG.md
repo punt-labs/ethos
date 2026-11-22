@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated agent post-edit hooks forward inherited stdin through a fresh POSIX
+  shell pipe before invoking Ethos, avoiding DES-029's Linux fd-read hazard.
+  Handles are shell-quoted and the kill switch exits before reading input.
 - Commit checks refuse matched partially staged files before running commands,
   even for advisory checks, and list every file with stage/stash guidance.
   Detection uses the actual committing index, including custom indexes and linked
