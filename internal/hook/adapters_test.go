@@ -36,6 +36,32 @@ func TestGoAdapterNestedCwd(t *testing.T) {
 	}
 }
 
+func TestGoAdapterNestedPostEdit(t *testing.T) {
+	goBin, err := exec.LookPath("go")
+	require.NoError(t, err)
+	for _, cwd := range []string{"package_dir", "file_dir"} {
+		t.Run(cwd, func(t *testing.T) {
+			root, bin := postEditFixture(t)
+			t.Setenv("HOME", t.TempDir())
+			postEditTool(t, bin, "go", fmt.Sprintf("exec %q \"$@\"\n", goBin))
+			file := filepath.Join(root, "nested", "edited.go")
+			writeFile(t, filepath.Join(root, "nested", "go.mod"), "module example.com/nested\n\ngo 1.26\n")
+			writeFile(t, file, "package nested\nimport \"fmt\"\nfunc bad() { fmt.Printf(\"%d\", \"wrong\") }\n")
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: nested\n")
+			checkPolicy(t, root, "nested", "  - name: nested-vet\n    stage: edit\n    files: ['**/*.go']\n    cwd: "+cwd+"\n    adapter: go\n    go: vet\n")
+			checks, selected, err := configuredEditChecks(root, root, file, "")
+			require.NoError(t, err)
+			require.True(t, selected)
+			require.Len(t, checks, 1)
+			require.Equal(t, []string{"go", "vet", "."}, checks[0].argv)
+			out := postEditRun(t, file)
+			require.Contains(t, out, "nested-vet")
+			require.Contains(t, out, "Printf format")
+			require.NotContains(t, out, "nested/nested")
+		})
+	}
+}
+
 func TestGoAdapterExecution(t *testing.T) {
 	root, bin := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())
