@@ -181,7 +181,7 @@ func TestOnlyDoctorRepairsUnbounded(t *testing.T) {
 }
 
 func TestEnsureLineGoesToStderr(t *testing.T) {
-	const line = "ethos: upgraded storage (3 items; see ~/.punt-labs/ethos/logs/repair.log)"
+	const line = "ethos: upgraded storage (3 items; see ~/.punt-labs/ethos/logs/ethos.log)"
 	fakeEnsure(t, autorepair.Result{Items: 3, Repaired: true})
 	c, _, err := rootCmd.Find([]string{"doctor"})
 	require.NoError(t, err)

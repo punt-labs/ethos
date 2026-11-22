@@ -3,15 +3,16 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/punt-labs/ethos/v4/internal/mission"
-	"github.com/punt-labs/ethos/v4/internal/seed"
 	"slices"
 	"sync/atomic"
 
 	"github.com/spf13/cobra"
 
 	"github.com/punt-labs/ethos/v4/internal/autorepair"
+	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/punt-labs/ethos/v4/internal/mcp"
+	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/seed"
 )
 
 // ensureStorage is the repair gate. A variable so the tests can count calls.
@@ -60,7 +61,7 @@ func exemptFromEnsure(cmd *cobra.Command) bool {
 // tool call already located (one locate per call) and returns the line a
 // repair earned.
 func ensureForServe(ctx context.Context, loc mcp.StoreLocation) string {
-	res, _ := ensureStorage(ctx, locatedFrom(loc), defaultGlobalRoot())
+	res, _ := ensureStorage(diagnostic.WithLogger(ctx, processLogger), locatedFrom(loc), defaultGlobalRoot())
 	return res.Line()
 }
 

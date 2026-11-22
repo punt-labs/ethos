@@ -12,7 +12,9 @@ Claude Code plugin for developers who hand work to AI coding agents in a Git
 repository. It gives each agent a named identity and role, runs delegated work
 under a written mission contract that limits which files the agent may change,
 and logs every tool call the agent makes. It is a single Go binary that runs
-locally, with no server, telemetry, or cloud service.
+locally, with no server, network telemetry, or cloud service. Private local usage
+records under `~/.punt-labs/ethos` never leave the machine; disable them with
+`ETHOS_TELEMETRY=off` or `PUNT_TELEMETRY=off`.
 
 **Platforms:** macOS, Linux (amd64, arm64).
 

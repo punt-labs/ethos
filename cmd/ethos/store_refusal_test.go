@@ -266,6 +266,12 @@ func treeFiles(t *testing.T, root string) []string {
 		if err != nil {
 			return err
 		}
+		if privateObservabilityPath(root, p) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if !d.IsDir() {
 			rel, _ := filepath.Rel(root, p)
 			files = append(files, rel)

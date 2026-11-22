@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Private shared diagnostic logging for CLI, hooks, MCP tools and the UI, with
+  redaction and multi-process-safe rotation in `~/.punt-labs/ethos/logs/ethos.log`.
+  Repair diagnostics now use this sink; existing `repair.log` files are left
+  untouched. Audit and session streams remain separate.
+- Private, local-only usage records in `~/.punt-labs/ethos/telemetry.db`, with
+  typed metadata schemas and 90-day retention. Nothing is exported. Either
+  `ETHOS_TELEMETRY=off` or `PUNT_TELEMETRY=off` disables capture.
+
 - Check-set adapters for make, go, uv and npm build literal argv and probe
   project markers in the check cwd. Adapter policies round-trip without
   rewriting `run`; make variables never receive edited paths or expand dollars.

@@ -493,6 +493,9 @@ func (p archivalTracePolicy) allows(d archivalDestination) bool {
 		return true // the repair log and its rotation, under the global store
 	}
 	if d.directory {
+		if p.global != "" && (d.path == p.global || d.path == filepath.Dir(p.global)) {
+			return true
+		}
 		// Only the exact publication's ancestors may be created outside local.
 		// EEXIST probes of existing higher ancestors are also in the trace.
 		objectDir, err := filepath.Rel(p.objects, d.path)

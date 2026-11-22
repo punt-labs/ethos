@@ -1452,16 +1452,28 @@ The `agent` field is a channel binding — like email or GitHub. Ethos defines *
 
 ## Automatic storage upgrade
 
+Private diagnostics live in `~/.punt-labs/ethos/logs/ethos.log` (directory `0700`,
+file `0600`), rotating at 5 MiB with five backups. Invocation and tool outcomes
+contain no arguments, flag values or user content. Repair diagnostics retain
+redacted paths and errors. Old `repair.log` files are left untouched. Audit and
+session streams remain separate; shell hook wrappers still use `hook-errors.log`.
+
+Private local usage records live in `~/.punt-labs/ethos/telemetry.db` (`0600`),
+with 90-day retention. They never leave the machine and contain only validated
+command, hook and tool enums, outcomes, exit codes and durations, not content or
+identifiers. Command-path enums use hyphens between words. Set
+`ETHOS_TELEMETRY=off` or `PUNT_TELEMETRY=off` to disable capture entirely.
+
 Ethos upgrades its own storage; no command exists for it. Every CLI command,
 hook and MCP call first checks a stamp, one at
 `S/.punt-labs/local/ethos/layout.yaml` and one at
 `~/.punt-labs/ethos/layout.yaml`. When a stamp is missing, ethos converts older
 layouts into the shared local zone and appends what it did to
-`~/.punt-labs/ethos/logs/repair.log`. The only output is one line, and only when
+`~/.punt-labs/ethos/logs/ethos.log`. The only output is one line, and only when
 something changed:
 
 ```text
-ethos: upgraded storage (N items; see ~/.punt-labs/ethos/logs/repair.log)
+ethos: upgraded storage (N items; see ~/.punt-labs/ethos/logs/ethos.log)
 ```
 
 A busy lock defers the upgrade to the next run, which resumes it. Losses are

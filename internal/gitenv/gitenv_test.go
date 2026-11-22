@@ -7,12 +7,44 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPendingSignal(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		received, queued, want os.Signal
+	}{
+		{"empty", nil, nil, nil},
+		{"queued", nil, syscall.SIGTERM, syscall.SIGTERM},
+		{"received", os.Interrupt, nil, os.Interrupt},
+		{"preserve-first", os.Interrupt, syscall.SIGTERM, os.Interrupt},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			signals := make(chan os.Signal, 1)
+			if tc.queued != nil {
+				signals <- tc.queued
+			}
+			var received *os.Signal
+			if tc.received != nil {
+				received = &tc.received
+			}
+			got := pendingSignal(signals, received)
+			if tc.want == nil {
+				assert.Nil(t, got)
+			} else {
+				require.NotNil(t, got)
+				assert.Equal(t, tc.want, *got)
+			}
+			assert.Empty(t, signals)
+		})
+	}
+}
 
 func TestParsed(t *testing.T) {
 	t.Setenv("LC_ALL", "de_DE.UTF-8")

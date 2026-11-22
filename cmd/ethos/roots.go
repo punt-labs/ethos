@@ -112,7 +112,7 @@ func (r *repoRoots) mustBeUsable(err error) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "ethos: %v; refusing to use the global store instead\n", err)
-	os.Exit(2)
+	exitProcess(2, err)
 }
 
 // configFatal handles a configuration the user chose and ethos cannot honour
@@ -124,7 +124,7 @@ func (r *repoRoots) configFatal(err error) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-	os.Exit(1)
+	exitProcess(1, err)
 }
 
 // configIssue is why the repository's bundle or policy cannot be honoured

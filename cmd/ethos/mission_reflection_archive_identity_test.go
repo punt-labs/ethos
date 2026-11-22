@@ -17,12 +17,18 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/mission"
 )
 
-func cliArchiveIdentityTree(t *testing.T, root string) map[string]string {
+func cliArchiveIdentityTree(t *testing.T, root string, home ...string) map[string]string {
 	t.Helper()
 	files := make(map[string]string)
 	require.NoError(t, filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if len(home) > 0 && privateObservabilityPath(home[0], path) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		info, err := entry.Info()
 		if err != nil {
@@ -98,7 +104,7 @@ func TestCLIMissionReflectionArchiveIdentity(t *testing.T) {
 			err = os.Remove(filepath.Join(receipts, "1.yaml"))
 			require.True(t, err == nil || os.IsNotExist(err), "%v", err)
 			require.NoError(t, os.WriteFile(archive, data, 0o600))
-			before, homeBefore := cliArchiveIdentityTree(t, se.repo), cliArchiveIdentityTree(t, se.home)
+			before, homeBefore := cliArchiveIdentityTree(t, se.repo), cliArchiveIdentityTree(t, se.home, se.home)
 			for range 2 {
 				stdout, stderr, exit := runCLI(t, se, "mission", "reflections", id, "--json")
 				require.Equal(t, 0, exit, stderr)
@@ -130,7 +136,7 @@ func TestCLIMissionReflectionArchiveIdentity(t *testing.T) {
 				assert.NoDirExists(t, filepath.Join(se.repo, "damaged-export"))
 			}
 			assert.Equal(t, before, cliArchiveIdentityTree(t, se.repo), "reads/export must retain all evidence and the actual index")
-			assert.Equal(t, homeBefore, cliArchiveIdentityTree(t, se.home))
+			assert.Equal(t, homeBefore, cliArchiveIdentityTree(t, se.home, se.home))
 		})
 	}
 }
