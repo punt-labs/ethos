@@ -58,3 +58,33 @@ func TestGeneratedPostEditShellPipe(t *testing.T) {
 		})
 	}
 }
+
+func TestGeneratedPostEditShellOpenInput(t *testing.T) {
+	root, ids, teams, roles := setupTestRepo(t)
+	require.NoError(t, GenerateAgentFiles(root, ids, teams, roles))
+	command := extractPostToolUseCommand(t, filepath.Join(root, ".claude/agents/bwk.md"))
+	bin := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	postEditTool(t, bin, "ethos", "test -p /dev/stdin || exit 9\ncat\n")
+	reader, writer, err := os.Pipe()
+	require.NoError(t, err)
+	defer reader.Close()
+	defer writer.Close()
+	_, err = writer.WriteString("{\"tool_input\":{\"file_path\":\"file.go\"}}\n")
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
+	cmd.Stdin = reader
+	cmd.WaitDelay = time.Second
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err)
+	version, err := exec.Command("/bin/bash", "-c", `printf %s "${BASH_VERSINFO[0]}"`).Output()
+	require.NoError(t, err)
+	if string(version) == "3" {
+		require.Empty(t, out, "Bash 3.2 discards a partial read on timeout")
+		return
+	}
+	require.JSONEq(t, `{"tool_input":{"file_path":"file.go"}}`, string(out))
+}

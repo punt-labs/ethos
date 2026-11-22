@@ -410,7 +410,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 						"    - matcher: \"Write|Edit\"\n"+
 						"      hooks:\n"+
 						"        - type: command\n"+
-						"          command: \"if [ -f \\\"$HOME/.punt-hooks-kill\\\" ]; then exit 0; fi; cat | ethos hook post-edit --agent 'bwk' || true\"\n"+
+						"          command: \"if [ -f \\\"$HOME/.punt-hooks-kill\\\" ]; then exit 0; fi; /bin/bash -c 'IFS= read -r -d \\\"\\\" -t 10 p; printf %s \\\"$p\\\" | ethos hook post-edit --agent \\\"$1\\\"; true' _ 'bwk' || true\"\n"+
 						"          timeout: 70\n"+
 						"---\n")
 
@@ -667,7 +667,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 						"    - matcher: \"Write|Edit\"\n"+
 						"      hooks:\n"+
 						"        - type: command\n"+
-						"          command: \"if [ -f \\\"$HOME/.punt-hooks-kill\\\" ]; then exit 0; fi; cat | ethos hook post-edit --agent 'bwk' || true\"\n"+
+						"          command: \"if [ -f \\\"$HOME/.punt-hooks-kill\\\" ]; then exit 0; fi; /bin/bash -c 'IFS= read -r -d \\\"\\\" -t 10 p; printf %s \\\"$p\\\" | ethos hook post-edit --agent \\\"$1\\\"; true' _ 'bwk' || true\"\n"+
 						"          timeout: 70\n")
 
 				// Log the generated file so binary verification is visible
@@ -698,7 +698,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 					"    - matcher: \"Write|Edit\"\n" +
 					"      hooks:\n" +
 					"        - type: command\n" +
-					"          command: \"if [ -f \\\"$HOME/.punt-hooks-kill\\\" ]; then exit 0; fi; cat | ethos hook post-edit --agent 'bwk' || true\"\n" +
+					"          command: \"if [ -f \\\"$HOME/.punt-hooks-kill\\\" ]; then exit 0; fi; /bin/bash -c 'IFS= read -r -d \\\"\\\" -t 10 p; printf %s \\\"$p\\\" | ethos hook post-edit --agent \\\"$1\\\"; true' _ 'bwk' || true\"\n" +
 					"          timeout: 70\n" +
 					"---\n"
 				assert.Contains(t, content, want)
@@ -1012,7 +1012,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 					"    - matcher: \"Write|Edit\"\n" +
 					"      hooks:\n" +
 					"        - type: command\n" +
-					"          command: \"if [ -f \\\"$HOME/.punt-hooks-kill\\\" ]; then exit 0; fi; cat | ethos hook post-edit --agent 'eon' || true\"\n" +
+					"          command: \"if [ -f \\\"$HOME/.punt-hooks-kill\\\" ]; then exit 0; fi; /bin/bash -c 'IFS= read -r -d \\\"\\\" -t 10 p; printf %s \\\"$p\\\" | ethos hook post-edit --agent \\\"$1\\\"; true' _ 'eon' || true\"\n" +
 					"          timeout: 70\n" +
 					"---\n"
 				assert.Contains(t, content, want)
@@ -1024,7 +1024,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 				require.NoError(t, err)
 				data, readErr := os.ReadFile(filepath.Join(root, ".claude", "agents", "bwk.md"))
 				require.NoError(t, readErr)
-				assert.Contains(t, string(data), `command: "if [ -f \"$HOME/.punt-hooks-kill\" ]; then exit 0; fi; cat | ethos hook post-edit --agent 'bwk' || true"`)
+				assert.Contains(t, string(data), `command: "if [ -f \"$HOME/.punt-hooks-kill\" ]; then exit 0; fi; /bin/bash -c 'IFS= read -r -d \"\" -t 10 p; printf %s \"$p\" | ethos hook post-edit --agent \"$1\"; true' _ 'bwk' || true"`)
 			},
 		},
 	}
@@ -2035,7 +2035,7 @@ func TestGenerateAgentFiles_WorktreeResolution(t *testing.T) {
 	require.NoError(t, GenerateAgentFiles(root, ids, teams, roles))
 	data, readErr := os.ReadFile(filepath.Join(root, ".claude", "agents", "bwk.md"))
 	require.NoError(t, readErr)
-	assert.Contains(t, string(data), `command: "if [ -f \"$HOME/.punt-hooks-kill\" ]; then exit 0; fi; cat | ethos hook post-edit --agent 'bwk' || true"`)
+	assert.Contains(t, string(data), `command: "if [ -f \"$HOME/.punt-hooks-kill\" ]; then exit 0; fi; /bin/bash -c 'IFS= read -r -d \"\" -t 10 p; printf %s \"$p\" | ethos hook post-edit --agent \"$1\"; true' _ 'bwk' || true"`)
 }
 
 // TestGenerateAgentFiles_MalformedConfig covers bug ethos-9ai.6: a
