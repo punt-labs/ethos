@@ -283,9 +283,9 @@ fails closed rather than silently narrowing the scope.
 A blocking failure or broken policy returns
 `{"decision":"block","reason":...}` with exit zero. On `stop_hook_active`
 the hook allows the stop and sends the failure to stderr instead. Advisory
-failures always use stderr. The plugin currently declares no SubagentStop
-timeout, so its harness timeout does not provide the 30-minute stage window;
-the binary enforces its budgets, but the harness may terminate it earlier.
+failures always use stderr. The plugin declares a SubagentStop timeout of
+1800 seconds, matching the 30-minute handoff stage cap instead of relying on
+the harness's default 600-second timeout. The binary enforces its budgets.
 
 Commit/handoff checks run sequentially under a shared stage deadline. At
 `cwd: root`, `{files}` expands to all matching paths and `{package_dir}` to
@@ -306,7 +306,7 @@ OpenCode generation (`.opencode/agents`) uses the same subcommand from its
 |---|---|---|---|
 | edit | 10 s | 60 s total wall time | cap + 10 s |
 | commit | 120 s | 15 min | not applicable (git) |
-| handoff | 10 min | 30 min | cap + 30 s |
+| handoff | 10 min | 30 min | 1800 s (30 min) |
 
 The edit cap is far below the 600 s watchdog. Ethos records each check's
 duration in the local audit trace. `ethos doctor` WARNs when the p95 of an

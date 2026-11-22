@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The plugin's SubagentStop hook allows 1800 seconds, matching the handoff
+  stage cap so the default 600-second watchdog does not interrupt the full gate.
+
 - Edit-stage checks support layered project-defined check sets referenced by
   identities, roles and repo configuration, with glob scopes, literal argv,
   time budgets and explicit advisory or blocking feedback. Unconfigured repos
