@@ -16,6 +16,11 @@ import (
 
 func assertUsageRow(t *testing.T, home, name string, fields ...string) {
 	t.Helper()
+	assertUsageOutcome(t, home, name, "completed", fields...)
+}
+
+func assertUsageOutcome(t *testing.T, home, name, outcome string, fields ...string) {
+	t.Helper()
 	dir := filepath.Join(home, ".punt-labs", "ethos")
 	path := filepath.Join(dir, "telemetry.db")
 	for p, mode := range map[string]os.FileMode{dir: 0o700, path: 0o600} {
@@ -43,7 +48,7 @@ func assertUsageRow(t *testing.T, home, name string, fields ...string) {
 		for _, key := range fields {
 			require.Contains(t, attrs, key)
 		}
-		require.Equal(t, "completed", attrs["outcome"])
+		require.Equal(t, outcome, attrs["outcome"])
 		for _, private := range []string{home, "logging-private-login", "private-content", "private-token"} {
 			require.NotContains(t, raw, private)
 		}

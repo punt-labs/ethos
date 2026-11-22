@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"time"
 
 	"path/filepath"
 
@@ -17,9 +16,6 @@ import (
 )
 
 func runServeImpl(opencodeSessionMetadata bool) (serveErr error) {
-	started := time.Now()
-	processLogger.Info("Server started")
-	defer func() { logServerStop(processLogger, started, serveErr) }()
 	var s *server.MCPServer
 	hooks := toolLoggingHooks(processLogger, func(name string) *server.ServerTool { return s.GetTool(name) })
 	s = server.NewMCPServer(
@@ -50,6 +46,8 @@ func runServeImpl(opencodeSessionMetadata bool) (serveErr error) {
 		return buildServeHandler(home, loc, metadata)
 	})
 	h.RegisterTools(s)
+	stopLogging := beginServerLogging(processLogger)
+	defer func() { stopLogging(serveErr) }()
 
 	if err := server.ServeStdio(s); err != nil {
 		return fmt.Errorf("MCP server error: %w", err)

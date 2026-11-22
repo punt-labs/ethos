@@ -73,6 +73,23 @@ func TestProcessLoggingRolesAndSingleCompletion(t *testing.T) {
 	}
 }
 
+func TestServerStartupFailureHasNoLifecycle(t *testing.T) {
+	var sink bytes.Buffer
+	oldLogger := processLogger
+	processLogger = slog.New(slog.NewTextHandler(&sink, nil))
+	t.Cleanup(func() { processLogger = oldLogger })
+	t.Setenv("HOME", "")
+	require.Error(t, runServeImpl(false))
+	require.Empty(t, sink.String(), "a server that failed setup never started or stopped")
+	oldRoots := cmdRoots.Load()
+	blocked := &repoRoots{}
+	blocked.CheckoutErr = errors.New("unavailable checkout")
+	cmdRoots.Store(blocked)
+	t.Cleanup(func() { cmdRoots.Store(oldRoots) })
+	require.Error(t, runUI())
+	require.Empty(t, sink.String(), "a UI that failed setup never started or stopped")
+}
+
 func TestToolOutcomeHooksValidateMetadata(t *testing.T) {
 	oldUsage := processUsage
 	processUsage = nil

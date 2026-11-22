@@ -16,6 +16,8 @@ import (
 var processLogger = diagnostic.Discard()
 var processUsage *diagnostic.Usage
 var finishProcess = func(int, error) {}
+var serverLogMu sync.Mutex
+var stopServerOnSignal func()
 
 func startLogging() {
 	command := rootCmd
@@ -53,9 +55,11 @@ func startLogging() {
 	processUsage = diagnostic.NewUsage(logger.With("component", "ethos.telemetry"), commands)
 	rootCmd.SetContext(diagnostic.WithLogger(context.Background(), logger))
 	started := time.Now()
+	termination := newTerminationWatcher(role)
 	var once sync.Once
 	finishProcess = func(code int, err error) {
 		once.Do(func() {
+			termination.Close()
 			if role == "cli" || role == "hook" {
 				outcome := "completed"
 				if code != 0 {
@@ -74,6 +78,7 @@ func startLogging() {
 			closeLog()
 		})
 	}
+	termination.Start(finishProcess)
 }
 
 func exitProcess(code int, err error) {
@@ -86,5 +91,30 @@ func logServerStop(logger *slog.Logger, started time.Time, err error) {
 	if err != nil {
 		reason = "failed"
 	}
+	recordServerStop(logger, started, reason, err)
+}
+
+func recordServerStop(logger *slog.Logger, started time.Time, reason string, err error) {
 	logger.Info("Server stopped", "reason", reason, "error_type", diagnostic.ErrorType(err), "duration_ms", time.Since(started).Milliseconds())
+}
+
+func beginServerLogging(logger *slog.Logger) func(error) {
+	serverLogMu.Lock()
+	defer serverLogMu.Unlock()
+	started := time.Now()
+	var once sync.Once
+	stopServerOnSignal = func() {
+		once.Do(func() { recordServerStop(logger, started, "signal", nil) })
+	}
+	logger.Info("Server started")
+	return func(err error) { once.Do(func() { logServerStop(logger, started, err) }) }
+}
+
+func logServerTermination() {
+	serverLogMu.Lock()
+	stop := stopServerOnSignal
+	serverLogMu.Unlock()
+	if stop != nil {
+		stop()
+	}
 }
