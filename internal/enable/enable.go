@@ -1,5 +1,5 @@
 // Package enable turns ethos on and off in a repo per the
-// tool-enable-disable standard: it deposits the vendored guide and its §7
+// tool-enable-disable standard: it deposits the vendored guide and its punt-labs-dir PLD-9
 // manifest, writes the enabled marker, adds the canonical @-import line to
 // the repo CLAUDE.md, chains the two git hooks, and ensures the repo
 // .gitignore covers ethos's runtime zones — and reverses the reversible parts

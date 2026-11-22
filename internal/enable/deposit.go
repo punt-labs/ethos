@@ -13,14 +13,14 @@ import (
 
 // The vendored zone is exactly these three repo-relative paths. enable writes
 // them wholesale and never any other path under .punt-labs/ethos/, so the
-// overwrite is bounded to the vendored zone by construction (§7).
+// overwrite is bounded to the vendored zone by construction (punt-labs-dir PLD-7).
 const (
 	guideRel    = ".punt-labs/ethos/CLAUDE.md"
 	setupRel    = ".punt-labs/ethos/ETHOS-SETUP.md"
 	manifestRel = ".punt-labs/ethos/.vendored-manifest"
 )
 
-// deposit writes the vendored zone under §7 manifest semantics: it writes
+// deposit writes the vendored zone under punt-labs-dir PLD-9 manifest semantics: it writes
 // exactly the new-manifest set (the guide, the setup playbook, and the
 // manifest itself), validates the entire previous manifest against the owned
 // paths, and collision-errors on any new-manifest path that already
@@ -31,7 +31,7 @@ const (
 //
 // It returns any warnings — on first contact (bootstrap), overwriting an
 // existing vendored file whose content differs from what we deposit is
-// grandfathered by punt-labs-dir §7, but the overwrite is surfaced by naming
+// grandfathered by punt-labs-dir PLD-9, but the overwrite is surfaced by naming
 // the path so the (git-tracked, recoverable) clobber is not silent (S2).
 func deposit(repoRoot string, guide, setup []byte, policies ...layout.Policy) ([]string, error) {
 	p, err := layout.NewRepository(repoRoot, repoRoot, layout.RecordBlame)
@@ -73,7 +73,7 @@ func deposit(repoRoot string, guide, setup []byte, policies ...layout.Policy) ([
 			if bootstrap {
 				if existing, err := os.ReadFile(filepath.Join(repoRoot, rel)); err == nil && !bytes.Equal(existing, want[rel]) {
 					warnings = append(warnings, fmt.Sprintf(
-						"%s existed with different content and was overwritten by the vendored guide (punt-labs-dir §7 first-enable grandfather; the prior file is recoverable from git)", rel))
+						"%s existed with different content and was overwritten by the vendored guide (punt-labs-dir PLD-9 first-enable grandfather; the prior file is recoverable from git)", rel))
 				}
 			}
 			continue
