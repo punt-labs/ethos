@@ -195,6 +195,10 @@ func stageInvocations(root string, files []string, check checkset.Check) []editC
 		}
 	}
 	var invocations []editCheck
+	effective, err := check.Argv()
+	if err != nil {
+		return []editCheck{{name: check.Name, argv: []string{}, policy: &check}}
+	}
 	for _, group := range groups {
 		cwd := root
 		var packages []string
@@ -217,7 +221,7 @@ func stageInvocations(root string, files []string, check checkset.Check) []editC
 			cwd = filepath.Dir(group[0])
 		}
 		var argv []string
-		for _, arg := range check.Run {
+		for _, arg := range effective {
 			switch arg {
 			case "{files}":
 				argv = append(argv, group...)
@@ -229,7 +233,7 @@ func stageInvocations(root string, files []string, check checkset.Check) []editC
 				argv = append(argv, arg)
 			}
 		}
-		invocations = append(invocations, editCheck{name: check.Name, argv: argv, cwd: cwd, timeout: check.Duration(), onFail: check.OnFail, failOnOutput: check.FailOnOutput})
+		invocations = append(invocations, editCheck{name: check.Name, argv: argv, cwd: cwd, timeout: check.Duration(), onFail: check.OnFail, failOnOutput: check.FailOnOutput, policy: &check})
 	}
 	return invocations
 }

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Check-set adapters for make, go, uv and npm build literal argv and probe
+  project markers in the check cwd. Adapter policies round-trip without
+  rewriting `run`; make variables never receive edited paths or expand dollars.
+  Published schema validation covers adapter shapes and effective placeholders.
+
 - Ethos dogfoods `go-default`: advisory file/package checks on edits, blocking
   staged Go formatting at commit, and the full `make check` gate at handoff
   with a 30-minute budget.

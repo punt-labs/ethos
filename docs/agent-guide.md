@@ -42,8 +42,9 @@ Set `checks: quick-go` on an identity, its team-bound role, or in
 inheritance at any level. An unknown or absent agent uses the repo setting.
 Without a selected set the existing marker-based checks remain advisory.
 
-Only edit stages execute currently. Each command requires `run` argv; the
-only optional adapter is `exec`. There is no shell field or interpolation.
+Edit, commit and handoff checks execute through literal argv. The default
+adapter is `exec`, which requires `run`; make, go, uv and npm forbid `run`
+and require their own fields. There is no shell field or interpolation.
 Whole argv placeholders are `{file}` and `{files}` (the absolute edited
 file), `{root}` (the edited file's checkout), and `{package_dir}` (a `./`
 package path relative to that root). `cwd` defaults to `root`, or may select
@@ -62,7 +63,7 @@ PostToolUse block feedback, still with exit zero. Policy errors fail open
 with context. The session checkout's canonical store supplies policy, including
 main-tree changes not committed into a linked checkout. The edited worktree's
 configuration is never consulted. See
-[DES-085's design](design-agent-checks.md) for the future stages and adapters.
+[DES-085's design](design-agent-checks.md) for stage and adapter details.
 
 The same set may define `stage: commit` and `stage: handoff`. Pre-commit runs
 after seal/provenance, selects files from the actual committing index, and
@@ -85,8 +86,58 @@ feedback is exit-zero decision JSON; `stop_hook_active` sends failures to stderr
 instead. Advisory failures use stderr at both stages. Neither stage has marker
 defaults, and `files: all` runs even when no paths match. Commit and handoff
 defaults are 120s and 10m per check, capped at 15m and 30m per stage. The plugin
-currently has no explicit handoff timeout; the harness can stop it earlier.
+sets its handoff hook timeout to 1800 seconds, matching the 30-minute cap.
 `ethos mission result` integration remains a future slice.
+
+### Build-system adapters
+
+Each example is a complete check entry within a set's `checks` list:
+
+```yaml
+- name: formatting
+  stage: edit
+  files: ['**/*.go']
+  adapter: exec
+  run: [gofmt, -l, '{file}']
+  fail_on_output: true
+- name: project-lint
+  stage: edit
+  files: ['**/*.go']
+  adapter: make
+  target: lint
+  vars: {MODE: fast}
+- name: vet
+  stage: edit
+  files: ['**/*.go']
+  adapter: go
+  go: vet
+- name: python-lint
+  stage: edit
+  files: ['**/*.py']
+  adapter: uv
+  uv: [ruff, check, '{file}']
+- name: javascript-lint
+  stage: commit
+  files: ['**/*.js']
+  adapter: npm
+  script: lint
+```
+
+Make runs `make lint MODE=fast`; it never injects a `FILE` variable or edited
+path. Names in `vars` must match `[A-Za-z_][A-Za-z0-9_]*`; values are strings
+without `$` or placeholders. Variables are sorted by name. The Go adapter
+uses `{package_dir}` at root cwd, `.` at `package_dir` or `file_dir` cwd,
+or `./...` for `files: all`. uv prefixes its argv with
+`uv run` and supports the same whole-element placeholders as exec. npm appends
+`-- {file}` at edit or `-- {files}` for later glob checks, but passes no file
+arguments for `files: all`.
+Script names must be literal, without braces or a leading `-`.
+
+Adapters probe their actual cwd before execution: a makefile, `go.mod`,
+`pyproject.toml`, or `package.json` containing the named npm script. Missing
+markers or scripts produce check failures according to `on_fail`; they do not
+skip the check. A directory cwd must contain its own marker. Probes never run
+make or inspect its recipe database.
 
 ## Prerequisites: Agent Definitions
 

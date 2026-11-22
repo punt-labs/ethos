@@ -4,8 +4,8 @@
 
 The implementation covers strict check sets, layered references, argv
 execution, glob selection and advisory/block feedback at edit, commit and
-SubagentStop handoff. Mission-result integration is the next slice.
-Non-exec adapters, shell execution,
+SubagentStop handoff, with exec, make, go, uv and npm adapters. Mission-result
+integration is the next slice. Shell execution,
 cache/coalescing, concurrency tuning, audit metrics and doctor/init commands
 below describe later work, not shipped behavior. Generated commands stay
 unchanged when a check set changes: policy is loaded at hook execution time.
@@ -183,7 +183,7 @@ checks: none
 | `stage` | enum `edit\|commit\|handoff` | required | |
 | `files` | list of glob, or `all` | required | Doublestar globs relative to checkout C. `all` is invalid at `edit` |
 | `exclude` | list of glob | `[".tmp/**", ".punt-labs/local/**"]` | Always added to, never replaced |
-| `run` | argv list | one of `run`/`adapter` | Executed without a shell |
+| `run` | argv list | required for explicit or implicit `exec` | Executed without a shell; forbidden for other adapters |
 | `adapter` | string | none | §4 |
 | `on_fail` | `advisory\|block` | `advisory` at edit, `block` elsewhere | |
 | `fail_on_output` | bool | false | Non-empty stdout counts as a failure |
@@ -203,9 +203,8 @@ Qodo found in #642.
 
 ```go
 type Adapter interface {
-    Name() string
-    Validate(c Check, root string) error            // static: target exists, tool found
-    Command(c Check, root string, files []string) ([]string, error)
+    Argv(Check) ([]string, error)
+    Probe(Check, string) error // invocation cwd; filesystem-only
 }
 ```
 
@@ -214,10 +213,27 @@ Built-in adapters:
 | Adapter | Fields | Command | Probe |
 |---|---|---|---|
 | `exec` (implicit when `run` is set) | `run` | `run` with placeholders filled | `exec.LookPath(run[0])` |
-| `make` | `target`, `vars` | `make <target> FILE=<path>` | `make -pq <sentinel>` rule database; never runs a recipe (the Devin Review finding on #642) |
-| `go` | `go: vet\|test\|build` | `go <verb> <package_dir>` | `go.mod` present |
+| `make` | `target`, optional `vars` | `make <target> NAME=value…` (sorted) | `Makefile`, `makefile` or `GNUmakefile` present |
+| `go` | `go: vet\|test\|build` | `go <verb> {package_dir}` at root cwd; `.` at directory cwd; `./...` for `all` | `go.mod` present |
 | `uv` | `uv: <tool args>` | `uv run <args>` | `pyproject.toml` present |
-| `npm` | `script` | `npm run <script> -- <files>` | `package.json` scripts key |
+| `npm` | `script` | `npm run <script> -- {file}` at edit, `-- {files}` at later stages; no `--` for `all` | `package.json` with the named string script |
+
+These adapters are shipped. An omitted or empty adapter means `exec`, which
+requires `run`. Every other adapter forbids `run` and requires its own field;
+fields belonging to a different adapter are errors. `Check.Argv()` computes
+effective argv without writing it into `Run`, preserving YAML/JSON and vendor
+round trips. Whole-element placeholder validation applies to effective argv.
+An npm script name is literal: braces and a leading `-` are rejected.
+
+Unlike the original table, make never receives `FILE=<path>`: edited paths
+containing `$` would be expanded by make, the #642 defect class. Targets match
+`[A-Za-z0-9_][A-Za-z0-9_.:/-]*`; variable names match
+`[A-Za-z_][A-Za-z0-9_]*`, and values are literal strings without dollars or
+placeholders. Probing only checks marker files in the actual invocation cwd;
+it never invokes `make -n`, `make -p`, or a recipe, and does not promise that a
+target exists. A missing marker, invalid package JSON or absent npm script is
+a named check failure under `on_fail`, not a silent skip. Executable lookup and
+command failures use the same feedback path.
 
 Adding an adapter is a Go change plus a registry entry. A project that needs
 something else uses `exec`. The design rejects loading third-party adapters
@@ -389,7 +405,8 @@ overlays in `internal/schema/registry.go`. Errors:
 
 - an unknown stage, adapter or placeholder;
 - `files: all` at `edit`;
-- both or neither of `run` and `adapter`;
+- an explicit or implicit `exec` adapter without `run`, or any other adapter
+  paired with `run`;
 - an empty argv;
 - a timeout above the stage cap;
 - `{file}` at `commit` or `handoff` (use `{files}`);
