@@ -2,12 +2,13 @@
 
 **Status**: SETTLED as DES-085. Linear PL-1275. Supersedes PR #642.
 
-The edit-stage slice implements strict check sets, layered references, argv
-execution, glob selection and advisory/block feedback. Commit and handoff
-stages are validated but not executed yet. Non-exec adapters, shell execution,
+The implementation covers strict check sets, layered references, argv
+execution, glob selection and advisory/block feedback at edit, commit and
+SubagentStop handoff. Mission-result integration is the next slice.
+Non-exec adapters, shell execution,
 cache/coalescing, concurrency tuning, audit metrics and doctor/init commands
 below describe later work, not shipped behavior. Generated commands stay
-unchanged when a check set changes: policy is loaded at edit time.
+unchanged when a check set changes: policy is loaded at hook execution time.
 
 Read first: punt-kit `standards/hooks.md` §6–7 (observation vs mutation hooks,
 fail-open vs fail-closed), DES-055 (exit 2 blocks), DES-073 (identity skills
@@ -265,10 +266,45 @@ agent, with the project default set, or the committing session's resolved
 set when one is found. Exit 2 blocks the commit and prints the failing
 check's tail.
 
-The handoff stage is added to `ethos hook subagent-stop` and to
-`ethos mission result`. A failure returns
-`{"decision":"block","reason":...}` once. On `stop_hook_active` the hook
-allows the stop and records the failure in the mission result.
+The handoff stage runs in `ethos hook subagent-stop`; `ethos mission result`
+integration is deferred to the next slice. In the binary, roster leave happens
+before checks, including when its kill check skips them or they block. The
+plugin wrapper exits before invoking the binary when the kill switch exists;
+that skips the whole hook, including roster leave, as before this change.
+The payload's agent type/handle
+selects policy. Existing audit union readers select that agent's Write/Edit
+paths from the session; if no usable paths are available, selection falls back
+to staged, unstaged and untracked files only in linked worktrees, never in the
+store's main checkout. Fallback also requires that no other agent ID, including
+the main thread's empty ID, has a Write/Edit path under that root in the session
+audit. Roots come from this agent's accepted paths, or the session checkout when
+there are none; Bash commands are not parsed to discover additional roots.
+Otherwise the root keeps an empty file list: glob checks skip it, but
+`files: all` checks still run. Same-store linked worktrees
+run independently with their own matching paths, cwd and `{root}`, while policy
+still comes from the canonical store. Vanished audited files are omitted, but
+their checkout attribution is retained through the nearest existing physical
+ancestor directory, including when parent directories have disappeared. A path
+whose root is indeterminate disables dirty-tree fallback without blocking the
+stop; attributed files and `files: all` checks still run. An unreadable audit
+fails closed rather than silently narrowing the scope.
+
+A blocking failure or broken policy returns
+`{"decision":"block","reason":...}` with exit zero. On `stop_hook_active`
+the hook allows the stop and sends the failure to stderr instead. Advisory
+failures always use stderr. The plugin currently declares no SubagentStop
+timeout, so its harness timeout does not provide the 30-minute stage window;
+the binary enforces its budgets, but the harness may terminate it earlier.
+
+Commit/handoff checks run sequentially under a shared stage deadline. At
+`cwd: root`, `{files}` expands to all matching paths and `{package_dir}` to
+their deduplicated root-relative directories. A directory cwd runs once per
+matching directory, with that directory's matching files. `files: all` runs
+even with no paths, from the root in that case. There are no marker defaults
+at these stages. In the binary, the kill switch skips checks, not commit
+seal/provenance steps or roster leave; the plugin wrapper instead skips its
+entire SubagentStop hook. Commit file discovery and commands preserve the actual
+committing index while scrubbing other Git selectors and tracing variables.
 
 OpenCode generation (`.opencode/agents`) uses the same subcommand from its
 `tool.execute.after` plugin hook, so the two harnesses share one policy.

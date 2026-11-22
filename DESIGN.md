@@ -14280,7 +14280,7 @@ What the implementation settled beyond the decision above. Each item is enforced
 - **A versioned migration framework** (a script per release, replayed in order). More machinery than one layout number: steps here are idempotent by observed state, so no step needs to know which release wrote the data. DES-065 and DES-054 rejected per-file and per-release stamps for the same reason (DESIGN.md:6914-6916, 4974).
 - **Repair only at session start.** Repositories are committed to, queried and served over MCP without a session start, and the pre-commit seal is where the stuck warning appears.
 
-## DES-085: Project-defined agent check sets (SETTLED; edit stage implemented)
+## DES-085: Project-defined agent check sets (SETTLED; hook stages implemented)
 
 **Status:** Jim's PL-1275 decisions: policy belongs in the identity schema,
 commands and file scope are project-defined, each check is advisory or
@@ -14300,7 +14300,7 @@ needed to choose commands without changing the generator or assuming make.
 generator-bound role, then project `checks`, then advisory marker defaults.
 `none` stops inheritance. Missing or unresolved handles use project policy.
 
-The session checkout owns policy. An edited file's checkout owns matching
+The session checkout's canonical store owns policy. An edited file's checkout owns matching
 paths, `{root}`, package paths and execution cwd, but never supplies policy.
 Foreign checkouts are silent; linked worktrees must share the git common
 directory. Exclusions always include `.tmp/**` and `.punt-labs/local/**`.
@@ -14315,9 +14315,12 @@ response, and all paths exit zero. Ethos/config errors are advisory, with
 redacted diagnostics. There is no blocking compatibility release and no
 implicit make command.
 
-**Implementation boundary.** Only edit executes. Commit and handoff definitions
-are validated for future use, but their hooks are unchanged. Only `run` argv
-and the optional `exec` adapter are accepted. Build-system adapters, shell,
+**Implementation boundary.** Edit, pre-commit and SubagentStop execute their
+configured stages. Commit failures block with exit 2; handoff failures use
+decision-block JSON, with stderr-only re-entry feedback and unconditional
+roster leave. Commit/handoff have no marker defaults. Mission-result integration
+is the next slice. Only `run` argv and the optional `exec` adapter are accepted.
+Build-system adapters, shell,
 caching/coalescing, audit metrics and check-set management commands are deferred.
 The generated hook command and timeout remain byte-identical to #643.
 

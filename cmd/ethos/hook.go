@@ -74,7 +74,7 @@ var hookSubagentStopCmd = &cobra.Command{
 	Short: "SubagentStop hook handler",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runHookSubagentStop()
+		return hook.HandleSubagentStopWithIO(cmd.Context(), cmd.InOrStdin(), sessionStore(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
 
@@ -274,14 +274,6 @@ func locateHookRoots() (repoRoot, storeRoot string, err error) {
 		return "", "", err
 	}
 	return r.Checkout, r.Store, nil
-}
-
-func runHookSubagentStop() error {
-	ss := sessionStore()
-	if err := hook.HandleSubagentStop(os.Stdin, ss); err != nil {
-		return fmt.Errorf("hook subagent-stop: %w", err)
-	}
-	return nil
 }
 
 func runHookPreCompact() error {

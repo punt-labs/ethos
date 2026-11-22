@@ -15,7 +15,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/team"
 )
 
-func configuredEditChecks(checkout, root, file, agent string) ([]editCheck, bool, error) {
+func configuredStageChecks(checkout, agent, stage string) ([]checkset.Check, bool, error) {
 	store, err := resolve.StoreOf(checkout)
 	if err != nil {
 		return nil, false, err
@@ -115,6 +115,20 @@ func configuredEditChecks(checkout, root, file, agent string) ([]editCheck, bool
 	if err != nil {
 		return nil, true, err
 	}
+	var checks []checkset.Check
+	for _, check := range set.Checks {
+		if check.Stage == stage {
+			checks = append(checks, check)
+		}
+	}
+	return checks, true, nil
+}
+
+func configuredEditChecks(checkout, root, file, agent string) ([]editCheck, bool, error) {
+	configured, selected, err := configuredStageChecks(checkout, agent, "edit")
+	if err != nil || !selected {
+		return nil, selected, err
+	}
 	rel, err := filepath.Rel(root, file)
 	if err != nil {
 		return nil, true, err
@@ -128,7 +142,7 @@ func configuredEditChecks(checkout, root, file, agent string) ([]editCheck, bool
 		packageDir += filepath.ToSlash(dir)
 	}
 	var checks []editCheck
-	for _, check := range set.Checks {
+	for _, check := range configured {
 		if check.Stage != "edit" || !check.Matches(filepath.ToSlash(rel)) {
 			continue
 		}
