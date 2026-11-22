@@ -267,11 +267,17 @@ set when one is found. Exit 2 blocks the commit and prints the failing
 check's tail.
 
 The handoff stage runs in `ethos hook subagent-stop`; `ethos mission result`
-integration is deferred to the next slice. Roster leave happens before checks,
-including when checks are killed or block. The payload's agent type/handle
+integration is deferred to the next slice. In the binary, roster leave happens
+before checks, including when its kill check skips them or they block. The
+plugin wrapper exits before invoking the binary when the kill switch exists;
+that skips the whole hook, including roster leave, as before this change.
+The payload's agent type/handle
 selects policy. Existing audit union readers select that agent's Write/Edit
 paths from the session; if no usable paths are available, selection falls back
-to the checkout's staged, unstaged and untracked files. An unreadable audit
+to staged, unstaged and untracked files in each accepted touched root (or the
+session checkout when the audit identifies none). Same-store linked worktrees
+run independently with their own matching paths, cwd and `{root}`, while policy
+still comes from the canonical store. An unreadable audit
 fails closed rather than silently narrowing the scope.
 
 A blocking failure or broken policy returns
@@ -286,8 +292,9 @@ Commit/handoff checks run sequentially under a shared stage deadline. At
 their deduplicated root-relative directories. A directory cwd runs once per
 matching directory, with that directory's matching files. `files: all` runs
 even with no paths, from the root in that case. There are no marker defaults
-at these stages. The kill switch skips checks, not commit seal/provenance
-steps or roster leave. Commit file discovery and commands preserve the actual
+at these stages. In the binary, the kill switch skips checks, not commit
+seal/provenance steps or roster leave; the plugin wrapper instead skips its
+entire SubagentStop hook. Commit file discovery and commands preserve the actual
 committing index while scrubbing other Git selectors and tracing variables.
 
 OpenCode generation (`.opencode/agents`) uses the same subcommand from its
