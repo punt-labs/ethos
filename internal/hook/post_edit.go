@@ -205,6 +205,7 @@ type editCheck struct {
 	onFail       string
 	timeout      time.Duration
 	cwd          string
+	env          []string
 }
 
 func defaultEditChecks(root, file string) []editCheck {
@@ -260,6 +261,9 @@ func (b *editTail) Write(p []byte) (int, error) {
 }
 
 func runEditCheck(stage context.Context, root string, check editCheck) string {
+	if len(check.argv) == 0 {
+		return check.name + ": command has no executable after placeholder expansion"
+	}
 	timeout := check.timeout
 	if timeout == 0 {
 		timeout = 10 * time.Second
@@ -272,6 +276,9 @@ func runEditCheck(stage context.Context, root string, check editCheck) string {
 		cmd.Dir = check.cwd
 	}
 	cmd.Env = gitenv.Parsed()
+	if check.env != nil {
+		cmd.Env = check.env
+	}
 	cmd.WaitDelay = time.Second
 	stopGroup := editProcessGroup(cmd)
 	defer stopGroup()

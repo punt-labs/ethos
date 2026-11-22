@@ -3,6 +3,7 @@ package hook
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -20,6 +21,10 @@ type StageFeedback struct {
 
 // RunStageChecks runs configured commit or handoff checks, without marker defaults.
 func RunStageChecks(ctx context.Context, checkout, agent, stage string) StageFeedback {
+	return runStageChecks(ctx, checkout, agent, stage, func() ([]string, error) { return stageFiles(checkout, stage) })
+}
+
+func runStageChecks(ctx context.Context, checkout, agent, stage string, filesForStage func() ([]string, error)) StageFeedback {
 	if postEditKilled() {
 		return StageFeedback{}
 	}
@@ -38,13 +43,24 @@ func RunStageChecks(ctx context.Context, checkout, agent, stage string) StageFee
 	if len(checks) == 0 {
 		return StageFeedback{}
 	}
-	files, err := stageFiles(checkout, stage)
+	var env []string
+	if stage == "commit" {
+		env, err = gitenv.ActualIndexEnv()
+		if err != nil {
+			return StageFeedback{Blocking: editRedact(stage + " index: " + err.Error())}
+		}
+		if index := os.Getenv("GIT_INDEX_FILE"); index != "" && !filepath.IsAbs(index) {
+			env = gitenv.WithIndex(env, filepath.Join(checkout, index))
+		}
+	}
+	files, err := filesForStage()
 	if err != nil {
 		return StageFeedback{Blocking: editRedact(stage + " files: " + err.Error())}
 	}
 	var advisory, blocking []string
 	for _, check := range checks {
 		for _, invocation := range stageInvocations(checkout, files, check) {
+			invocation.env = env
 			if failure := runEditCheck(ctx, checkout, invocation); failure != "" {
 				if check.OnFail == "block" {
 					blocking = append(blocking, failure)
@@ -67,13 +83,18 @@ func stageFiles(root, stage string) ([]string, error) {
 			return nil, err
 		}
 	} else {
-		args = []string{"diff", "HEAD", "--name-only", "-z", "--diff-filter=ACMR"}
+		args = []string{"diff", "--name-only", "-z", "--diff-filter=ACMR"}
 	}
 	data, err := gitenv.OutputEnv(root, "git", env, args...)
 	if err != nil {
 		return nil, fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
 	if stage == "handoff" {
+		staged, err := gitenv.Output(root, "git", "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR")
+		if err != nil {
+			return nil, err
+		}
+		data = append(data, staged...)
 		untracked, err := gitenv.Output(root, "git", "ls-files", "--others", "--exclude-standard", "-z")
 		if err != nil {
 			return nil, err
