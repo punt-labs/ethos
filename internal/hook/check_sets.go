@@ -16,7 +16,14 @@ import (
 )
 
 func configuredEditChecks(checkout, root, file, agent string) ([]editCheck, bool, error) {
-	cfg, err := resolve.ConfigOf(checkout)
+	store, err := resolve.StoreOf(checkout)
+	if err != nil {
+		return nil, false, err
+	}
+	if store == "" {
+		return nil, false, nil
+	}
+	cfg, err := resolve.ConfigOf(store)
 	if err != nil {
 		return nil, false, err
 	}
@@ -35,11 +42,11 @@ func configuredEditChecks(checkout, root, file, agent string) ([]editCheck, bool
 		return nil, false, err
 	}
 	global := filepath.Join(home, ".punt-labs", "ethos")
-	bundleRoot, active, err := bundle.ResolveRootFromConfig(checkout, global, cfg)
+	bundleRoot, active, err := bundle.ResolveRootFromConfig(store, global, cfg)
 	if err != nil {
 		return nil, false, err
 	}
-	repo := filepath.Join(checkout, ".punt-labs", "ethos")
+	repo := filepath.Join(store, ".punt-labs", "ethos")
 	repoOnly := policy == resolve.ResolutionRepoOnly
 	if repoOnly {
 		storeRoot := ""
@@ -100,6 +107,9 @@ func configuredEditChecks(checkout, root, file, agent string) ([]editCheck, bool
 	}
 	if ref == "" {
 		return nil, false, nil
+	}
+	if err := checkset.ValidateReference(ref); err != nil {
+		return nil, true, err
 	}
 	set, err := sets.Load(ref)
 	if err != nil {

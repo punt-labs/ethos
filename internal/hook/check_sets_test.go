@@ -50,6 +50,56 @@ func TestConfiguredEditKillSwitch(t *testing.T) {
 	require.Empty(t, configuredEdit(t, "file.txt", ""))
 }
 
+func TestConfiguredEditInvalidRepoReference(t *testing.T) {
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: Go_Default\n")
+	writeFile(t, filepath.Join(root, "file.txt"), "")
+	out := configuredEdit(t, "file.txt", "")
+	require.Contains(t, out, "additionalContext")
+	require.Contains(t, out, "Go_Default")
+	require.NotContains(t, out, `"decision"`)
+}
+
+func TestConfiguredEditMainStoreFromLinkedSession(t *testing.T) {
+	for _, tc := range []struct{ name, agent, config, identity, role string }{
+		{"repository", "", "checks: project\n", "", ""},
+		{"identity", "worker", "", "checks: project\n", ""},
+		{"role", "worker", "team: crew\n", "", "checks: project\n"},
+		{"bundle", "", "active_bundle: ops\nchecks: project\n", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, bin := postEditFixture(t)
+			t.Setenv("HOME", t.TempDir())
+			worktree := filepath.Join(t.TempDir(), "linked")
+			cmd := exec.Command("git", "worktree", "add", "--detach", worktree)
+			cmd.Dir = root
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "%s", out)
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), tc.config)
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos/identities/worker.yaml"), "name: Worker\nhandle: worker\nkind: agent\n"+tc.identity)
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos/teams/crew.yaml"), "name: crew\nmembers: [{identity: worker, role: writer}]\n")
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos/roles/writer.yaml"), "name: writer\ntools: [Edit]\n"+tc.role)
+			policyRoot := root
+			if tc.name == "bundle" {
+				policyRoot = filepath.Join(root, ".punt-labs/ethos-bundles/ops")
+				writeFile(t, filepath.Join(policyRoot, "bundle.yaml"), "name: ops\n")
+			}
+			if tc.name == "bundle" {
+				writeFile(t, filepath.Join(policyRoot, "checks/project.yaml"), "name: project\nchecks:\n  - name: main-only-check\n    stage: edit\n    files: ['**']\n    run: [probe]\n")
+			} else {
+				checkPolicy(t, root, "project", "  - name: main-only-check\n    stage: edit\n    files: ['**']\n    run: [probe]\n")
+			}
+			writeFile(t, filepath.Join(worktree, "file.txt"), "")
+			postEditTool(t, bin, "probe", "echo failed; exit 1\n")
+			t.Setenv("CLAUDE_PROJECT_DIR", worktree)
+			require.Contains(t, configuredEdit(t, filepath.Join(worktree, "file.txt"), tc.agent), "main-only-check")
+			writeFile(t, filepath.Join(worktree, ".punt-labs/ethos.yaml"), "checks: none\n")
+			require.Contains(t, configuredEdit(t, filepath.Join(worktree, "file.txt"), tc.agent), "main-only-check")
+		})
+	}
+}
+
 func TestConfiguredEditEnginePrecedence(t *testing.T) {
 	for _, tc := range []struct{ name, idRef, roleRef, repoRef, want string }{
 		{"identity", "id-policy", "role-policy", "repo-policy", "id-policy"},

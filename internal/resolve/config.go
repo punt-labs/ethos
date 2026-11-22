@@ -5,7 +5,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
@@ -69,9 +68,6 @@ func (c *RepoConfig) UnmarshalYAML(node *yaml.Node) error {
 		return err
 	}
 	cfg := RepoConfig(decoded)
-	if err := checkset.ValidateReference(cfg.Checks); err != nil {
-		return err
-	}
 	if _, err := cfg.RecordingMode(); err != nil {
 		return err
 	}
@@ -97,9 +93,6 @@ func validateRecordNode(r *yaml.Node) error {
 // yaml.Node does not invoke this check. The interface{} result is
 // yaml.Marshaler's contract.
 func (c RepoConfig) MarshalYAML() (interface{}, error) {
-	if err := checkset.ValidateReference(c.Checks); err != nil {
-		return nil, err
-	}
 	if _, err := c.RecordingMode(); err != nil {
 		return nil, err
 	}

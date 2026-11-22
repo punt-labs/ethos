@@ -13,19 +13,14 @@ import (
 )
 
 func TestConfigCheckReference(t *testing.T) {
-	for _, ref := range []string{"", "none", "project", "bad ref", "../outside"} {
+	for _, ref := range []string{"", "none", "project", "bad ref", "../outside", "Go_Default"} {
 		t.Run(ref, func(t *testing.T) {
 			var cfg RepoConfig
 			err := yaml.Unmarshal([]byte("checks: '"+ref+"'\n"), &cfg)
 			_, marshalErr := yaml.Marshal(&RepoConfig{Checks: ref})
-			if ref == "bad ref" || ref == "../outside" {
-				require.Error(t, err)
-				require.Error(t, marshalErr)
-			} else {
-				require.NoError(t, err)
-				require.NoError(t, marshalErr)
-				require.Equal(t, ref, cfg.Checks)
-			}
+			require.NoError(t, err)
+			require.NoError(t, marshalErr)
+			require.Equal(t, ref, cfg.Checks)
 		})
 	}
 }

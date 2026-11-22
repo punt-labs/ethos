@@ -295,7 +295,8 @@ edit check over the last 50 runs exceeds half its timeout.
 - **Configured policies.** Identity, then the generator-bound role, then repo
   config selects a check-set slug. `none` at any level stops inheritance.
   An unresolved handle uses the repo setting, then the advisory defaults.
-  Policy comes from the session checkout, never the edited worktree's config.
+  Policy comes from the session checkout's canonical store root S (resolved
+  through Git's common directory), never the edited worktree's config.
   Every configured check chooses `advisory` or `block`; edit defaults to
   advisory. A block is exit-zero PostToolUse decision feedback, never exit 2.
 - **`ethos checks init`.** Writes a starter set from marker files:

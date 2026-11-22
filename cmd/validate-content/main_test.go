@@ -83,6 +83,22 @@ func TestValidateContent_LayeredModeUnchanged(t *testing.T) {
 	require.NoErrorf(t, err, "layered mode (unset resolution) must still pass: %s", out)
 }
 
+func TestInvalidProjectCheckReferenceIsContentError(t *testing.T) {
+	repo, root := minimalRepo(t, "")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs/ethos.yaml"), []byte("checks: Go_Default\n"), 0600))
+	rep, err := run(root, t.TempDir())
+	require.NoError(t, err)
+	found := false
+	for _, result := range rep.results {
+		if result.label == "checks: project reference" {
+			found = true
+			require.False(t, result.pass)
+			require.Contains(t, result.detail, "Go_Default")
+		}
+	}
+	require.True(t, found)
+}
+
 func TestValidateContent_RepoOnlyExcludesGlobal(t *testing.T) {
 	bin := buildValidateContent(t)
 	repoRoot, ethosRoot := minimalRepo(t, "repo-only")

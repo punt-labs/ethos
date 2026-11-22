@@ -1692,6 +1692,22 @@ func CheckoutOf(dir string) (string, error) {
 	return r.loc.root, nil
 }
 
+// StoreOf locates the canonical store for a supplied checkout using the same
+// common-directory resolution as Roots, without consulting process overrides.
+func StoreOf(dir string) (string, error) {
+	r := locate(dir)
+	if errors.Is(r.err, ErrNotInRepo) {
+		return "", nil
+	}
+	if r.err != nil {
+		return "", r.err
+	}
+	if r.loc.storeErr != nil {
+		return "", r.loc.storeErr
+	}
+	return physicalRoot(r.loc.store, "store")
+}
+
 // IsWorkingTree reports whether dir is the root of a working tree: it holds a
 // .git that git (or, without a git that runs, the hand rules) accepts as a
 // repository. A .git that is walked past or refused is not a working tree; an
