@@ -115,20 +115,19 @@ func postEditScope(file string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	root := checkout
-	if !editWithin(checkout, physical) {
-		other, locateErr := resolve.CheckoutOf(filepath.Dir(physical))
-		if locateErr != nil {
-			return "", "", locateErr
-		}
-		if other == "" {
-			return "", "", nil
-		}
+	root, err := resolve.CheckoutOf(filepath.Dir(physical))
+	if err != nil {
+		return "", "", err
+	}
+	if root == "" {
+		return "", "", nil
+	}
+	if root != checkout {
 		_, common, commonErr := resolve.HandGitDirs(checkout)
 		if commonErr != nil {
 			return "", "", nil
 		}
-		_, otherCommon, otherErr := resolve.HandGitDirs(other)
+		_, otherCommon, otherErr := resolve.HandGitDirs(root)
 		if otherErr != nil {
 			return "", "", otherErr
 		}
@@ -143,7 +142,6 @@ func postEditScope(file string) (string, string, error) {
 		if common != otherCommon {
 			return "", "", nil
 		}
-		root = other
 	}
 	rel, err := filepath.Rel(root, physical)
 	if err != nil {
@@ -154,11 +152,6 @@ func postEditScope(file string) (string, string, error) {
 		return "", "", nil
 	}
 	return root, physical, nil
-}
-
-func editWithin(root, file string) bool {
-	rel, err := filepath.Rel(root, file)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 type editCheck struct {

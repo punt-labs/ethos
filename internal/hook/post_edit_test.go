@@ -98,6 +98,33 @@ func TestPostEditScope(t *testing.T) {
 	}
 }
 
+func TestPostEditNestedWorktreeRoot(t *testing.T) {
+	root, bin := postEditFixture(t)
+	worktree := filepath.Join(root, ".claude", "worktrees", "nested")
+	cmd := exec.Command("git", "worktree", "add", "--detach", worktree)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	writeFile(t, filepath.Join(worktree, "go.mod"), "module example.com/nested\n")
+	writeFile(t, filepath.Join(root, "go.mod"), "module example.com/session\n")
+	writeFile(t, filepath.Join(worktree, "file.go"), "package nested\n")
+	log := filepath.Join(root, "vet-cwd")
+	t.Setenv("POST_EDIT_LOG", log)
+	postEditTool(t, bin, "go", "printf '%s\\n' \"$PWD\" > \"$POST_EDIT_LOG\"\n")
+	require.Empty(t, postEditRun(t, filepath.Join(worktree, "file.go")))
+	data, err := os.ReadFile(log)
+	require.NoError(t, err)
+	require.Equal(t, worktree+"\n", string(data))
+	for _, excluded := range []string{".tmp/file.go", ".punt-labs/local/file.go"} {
+		writeFile(t, filepath.Join(worktree, excluded), "package scratch\n")
+		require.NoError(t, os.Remove(log))
+		require.Empty(t, postEditRun(t, filepath.Join(worktree, excluded)))
+		_, err := os.Stat(log)
+		require.ErrorIs(t, err, os.ErrNotExist)
+		writeFile(t, log, "")
+	}
+}
+
 func TestPostEditSelectionAndLiteralArguments(t *testing.T) {
 	for _, tc := range []struct{ name, marker, file, tools, want string }{
 		{"Go", "go.mod", "sub/file.go", "gofmt,go", "gofmt|-l|{file}\ngo|vet|./sub\n"},
