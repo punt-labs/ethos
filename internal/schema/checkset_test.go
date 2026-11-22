@@ -145,6 +145,10 @@ func TestAdapterSchemaRuntimeParity(t *testing.T) {
 		{"adapter": "uv", "uv": []string{"ruff", "{file}"}, "stage": "commit"},
 		{"adapter": "npm", "script": ""}, {"adapter": "npm", "script": 42}, {"adapter": "npm", "script": "x{file}"}, {"adapter": "npm", "script": "{"},
 		{"run": []string{}}, {"run": []string{" "}}, {"run": []string{"true", "x{file}"}}, {"run": []string{"true", "{bad}"}},
+		{"run": []any{42}}, {"run": []string{"{bad}"}}, {"run": []string{"x{file}"}},
+		{"run": []string{"{file}"}, "stage": "commit"},
+		{"adapter": "uv", "uv": []any{42}}, {"adapter": "uv", "uv": []string{"{bad}"}},
+		{"adapter": "uv", "uv": []string{"x{file}"}}, {"adapter": "uv", "uv": []string{"{file}"}, "stage": "handoff"},
 		{"run": []string{"true", "{file}"}, "stage": "handoff"},
 		{"run": []string{"true"}, "adapter": nil},
 	} {

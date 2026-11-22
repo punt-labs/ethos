@@ -82,7 +82,8 @@ func adapterSchema(items map[string]any) {
 		if file {
 			placeholders = "file|" + placeholders
 		}
-		return map[string]any{"type": "array", "minItems": 1, "items": map[string]any{"type": "string", "pattern": `^([^{}]*|\{(` + placeholders + `)\})$`}, "prefixItems": []any{map[string]any{"pattern": `\S`}}}
+		pattern := `^([^{}]*|\{(` + placeholders + `)\})$`
+		return map[string]any{"type": "array", "minItems": 1, "items": map[string]any{"type": "string", "pattern": pattern}, "prefixItems": []any{map[string]any{"type": "string", "pattern": pattern, "allOf": []any{map[string]any{"pattern": `\S`}}}}}
 	}
 	props["run"] = argv(true)
 	props["uv"] = argv(true)
