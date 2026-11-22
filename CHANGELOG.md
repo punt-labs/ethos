@@ -39,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated agent post-edit hooks forward stdin over a fresh shell pipe on
+  Linux (DES-029), preserve the kill switch, and fail open even if Ethos fails
+  or is missing from PATH.
+
 - `ethos hook pre-commit` and `ethos hook subagent-stop` now honor
   `~/.punt-hooks-kill` before reading input or locating/repairing storage. Neither
   writes data, leaves the roster, changes the index or ignore files, seals audit

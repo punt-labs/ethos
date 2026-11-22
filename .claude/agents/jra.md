@@ -52,7 +52,7 @@ hooks:
     - matcher: "Write|Edit"
       hooks:
         - type: command
-          command: "ethos hook post-edit --agent jra"
+          command: "if [ -f \"$HOME/.punt-hooks-kill\" ]; then exit 0; fi; cat | ethos hook post-edit --agent 'jra' || true"
           timeout: 70
 ---
 

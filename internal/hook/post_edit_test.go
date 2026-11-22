@@ -20,7 +20,7 @@ func TestPostEditGeneratedCommand(t *testing.T) {
 	root, ids, teams, roles := setupTestRepo(t)
 	require.NoError(t, GenerateAgentFiles(root, ids, teams, roles))
 	command := extractPostToolUseCommand(t, filepath.Join(root, ".claude", "agents", "bwk.md"))
-	require.Equal(t, "ethos hook post-edit --agent bwk", command)
+	require.Equal(t, `if [ -f "$HOME/.punt-hooks-kill" ]; then exit 0; fi; cat | ethos hook post-edit --agent 'bwk' || true`, command)
 	data, err := os.ReadFile(filepath.Join(root, ".claude", "agents", "bwk.md"))
 	require.NoError(t, err)
 	require.Contains(t, string(data), "timeout: 70")

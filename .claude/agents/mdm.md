@@ -40,7 +40,7 @@ hooks:
     - matcher: "Write|Edit"
       hooks:
         - type: command
-          command: "ethos hook post-edit --agent mdm"
+          command: "if [ -f \"$HOME/.punt-hooks-kill\" ]; then exit 0; fi; cat | ethos hook post-edit --agent 'mdm' || true"
           timeout: 70
 ---
 

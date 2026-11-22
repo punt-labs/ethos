@@ -19,9 +19,12 @@ func TestPostToolUseHook_Execution(t *testing.T) {
 	root, ids, teams, roles := setupTestRepo(t)
 	require.NoError(t, GenerateAgentFiles(root, ids, teams, roles))
 	command := extractPostToolUseCommand(t, filepath.Join(root, ".claude", "agents", "bwk.md"))
+	cat, err := exec.LookPath("cat")
+	require.NoError(t, err)
 	for _, fails := range []bool{false, true} {
 		t.Run(map[bool]string{false: "silent pass", true: "advisory failure"}[fails], func(t *testing.T) {
 			project, bin := postEditFixture(t)
+			require.NoError(t, os.Symlink(cat, filepath.Join(bin, "cat")))
 			writeFile(t, filepath.Join(project, "file.sh"), "")
 			body := "exit 0\n"
 			if fails {
