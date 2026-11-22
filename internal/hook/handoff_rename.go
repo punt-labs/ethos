@@ -8,9 +8,25 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/layout"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
 func handoffRenames(root string) (map[string]string, error) {
+	store, err := resolve.StoreOf(root)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := resolve.ConfigOf(store)
+	if err != nil {
+		return nil, err
+	}
+	policy, err := (resolve.Located{Store: store, Checkout: root, Config: cfg}).Layout()
+	if err != nil {
+		return nil, err
+	}
+	if err := layout.EnsureLocalDir(policy, policy.TempDir()); err != nil {
+		return nil, err
+	}
 	pathData, err := gitenv.Output(root, "git", "rev-parse", "--path-format=absolute", "--git-path", "index")
 	if err != nil {
 		return nil, err
@@ -19,7 +35,7 @@ func handoffRenames(root string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	dir, err := os.MkdirTemp("", layout.ScratchDirPattern("ethos-handoff-index"))
+	dir, err := os.MkdirTemp(policy.TempDir(), layout.ScratchDirPattern("ethos-handoff-index"))
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +54,7 @@ func handoffRenames(root string) (map[string]string, error) {
 	} else {
 		return nil, err
 	}
-	untracked, err := gitenv.OutputEnv(root, "git", env, "ls-files", "--others", "--exclude-standard", "-z")
+	untracked, err := gitenv.OutputEnv(root, "git", env, "ls-files", "--others", "--exclude-standard", "--exclude=/.punt-labs/local/", "-z")
 	if err != nil {
 		return nil, err
 	}

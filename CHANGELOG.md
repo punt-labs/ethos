@@ -28,7 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Handoff glob checks follow an agent's vanished Write/Edit paths to Git rename
   targets in the same checkout, including untracked `mv` destinations and staged
   `git mv` renames. Discovery uses a private index, excludes other agents' known
-  paths, and leaves the real index unchanged. Lookup errors are advisory;
+  paths, and leaves the real index unchanged. Temporary indexes stay under the
+  canonical store's untracked local area and are removed on success and failure.
+  Lookup errors are advisory;
   deletions and the existing dirty-tree fallback rules are unchanged.
 - Commit checks refuse matched partially staged files before running commands,
   even for advisory checks, and list every file with stage/stash guidance.
