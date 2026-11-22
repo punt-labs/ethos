@@ -14,6 +14,8 @@ import (
 // team name fields.
 const slugPattern = `^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`
 
+const durationPattern = `^\+?(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+$`
+
 // Identity overlays the persisted identity fields.
 var Identity = Entity{
 	Name:   "Identity",
@@ -102,7 +104,7 @@ var CheckSet = Entity{
 			"adapter":        {Type: "enum", Enum: []string{"exec"}, AllowEmpty: true, Description: "Optional exec adapter; other adapters are not yet supported."},
 			"on_fail":        {Type: "enum", Enum: []string{"advisory", "block"}, Description: "Failure feedback mode; defaults to advisory at edit, block otherwise."},
 			"fail_on_output": {Type: "boolean", Description: "Treat non-empty stdout as failure even with exit zero."},
-			"timeout":        {Type: "duration", Description: "Positive duration, at most the stage cap; defaults to 10s/120s/10m."},
+			"timeout":        {Type: "duration", Pattern: durationPattern, Description: "Positive Go duration; defaults to 10s/120s/10m. Runtime limits: edit 60s, commit 15m, handoff 30m; must resolve to at least 1ns."},
 			"cwd":            {Type: "enum", Enum: []string{"root", "package_dir", "file_dir"}, Description: "Working directory; defaults to root."},
 		}},
 	},

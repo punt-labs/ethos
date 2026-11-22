@@ -62,6 +62,13 @@ func (e Entity) JSONSchema() map[string]any {
 	if len(required) > 0 {
 		obj["required"] = required
 	}
+	if e.Wire == "checks" {
+		items := props["checks"].(map[string]any)["items"].(map[string]any)
+		items["if"] = map[string]any{"properties": map[string]any{"stage": map[string]any{"const": "edit"}}}
+		items["then"] = map[string]any{"properties": map[string]any{"files": map[string]any{"type": "array"}}}
+		timeout := items["properties"].(map[string]any)["timeout"].(map[string]any)
+		timeout["allOf"] = []any{map[string]any{"pattern": "[1-9]"}}
+	}
 	return obj
 }
 
