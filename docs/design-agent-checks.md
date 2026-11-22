@@ -329,9 +329,9 @@ at these stages. The kill switch skips input, storage resolution/repair, roster
 leave, commit sealing, provenance verification, and checks. SubagentStop succeeds
 silently. Pre-commit makes a read-only query of the actual committing index and
 refuses with exit 2 if it contains `.punt-labs/local/` paths or cannot be read.
-It names each private path with `git restore --staged` guidance. Already-tracked
-private files require disabling the kill switch so Ethos can untrack them on the
-normal pre-commit path; a safe index succeeds silently. No index,
+It names each private path with `git rm --cached -r --` guidance, which removes
+only the index entry, keeps the file on disk, and works before the first commit
+as well as with an existing HEAD. A safe index succeeds silently. No index,
 ignore file, or other storage is changed under the kill switch. Commit file
 discovery and commands preserve the actual
 committing index while scrubbing other Git selectors and tracing variables.

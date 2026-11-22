@@ -71,8 +71,8 @@ provenance verification, and checks without changing the index or ignore files.
 SubagentStop succeeds silently. Pre-commit still reads the actual committing
 index: any private `.punt-labs/local/` path or query failure blocks with exit 2;
 a safe index succeeds silently. Remove the named paths with the printed
-`git restore --staged` command. For already-tracked private files, disable the kill
-switch and retry so Ethos can untrack them; files stay on disk. Otherwise pre-commit runs
+`git rm --cached -r --` command; it keeps working files on disk and also works
+before the first commit. Otherwise pre-commit runs
 after seal/provenance, selects files from the actual committing index, and
 blocks with exit 2 by default. Checks read files on disk, so matched staged files
 with unstaged changes block before any check runs, even for advisory checks.

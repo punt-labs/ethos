@@ -16,6 +16,47 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestKilledPreCommitPrintedRecovery(t *testing.T) {
+	for _, mode := range []string{"unborn", "committed", "already tracked"} {
+		t.Run(mode, func(t *testing.T) {
+			se := enableSubprocessRepo(t)
+			if mode == "committed" {
+				gitRunEnv(t, se.repo, se.env, "commit", "--allow-empty", "-qm", "initial")
+			}
+			local := ".punt-labs/local/ethos/stray ' [data].txt"
+			path := filepath.Join(se.repo, local)
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+			require.NoError(t, os.WriteFile(path, []byte("private\n"), 0o600))
+			gitRunEnv(t, se.repo, se.env, "add", "-f", "--", local)
+			if mode == "already tracked" {
+				gitRunEnv(t, se.repo, se.env, "commit", "-qm", "initial private fixture")
+			}
+			require.NoError(t, os.WriteFile(filepath.Join(se.home, ".punt-hooks-kill"), nil, 0o600))
+			_, stderr, code := runCLI(t, se, "hook", "pre-commit")
+			require.Equal(t, 2, code, stderr)
+			start := strings.Index(stderr, "git ")
+			require.NotEqual(t, -1, start, stderr)
+			command, _, _ := strings.Cut(strings.TrimSpace(stderr[start:]), ". For")
+			cmd := exec.Command("/bin/sh", "-c", command)
+			cmd.Dir, cmd.Env = se.repo, se.env
+			output, err := cmd.CombinedOutput()
+			require.NoError(t, err, "%s: %s", command, output)
+			cmd = exec.Command("git", "ls-files", "--cached", "--", local)
+			cmd.Dir, cmd.Env = se.repo, se.env
+			output, err = cmd.Output()
+			require.NoError(t, err)
+			require.Empty(t, output)
+			out, stderr, code := runCLI(t, se, "hook", "pre-commit")
+			require.Zero(t, code, stderr)
+			require.Empty(t, out)
+			require.Empty(t, stderr)
+			data, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.Equal(t, "private\n", string(data))
+		})
+	}
+}
+
 func TestKilledPreCommitPrivacyGuard(t *testing.T) {
 	se := enableSubprocessRepo(t)
 	t.Chdir(se.repo)
@@ -41,7 +82,7 @@ func TestKilledPreCommitPrivacyGuard(t *testing.T) {
 	require.ErrorAs(t, killedPreCommit(ctx, &stderr), &refused)
 	for _, path := range paths {
 		require.Contains(t, stderr.String(), fmt.Sprintf("%q", path))
-		require.Contains(t, stderr.String(), "git restore --staged -- "+shellQuote(":(top,literal)"+path))
+		require.Contains(t, stderr.String(), "git rm --cached -r -- "+shellQuote(":(top,literal)"+path))
 	}
 	after, err := os.ReadFile(index)
 	require.NoError(t, err)
@@ -141,7 +182,7 @@ func TestKilledPreCommitIndexSafety(t *testing.T) {
 				require.Contains(t, stderr, "index")
 			} else {
 				require.Contains(t, stderr, local)
-				require.Contains(t, stderr, "git restore --staged -- "+shellQuote(":(top,literal)"+local))
+				require.Contains(t, stderr, "git rm --cached -r -- "+shellQuote(":(top,literal)"+local))
 			}
 			after, err := os.ReadFile(index)
 			require.NoError(t, err)
