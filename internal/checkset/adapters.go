@@ -1,6 +1,7 @@
 package checkset
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -127,7 +128,7 @@ func (npmAdapter) Probe(c Check, cwd string) error {
 	var pkg struct {
 		Scripts map[string]any `json:"scripts"`
 	}
-	if err := json.Unmarshal(data, &pkg); err != nil {
+	if err := json.Unmarshal(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")), &pkg); err != nil {
 		return fmt.Errorf("npm adapter package.json: %w", err)
 	}
 	if _, ok := pkg.Scripts[c.Script].(string); !ok {

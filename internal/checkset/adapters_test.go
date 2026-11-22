@@ -175,3 +175,16 @@ func TestNpmScriptLiteral(t *testing.T) {
 		})
 	}
 }
+
+func TestNpmProbeBOM(t *testing.T) {
+	root := t.TempDir()
+	c := Check{Adapter: "npm", Script: "lint"}
+	for _, prefix := range []string{"", "\ufeff"} {
+		require.NoError(t, os.WriteFile(filepath.Join(root, "package.json"), []byte(prefix+`{"scripts":{"lint":"node lint.js"}}`), 0600))
+		require.NoError(t, c.Probe(root))
+		for _, invalid := range []string{"", "{", "{}"} {
+			require.NoError(t, os.WriteFile(filepath.Join(root, "package.json"), []byte(prefix+invalid), 0600))
+			require.Error(t, c.Probe(root))
+		}
+	}
+}
