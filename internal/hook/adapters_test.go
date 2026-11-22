@@ -4,6 +4,7 @@ package hook
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,9 +16,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGoAdapterNestedCwd(t *testing.T) {
+func goAdapterTool(t *testing.T) string {
+	t.Helper()
 	goBin, err := exec.LookPath("go")
 	require.NoError(t, err)
+	data, err := exec.Command(goBin, "env", "-json", "GOCACHE", "GOMODCACHE").Output()
+	require.NoError(t, err)
+	var caches map[string]string
+	require.NoError(t, json.Unmarshal(data, &caches))
+	for _, key := range []string{"GOCACHE", "GOMODCACHE"} {
+		require.NotEmpty(t, caches[key])
+		t.Setenv(key, caches[key])
+	}
+	return goBin
+}
+
+func TestGoAdapterCacheEnvironment(t *testing.T) {
+	t.Setenv("GOCACHE", "")
+	t.Setenv("GOMODCACHE", "")
+	goBin, err := exec.LookPath("go")
+	require.NoError(t, err)
+	want, err := exec.Command(goBin, "env", "GOCACHE", "GOMODCACHE").Output()
+	require.NoError(t, err)
+	goAdapterTool(t)
+	t.Setenv("HOME", t.TempDir())
+	got, err := exec.Command(goBin, "env", "GOCACHE", "GOMODCACHE").Output()
+	require.NoError(t, err)
+	require.Equal(t, string(want), string(got))
+}
+
+func TestGoAdapterNestedCwd(t *testing.T) {
+	goBin := goAdapterTool(t)
 	for _, cwd := range []string{"package_dir", "file_dir"} {
 		for _, stage := range []string{"edit", "commit", "handoff"} {
 			t.Run(cwd+"/"+stage, func(t *testing.T) {
@@ -37,8 +66,7 @@ func TestGoAdapterNestedCwd(t *testing.T) {
 }
 
 func TestGoAdapterNestedPostEdit(t *testing.T) {
-	goBin, err := exec.LookPath("go")
-	require.NoError(t, err)
+	goBin := goAdapterTool(t)
 	for _, cwd := range []string{"package_dir", "file_dir"} {
 		t.Run(cwd, func(t *testing.T) {
 			root, bin := postEditFixture(t)
