@@ -325,9 +325,15 @@ Commit/handoff checks run sequentially under a shared stage deadline. At
 their deduplicated root-relative directories. A directory cwd runs once per
 matching directory, with that directory's matching files. `files: all` runs
 even with no paths, from the root in that case. There are no marker defaults
-at these stages. The kill switch makes both binary hook commands return success
-silently before input, storage resolution/repair, roster leave, commit sealing,
-provenance verification, or checks. Commit file discovery and commands preserve the actual
+at these stages. The kill switch skips input, storage resolution/repair, roster
+leave, commit sealing, provenance verification, and checks. SubagentStop succeeds
+silently. Pre-commit makes a read-only query of the actual committing index and
+refuses with exit 2 if it contains `.punt-labs/local/` paths or cannot be read.
+It names each private path with `git restore --staged` guidance. Already-tracked
+private files require disabling the kill switch so Ethos can untrack them on the
+normal pre-commit path; a safe index succeeds silently. No index,
+ignore file, or other storage is changed under the kill switch. Commit file
+discovery and commands preserve the actual
 committing index while scrubbing other Git selectors and tracing variables.
 
 OpenCode generation (`.opencode/agents`) uses the same subcommand from its

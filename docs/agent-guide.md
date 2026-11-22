@@ -66,9 +66,13 @@ configuration is never consulted. See
 [DES-085's design](design-agent-checks.md) for stage and adapter details.
 
 The same set may define `stage: commit` and `stage: handoff`.
-`~/.punt-hooks-kill` makes both hook commands return success silently before
-reading input or storage: no repair, roster leave, sealing, provenance
-verification, or checks. Otherwise pre-commit runs
+`~/.punt-hooks-kill` disables input, storage repair, roster leave, sealing,
+provenance verification, and checks without changing the index or ignore files.
+SubagentStop succeeds silently. Pre-commit still reads the actual committing
+index: any private `.punt-labs/local/` path or query failure blocks with exit 2;
+a safe index succeeds silently. Remove the named paths with the printed
+`git restore --staged` command. For already-tracked private files, disable the kill
+switch and retry so Ethos can untrack them; files stay on disk. Otherwise pre-commit runs
 after seal/provenance, selects files from the actual committing index, and
 blocks with exit 2 by default. Checks read files on disk, so matched staged files
 with unstaged changes block before any check runs, even for advisory checks.

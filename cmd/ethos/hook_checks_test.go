@@ -62,9 +62,10 @@ func TestCommitKilledBeforeSideEffects(t *testing.T) {
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(se.home, ".punt-hooks-kill"), nil, 0600))
 	out, stderr, code := runCLI(t, se, "hook", "pre-commit")
-	assert.Zero(t, code, stderr)
+	assert.Equal(t, 2, code, stderr)
 	assert.Empty(t, out)
-	assert.Empty(t, stderr)
+	assert.Contains(t, stderr, local)
+	assert.Contains(t, stderr, "git restore --staged")
 	for path, want := range before {
 		got, err := os.ReadFile(path)
 		require.NoError(t, err)
@@ -75,7 +76,7 @@ func TestCommitKilledBeforeSideEffects(t *testing.T) {
 	assert.Empty(t, sealed)
 }
 
-func TestHooksKilledBeforeRootResolution(t *testing.T) {
+func TestHooksKilledBeforeStoreResolution(t *testing.T) {
 	for _, name := range []string{"pre-commit", "subagent-stop"} {
 		t.Run(name, func(t *testing.T) {
 			se := enabledHookRepo(t)
@@ -85,10 +86,16 @@ func TestHooksKilledBeforeRootResolution(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nprintf called > '"+marker+"'\nexit 99\n"), 0700))
 			se.env = append(se.env, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 			out, stderr, code := runCLI(t, se, "hook", name)
-			assert.Zero(t, code, stderr)
 			assert.Empty(t, out)
-			assert.Empty(t, stderr)
-			assert.NoFileExists(t, marker)
+			if name == "pre-commit" {
+				assert.Equal(t, 2, code, stderr)
+				assert.Contains(t, stderr, "index")
+				assert.FileExists(t, marker)
+			} else {
+				assert.Zero(t, code, stderr)
+				assert.Empty(t, stderr)
+				assert.NoFileExists(t, marker)
+			}
 		})
 	}
 }
