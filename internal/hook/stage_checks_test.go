@@ -216,6 +216,48 @@ func TestHandoffConcurrentAgents(t *testing.T) {
 	}
 }
 
+func TestHandoffVanishedPaths(t *testing.T) {
+	for _, agent := range []string{"sub", "other", ""} {
+		for _, parentGone := range []bool{false, true} {
+			for _, ownFile := range []bool{false, true} {
+				t.Run(fmt.Sprintf("agent=%s/parent-gone=%t/own-file=%t", agent, parentGone, ownFile), func(t *testing.T) {
+					root, bin := postEditFixture(t)
+					t.Setenv("HOME", t.TempDir())
+					writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+					checkPolicy(t, root, "project", "  - name: glob\n    stage: handoff\n    files: ['**/*.go']\n    run: [glob-probe, '{files}']\n  - name: all\n    stage: handoff\n    files: all\n    run: [all-probe]\n")
+					log := filepath.Join(t.TempDir(), "log")
+					t.Setenv("STAGE_LOG", log)
+					postEditTool(t, bin, "glob-probe", "printf 'glob|%s\\n' \"$@\" >> \"$STAGE_LOG\"\n")
+					postEditTool(t, bin, "all-probe", "printf 'all\\n' >> \"$STAGE_LOG\"\n")
+					removed := filepath.Join(root, "removed", "gone.go")
+					writeFile(t, removed, "package gone\n")
+					require.NoError(t, os.Remove(removed))
+					if parentGone {
+						require.NoError(t, os.Remove(filepath.Dir(removed)))
+					}
+					entries := []auditEntry{{Ts: "2026-11-22T10:00:00Z", Session: "vanished", AgentID: agent, Tool: "Write", ToolInput: map[string]any{"file_path": "<repo>/removed/gone.go"}, PathFormat: auditPathFormat}}
+					want := "all\n"
+					if ownFile {
+						writeFile(t, filepath.Join(root, "own.go"), "package own\n")
+						entries = append(entries, auditEntry{Ts: "2026-11-22T10:00:01Z", Session: "vanished", AgentID: "sub", Tool: "Edit", ToolInput: map[string]any{"file_path": "<repo>/own.go"}, PathFormat: auditPathFormat})
+						want = "glob|" + filepath.Join(root, "own.go") + "\n" + want
+					}
+					writeRepoTreeSession(t, root, "2026-11-22", "vanished", entries)
+					ss := session.NewStore(t.TempDir())
+					require.NoError(t, ss.Create("vanished", session.Participant{AgentID: "human"}, session.Participant{AgentID: "sub"}, "", ""))
+					var out, stderr bytes.Buffer
+					require.NoError(t, HandleSubagentStopWithIO(context.Background(), strings.NewReader(`{"session_id":"vanished","agent_id":"sub"}`), ss, &out, &stderr))
+					require.Empty(t, out.String())
+					require.Empty(t, stderr.String())
+					data, err := os.ReadFile(log)
+					require.NoError(t, err)
+					require.Equal(t, want, string(data))
+				})
+			}
+		}
+	}
+}
+
 func TestHandoffUnreadableAudit(t *testing.T) {
 	root, _ := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())

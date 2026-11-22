@@ -109,7 +109,9 @@ func handoffFiles(checkout, sessionID, agentID string) (map[string][]string, err
 			scope = postEditRoot
 		}
 		root, physical, err := scope(checkout, file)
-		if err != nil {
+		if os.IsNotExist(err) {
+			continue
+		} else if err != nil {
 			return nil, err
 		}
 		if root == "" {

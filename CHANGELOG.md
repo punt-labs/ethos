@@ -19,7 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Handoff glob checks no longer fall back to other agents' dirty files in a
   shared main checkout. Dirty-tree fallback is limited to linked worktrees
   without another session agent's Write/Edit paths; `files: all` still runs
-  when no files are attributed to the stopping agent.
+  when no files are attributed to the stopping agent. Vanished audited files
+  or parent directories no longer abort handoff checks.
 
 - Edit-stage checks support layered project-defined check sets referenced by
   identities, roles and repo configuration, with glob scopes, literal argv,

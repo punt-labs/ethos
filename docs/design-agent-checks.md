@@ -282,7 +282,8 @@ there are none; Bash commands are not parsed to discover additional roots.
 Otherwise the root keeps an empty file list: glob checks skip it, but
 `files: all` checks still run. Same-store linked worktrees
 run independently with their own matching paths, cwd and `{root}`, while policy
-still comes from the canonical store. An unreadable audit
+still comes from the canonical store. Vanished audited files or parent
+directories do not abort handoff. An unreadable audit
 fails closed rather than silently narrowing the scope.
 
 A blocking failure or broken policy returns
