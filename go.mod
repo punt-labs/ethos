@@ -6,6 +6,7 @@ toolchain go1.26.5
 
 require (
 	github.com/mark3labs/mcp-go v0.45.0
+	github.com/punt-labs/punt-observe-go v0.0.0-20261122183941-8b005646fab7
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
@@ -30,5 +31,5 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/mod v0.35.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/text v0.14.0 // indirect
+	golang.org/x/text v0.35.0 // indirect
 )

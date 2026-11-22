@@ -20,7 +20,7 @@ func pipelineStore() *mission.PipelineStore {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: pipeline: cannot determine home directory: %v\n", err)
-		os.Exit(1)
+		exitProcess(1, err)
 	}
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	repoRoot := ethosRootForStores()

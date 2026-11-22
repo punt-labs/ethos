@@ -90,6 +90,7 @@ func firstWord(args []string) int {
 }
 
 func main() {
+	startLogging()
 	err := unknownGroupCommand(os.Args[1:])
 	if err == nil {
 		err = rootCmd.Execute()
@@ -107,13 +108,14 @@ func main() {
 			}
 		}
 		if _, ok := err.(failClosed); ok {
-			os.Exit(2)
+			exitProcess(2, err)
 		}
 		if isUsageError(err) {
-			os.Exit(2)
+			exitProcess(2, err)
 		}
-		os.Exit(1)
+		exitProcess(1, err)
 	}
+	finishProcess(0, nil)
 }
 
 // failClosed is returned when a fail-closed command (the audit seal, DES-055
@@ -154,7 +156,7 @@ func isUsageError(err error) bool {
 func printJSON(v any) {
 	if err := writeJSON(os.Stdout, v); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		exitProcess(1, err)
 	}
 }
 

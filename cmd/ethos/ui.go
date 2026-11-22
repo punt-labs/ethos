@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/ui"
 	"github.com/spf13/cobra"
@@ -34,7 +35,9 @@ func init() {
 	rootCmd.AddCommand(uiCmd)
 }
 
-func runUI() error {
+func runUI() (uiErr error) {
+	started := time.Now()
+	defer func() { logServerStop(processLogger, started, uiErr) }()
 	loc := currentRoots()
 	if loc.CheckoutErr != nil {
 		return fmt.Errorf("ethos ui: locating the checkout: %w", loc.CheckoutErr)
@@ -72,6 +75,7 @@ func runUI() error {
 	}
 
 	url := fmt.Sprintf("http://%s", ln.Addr())
+	processLogger.Info("Server started")
 	fmt.Fprintf(os.Stdout, "ethos ui: %s\n", url)
 
 	// Open browser.
