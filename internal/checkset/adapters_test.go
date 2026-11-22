@@ -60,6 +60,26 @@ checks:
 	require.Len(t, set.Checks, 5)
 }
 
+func TestCheckYAMLMerge(t *testing.T) {
+	set, err := Decode([]byte(`name: merged
+checks:
+  - &base
+    name: base
+    stage: edit
+    files: ['**']
+    run: ['true']
+  - <<: *base
+    name: inherited
+`))
+	require.NoError(t, err)
+	require.Len(t, set.Checks, 2)
+	require.Equal(t, Strings{"true"}, set.Checks[1].Run)
+	for _, fields := range []string{"unknown: value", "adapter: make\n    target: check", "script: lint"} {
+		_, err := Decode([]byte("name: merged\nchecks:\n  - &base\n    name: base\n    stage: edit\n    files: ['**']\n    run: ['true']\n  - <<: *base\n    name: inherited\n    " + fields + "\n"))
+		require.Error(t, err, fields)
+	}
+}
+
 func TestAdapterArgv(t *testing.T) {
 	for _, tc := range []struct {
 		name, stage, files, fields string
@@ -142,6 +162,15 @@ func TestAdapterInvalidShapes(t *testing.T) {
 	} {
 		t.Run(strings.ReplaceAll(fields, "\n    ", ";"), func(t *testing.T) {
 			_, err := Decode([]byte("name: adapters\nchecks:\n  - name: probe\n    stage: edit\n    files: ['**']\n    " + fields + "\n"))
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestNpmScriptLiteral(t *testing.T) {
+	for _, script := range []string{"{file}", "{root}", "lint{files}", "}", "-s", "--help"} {
+		t.Run(script, func(t *testing.T) {
+			_, err := (Check{Adapter: "npm", Script: script}).Argv()
 			require.Error(t, err)
 		})
 	}

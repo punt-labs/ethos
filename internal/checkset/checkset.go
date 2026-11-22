@@ -50,13 +50,16 @@ func (c *Check) UnmarshalYAML(node *yaml.Node) error {
 			known[strings.Split(f.Tag.Get("yaml"), ",")[0]] = true
 		}
 	}
+	var values map[string]yaml.Node
+	if err := node.Decode(&values); err != nil {
+		return err
+	}
 	fields := map[string]bool{}
-	for i := 0; i+1 < len(node.Content); i += 2 {
-		key := node.Content[i].Value
+	for key, item := range values {
 		if !known[key] {
 			return fmt.Errorf("unknown check field %q", key)
 		}
-		value := node.Content[i+1]
+		value := &item
 		if value.Kind == yaml.AliasNode {
 			value = value.Alias
 		}
