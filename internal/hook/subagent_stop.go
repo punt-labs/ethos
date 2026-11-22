@@ -22,6 +22,9 @@ func HandleSubagentStop(r io.Reader, ss *session.Store) error {
 
 // HandleSubagentStopWithIO removes the roster participant before running handoff checks.
 func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Store, out, errOut io.Writer) error {
+	if Killed() {
+		return nil
+	}
 	input, err := ReadInput(r, hookInputTimeout)
 	if err != nil {
 		stopFeedback(out, errOut, StageFeedback{Blocking: "subagent-stop: " + err.Error()}, false)
@@ -37,9 +40,6 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 
 	if leaveErr := ss.Leave(sessionID, agentID); leaveErr != nil {
 		fmt.Fprintf(errOut, "ethos: failed to leave session %s: %v\n", sessionID, leaveErr)
-	}
-	if postEditKilled() {
-		return nil
 	}
 	active, _ := input["stop_hook_active"].(bool)
 	checkout, err := hookCheckout()

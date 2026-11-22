@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"os"
 	"slices"
@@ -167,6 +168,9 @@ func usesGlobalOnly(cmd *cobra.Command) bool {
 // wrong tree and exit 0. Every other class runs on the global stores when a
 // lookup failed: that is the class's explicit choice (repoRoots.Global).
 func establishRoots(cmd *cobra.Command, _ []string) error {
+	if (cmd.CommandPath() == "ethos hook pre-commit" || cmd.CommandPath() == "ethos hook subagent-stop") && hook.Killed() {
+		return nil
+	}
 	// Post-edit reads no Ethos storage; its own scope errors are advisory JSON.
 	if cmd.CommandPath() == "ethos hook post-edit" {
 		return nil

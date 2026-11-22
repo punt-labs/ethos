@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/punt-labs/ethos/v4/internal/autorepair"
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/hook"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/process"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
@@ -24,6 +27,8 @@ audit seal in commit context, then verification of the provenance snapshots
 staged in the actual committing index, then configured commit-stage checks.
 Before sealing, every path under
 .punt-labs/local/ is removed from the committing index (files stay on disk).
+With ~/.punt-hooks-kill, no writes or checks run, but an index containing private
+local paths, or an index that cannot be inspected, still refuses the commit.
 
 Exit codes:
   0  sealed, nothing pending, or a blame-mode retained-data warning
@@ -100,6 +105,9 @@ func logPreCommit(env autorepair.Env, action string, err error) {
 // verifies staged provenance snapshots. Any of them failing blocks the commit
 // with exit 2.
 func runHookPreCommit(ctx context.Context, out, errOut io.Writer) error {
+	if hook.Killed() {
+		return killedPreCommit(ctx, errOut)
+	}
 	if err := repairPreCommit(ctx, errOut); err != nil {
 		return err
 	}
@@ -123,6 +131,61 @@ func runHookPreCommit(ctx context.Context, out, errOut io.Writer) error {
 		return failClosed{}
 	}
 	return nil
+}
+
+func killedPreCommit(ctx context.Context, errOut io.Writer) error {
+	paths, err := privateIndexPaths(ctx)
+	if err != nil {
+		fmt.Fprintf(errOut, "ethos: hook pre-commit: cannot inspect committing index with kill switch: %v\n", err)
+		return failClosed{}
+	}
+	for _, path := range paths {
+		literal := shellQuote(":(top,literal)" + path)
+		fmt.Fprintf(errOut, "ethos: %q is private local data; kill switch leaves the index unchanged. Remove only from the index (files stay on disk) with git rm --cached -f -r -- %s\n", path, literal) // msgguard: allow operator-selected kill switch forbids automatic index changes
+	}
+	if len(paths) > 0 {
+		return failClosed{}
+	}
+	return nil
+}
+
+func privateIndexPaths(ctx context.Context) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	checkout, err := resolve.CheckoutOf(cwd)
+	if err != nil {
+		return nil, err
+	}
+	if checkout == "" {
+		return nil, resolve.ErrNotInRepo
+	}
+	env, err := gitenv.ActualIndexEnv()
+	if err != nil {
+		return nil, err
+	}
+	limit := gitenv.Timeout
+	if deadline, ok := ctx.Deadline(); ok {
+		limit = min(limit, time.Until(deadline))
+		if limit <= 0 {
+			return nil, context.DeadlineExceeded
+		}
+	}
+	data, _, err := gitenv.Read(gitenv.Spec{Git: "git", Dir: checkout, Env: append(env, "GIT_OPTIONAL_LOCKS=0"), Args: []string{"ls-files", "--cached", "-z", "--", layout.LocalPrefix}, Limit: limit}, 0)
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, path := range strings.Split(string(data), "\x00") {
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+	return paths, nil
 }
 
 func committingAgent() string {

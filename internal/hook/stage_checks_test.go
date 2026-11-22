@@ -91,12 +91,13 @@ func TestHandoffChecks(t *testing.T) {
 			require.NoError(t, HandleSubagentStopWithIO(context.Background(), bytes.NewReader(payload), ss, &out, &stderr))
 			roster, err := ss.Load("stop")
 			require.NoError(t, err)
-			require.Nil(t, roster.FindParticipant("sub"))
 			if tc.killed {
+				require.NotNil(t, roster.FindParticipant("sub"))
 				require.Empty(t, out.String())
 				require.Empty(t, stderr.String())
 				return
 			}
+			require.Nil(t, roster.FindParticipant("sub"))
 			if tc.active || tc.mode != "" {
 				require.Empty(t, out.String())
 				require.NotEmpty(t, stderr.String())
@@ -105,6 +106,17 @@ func TestHandoffChecks(t *testing.T) {
 				require.True(t, strings.Contains(out.String(), "handoff-probe") || strings.Contains(out.String(), "absent"))
 			}
 		})
+	}
+}
+
+func TestHandoffKilledBeforeInput(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(os.Getenv("HOME"), ".punt-hooks-kill"), "")
+	for _, payload := range []string{"", "{"} {
+		var out, stderr bytes.Buffer
+		require.NoError(t, HandleSubagentStopWithIO(context.Background(), strings.NewReader(payload), nil, &out, &stderr))
+		require.Empty(t, out.String())
+		require.Empty(t, stderr.String())
 	}
 }
 

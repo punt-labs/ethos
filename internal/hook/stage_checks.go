@@ -32,7 +32,7 @@ func runStageChecks(ctx context.Context, checkout, agent, stage string, filesFor
 }
 
 func runStageRootChecks(ctx context.Context, checkout, agent, stage string, filesForStage func() (map[string][]string, error)) StageFeedback {
-	if postEditKilled() {
+	if Killed() {
 		return StageFeedback{}
 	}
 	cap := 15 * time.Minute

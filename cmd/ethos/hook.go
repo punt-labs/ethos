@@ -74,6 +74,9 @@ var hookSubagentStopCmd = &cobra.Command{
 	Short: "SubagentStop hook handler",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if hook.Killed() {
+			return nil
+		}
 		return hook.HandleSubagentStopWithIO(cmd.Context(), cmd.InOrStdin(), sessionStore(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }

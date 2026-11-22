@@ -65,7 +65,14 @@ main-tree changes not committed into a linked checkout. The edited worktree's
 configuration is never consulted. See
 [DES-085's design](design-agent-checks.md) for stage and adapter details.
 
-The same set may define `stage: commit` and `stage: handoff`. Pre-commit runs
+The same set may define `stage: commit` and `stage: handoff`.
+`~/.punt-hooks-kill` disables input, storage repair, roster leave, sealing,
+provenance verification, and checks without changing the index or ignore files.
+SubagentStop succeeds silently. Pre-commit still reads the actual committing
+index: any private `.punt-labs/local/` path or query failure blocks with exit 2;
+a safe index succeeds silently. Remove the named paths with the printed
+`git rm --cached -f -r --` command; it keeps working files and their unstaged edits
+on disk and also works before the first commit. Otherwise pre-commit runs
 after seal/provenance, selects files from the actual committing index, and
 blocks with exit 2 by default. Checks read files on disk, so matched staged files
 with unstaged changes block before any check runs, even for advisory checks.

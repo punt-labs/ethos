@@ -39,6 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `ethos hook pre-commit` and `ethos hook subagent-stop` now honor
+  `~/.punt-hooks-kill` before reading input or locating/repairing storage. Neither
+  writes data, leaves the roster, changes the index or ignore files, seals audit
+  data, verifies provenance, or runs checks. Pre-commit only reads the actual
+  committing index: private `.punt-labs/local/` paths or a failed query refuse
+  with exit 2 and index-only unstaging guidance that works without HEAD or after
+  further edits; a safe index succeeds silently. SubagentStop
+  returns success silently as before.
 - Commit checks refuse matched partially staged files before running commands,
   even for advisory checks, and list every file with stage/stash guidance.
   Detection uses the actual committing index, including custom indexes and linked

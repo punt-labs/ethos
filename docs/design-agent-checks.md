@@ -291,10 +291,10 @@ unaffected; `files: all` counts every staged path as matched. With no commit che
 this preflight performs no Git query. Index-snapshot execution is a later slice.
 
 The handoff stage runs in `ethos hook subagent-stop`; `ethos mission result`
-integration is deferred to the next slice. In the binary, roster leave happens
-before checks, including when its kill check skips them or they block. The
-plugin wrapper exits before invoking the binary when the kill switch exists;
-that skips the whole hook, including roster leave, as before this change.
+integration is deferred to the next slice. The binary and plugin wrapper honor
+`~/.punt-hooks-kill` before reading input or storage, skipping the whole hook,
+including roster leave. Otherwise roster leave happens before checks, including
+when they block.
 The payload's agent type/handle
 selects policy. Existing audit union readers select that agent's Write/Edit
 paths from the session; if no usable paths are available, selection falls back
@@ -325,9 +325,16 @@ Commit/handoff checks run sequentially under a shared stage deadline. At
 their deduplicated root-relative directories. A directory cwd runs once per
 matching directory, with that directory's matching files. `files: all` runs
 even with no paths, from the root in that case. There are no marker defaults
-at these stages. In the binary, the kill switch skips checks, not commit
-seal/provenance steps or roster leave; the plugin wrapper instead skips its
-entire SubagentStop hook. Commit file discovery and commands preserve the actual
+at these stages. The kill switch skips input, storage resolution/repair, roster
+leave, commit sealing, provenance verification, and checks. SubagentStop succeeds
+silently. Pre-commit makes a read-only query of the actual committing index and
+refuses with exit 2 if it contains `.punt-labs/local/` paths or cannot be read.
+It names each private path with `git rm --cached -f -r --` guidance, which removes
+only the index entry and keeps the file on disk, including edits made after
+staging. It works before the first commit as well as with an existing HEAD.
+A safe index succeeds silently. No index,
+ignore file, or other storage is changed under the kill switch. Commit file
+discovery and commands preserve the actual
 committing index while scrubbing other Git selectors and tracing variables.
 
 OpenCode generation (`.opencode/agents`) uses the same subcommand from its
