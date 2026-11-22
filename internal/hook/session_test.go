@@ -178,6 +178,9 @@ func TestHandleSubagentStart_MissingAgentID(t *testing.T) {
 }
 
 func TestHandleSubagentStop_LeavesRoster(t *testing.T) {
+	root := t.TempDir()
+	initGitRepo(t, root)
+	t.Setenv("CLAUDE_PROJECT_DIR", root)
 	_, ss := testStores(t)
 
 	require.NoError(t, ss.Create("test-stop-1",
