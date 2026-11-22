@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"reflect"
 	"strings"
 	"time"
 
@@ -25,12 +26,42 @@ type Check struct {
 	Stage        string   `yaml:"stage" json:"stage"`
 	Files        Patterns `yaml:"files" json:"files"`
 	Exclude      Strings  `yaml:"exclude,omitempty" json:"exclude,omitempty"`
-	Run          Strings  `yaml:"run" json:"run"`
+	Run          Strings  `yaml:"run,omitempty" json:"run,omitempty"`
 	Adapter      string   `yaml:"adapter,omitempty" json:"adapter,omitempty"`
+	Go           string   `yaml:"go,omitempty" json:"go,omitempty"`
 	OnFail       string   `yaml:"on_fail,omitempty" json:"on_fail,omitempty"`
 	FailOnOutput bool     `yaml:"fail_on_output,omitempty" json:"fail_on_output,omitempty"`
 	Timeout      string   `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 	Cwd          string   `yaml:"cwd,omitempty" json:"cwd,omitempty"`
+	fields       map[string]bool
+}
+
+func (c *Check) UnmarshalYAML(node *yaml.Node) error {
+	type wire Check
+	known := map[string]bool{}
+	typ := reflect.TypeFor[Check]()
+	for i := range typ.NumField() {
+		f := typ.Field(i)
+		if f.IsExported() {
+			known[strings.Split(f.Tag.Get("yaml"), ",")[0]] = true
+		}
+	}
+	fields := map[string]bool{}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key := node.Content[i].Value
+		if !known[key] {
+			return fmt.Errorf("unknown check field %q", key)
+		}
+		if key == "go" && node.Content[i+1].Tag != "!!str" {
+			return fmt.Errorf("go must be a string")
+		}
+		fields[key] = true
+	}
+	if err := node.Decode((*wire)(c)); err != nil {
+		return err
+	}
+	c.fields = fields
+	return nil
 }
 
 // Patterns accepts a list of globs or the scalar "all".
@@ -175,13 +206,14 @@ func (c *Check) validate() error {
 			return err
 		}
 	}
-	if c.Adapter != "" && c.Adapter != "exec" {
-		return fmt.Errorf("adapter %q is not yet supported", c.Adapter)
+	argv, err := c.Argv()
+	if err != nil {
+		return err
 	}
-	if len(c.Run) == 0 || strings.TrimSpace(c.Run[0]) == "" {
+	if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
 		return fmt.Errorf("run must be a non-empty argv")
 	}
-	for _, arg := range c.Run {
+	for _, arg := range argv {
 		if !strings.ContainsAny(arg, "{}") {
 			continue
 		}
