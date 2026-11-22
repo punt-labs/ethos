@@ -20,6 +20,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/agentmark"
 	"github.com/punt-labs/ethos/v4/internal/bundle"
+	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/punt-labs/ethos/v4/internal/githook"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/layout"
@@ -170,6 +171,11 @@ func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 	// matching session_start/resolveLeader/resolve-agent; the "in a repo"
 	// guard stays on the checkout (repoRoot) (#370).
 	results = append(results, checkout(store(defaultAgentResult(repoRoot, storeRoot, cfg, configErr))))
+	if cfg != nil && configErr == nil {
+		if err := checkset.ValidateReference(cfg.Checks); err != nil {
+			results = append(results, store(Result{Name: "Check-set reference", Status: "FAIL", Detail: err.Error()}))
+		}
+	}
 
 	results = append(results, store(duplicateFieldsResult(s, ss)))
 

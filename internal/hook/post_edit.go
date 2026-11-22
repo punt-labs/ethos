@@ -18,8 +18,8 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
-// PostEdit provides advisory feedback only; errors never block the next edit.
-func PostEdit(ctx context.Context, input io.Reader, output io.Writer) {
+// PostEdit emits edit feedback. Ethos errors are always advisory and fail open.
+func PostEdit(ctx context.Context, input io.Reader, output io.Writer, agent ...string) {
 	if postEditKilled() {
 		return
 	}
@@ -39,7 +39,12 @@ func PostEdit(ctx context.Context, input io.Reader, output io.Writer) {
 		postEditAdvice(output, "post-edit input: tool_input.file_path is required")
 		return
 	}
-	root, file, err := postEditScope(file)
+	checkout, err := postEditCheckout()
+	if err != nil {
+		postEditAdvice(output, "post-edit scope: "+err.Error())
+		return
+	}
+	root, file, err := postEditScope(checkout, file)
 	if err != nil {
 		postEditAdvice(output, "post-edit scope: "+err.Error())
 		return
@@ -48,6 +53,18 @@ func PostEdit(ctx context.Context, input io.Reader, output io.Writer) {
 		return
 	}
 	checks := defaultEditChecks(root, file)
+	handle := ""
+	if len(agent) > 0 {
+		handle = agent[0]
+	}
+	configured, selected, err := configuredEditChecks(checkout, root, file, handle)
+	if err != nil {
+		postEditAdvice(output, "post-edit policy: "+err.Error())
+		return
+	}
+	if selected {
+		checks = configured
+	}
 	stage, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	results := make([]string, len(checks))
@@ -60,15 +77,24 @@ func PostEdit(ctx context.Context, input io.Reader, output io.Writer) {
 		}()
 	}
 	wg.Wait()
-	var failures []string
-	for _, result := range results {
+	var advisory, blocking []string
+	for i, result := range results {
 		if result != "" {
-			failures = append(failures, result)
+			if checks[i].onFail == "block" {
+				blocking = append(blocking, result)
+			} else {
+				advisory = append(advisory, result)
+			}
 		}
 	}
-	if len(failures) > 0 {
-		postEditAdvice(output, strings.Join(failures, "\n\n"))
+	if len(advisory) > 0 || len(blocking) > 0 {
+		postEditFeedback(output, strings.Join(advisory, "\n\n"), strings.Join(blocking, "\n\n"))
 	}
+}
+
+func editRedact(message string) string {
+	message = redact.HomePaths(redact.SecretsString(message))
+	return redact.EmailPattern.ReplaceAllString(message, redact.EmailToken)
 }
 
 // postEditKilled honours the operator kill switch every punt hook obeys.
@@ -82,22 +108,27 @@ func postEditKilled() bool {
 }
 
 func postEditAdvice(out io.Writer, message string) {
-	message = redact.HomePaths(redact.SecretsString(message))
-	message = redact.EmailPattern.ReplaceAllString(message, redact.EmailToken)
-	_ = json.NewEncoder(out).Encode(map[string]any{
-		"hookSpecificOutput": map[string]string{
-			"hookEventName": "PostToolUse", "additionalContext": message,
-		},
-	})
+	postEditFeedback(out, message, "")
 }
 
-func postEditScope(file string) (string, string, error) {
+func postEditFeedback(out io.Writer, advisory, blocking string) {
+	response := make(map[string]any)
+	if advisory != "" {
+		response["hookSpecificOutput"] = map[string]string{"hookEventName": "PostToolUse", "additionalContext": editRedact(advisory)}
+	}
+	if blocking != "" {
+		response["decision"], response["reason"] = "block", editRedact(blocking)
+	}
+	_ = json.NewEncoder(out).Encode(response)
+}
+
+func postEditCheckout() (string, error) {
 	if _, err := gitenv.Output("", "git", "--version"); err != nil {
-		return "", "", fmt.Errorf("git: %w", err)
+		return "", fmt.Errorf("git: %w", err)
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 	start := os.Getenv("CLAUDE_PROJECT_DIR")
 	if start == "" {
@@ -105,15 +136,15 @@ func postEditScope(file string) (string, string, error) {
 	}
 	checkout, err := resolve.CheckoutOf(start)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 	if checkout == "" {
 		checkout = cwd
 	}
-	checkout, err = filepath.EvalSymlinks(checkout)
-	if err != nil {
-		return "", "", err
-	}
+	return filepath.EvalSymlinks(checkout)
+}
+
+func postEditScope(checkout, file string) (string, string, error) {
 	if !filepath.IsAbs(file) {
 		// Preserve link/.. until EvalSymlinks has resolved it physically.
 		file = checkout + string(filepath.Separator) + file
@@ -171,13 +202,16 @@ type editCheck struct {
 	name         string
 	argv         []string
 	failOnOutput bool
+	onFail       string
+	timeout      time.Duration
+	cwd          string
 }
 
 func defaultEditChecks(root, file string) []editCheck {
 	var checks []editCheck
 	add := func(name string, failOnOutput bool, argv ...string) {
 		if _, err := exec.LookPath(argv[0]); err == nil {
-			checks = append(checks, editCheck{name, argv, failOnOutput})
+			checks = append(checks, editCheck{name: name, argv: argv, failOnOutput: failOnOutput})
 		}
 	}
 	marker := func(name string) bool {
@@ -226,10 +260,17 @@ func (b *editTail) Write(p []byte) (int, error) {
 }
 
 func runEditCheck(stage context.Context, root string, check editCheck) string {
-	ctx, cancel := context.WithTimeout(stage, 10*time.Second)
+	timeout := check.timeout
+	if timeout == 0 {
+		timeout = 10 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(stage, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, check.argv[0], check.argv[1:]...)
 	cmd.Dir = root
+	if check.cwd != "" {
+		cmd.Dir = check.cwd
+	}
 	cmd.Env = gitenv.Parsed()
 	cmd.WaitDelay = time.Second
 	stopGroup := editProcessGroup(cmd)

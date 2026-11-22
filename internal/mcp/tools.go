@@ -394,7 +394,7 @@ func (h *Handler) handleCreateIdentity(_ context.Context, req mcplib.CallToolReq
 	// "required" error that hides the real cause. Same silent-drop class as
 	// the role and team create paths.
 	fields := map[string]string{}
-	for _, key := range []string{"name", "handle", "kind", "email", "github", "agent", "writing_style", "personality"} {
+	for _, key := range []string{"name", "handle", "kind", "email", "github", "agent", "writing_style", "personality", "checks"} {
 		v, err := stringArgStrict(req, key)
 		if err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
@@ -418,6 +418,7 @@ func (h *Handler) handleCreateIdentity(_ context.Context, req mcplib.CallToolReq
 		Email:        fields["email"],
 		GitHub:       fields["github"],
 		Agent:        fields["agent"],
+		Checks:       fields["checks"],
 		WritingStyle: fields["writing_style"],
 		Personality:  fields["personality"],
 		Talents:      talents,

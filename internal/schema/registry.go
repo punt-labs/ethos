@@ -3,7 +3,9 @@ package schema
 import (
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/team"
 )
@@ -11,6 +13,8 @@ import (
 // slugPattern is the handle/name slug regexp shared by identity, role, and
 // team name fields.
 const slugPattern = `^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`
+
+const durationPattern = `^\+?(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+$`
 
 // Identity overlays the persisted identity fields.
 var Identity = Entity{
@@ -24,6 +28,7 @@ var Identity = Entity{
 		"email":         {Type: "string", Description: "Email address; must contain @ and no whitespace. Beadle binding."},
 		"github":        {Type: "string", Description: "GitHub handle. Biff binding."},
 		"agent":         {Type: "string (path)", Description: "Path to the Claude Code agent .md file."},
+		"checks":        {Type: "string (slug)", Pattern: slugPattern, Description: "Check-set slug from checks/, or none to disable inherited checks."},
 		"writing_style": {Type: "string (slug)", Description: "Slug referencing writing-styles/; e.g. concise-quantified."},
 		"personality":   {Type: "string (slug)", Description: "Slug referencing personalities/; e.g. principal-engineer."},
 		"talents":       {Type: "list of string (slug)", Description: "Slugs referencing talents/; e.g. engineering."},
@@ -40,6 +45,7 @@ var Role = Entity{
 	Struct: role.Role{},
 	Overlay: map[string]Overlay{
 		"name":             {Type: "string (slug)", Pattern: slugPattern, Description: "Role name; lowercase alphanumeric with hyphens."},
+		"checks":           {Type: "string (slug)", Pattern: slugPattern, Description: "Check-set slug from checks/, or none to disable inherited checks."},
 		"model":            {Type: "enum + pattern", Enum: role.ModelAliases, Pattern: "^claude-.+", AllowEmpty: true, Description: "Claude model: " + strings.Join(role.ModelAliases, ", ") + ", or any claude-* ID. Empty inherits."},
 		"responsibilities": {Type: "list of string", Description: "What the role is accountable for."},
 		"permissions":      {Type: "list of string", Description: "Permission grants for the role."},
@@ -84,9 +90,44 @@ var Team = Entity{
 	},
 }
 
+var CheckSet = Entity{
+	Name: "CheckSet", Wire: "checks", Struct: checkset.Set{},
+	Overlay: map[string]Overlay{
+		"name":        {Type: "string (slug)", Pattern: slugPattern, Description: "Check-set name, matching its YAML filename."},
+		"description": {Type: "string", Description: "Purpose of the check set."},
+		"checks": {Type: "list of object", Description: "Named checks selected by stage and file scope.", Fields: map[string]Overlay{
+			"name":           {Type: "string (slug)", Pattern: slugPattern, Description: "Unique check name within the set."},
+			"stage":          {Type: "enum", Enum: []string{"edit", "commit", "handoff"}, Description: "Trigger stage; only edit executes currently."},
+			"files":          {Type: "glob list or all", Description: "Checkout-relative glob list; all is forbidden at edit."},
+			"exclude":        {Type: "list of glob", Description: "Additional excluded paths; scratch and machine-local paths are always excluded."},
+			"run":            {Type: "list of string", Description: "Command argv; placeholders must occupy whole elements."},
+			"adapter":        {Type: "enum", Enum: []string{"exec"}, AllowEmpty: true, Description: "Optional exec adapter; other adapters are not yet supported."},
+			"on_fail":        {Type: "enum", Enum: []string{"advisory", "block"}, Description: "Failure feedback mode; defaults to advisory at edit, block otherwise."},
+			"fail_on_output": {Type: "boolean", Description: "Treat non-empty stdout as failure even with exit zero."},
+			"timeout":        {Type: "duration", Pattern: durationPattern, Description: "Positive Go duration; defaults to 10s/120s/10m. Runtime limits: edit 60s, commit 15m, handoff 30m; must resolve to at least 1ns."},
+			"cwd":            {Type: "enum", Enum: []string{"root", "package_dir", "file_dir"}, Description: "Working directory; defaults to root."},
+		}},
+	},
+}
+
+var RepoConfig = Entity{
+	Name: "RepoConfig", Wire: "repo-config", Struct: resolve.RepoConfig{},
+	Overlay: map[string]Overlay{
+		"agent":                {Type: "string (slug)", Description: "Default agent handle."},
+		"team":                 {Type: "string (slug)", Description: "Team bound to the checkout."},
+		"active_bundle":        {Type: "string (slug)", Description: "Active bundle name."},
+		"resolution":           {Type: "enum", Enum: []string{"layered", "repo-only"}, Description: "Entity lookup policy."},
+		"record":               {Type: "enum", Enum: []string{"blame", "full"}, Description: "Recording mode."},
+		"max_delegation_depth": {Type: "integer", Description: "Delegation depth ceiling; zero inherits the default."},
+		"checks":               {Type: "string (slug)", Pattern: slugPattern, Description: "Project check-set slug, or none; absent uses advisory marker defaults."},
+	},
+}
+
 // Registry maps wire name to Entity for CLI and MCP dispatch.
 var Registry = map[string]Entity{
-	Identity.Wire: Identity,
-	Role.Wire:     Role,
-	Team.Wire:     Team,
+	Identity.Wire:   Identity,
+	Role.Wire:       Role,
+	Team.Wire:       Team,
+	CheckSet.Wire:   CheckSet,
+	RepoConfig.Wire: RepoConfig,
 }

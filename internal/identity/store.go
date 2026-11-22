@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/attribute"
+	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"gopkg.in/yaml.v3"
 )
 
@@ -213,6 +214,9 @@ func (s *Store) resolveAttributes(id *Identity) []string {
 // ValidateRefs checks that all attribute references in an identity point
 // to existing .md files. Returns an error on the first missing reference.
 func (s *Store) ValidateRefs(id *Identity) error {
+	if err := checkset.NewLayeredStoreWithBundle(s.root, "", "", false).ValidateRef(id.Checks); err != nil {
+		return &ValidationError{Field: "checks", Message: err.Error()}
+	}
 	if id.Personality != "" {
 		if err := attribute.ValidateSlug(id.Personality); err != nil {
 			return &ValidationError{Field: "personality", Message: fmt.Sprintf("invalid slug %q: %v", id.Personality, err)}

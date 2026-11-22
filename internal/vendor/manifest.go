@@ -47,6 +47,7 @@ type Manifest struct {
 	Talents       []string           `yaml:"talents,omitempty"`
 	Roles         []string           `yaml:"roles,omitempty"`
 	Teams         []string           `yaml:"teams,omitempty"`
+	Checks        []string           `yaml:"checks,omitempty"`
 }
 
 // ManifestPath returns the manifest's location for a vendored set root.
@@ -126,6 +127,7 @@ func buildManifest(p *Plan, now time.Time) *Manifest {
 		Talents:       p.Talents,
 		Roles:         p.Roles,
 		Teams:         p.Teams,
+		Checks:        p.Checks,
 	}
 }
 

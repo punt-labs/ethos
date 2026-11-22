@@ -11,9 +11,10 @@ func init() {
 		Short:  "Advisory checks for an edited file",
 		Hidden: true,
 		Run: func(cmd *cobra.Command, _ []string) {
-			hook.PostEdit(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout())
+			agent, _ := cmd.Flags().GetString("agent")
+			hook.PostEdit(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), agent)
 		},
 	}
-	cmd.Flags().String("agent", "", "Agent handle (reserved for check-set resolution)")
+	cmd.Flags().String("agent", "", "Agent handle for check-set resolution")
 	hookCmd.AddCommand(cmd)
 }

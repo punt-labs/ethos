@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/repomiss"
 	"github.com/punt-labs/ethos/v4/internal/role"
@@ -122,6 +123,22 @@ func Check(roots ...string) (*Report, error) {
 		identity.NewStore(repoRoot), bundleStore, identity.NewStore(noGlobal), true)
 	roles := role.NewLayeredStoreWithBundle(repoRoot, bundleRoot, noGlobal, true)
 	teams := team.NewLayeredStoreWithBundle(repoRoot, bundleRoot, noGlobal, true)
+	sets := checkset.NewLayeredStoreWithBundle(repoRoot, bundleRoot, noGlobal, true)
+	seenChecks := map[string]bool{}
+	checkRef := func(ref string) error {
+		if seenChecks[ref] {
+			return nil
+		}
+		seenChecks[ref] = true
+		err := sets.ValidateRef(ref)
+		if errors.Is(err, os.ErrNotExist) {
+			rep.Missing = append(rep.Missing, repomiss.MissingRef{
+				Kind: "check-set", Slug: ref, Path: filepath.Join(repoRoot, "checks", ref+".yaml"),
+			})
+			return nil
+		}
+		return err
+	}
 
 	list, err := store.List()
 	if err != nil {
@@ -132,6 +149,9 @@ func Check(roots ...string) (*Report, error) {
 	}
 	for _, id := range list.Identities {
 		rep.Handles = append(rep.Handles, id.Handle)
+		if err := checkRef(id.Checks); err != nil {
+			return nil, fmt.Errorf("identity %q checks: %w", id.Handle, err)
+		}
 	}
 	sort.Strings(rep.Handles)
 
@@ -145,6 +165,20 @@ func Check(roots ...string) (*Report, error) {
 			rep.Missing = append(rep.Missing, incomplete.Missing...)
 		default:
 			return nil, fmt.Errorf("loading identity %q from %s: %w", handle, repoRoot, err)
+		}
+	}
+
+	roleNames, err := roles.List()
+	if err != nil {
+		return nil, fmt.Errorf("listing roles in %s: %w", repoRoot, err)
+	}
+	for _, name := range roleNames {
+		r, err := roles.Load(name)
+		if err != nil {
+			return nil, fmt.Errorf("loading role %q from %s: %w", name, repoRoot, err)
+		}
+		if err := checkRef(r.Checks); err != nil {
+			return nil, fmt.Errorf("role %q checks: %w", name, err)
 		}
 	}
 
@@ -178,6 +212,11 @@ func Check(roots ...string) (*Report, error) {
 		rep.ExtUnverifiable = true
 	} else {
 		rep.Missing = append(rep.Missing, missingExtRefs(layers, m.RequiredExt())...)
+		for _, ref := range m.Checks {
+			if err := checkRef(ref); err != nil {
+				return nil, fmt.Errorf("manifest checks: %w", err)
+			}
+		}
 	}
 
 	rep.Missing = repomiss.Sorted(rep.Missing)

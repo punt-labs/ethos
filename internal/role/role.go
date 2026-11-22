@@ -28,6 +28,7 @@ type SafetyConstraint struct {
 type Role struct {
 	Name              string             `yaml:"name" json:"name"`
 	Model             string             `yaml:"model,omitempty" json:"model,omitempty"`
+	Checks            string             `yaml:"checks,omitempty" json:"checks,omitempty"`
 	Responsibilities  []string           `yaml:"responsibilities,omitempty" json:"responsibilities,omitempty"`
 	Permissions       []string           `yaml:"permissions,omitempty" json:"permissions,omitempty"`
 	Tools             []string           `yaml:"tools,omitempty" json:"tools,omitempty"`

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/attribute"
+	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/punt-labs/ethos/v4/internal/repomiss"
 	"gopkg.in/yaml.v3"
 )
@@ -530,6 +531,15 @@ func (ls *LayeredStore) Update(handle string, fn func(*Identity) error) error {
 
 // ValidateRefs checks that attribute references exist in either layer.
 func (ls *LayeredStore) ValidateRefs(id *Identity) error {
+	root := func(s *Store) string {
+		if s == nil {
+			return ""
+		}
+		return s.Root()
+	}
+	if err := checkset.NewLayeredStoreWithBundle(root(ls.repo), root(ls.bundle), root(ls.global), ls.repoAuthoritative).ValidateRef(id.Checks); err != nil {
+		return &ValidationError{Field: "checks", Message: err.Error()}
+	}
 	if id.Personality != "" {
 		if err := attribute.ValidateSlug(id.Personality); err != nil {
 			return &ValidationError{Field: "personality", Message: fmt.Sprintf("invalid slug %q: %v", id.Personality, err)}

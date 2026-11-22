@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,6 +37,9 @@ func (s *Store) path(name string) (string, error) {
 
 // Save writes a role to disk. Returns an error if it already exists.
 func (s *Store) Save(r *Role) error {
+	if err := checkset.ValidateReference(r.Checks); err != nil {
+		return err
+	}
 	if err := ValidateName(r.Name); err != nil {
 		return err
 	}
@@ -97,6 +101,9 @@ func (s *Store) Load(name string) (*Role, error) {
 	}
 	if err := ValidateModel(r.Model); err != nil {
 		return nil, fmt.Errorf("role %q: %w", name, err)
+	}
+	if err := checkset.ValidateReference(r.Checks); err != nil {
+		return nil, err
 	}
 	return &r, nil
 }
