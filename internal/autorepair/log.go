@@ -13,11 +13,11 @@ type FileLog struct {
 	logger *slog.Logger
 }
 
-func newFileLog(store, checkout, ethos string, logger *slog.Logger) *FileLog {
+func newFileLog(_, _, ethos string, logger *slog.Logger) *FileLog {
 	if logger == nil {
 		logger = diagnostic.Discard()
 	}
-	return &FileLog{logger: logger.With("component", "ethos.repair", "store", redact.Prose(store), "checkout", redact.Prose(checkout), "ethos", ethos)}
+	return &FileLog{logger: logger.With("component", "ethos.repair", "ethos", ethos)}
 }
 
 // Logf records a repair decision after applying the existing prose redactor.

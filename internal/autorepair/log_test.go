@@ -66,7 +66,7 @@ func TestFileLogWritesJSONLines(t *testing.T) {
 	lines := readLog(t, LogPath(global))
 	require.Len(t, lines, 2)
 	first := lines[0]
-	for _, k := range []string{"time", "store", "checkout", "ethos", "step", "action", "paths"} {
+	for _, k := range []string{"time", "ethos", "step", "action", "paths"} {
 		assert.Contains(t, first, k)
 	}
 	assert.Equal(t, "overlays", first["step"])
@@ -74,6 +74,8 @@ func TestFileLogWritesJSONLines(t *testing.T) {
 	assert.Equal(t, "v5.0.0", first["ethos"])
 	assert.Equal(t, "/repo/store/.punt-labs/a, /repo/store/.punt-labs/b", first["paths"])
 	assert.Equal(t, "ethos.repair", first["component"])
+	assert.NotContains(t, first, "store")
+	assert.NotContains(t, first, "checkout")
 	assert.NotContains(t, first, "error")
 	assert.Equal(t, "boom", lines[1]["error"])
 }
@@ -87,9 +89,20 @@ func TestFileLogRedactsHomePaths(t *testing.T) {
 	assert.NotContains(t, string(raw), "alice")
 }
 
+func TestFileLogOmitsRepositoryRoots(t *testing.T) {
+	global := physicalTemp(t)
+	l := newFileLog("/home/ubuntu/private-smoke-store", "/home/ubuntu/private-smoke-checkout", "test", captureRepairLog(global))
+	l.Logf("sessions", "ran", nil, nil)
+	raw, err := os.ReadFile(LogPath(global))
+	require.NoError(t, err)
+	for _, private := range []string{"ubuntu", "private-smoke-store", "private-smoke-checkout"} {
+		require.NotContains(t, string(raw), private)
+	}
+}
+
 // A step error can quote file contents (a yaml decode error includes the
 // value), so the whole line goes through the DES-080 prose redactor: secrets
-// and addresses as well as home paths, in paths, store, checkout and error.
+// and addresses as well as home paths, in paths and error.
 func TestFileLogRedactsSecretsAndEmails(t *testing.T) {
 	global := physicalTemp(t)
 	l := newFileLog("/Users/alice/repo", "/Users/alice/repo", "v5.0.0", captureRepairLog(global))
