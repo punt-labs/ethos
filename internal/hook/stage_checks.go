@@ -25,6 +25,13 @@ func RunStageChecks(ctx context.Context, checkout, agent, stage string) StageFee
 }
 
 func runStageChecks(ctx context.Context, checkout, agent, stage string, filesForStage func() ([]string, error)) StageFeedback {
+	return runStageRootChecks(ctx, checkout, agent, stage, func() (map[string][]string, error) {
+		files, err := filesForStage()
+		return map[string][]string{checkout: files}, err
+	})
+}
+
+func runStageRootChecks(ctx context.Context, checkout, agent, stage string, filesForStage func() (map[string][]string, error)) StageFeedback {
 	if postEditKilled() {
 		return StageFeedback{}
 	}
@@ -53,19 +60,26 @@ func runStageChecks(ctx context.Context, checkout, agent, stage string, filesFor
 			env = gitenv.WithIndex(env, filepath.Join(checkout, index))
 		}
 	}
-	files, err := filesForStage()
+	filesByRoot, err := filesForStage()
 	if err != nil {
 		return StageFeedback{Blocking: editRedact(stage + " files: " + err.Error())}
 	}
 	var advisory, blocking []string
-	for _, check := range checks {
-		for _, invocation := range stageInvocations(checkout, files, check) {
-			invocation.env = env
-			if failure := runEditCheck(ctx, checkout, invocation); failure != "" {
-				if check.OnFail == "block" {
-					blocking = append(blocking, failure)
-				} else {
-					advisory = append(advisory, failure)
+	roots := make([]string, 0, len(filesByRoot))
+	for root := range filesByRoot {
+		roots = append(roots, root)
+	}
+	sort.Strings(roots)
+	for _, root := range roots {
+		for _, check := range checks {
+			for _, invocation := range stageInvocations(root, filesByRoot[root], check) {
+				invocation.env = env
+				if failure := runEditCheck(ctx, root, invocation); failure != "" {
+					if check.OnFail == "block" {
+						blocking = append(blocking, failure)
+					} else {
+						advisory = append(advisory, failure)
+					}
 				}
 			}
 		}

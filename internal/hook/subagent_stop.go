@@ -51,7 +51,7 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 	if handle, _ := input["agent_handle"].(string); handle != "" {
 		agent = handle
 	}
-	feedback := runStageChecks(ctx, checkout, agent, "handoff", func() ([]string, error) {
+	feedback := runStageRootChecks(ctx, checkout, agent, "handoff", func() (map[string][]string, error) {
 		return handoffFiles(checkout, sessionID, agentID)
 	})
 	stopFeedback(out, errOut, feedback, active)
@@ -72,7 +72,7 @@ func stopFeedback(out, errOut io.Writer, feedback StageFeedback, active bool) {
 	_ = json.NewEncoder(out).Encode(map[string]string{"decision": "block", "reason": editRedact(feedback.Blocking)})
 }
 
-func handoffFiles(checkout, sessionID, agentID string) ([]string, error) {
+func handoffFiles(checkout, sessionID, agentID string) (map[string][]string, error) {
 	store, err := resolve.StoreOf(checkout)
 	if err != nil {
 		return nil, err
@@ -90,7 +90,7 @@ func handoffFiles(checkout, sessionID, agentID string) ([]string, error) {
 		return nil, err
 	}
 	seen := map[string]bool{}
-	var files []string
+	files := map[string][]string{}
 	for _, entry := range entries {
 		if entry.AgentID != agentID || entry.Tool != "Write" && entry.Tool != "Edit" {
 			continue
@@ -107,21 +107,38 @@ func handoffFiles(checkout, sessionID, agentID string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		if root != checkout {
+		if root == "" {
 			continue
 		}
-		rel, err := filepath.Rel(checkout, physical)
+		if _, ok := files[root]; !ok {
+			files[root] = nil
+		}
+		if _, err := os.Stat(physical); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			return nil, err
+		}
+		rel, err := filepath.Rel(root, physical)
 		if err != nil {
 			return nil, err
 		}
-		if !seen[rel] {
-			seen[rel] = true
-			files = append(files, rel)
+		if !seen[physical] {
+			seen[physical] = true
+			files[root] = append(files[root], rel)
 		}
 	}
 	if len(files) == 0 {
-		return stageFiles(checkout, "handoff")
+		files[checkout] = nil
 	}
-	sort.Strings(files)
+	for root, paths := range files {
+		if len(paths) == 0 {
+			paths, err = stageFiles(root, "handoff")
+			if err != nil {
+				return nil, err
+			}
+		}
+		sort.Strings(paths)
+		files[root] = paths
+	}
 	return files, nil
 }
