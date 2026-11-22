@@ -58,7 +58,10 @@ func TestPostEditScope(t *testing.T) {
 	foreign := t.TempDir()
 	initGitRepo(t, foreign)
 	worktree := filepath.Join(t.TempDir(), "linked")
-	gitCmd(t, root, "worktree", "add", "--detach", worktree)
+	cmd := exec.Command("git", "worktree", "add", "--detach", worktree)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
 	require.NoError(t, os.Symlink(foreign, filepath.Join(root, "escape")))
 	marker := filepath.Join(t.TempDir(), "hostile-ran")
 	t.Setenv("POST_EDIT_MARKER", marker)
@@ -121,7 +124,7 @@ func TestPostEditSelectionAndLiteralArguments(t *testing.T) {
 				if tool == "" {
 					continue
 				}
-				postEditTool(t, bin, tool, "[ -z \"$GIT_TRACE_TEST$GIT_DIR$GIT_INDEX_FILE\" ] || exit 9\nprintf '"+tool+"' >> \"$POST_EDIT_LOG\"\nfor arg do printf '|%s' \"$arg\" >> \"$POST_EDIT_LOG\"; done\nprintf '\\n' >> \"$POST_EDIT_LOG\"\n")
+				postEditTool(t, bin, tool, "[ -z \"$GIT_TRACE_TEST$GIT_DIR$GIT_INDEX_FILE\" ] || exit 9\nline='"+tool+"'\nfor arg do line=\"$line|$arg\"; done\nprintf '%s\\n' \"$line\" >> \"$POST_EDIT_LOG\"\n")
 			}
 			require.Empty(t, postEditRun(t, tc.file))
 			data, err := os.ReadFile(log)
@@ -164,6 +167,7 @@ func TestPostEditFailOpen(t *testing.T) {
 		PostEdit(context.Background(), strings.NewReader(payload), &out)
 		require.Contains(t, out.String(), "additionalContext")
 	}
+	require.NoError(t, os.Remove(filepath.Join(os.Getenv("PATH"), "git")))
 	postEditTool(t, os.Getenv("PATH"), "git", "echo git-broke >&2; exit 1\n")
 	require.Contains(t, postEditRun(t, "file.sh"), "additionalContext")
 }

@@ -92,7 +92,7 @@ func TestAgentPlanProblemsVisibleAtEntryPoints(t *testing.T) {
 				case "compatibility writer":
 					require.NoError(t, GenerateAgentFilesTo(root, root, ids, teams, roles))
 				case "direct plan and apply":
-					plan, err := PlanGeneratedAgentFilesFromConfig(cfg, AgentProjectPatterns(root), nil, AgentIdentities(ids), teams, roles)
+					plan, err := PlanGeneratedAgentFilesFromConfig(cfg, nil, AgentIdentities(ids), teams, roles)
 					require.NoError(t, err)
 					require.Len(t, plan.Problems, 1)
 					p, err := loc.Layout()
@@ -152,12 +152,12 @@ func TestAgentPlanUsesSnapshotAndExactWriterBytes(t *testing.T) {
 	root, ids, teams, roles := setupTestRepo(t)
 	cfg, err := resolve.ConfigOf(root)
 	require.NoError(t, err)
-	plan, err := PlanGeneratedAgentFilesFromConfig(cfg, projectFilePatterns(root), nil, AgentIdentities(ids), teams, roles)
+	plan, err := PlanGeneratedAgentFilesFromConfig(cfg, nil, AgentIdentities(ids), teams, roles)
 	require.NoError(t, err)
 	require.Len(t, plan.Files, 1)
 	assert.NoDirExists(t, filepath.Join(root, ".claude"), "planning must not install anything")
 	writeFile(t, filepath.Join(root, ".punt-labs", "ethos.yaml"), "record: invalid\n")
-	again, err := PlanGeneratedAgentFilesFromConfig(cfg, projectFilePatterns(root), nil, AgentIdentities(ids), teams, roles)
+	again, err := PlanGeneratedAgentFilesFromConfig(cfg, nil, AgentIdentities(ids), teams, roles)
 	require.NoError(t, err)
 	assert.Equal(t, plan, again, "the plan must not reread the on-disk configuration")
 	p, err := layout.NewRepository(root, root, layout.RecordBlame)
@@ -173,9 +173,9 @@ func TestAgentToolCatalogNormalizationIsStableAndNonmutating(t *testing.T) {
 	id := &identity.Identity{Name: "Brian", Handle: "bwk", Kind: "agent", PersonalityContent: "Clear prose.\n"}
 	a := &role.Role{Tools: []string{" Write ", "Read", "Bash", "Read", ""}}
 	b := &role.Role{Tools: []string{"Bash", "Write", "Read"}}
-	want := buildAgentFile(id, b, nil, nil, "*.go", nil)
+	want := buildAgentFile(id, b, nil, nil, nil)
 	for range 20 {
-		assert.Equal(t, want, buildAgentFile(id, a, nil, nil, "*.go", nil))
+		assert.Equal(t, want, buildAgentFile(id, a, nil, nil, nil))
 	}
 	assert.Equal(t, []string{" Write ", "Read", "Bash", "Read", ""}, a.Tools)
 }
@@ -310,7 +310,7 @@ func TestAgentPlanDoesNotMigrateLegacyVoice(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, data, 0o600))
 	cfg, err := resolve.ConfigOf(root)
 	require.NoError(t, err)
-	_, err = PlanGeneratedAgentFilesFromConfig(cfg, projectFilePatterns(root), nil, AgentIdentities(ids), teams, roles)
+	_, err = PlanGeneratedAgentFilesFromConfig(cfg, nil, AgentIdentities(ids), teams, roles)
 	require.NoError(t, err)
 	after, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -326,7 +326,7 @@ func TestAgentPlanRejectsMissingIdentityStore(t *testing.T) {
 	root, _, teams, roles := setupTestRepo(t)
 	cfg, err := resolve.ConfigOf(root)
 	require.NoError(t, err)
-	_, err = PlanGeneratedAgentFilesFromConfig(cfg, projectFilePatterns(root), nil, AgentIdentities(nil), teams, roles)
+	_, err = PlanGeneratedAgentFilesFromConfig(cfg, nil, AgentIdentities(nil), teams, roles)
 	require.ErrorContains(t, err, "agent rendering stores are unavailable")
 }
 

@@ -92,7 +92,7 @@ func setupTestRepo(t *testing.T) (string, identity.IdentityStore, *team.LayeredS
 		"team":  "engineering",
 	})
 
-	// Project marker — go.mod makes projectFilePatterns return Go patterns.
+	// Project marker for the Go fixture.
 	writeFile(t, filepath.Join(root, "go.mod"), "module example.com/test\n")
 
 	// Team.
@@ -410,7 +410,8 @@ func TestGenerateAgentFiles(t *testing.T) {
 						"    - matcher: \"Write|Edit\"\n"+
 						"      hooks:\n"+
 						"        - type: command\n"+
-						"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/local/ethos/*|.tmp/*|.punt-labs/local/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) case \\\"$_path\\\" in /*) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi ;; *) _root=\\\"$CLAUDE_PROJECT_DIR\\\" ;; esac; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n"+
+						"          command: \"ethos hook post-edit --agent bwk\"\n"+
+						"          timeout: 70\n"+
 						"---\n")
 
 				// Body checks.
@@ -666,7 +667,8 @@ func TestGenerateAgentFiles(t *testing.T) {
 						"    - matcher: \"Write|Edit\"\n"+
 						"      hooks:\n"+
 						"        - type: command\n"+
-						"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/local/ethos/*|.tmp/*|.punt-labs/local/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) case \\\"$_path\\\" in /*) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi ;; *) _root=\\\"$CLAUDE_PROJECT_DIR\\\" ;; esac; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n")
+						"          command: \"ethos hook post-edit --agent bwk\"\n"+
+						"          timeout: 70\n")
 
 				// Log the generated file so binary verification is visible
 				// in -v test output (spec success criterion 5).
@@ -696,7 +698,8 @@ func TestGenerateAgentFiles(t *testing.T) {
 					"    - matcher: \"Write|Edit\"\n" +
 					"      hooks:\n" +
 					"        - type: command\n" +
-					"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/local/ethos/*|.tmp/*|.punt-labs/local/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) case \\\"$_path\\\" in /*) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi ;; *) _root=\\\"$CLAUDE_PROJECT_DIR\\\" ;; esac; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n" +
+					"          command: \"ethos hook post-edit --agent bwk\"\n" +
+					"          timeout: 70\n" +
 					"---\n"
 				assert.Contains(t, content, want)
 			},
@@ -1009,44 +1012,19 @@ func TestGenerateAgentFiles(t *testing.T) {
 					"    - matcher: \"Write|Edit\"\n" +
 					"      hooks:\n" +
 					"        - type: command\n" +
-					"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/local/ethos/*|.tmp/*|.punt-labs/local/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) case \\\"$_path\\\" in /*) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi ;; *) _root=\\\"$CLAUDE_PROJECT_DIR\\\" ;; esac; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n" +
+					"          command: \"ethos hook post-edit --agent eon\"\n" +
+					"          timeout: 70\n" +
 					"---\n"
 				assert.Contains(t, content, want)
 			},
 		},
 		{
-			// PostToolUse command captures the make-check exit code in
-			// _rc, then surfaces failures where Claude Code can see them:
-			// on failure it routes the truncated output to stderr and
-			// exits 2 (the only code that hands the block reason back to
-			// the model); on success it is silent and exits 0.
-			name: "PostToolUse surfaces make check failures on stderr",
+			name: "PostToolUse delegates advisory feedback to ethos",
 			check: func(t *testing.T, root string, err error) {
 				require.NoError(t, err)
-
-				agentPath := filepath.Join(root, ".claude", "agents", "bwk.md")
-				data, readErr := os.ReadFile(agentPath)
+				data, readErr := os.ReadFile(filepath.Join(root, ".claude", "agents", "bwk.md"))
 				require.NoError(t, readErr)
-
-				content := string(data)
-				// The exit-capture pattern must be present.
-				assert.Contains(t, content, "_rc=$?",
-					"command must capture exit code in _rc")
-				// On failure the truncated output goes to stderr...
-				assert.Contains(t, content, "tail -n 60 >&2",
-					"command must route failure output to stderr")
-				// ...and the hook exits 2 so Claude Code feeds the reason
-				// back to the model.
-				assert.Contains(t, content, "exit 2",
-					"command must exit 2 on failure to block with a reason")
-
-				// No bare "| head" without the exit-capture wrapper.
-				// A regression would revert to the old form:
-				//   (cd ... && make check) 2>&1 | head -n 60
-				// which masks make check's exit code.
-				assert.NotContains(t, content,
-					`make check) 2>&1 | head`,
-					"must not pipe make check directly to head (masks exit code)")
+				assert.Contains(t, string(data), `command: "ethos hook post-edit --agent bwk"`)
 			},
 		},
 	}
@@ -2051,40 +2029,13 @@ func TestYamlQuote(t *testing.T) {
 	}
 }
 
-// TestGenerateAgentFiles_WorktreeResolution pins the ethos-n4tk change at
-// the command-text level: the matched-path branch resolves the repo root
-// from the edited file via `git -C <dir> rev-parse --show-toplevel`, and
-// only the two no-path branches (jq missing; empty file_path) keep using
-// $CLAUDE_PROJECT_DIR directly. The behavioral proof lives in
-// TestPostToolUseHook_WorktreeResolution; this locks the string so a
-// refactor cannot quietly drop the resolution.
+// Scope resolution belongs to the binary, not the generated command.
 func TestGenerateAgentFiles_WorktreeResolution(t *testing.T) {
 	root, ids, teams, roles := setupTestRepo(t)
 	require.NoError(t, GenerateAgentFiles(root, ids, teams, roles))
-
-	data, err := os.ReadFile(filepath.Join(root, ".claude", "agents", "bwk.md"))
-	require.NoError(t, err)
-	content := string(data)
-
-	// The matched branch guards the git resolution on an ABSOLUTE path
-	// (case /*): a relative path would make `git -C $(dirname)` resolve
-	// against the hook's own cwd, so it takes the $CLAUDE_PROJECT_DIR
-	// default instead.
-	assert.Contains(t, content, `case \"$_path\" in /*) _dir=$(dirname \"$_path\")`,
-		"matched branch must resolve from the file only for an absolute path")
-	assert.Contains(t, content, `git -C \"$_dir\" rev-parse --show-toplevel`,
-		"matched branch must resolve the repo root from the edited file")
-	// When git yields no root, fall back to $CLAUDE_PROJECT_DIR; a relative
-	// path (the *) arm of the inner case) also uses $CLAUDE_PROJECT_DIR.
-	assert.Contains(t, content, `if [ -z \"$_root\" ]; then _root=\"$CLAUDE_PROJECT_DIR\"; fi ;; *) _root=\"$CLAUDE_PROJECT_DIR\" ;; esac`,
-		"matched branch must fall back to CLAUDE_PROJECT_DIR when git fails or the path is relative")
-	assert.Contains(t, content, `_out=$(cd \"$_root\" && make check 2>&1)`,
-		"matched branch must run make check in the resolved root")
-
-	// The two no-path branches have nothing to resolve from and must run
-	// make check directly in $CLAUDE_PROJECT_DIR — exactly twice.
-	assert.Equal(t, 2, strings.Count(content, `_out=$(cd \"$CLAUDE_PROJECT_DIR\" && make check 2>&1)`),
-		"only the jq-missing and empty-path branches use CLAUDE_PROJECT_DIR directly")
+	data, readErr := os.ReadFile(filepath.Join(root, ".claude", "agents", "bwk.md"))
+	require.NoError(t, readErr)
+	assert.Contains(t, string(data), `command: "ethos hook post-edit --agent bwk"`)
 }
 
 // TestGenerateAgentFiles_MalformedConfig covers bug ethos-9ai.6: a
@@ -2367,176 +2318,6 @@ func TestGenerateAgentFiles_UpdateDiffSummary(t *testing.T) {
 	assert.Contains(t, stderr2, "bwk.md")
 	assert.Contains(t, stderr2, "lines")
 	assert.NotContains(t, stderr2, "wrote", "update path must not log 'wrote'")
-}
-
-// TestProjectFilePatterns exercises the project-type detection helper
-// directly. Each case creates a temp dir with zero or more marker files
-// and asserts the returned glob pattern.
-func TestProjectFilePatterns(t *testing.T) {
-	tests := []struct {
-		name    string
-		markers []string // files to create in the temp dir
-		want    string
-	}{
-		{
-			name:    "go project",
-			markers: []string{"go.mod"},
-			want:    "*.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml",
-		},
-		{
-			name:    "python project with pyproject.toml",
-			markers: []string{"pyproject.toml"},
-			want:    "*.py|*.pyi|*.toml|*uv.lock|*Makefile|*.sh|*.yaml|*.yml",
-		},
-		{
-			name:    "python project with setup.py",
-			markers: []string{"setup.py"},
-			want:    "*.py|*.pyi|*.toml|*uv.lock|*Makefile|*.sh|*.yaml|*.yml",
-		},
-		{
-			name:    "generic fallback",
-			markers: nil,
-			want:    "*Makefile|*.sh|*.yaml|*.yml",
-		},
-		{
-			name:    "both go.mod and pyproject.toml — go wins",
-			markers: []string{"go.mod", "pyproject.toml"},
-			want:    "*.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			root := physicalAgentTempDir(t)
-			for _, m := range tt.markers {
-				writeFile(t, filepath.Join(root, m), "")
-			}
-			got := projectFilePatterns(root)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-// TestGenerateAgentFiles_ProjectPatterns verifies that generated agent
-// files embed the correct file-extension patterns for each project type.
-// The assertion checks a substring of the generated hook command that
-// includes the project-specific glob and excludes patterns from other
-// project types.
-func TestGenerateAgentFiles_ProjectPatterns(t *testing.T) {
-	tests := []struct {
-		name        string
-		markers     []string // files to create at repo root
-		wantGlob    string   // pattern that must appear in the hook command
-		rejectGlobs []string // patterns that must NOT appear
-	}{
-		{
-			name:     "go project embeds go patterns",
-			markers:  []string{"go.mod"},
-			wantGlob: "*.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml",
-			rejectGlobs: []string{
-				"*.py|*.pyi",
-			},
-		},
-		{
-			name:     "python project embeds python patterns",
-			markers:  []string{"pyproject.toml"},
-			wantGlob: "*.py|*.pyi|*.toml|*uv.lock|*Makefile|*.sh|*.yaml|*.yml",
-			rejectGlobs: []string{
-				"*.go|*go.mod",
-			},
-		},
-		{
-			name:     "generic project embeds generic patterns",
-			markers:  nil,
-			wantGlob: "*Makefile|*.sh|*.yaml|*.yml",
-			rejectGlobs: []string{
-				"*.go|*go.mod",
-				"*.py|*.pyi",
-			},
-		},
-		{
-			name:     "both markers — go wins",
-			markers:  []string{"go.mod", "pyproject.toml"},
-			wantGlob: "*.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml",
-			rejectGlobs: []string{
-				"*.py|*.pyi",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			root := physicalAgentTempDir(t)
-			ethosDir := filepath.Join(root, ".punt-labs", "ethos")
-
-			// Repo config.
-			writeYAML(t, filepath.Join(root, ".punt-labs", "ethos.yaml"), map[string]string{
-				"agent": "claude",
-				"team":  "engineering",
-			})
-
-			// Project markers.
-			for _, m := range tt.markers {
-				writeFile(t, filepath.Join(root, m), "")
-			}
-
-			// Minimal team with one write-enabled agent.
-			writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
-				"name":         "engineering",
-				"repositories": []string{"test/repo"},
-				"members": []map[string]string{
-					{"identity": "claude", "role": "coo"},
-					{"identity": "bot", "role": "worker"},
-				},
-			})
-			writeYAML(t, filepath.Join(ethosDir, "identities", "claude.yaml"), map[string]interface{}{
-				"name":   "Claude",
-				"handle": "claude",
-				"kind":   "agent",
-			})
-			writeYAML(t, filepath.Join(ethosDir, "identities", "bot.yaml"), map[string]interface{}{
-				"name":          "Bot",
-				"handle":        "bot",
-				"kind":          "agent",
-				"personality":   "test-p",
-				"writing_style": "test-ws",
-				"talents":       []string{"testing"},
-			})
-			writeFile(t, filepath.Join(ethosDir, "personalities", "test-p.md"),
-				"# Test\n\nTest agent.\n")
-			writeFile(t, filepath.Join(ethosDir, "writing-styles", "test-ws.md"),
-				"# Test WS\n\nClear.\n")
-			writeYAML(t, filepath.Join(ethosDir, "roles", "coo.yaml"), map[string]interface{}{
-				"name":             "coo",
-				"responsibilities": []string{"lead"},
-			})
-			writeYAML(t, filepath.Join(ethosDir, "roles", "worker.yaml"), map[string]interface{}{
-				"name":             "worker",
-				"responsibilities": []string{"implement"},
-				"tools":            []string{"Read", "Write", "Bash"},
-			})
-
-			ids := identity.NewLayeredStore(
-				identity.NewStore(ethosDir),
-				identity.NewStore(ethosDir),
-			)
-			teams := team.NewLayeredStore(ethosDir, ethosDir)
-			roles := role.NewLayeredStore(ethosDir, ethosDir)
-
-			err := GenerateAgentFiles(root, ids, teams, roles)
-			require.NoError(t, err)
-
-			data, readErr := os.ReadFile(filepath.Join(root, ".claude", "agents", "bot.md"))
-			require.NoError(t, readErr)
-			content := string(data)
-
-			assert.Contains(t, content, tt.wantGlob,
-				"hook command must contain the project-type pattern")
-			for _, reject := range tt.rejectGlobs {
-				assert.NotContains(t, content, reject,
-					"hook command must not contain patterns from other project types")
-			}
-		})
-	}
 }
 
 // TestGenerateAgentFiles_ProvenanceMarker pins that every generated file

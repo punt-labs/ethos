@@ -18,29 +18,6 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/team"
 )
 
-// projectFilePatterns returns the shell case-statement glob pattern for
-// file extensions that should trigger make check. Detection is by marker
-// file at the repo root: go.mod → Go, pyproject.toml or setup.py →
-// Python, neither → generic (Makefile, shell, YAML only).
-// When both Go and Python markers exist, Go wins — a polyglot repo with
-// go.mod is more likely Go-primary.
-func projectFilePatterns(repoRoot string) string {
-	goPatterns := "*.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml"
-	pyPatterns := "*.py|*.pyi|*.toml|*uv.lock|*Makefile|*.sh|*.yaml|*.yml"
-	genericPatterns := "*Makefile|*.sh|*.yaml|*.yml"
-
-	if _, err := os.Stat(filepath.Join(repoRoot, "go.mod")); err == nil {
-		return goPatterns
-	}
-	if _, err := os.Stat(filepath.Join(repoRoot, "pyproject.toml")); err == nil {
-		return pyPatterns
-	}
-	if _, err := os.Stat(filepath.Join(repoRoot, "setup.py")); err == nil {
-		return pyPatterns
-	}
-	return genericPatterns
-}
-
 // GenerateAgentFiles creates .claude/agents/<handle>.md files from ethos
 // identity, personality, writing-style, and role data. Skips the main
 // agent (from repo config) and human identities. Writes are idempotent:
@@ -57,8 +34,7 @@ func GenerateAgentFiles(repoRoot string, identities identity.IdentityStore, team
 // the output root split. configRoot resolves the repo config and thus the
 // team/agent selection — the shared store (StoreRootIfAny), matching the
 // team/role data the stores already resolve from main. destRoot is where the
-// .claude/agents/ files are written and the project file-pattern detection
-// runs — the current checkout (CheckoutRootIfAny), so a worktree
+// .claude/agents/ files are written — the current checkout, so a worktree
 // generates agents into its OWN tree, where its Claude reads them and
 // InstallAgentDefinitions writes (Bugbot HIGH on PR #370). They coincide
 // outside a linked worktree.
@@ -122,7 +98,7 @@ func PlanGeneratedAgentFiles(configRoot, destRoot string, identities identity.Id
 	if err != nil {
 		return AgentPlan{}, fmt.Errorf("generate agents: %w", err)
 	}
-	return PlanGeneratedAgentFilesFromConfig(cfg, projectFilePatterns(destRoot), activeBundleDefaultSkills(configRoot), AgentIdentities(identities), teams, roles)
+	return PlanGeneratedAgentFilesFromConfig(cfg, activeBundleDefaultSkills(configRoot), AgentIdentities(identities), teams, roles)
 }
 
 // AgentIdentityReader separates resolved rendering inputs from reference reads.
@@ -154,10 +130,10 @@ func (s agentIdentities) LoadAgentReference(handle string) (*identity.Identity, 
 	return s.store.Load(handle, identity.Reference(true), identity.WithoutMigration())
 }
 
-// PlanGeneratedAgentFilesFromConfig uses the caller's configuration snapshot,
-// project patterns and bundle skills; it does not rediscover roots or reread
-// configuration. Rendering is shared with generation, not a metadata approximation.
-func PlanGeneratedAgentFilesFromConfig(cfg *resolve.RepoConfig, filePatterns string, bundleSkills []string, identities AgentIdentityReader, teams *team.LayeredStore, roles *role.LayeredStore) (AgentPlan, error) {
+// PlanGeneratedAgentFilesFromConfig uses the caller's configuration snapshot
+// and bundle skills; it does not rediscover roots or reread configuration.
+// Rendering is shared with generation, not a metadata approximation.
+func PlanGeneratedAgentFilesFromConfig(cfg *resolve.RepoConfig, bundleSkills []string, identities AgentIdentityReader, teams *team.LayeredStore, roles *role.LayeredStore) (AgentPlan, error) {
 	plan := AgentPlan{Owned: make(map[string]bool)}
 	if cfg == nil {
 		return plan, nil // neither .punt-labs/ethos.yaml nor the legacy path exists
@@ -245,7 +221,7 @@ func PlanGeneratedAgentFilesFromConfig(cfg *resolve.RepoConfig, filePatterns str
 		antiResps := deriveAntiResponsibilities(m.Role, t.Collaborations, roles)
 		reportsTo := deriveReportsToTargetsReader(m.Role, t.Members, t.Collaborations, identities)
 		skills := mergeSkills(id.Skills, bundleSkills)
-		content := buildAgentFile(id, r, antiResps, reportsTo, filePatterns, skills)
+		content := buildAgentFile(id, r, antiResps, reportsTo, skills)
 		file := AgentFile{Handle: id.Handle, Content: content}
 		if index, exists := fileIndex[id.Handle]; exists {
 			// The old writer overwrote this destination for each supported
@@ -646,7 +622,7 @@ func mergeSkills(identitySkills, bundleDefaultSkills []string) []string {
 // Responsibilities and Talents. reportsTo is the resolved occupants of
 // those same roles; when non-empty, it renders the "You report to ..."
 // opening-line sentence.
-func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiResponsibility, reportsTo []reportsToTarget, filePatterns string, skills []string) string {
+func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiResponsibility, reportsTo []reportsToTarget, skills []string) string {
 	var b strings.Builder
 
 	// Extract description: first non-heading content line from personality.
@@ -673,85 +649,9 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		b.WriteString("    - matcher: \"Write|Edit\"\n")
 		b.WriteString("      hooks:\n")
 		b.WriteString("        - type: command\n")
-		// Path-filtered make check. Reviewer-style agents emit 20KB+
-		// markdown over many Write calls into .tmp/ and .punt-labs/local/ethos/ to
-		// stage results and traces; running `make check` after each
-		// of those writes serializes lint+test across the agent's
-		// stream and trips the 600s Claude Code watchdog (bug
-		// ethos-m3gh). The hook reads the tool's target path from the
-		// Claude Code hook stdin payload via jq, then routes:
-		//
-		//   1. jq missing OR empty $_path (jq ran but stdin had no
-		//      .tool_input.file_path, or jq itself errored and the
-		//      2>/dev/null swallowed it) — fail closed: run make
-		//      check. The path filter only short-circuits the gate
-		//      when we KNOW the write is scratch/markdown; absence of
-		//      a path is "unknown", which must trigger the gate, not
-		//      skip it (Copilot reviews on PR #326).
-		//
-		//   2. Paths under .tmp/ or .punt-labs/local/ethos/ — bypass (exit 0).
-		//      These are scratch and local trace dirs. The .punt-labs/ethos/
-		//      source/record tree is NOT exempt. Patterns cover leading and
-		//      embedded segments so worktree layouts (`*/.tmp/*`) and
-		//      cwd-relative writes (`.tmp/*`) both match.
-		//
-		//   3. Project-type file extensions (from filePatterns) — run
-		//      resolve the repo root FROM THE EDITED FILE, then run
-		//      make check there with output-capture; on failure emit
-		//      the tail -n 60 truncation to stderr and exit 2, else
-		//      exit 0. Patterns are detected at generation time
-		//      by projectFilePatterns: go.mod → Go patterns, pyproject.toml
-		//      or setup.py → Python patterns, neither → generic fallback.
-		//
-		//   4. Anything else (markdown, JSON, text) — exit 0. Doc
-		//      writes do not trigger compile or lint failures.
-		//
-		// The case statement is pure glob — no `..` resolution, no
-		// realpath. Sh's glob patterns are byte-literal and
-		// case-sensitive, so `.TMP/` does not match `.tmp/` and a
-		// path like `.tmp/foo/../internal/bar.go` is matched against
-		// the FIRST .tmp/ pattern (path text starts with `.tmp/`),
-		// triggering bypass. That is the correct behavior: the worker
-		// is asking to write to `.tmp/foo/../internal/bar.go`, which
-		// the OS will resolve to the same inode as `internal/bar.go`,
-		// but the user-supplied path text is the scratch dir — if a
-		// malicious worker can synthesize such a path, the bypass is
-		// the least of the problems. Production code writes use
-		// direct paths (`internal/bar.go`), which fall through to the
-		// trigger clause.
-		//
-		// In the trigger clause, resolve cwd from the EDITED FILE, not
-		// from $CLAUDE_PROJECT_DIR: dirname the path, then `git -C <dir>
-		// rev-parse --show-toplevel`, and cd to that root. An
-		// isolated-worktree sub-agent edits files in its own linked
-		// worktree while $CLAUDE_PROJECT_DIR still names the MAIN
-		// checkout — running make check there is blind to the agent's
-		// changes and blocks on unrelated failures (ethos-n4tk).
-		// Resolving from the file lands make check in the worktree that
-		// actually holds the edit. The resolution only runs for an
-		// ABSOLUTE $_path (case /*): a relative path would make `git -C
-		// $(dirname)` resolve against the hook's own cwd, which is
-		// ambiguous, so a relative path takes the prior-behavior default
-		// of $CLAUDE_PROJECT_DIR. Claude Code's tool input is absolute in
-		// practice; the guard makes the fallback provable. When git
-		// errors or the file is outside a repo (empty $_root), also fall
-		// back to $CLAUDE_PROJECT_DIR. The two branches with no file path
-		// (jq missing; empty .tool_input.file_path) have nothing to
-		// resolve from and keep using $CLAUDE_PROJECT_DIR directly.
-		// Output is captured to a variable first. On failure the tail
-		// -n 60 truncation is written to stderr and the hook exits 2;
-		// tail (not head) keeps the LAST 60 lines, which hold the
-		// failing tool's diagnostic — make stops at the first failing
-		// target, so the error is at the end of the accumulated output.
-		// on success it is silent and exits 0. Claude Code surfaces
-		// only stderr for a blocking PostToolUse hook, and only exit 2
-		// hands the block reason back to the model — routing to stdout
-		// or exiting with make's raw code swallows the failure detail
-		// (ethos-bo84). The command stays POSIX-sh compatible (it runs
-		// under /bin/sh, which is dash on Debian/Ubuntu): no `set -o
-		// pipefail`, no process substitution, no bash-isms in the case
-		// patterns.
-		fmt.Fprintf(&b, "          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/local/ethos/*|.tmp/*|.punt-labs/local/ethos/*) exit 0 ;; %s) case \\\"$_path\\\" in /*) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi ;; *) _root=\\\"$CLAUDE_PROJECT_DIR\\\" ;; esac; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n", filePatterns)
+		// The binary owns edit policy and advisory output (agent checks design §5).
+		fmt.Fprintf(&b, "          command: %q\n", "ethos hook post-edit --agent "+id.Handle)
+		b.WriteString("          timeout: 70\n")
 	}
 	b.WriteString("---\n")
 

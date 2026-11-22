@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated agents now use fast, advisory post-edit checks instead of running
+  the full `make check` gate after every edit. Checks stay within the session's
+  checkout or its linked worktrees, time out promptly, and never block edits.
+
 - **`ethos --version` and `ethos --help` no longer prompt in an enabled repo
   (punt-kit DES-039).** `ethos enable` stops granting the `Bash(ethos -*)`
   ask rule, which matched every command starting with an option; the CLI ask

@@ -174,16 +174,17 @@ func TestAgentCurrencyMissingAndSymlinkedFilesFail(t *testing.T) {
 	}
 }
 
-func TestAgentCurrencyUsesStoreSourcesAndCheckoutProjectInputs(t *testing.T) {
+func TestAgentCurrencyUsesStoreSourcesIndependentlyOfProjectMarkers(t *testing.T) {
 	store, checkout, s, teams := currencyFixture(t)
 	// A checkout-local source change is not shared authority.
 	path := filepath.Join(checkout, ".punt-labs", "ethos", "personalities", "clear.md")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	require.NoError(t, os.WriteFile(path, []byte("Not authoritative.\n"), 0o600))
 	assert.Equal(t, "PASS", CheckAgentCurrency(checkout, store, teams, s).Status)
-	// But project detection belongs to C, not S: changing C's marker changes
-	// the expected generated hook bytes.
+	// The binary selects checks at edit time, not during generation.
 	require.NoError(t, os.WriteFile(filepath.Join(checkout, "go.mod"), []byte("module example.com/test\n"), 0o600))
+	assert.Equal(t, "PASS", CheckAgentCurrency(checkout, store, teams, s).Status)
+	require.NoError(t, os.WriteFile(filepath.Join(store, ".punt-labs", "ethos", "personalities", "clear.md"), []byte("Changed shared authority.\n"), 0o600))
 	assert.Equal(t, "FAIL", CheckAgentCurrency(checkout, store, teams, s).Status)
 }
 

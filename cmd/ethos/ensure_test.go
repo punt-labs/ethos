@@ -84,7 +84,7 @@ func TestEveryCommandPassesEnsure(t *testing.T) {
 			// A refusal is allowed; reaching the gate first is the property.
 			_ = establishRoots(c, nil)
 			called := *n > before
-			if exempt[topLevel(c)] {
+			if exempt[topLevel(c)] || c.CommandPath() == "ethos hook post-edit" {
 				assert.False(t, called, "%s must not pass Ensure", c.CommandPath())
 			} else {
 				assert.True(t, called, "%s does not pass Ensure", c.CommandPath())
@@ -162,7 +162,10 @@ func TestOnlyDoctorRepairsUnbounded(t *testing.T) {
 			b0, u0 := *bounded, *unbounded
 			_ = establishRoots(c, nil)
 			cmdRoots.Store(nil)
-			if c.CommandPath() == "ethos doctor" {
+			if c.CommandPath() == "ethos hook post-edit" {
+				assert.Equal(t, b0, *bounded, "post-edit reads no storage")
+				assert.Equal(t, u0, *unbounded, "post-edit reads no storage")
+			} else if c.CommandPath() == "ethos doctor" {
 				assert.Equal(t, u0+1, *unbounded, "doctor must reach the unbounded gate")
 				assert.Equal(t, b0, *bounded, "doctor must not reach the bounded gate")
 			} else {
