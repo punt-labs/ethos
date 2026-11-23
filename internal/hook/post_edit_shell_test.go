@@ -120,9 +120,10 @@ func TestGeneratedPostEditShellOpenInput(t *testing.T) {
 	root, ids, teams, roles := setupTestRepo(t)
 	require.NoError(t, GenerateAgentFiles(root, ids, teams, roles))
 	command := extractPostToolUseCommand(t, filepath.Join(root, ".claude/agents/bwk.md"))
-	bash, err := exec.LookPath("bash")
-	require.NoError(t, err)
-	shells := map[string]string{"sh": "/bin/sh", "bash": bash, "no-bash": "/bin/sh"}
+	shells := map[string]string{"sh": "/bin/sh", "no-bash": "/bin/sh"}
+	if bash, err := exec.LookPath("bash"); err == nil {
+		shells["bash"] = bash
+	}
 	if bash32 := os.Getenv("ETHOS_TEST_BASH32"); bash32 != "" {
 		shells["bash32"] = bash32
 	}
