@@ -3,6 +3,7 @@ package hook
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -29,23 +30,39 @@ func stopAgent(input map[string]any) string {
 	return agent
 }
 
-// subagentStartState fingerprints the session checkout for a starting
-// subagent whose policy has handoff checks. Any failure returns "", which
-// makes the matching stop run its handoff checks.
+// subagentStartState fingerprints the session checkout and handoff policy
+// for a starting subagent whose policy has handoff checks. Any failure
+// returns "", which makes the matching stop run its handoff checks.
 func subagentStartState(input map[string]any) string {
 	checkout, err := hookCheckout()
 	if err != nil {
 		return ""
 	}
-	checks, _, err := configuredStageChecks(checkout, stopAgent(input), "handoff")
-	if err != nil || len(checks) == 0 {
-		return ""
-	}
-	state, err := checkoutState(checkout)
+	state, err := handoffState(checkout, stopAgent(input))
 	if err != nil {
 		return ""
 	}
 	return state
+}
+
+// handoffState hashes the agent's resolved handoff checks with the checkout
+// state, so a stop skips only if neither changed. With no handoff checks it
+// returns "": there is nothing to skip.
+func handoffState(checkout, agent string) (string, error) {
+	checks, _, err := configuredStageChecks(checkout, agent, "handoff")
+	if err != nil || len(checks) == 0 {
+		return "", err
+	}
+	policy, err := json.Marshal(checks)
+	if err != nil {
+		return "", err
+	}
+	state, err := checkoutState(checkout)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(append(append(policy, 0), state...))
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 func participantCheckoutState(ss *session.Store, sessionID, agentID string) string {
@@ -60,9 +77,10 @@ func participantCheckoutState(ss *session.Store, sessionID, agentID string) stri
 }
 
 // readOnlyStop reports whether a stopping subagent provably changed nothing:
-// it has a start fingerprint, made no audited Write/Edit call, and the
-// checkout's fingerprint still matches. Bash edits change the fingerprint.
-func readOnlyStop(checkout, sessionID, agentID, startState string) bool {
+// it has a start fingerprint, made no audited Write/Edit call, and neither
+// the checkout nor its handoff policy changed. Bash edits change the
+// fingerprint.
+func readOnlyStop(checkout, agent, sessionID, agentID, startState string) bool {
 	if startState == "" {
 		return false
 	}
@@ -75,7 +93,7 @@ func readOnlyStop(checkout, sessionID, agentID, startState string) bool {
 			return false
 		}
 	}
-	current, err := checkoutState(checkout)
+	current, err := handoffState(checkout, agent)
 	return err == nil && current == startState
 }
 
@@ -123,6 +141,10 @@ func checkoutState(checkout string) (string, error) {
 		case '2':
 			path = statusPath(record, 10)
 			i++ // the original path of a rename or copy follows
+			if i == len(records) || records[i] == "" {
+				return "", fmt.Errorf("git status: rename without source %q", record)
+			}
+			fmt.Fprintf(h, "%s\x00", records[i])
 		case 'u':
 			path = statusPath(record, 11)
 		case '?':

@@ -10,8 +10,10 @@ type Participant struct {
 	Parent    string         `yaml:"parent,omitempty" json:"parent,omitempty"`
 	Joined    string         `yaml:"joined,omitempty" json:"joined,omitempty"`
 	Ext       map[string]any `yaml:"ext,omitempty" json:"ext,omitempty"`
-	// CheckoutState fingerprints the checkout when a subagent started, so its
-	// stop can skip handoff checks if it changed nothing.
+	// CheckoutState fingerprints the checkout and handoff policy when a
+	// subagent started, so its stop can skip handoff checks if it changed
+	// nothing. Every join replaces it, so a failed fingerprint never reuses
+	// an earlier one.
 	CheckoutState string `yaml:"checkout_state,omitempty" json:"checkout_state,omitempty"`
 }
 

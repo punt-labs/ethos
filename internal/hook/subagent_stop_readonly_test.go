@@ -24,6 +24,7 @@ func TestHandoffReadOnlyStop(t *testing.T) {
 		act     func(t *testing.T, root string)
 		audit   []auditEntry
 		noStart bool
+		global  bool
 		runs    bool
 	}{
 		{name: "read-only", runs: false},
@@ -40,12 +41,24 @@ func TestHandoffReadOnlyStop(t *testing.T) {
 		{name: "bash commits", act: func(t *testing.T, root string) {
 			stageGit(t, root, "-c", "user.name=T", "-c", "user.email=t@t", "commit", "-qam", "bash")
 		}, runs: true},
+		{name: "bash swaps a rename's source", act: func(t *testing.T, root string) {
+			stageGit(t, root, "mv", "twin.txt", "twin1.txt")
+			stageGit(t, root, "mv", "twin2.txt", "twin.txt")
+		}, runs: true},
+		{name: "read-only with global policy", global: true, runs: false},
+		{name: "global policy changes", global: true, act: func(t *testing.T, _ string) {
+			checkPolicy(t, os.Getenv("HOME"), "project", handoffProbe+"  - name: added\n    stage: handoff\n    files: all\n    run: [probe]\n")
+		}, runs: true},
 		{name: "no start fingerprint", noStart: true, runs: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, bin := postEditFixture(t)
 			t.Setenv("HOME", t.TempDir())
-			checkPolicy(t, root, "project", "  - name: full-gate\n    stage: handoff\n    files: all\n    run: [probe]\n")
+			policyRoot := root
+			if tc.global {
+				policyRoot = os.Getenv("HOME")
+			}
+			checkPolicy(t, policyRoot, "project", handoffProbe)
 			writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
 			stageGit(t, root, "add", ".punt-labs")
 			stageGit(t, root, "-c", "user.name=T", "-c", "user.email=t@t", "commit", "-qm", "policy")
@@ -54,10 +67,13 @@ func TestHandoffReadOnlyStop(t *testing.T) {
 			postEditTool(t, bin, "probe", "printf ran > \"$HANDOFF_MARKER\"; exit 1\n")
 			writeFile(t, filepath.Join(root, "dirty.go"), "package a\n")
 			writeFile(t, filepath.Join(root, "clean.go"), "package clean\n")
-			stageGit(t, root, "add", "dirty.go", "clean.go")
+			writeFile(t, filepath.Join(root, "twin1.txt"), "same\n")
+			writeFile(t, filepath.Join(root, "twin2.txt"), "same\n")
+			stageGit(t, root, "add", "dirty.go", "clean.go", "twin1.txt", "twin2.txt")
 			stageGit(t, root, "-c", "user.name=T", "-c", "user.email=t@t", "commit", "-qm", "dirty")
 			writeFile(t, filepath.Join(root, "dirty.go"), "package a // dirty\n")
 			stageGit(t, root, "mv", "README", "renamed file.go")
+			stageGit(t, root, "mv", "twin1.txt", "twin.txt")
 			writeFile(t, filepath.Join(root, "untracked.go"), "package u\n")
 
 			ss := session.NewStore(t.TempDir())
@@ -101,6 +117,8 @@ func TestHandoffReadOnlyStop(t *testing.T) {
 		})
 	}
 }
+
+const handoffProbe = "  - name: full-gate\n    stage: handoff\n    files: all\n    run: [probe]\n"
 
 func auditWrite(agent, file string) auditEntry {
 	return auditEntry{Tool: "Write", AgentID: agent, ToolInput: map[string]any{"file_path": "<repo>/" + file}, PathFormat: auditPathFormat}

@@ -1006,3 +1006,15 @@ func TestPurgeTombstoned_RecordedWriterHoldsNoLiveLogFlagsTombstone(t *testing.T
 		"a recorded writer that cannot produce the live log must leave a loss tombstone")
 	assert.True(t, tb.LiveFileGone)
 }
+
+// A rejoin replaces the checkout fingerprint, so a start that could not
+// fingerprint never inherits an earlier one.
+func TestJoinReplacesCheckoutState(t *testing.T) {
+	s := NewStore(t.TempDir())
+	require.NoError(t, s.Create("cs", Participant{AgentID: "human"}, Participant{AgentID: "main"}, "", ""))
+	require.NoError(t, s.Join("cs", Participant{AgentID: "sub", CheckoutState: "sha256:old"}))
+	require.NoError(t, s.Join("cs", Participant{AgentID: "sub"}))
+	roster, err := s.Load("cs")
+	require.NoError(t, err)
+	assert.Empty(t, roster.FindParticipant("sub").CheckoutState)
+}

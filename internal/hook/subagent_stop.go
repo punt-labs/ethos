@@ -48,10 +48,11 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 		stopFeedback(out, errOut, StageFeedback{Blocking: "handoff scope: " + err.Error()}, active)
 		return nil
 	}
-	if readOnlyStop(checkout, sessionID, agentID, startState) {
+	agent := stopAgent(input)
+	if readOnlyStop(checkout, agent, sessionID, agentID, startState) {
 		return nil
 	}
-	feedback := runStageRootChecks(ctx, checkout, stopAgent(input), "handoff", func() (map[string][]string, error) {
+	feedback := runStageRootChecks(ctx, checkout, agent, "handoff", func() (map[string][]string, error) {
 		return handoffFiles(checkout, sessionID, agentID)
 	})
 	stopFeedback(out, errOut, feedback, active)
