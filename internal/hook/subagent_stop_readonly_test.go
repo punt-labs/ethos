@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/session"
@@ -25,6 +26,7 @@ func TestHandoffReadOnlyStop(t *testing.T) {
 		audit   []auditEntry
 		noStart bool
 		global  bool
+		before  bool
 		runs    bool
 	}{
 		{name: "read-only", runs: false},
@@ -48,6 +50,11 @@ func TestHandoffReadOnlyStop(t *testing.T) {
 		{name: "read-only with global policy", global: true, runs: false},
 		{name: "global policy changes", global: true, act: func(t *testing.T, _ string) {
 			checkPolicy(t, os.Getenv("HOME"), "project", handoffProbe+"  - name: added\n    stage: handoff\n    files: all\n    run: [probe]\n")
+		}, runs: true},
+		{name: "unattributed write after start", audit: []auditEntry{auditWrite("", "dirty.go")}, runs: true},
+		{name: "unattributed write before start", audit: []auditEntry{auditWrite("", "dirty.go")}, before: true, runs: false},
+		{name: "bash edits a dirty nested repo", act: func(t *testing.T, root string) {
+			writeFile(t, filepath.Join(root, "nested/other.txt"), "changed\n")
 		}, runs: true},
 		{name: "no start fingerprint", noStart: true, runs: true},
 	} {
@@ -75,6 +82,12 @@ func TestHandoffReadOnlyStop(t *testing.T) {
 			stageGit(t, root, "mv", "README", "renamed file.go")
 			stageGit(t, root, "mv", "twin1.txt", "twin.txt")
 			writeFile(t, filepath.Join(root, "untracked.go"), "package u\n")
+			nested := filepath.Join(root, "nested")
+			writeFile(t, filepath.Join(nested, "other.txt"), "base\n")
+			stageGit(t, nested, "init", "-q")
+			stageGit(t, nested, "add", "other.txt")
+			stageGit(t, nested, "-c", "user.name=T", "-c", "user.email=t@t", "commit", "-qm", "nested")
+			writeFile(t, filepath.Join(nested, "dirty.txt"), "dirty\n")
 
 			ss := session.NewStore(t.TempDir())
 			require.NoError(t, ss.Create("ro", session.Participant{AgentID: "human"}, session.Participant{AgentID: "main"}, "", ""))
@@ -95,7 +108,11 @@ func TestHandoffReadOnlyStop(t *testing.T) {
 				tc.act(t, root)
 			}
 			for i := range tc.audit {
-				tc.audit[i].Ts, tc.audit[i].Session = "2026-11-22T10:00:00Z", "ro"
+				ts := time.Now().UTC().Add(time.Second)
+				if tc.before {
+					ts = ts.Add(-time.Hour)
+				}
+				tc.audit[i].Ts, tc.audit[i].Session = ts.Format(time.RFC3339Nano), "ro"
 			}
 			if len(tc.audit) > 0 {
 				writeRepoTreeSession(t, root, "2026-11-22", "ro", tc.audit)

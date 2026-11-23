@@ -38,7 +38,7 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 		return nil
 	}
 
-	startState := participantCheckoutState(ss, sessionID, agentID)
+	start := startedParticipant(ss, sessionID, agentID)
 	if leaveErr := ss.Leave(sessionID, agentID); leaveErr != nil {
 		fmt.Fprintf(errOut, "ethos: failed to leave session %s: %v\n", sessionID, leaveErr)
 	}
@@ -49,7 +49,7 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 		return nil
 	}
 	agent := stopAgent(input)
-	if readOnlyStop(checkout, agent, sessionID, agentID, startState) {
+	if readOnlyStop(ctx, checkout, agent, sessionID, start) {
 		return nil
 	}
 	feedback := runStageRootChecks(ctx, checkout, agent, "handoff", func() (map[string][]string, error) {

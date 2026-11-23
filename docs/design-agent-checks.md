@@ -316,17 +316,21 @@ fails closed rather than silently narrowing the scope.
 A provably read-only stop skips every handoff check, `files: all` included.
 SubagentStart records a fingerprint on the agent's roster entry when its
 policy has handoff checks: the resolved handoff checks, HEAD, the status of
-every index and worktree change (rename sources included), and the content of
-each changed or untracked non-ignored path. Every roster join replaces it, so
-a later `ethos iam` by the agent clears it. Ethos's own `.punt-labs/local/`
-and `.punt-labs/ethos/sessions/` files are excluded, since hooks write them on
+every index and worktree change (rename sources included), the content of each
+changed or untracked non-ignored path, and the state of each nested repository
+or submodule those paths name. Every roster join replaces it, so a later
+`ethos iam` by the agent clears it. Ethos's own `.punt-labs/local/` and
+`.punt-labs/ethos/sessions/` files are excluded, since hooks write them on
 every tool call. The stop skips only when that fingerprint exists, the session
-audit has no Write, Edit, MultiEdit or NotebookEdit entry for the agent, and
-the fingerprint is unchanged, so a check set edited in any layer since the
-start also runs. A Bash edit, stage, commit or removal changes the
-fingerprint, so it runs the gate. Any missing or unreadable state runs the
-gate. Ignored files are outside the fingerprint, so a change only to an
-ignored path does not trigger checks.
+audit has no Write, Edit, MultiEdit or NotebookEdit entry that is the agent's
+own or unattributed and not older than its join, and the fingerprint is
+unchanged, so a check set edited in any layer since the start also runs. A
+Bash edit, stage, commit or removal changes the fingerprint, so it runs the
+gate. Any missing or unreadable state runs the gate. Ignored files are outside
+the fingerprint, so a change only to an ignored path does not trigger checks.
+An agent that deletes its own audit records can skip the gate only by also
+restoring the checkout and policy byte for byte, which leaves nothing new for
+the checks to see.
 
 A blocking failure or broken policy returns
 `{"decision":"block","reason":...}` with exit zero. On `stop_hook_active`

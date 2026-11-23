@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,7 +12,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/session"
@@ -65,36 +68,59 @@ func handoffState(checkout, agent string) (string, error) {
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
-func participantCheckoutState(ss *session.Store, sessionID, agentID string) string {
+// startedParticipant returns the stopping agent's roster entry, or an
+// empty one when it cannot be read.
+func startedParticipant(ss *session.Store, sessionID, agentID string) session.Participant {
 	roster, err := ss.Load(sessionID)
 	if err != nil {
-		return ""
+		return session.Participant{}
 	}
 	if p := roster.FindParticipant(agentID); p != nil {
-		return p.CheckoutState
+		return *p
 	}
-	return ""
+	return session.Participant{}
 }
 
 // readOnlyStop reports whether a stopping subagent provably changed nothing:
-// it has a start fingerprint, made no audited Write/Edit call, and neither
-// the checkout nor its handoff policy changed. Bash edits change the
-// fingerprint.
-func readOnlyStop(checkout, agent, sessionID, agentID, startState string) bool {
-	if startState == "" {
+// it has a start fingerprint, no audited Write/Edit call is its own or
+// unattributed since it joined, and neither the checkout nor its handoff
+// policy changed. Bash edits change the fingerprint.
+func readOnlyStop(ctx context.Context, checkout, agent, sessionID string, start session.Participant) bool {
+	if start.CheckoutState == "" {
+		return false
+	}
+	logger := diagnostic.FromContext(ctx)
+	joined, err := time.Parse(time.RFC3339Nano, start.Joined)
+	if err != nil {
+		logger.Info("handoff read-only check unavailable", "reason", "join time", "error_type", diagnostic.ErrorType(err))
 		return false
 	}
 	entries, err := sessionAuditEntries(checkout, sessionID)
 	if err != nil {
+		logger.Info("handoff read-only check unavailable", "reason", "audit", "error_type", diagnostic.ErrorType(err))
 		return false
 	}
 	for _, entry := range entries {
-		if entry.AgentID == agentID && mutatingTools[entry.Tool] {
+		if !mutatingTools[entry.Tool] {
+			continue
+		}
+		if entry.AgentID == start.AgentID {
+			return false
+		}
+		if entry.AgentID != "" {
+			continue
+		}
+		ts, err := time.Parse(time.RFC3339Nano, entry.Ts)
+		if err != nil || !ts.Before(joined) {
 			return false
 		}
 	}
 	current, err := handoffState(checkout, agent)
-	return err == nil && current == startState
+	if err != nil {
+		logger.Info("handoff read-only check unavailable", "reason", "fingerprint", "error_type", diagnostic.ErrorType(err))
+		return false
+	}
+	return current == start.CheckoutState
 }
 
 func sessionAuditEntries(checkout, sessionID string) ([]auditEntry, error) {
@@ -192,10 +218,22 @@ func hashWorktreePath(h io.Writer, path string) error {
 		if err != nil {
 			return err
 		}
-		defer f.Close()
 		fmt.Fprintf(h, "file %o %d\x00", info.Mode().Perm(), info.Size())
 		_, err = io.Copy(h, f)
-		return err
+		return errors.Join(err, f.Close())
+	case info.IsDir():
+		// A nested repository or submodule: its own state covers edits
+		// that leave the parent's status record unchanged.
+		if _, err := os.Lstat(filepath.Join(path, ".git")); err != nil {
+			fmt.Fprintf(h, "dir\x00")
+			return nil
+		}
+		state, err := checkoutState(path)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(h, "repo %s\x00", state)
+		return nil
 	default:
 		fmt.Fprintf(h, "other %s\x00", info.Mode().Type())
 		return nil
