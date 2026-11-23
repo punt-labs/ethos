@@ -241,26 +241,50 @@ func TestGeneratedPostEditShellInterrupted(t *testing.T) {
 	root, ids, teams, roles := setupTestRepo(t)
 	require.NoError(t, GenerateAgentFiles(root, ids, teams, roles))
 	command := extractPostToolUseCommand(t, filepath.Join(root, ".claude/agents/bwk.md"))
-	bin, scratch, processes := postEditShellFixture(t)
-	postEditShellEthos(t, bin, "exit 9\n")
-	reader, writer, err := os.Pipe()
-	require.NoError(t, err)
-	defer reader.Close()
-	defer writer.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
-	cmd.Stdin = reader
-	var out bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &out
-	require.NoError(t, cmd.Start())
-	require.Eventually(t, func() bool {
-		data, err := os.ReadFile(processes)
-		return err == nil && len(strings.Fields(string(data))) >= 1
-	}, time.Second, 10*time.Millisecond)
-	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
-	require.NoError(t, cmd.Wait(), "%s", out.String())
-	postEditShellClean(t, scratch, processes)
+	shells := map[string]string{"sh": "/bin/sh"}
+	if bash, err := exec.LookPath("bash"); err == nil {
+		shells["bash"] = bash
+	}
+	for name, shell := range shells {
+		t.Run(name, func(t *testing.T) {
+			bin, scratch, processes := postEditShellFixture(t)
+			require.NotEmpty(t, ethosBinary)
+			t.Setenv("WATCHDOG_LOG", filepath.Join(os.Getenv("HOME"), "watchdog"))
+			postEditTool(t, bin, "ethos", `if [ "$1 $2" = 'hook stdin-watchdog' ]; then
+if [ "$3" != '--probe' ]; then
+printf '%s\n' "$$" >> "$PROCESS_LOG"
+printf '%s\n' "$$" > "$WATCHDOG_LOG"
+fi
+exec "`+ethosBinary+`" "$@"
+fi
+exit 9
+`)
+			reader, writer, err := os.Pipe()
+			require.NoError(t, err)
+			defer reader.Close()
+			defer writer.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, shell, "-c", command)
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+			cmd.WaitDelay = 200 * time.Millisecond
+			cmd.Stdin = reader
+			var out bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &out, &out
+			require.NoError(t, cmd.Start())
+			require.Eventually(t, func() bool {
+				data, err := os.ReadFile(processes)
+				watchdog, watchdogErr := os.ReadFile(os.Getenv("WATCHDOG_LOG"))
+				children := strings.Fields(string(data))
+				pid := strings.TrimSpace(string(watchdog))
+				return err == nil && watchdogErr == nil && len(children) == 2 && (children[0] == pid || children[1] == pid)
+			}, time.Second, 10*time.Millisecond)
+			require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+			require.NoError(t, cmd.Wait(), "%s", out.String())
+			postEditShellClean(t, scratch, processes)
+		})
+	}
 }
 
 func TestGeneratedPostEditShellOversizedInput(t *testing.T) {
