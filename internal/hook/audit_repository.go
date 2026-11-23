@@ -274,6 +274,13 @@ func sealPolicyStream(ctx context.Context, p layout.Policy, s audit.Stream, now 
 			return 0, "", err
 		}
 		if changed {
+			if bounded && l.Source == s.LivePath(p) {
+				saveCheckpoint = false
+				return 0, "", errors.Join(
+					fmt.Errorf("live audit payload at ts %d no longer matches the seal guard; retry after resetting its checkpoint", l.TS),
+					audit.ResetLiveSealCursor(p, s, guardScope),
+				)
+			}
 			return 0, "", errNeedsMigration(l.TS)
 		}
 	}

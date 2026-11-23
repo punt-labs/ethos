@@ -73,6 +73,37 @@ func TestBoundedSealResumesAfterBudgetExhaustion(t *testing.T) {
 	require.NoError(t, seal(&sealCheckBudget{Context: context.Background(), remaining: 2}))
 }
 
+func TestBoundedSealRetriesWithUpdatedLiveGuard(t *testing.T) {
+	root := t.TempDir()
+	p := hookPolicy(t, root, root, layout.RecordBlame)
+	s := audit.Stream{Namespace: audit.SessionNS, Session: "s"}
+	now := time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)
+	raw := []byte(`{"ts":"` + audit.FormatLineTS(100) + `","tool":"Read","tool_input":{"file_path":"/Users/test/workspace/private.txt"}}` + "\n")
+	require.NoError(t, audit.ReplaceLocalFile(p, s.LivePath(p), raw))
+	guard := LiveLineGuard(p, s.Namespace)
+	out, _, _ := guard(bytes.TrimSpace(raw))
+	require.NotEqual(t, string(bytes.TrimSpace(raw)), string(out))
+
+	require.NoError(t, audit.WithStreamLock(p, s, func() error {
+		home, _ := os.UserHomeDir()
+		passed, err := audit.RedactLiveUntil(context.Background(), p, s, func(line []byte) ([]byte, string, bool) {
+			return line, "", false
+		}, home)
+		require.NoError(t, err)
+		require.True(t, passed.Complete)
+		require.NoError(t, passed.SaveLiveSealCursor(p, s, home, "", 0))
+		_, _, err = sealPolicyStream(context.Background(), p, s, now, SealOptions{}, true)
+		require.ErrorContains(t, err, "no longer matches the seal guard")
+		_, _, err = sealPolicyStream(context.Background(), p, s, now, SealOptions{}, true)
+		require.NoError(t, err)
+		data, err := audit.ReadStream(p, s)
+		require.NoError(t, err)
+		require.Len(t, data.Lines, 1)
+		require.JSONEq(t, string(out), string(data.Lines[0].Raw))
+		return nil
+	}))
+}
+
 func TestSealRetriesReconciliationAfterArchiveStampCollision(t *testing.T) {
 	root := t.TempDir()
 	p := hookPolicy(t, root, root, layout.RecordBlame)
