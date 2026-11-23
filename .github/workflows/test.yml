@@ -86,6 +86,9 @@ jobs:
           uname -sr
           strace --version
 
+      - name: Audit redaction performance budget
+        run: ETHOS_TEST_PERF_BUDGET=1 go test -run TestRedactLiveLongSessionBudget -count=1 ./internal/hook/
+
       - name: Test
         # -timeout matches the Makefile's: cmd/ethos under -race runs past
         # go test's 10-minute per-package default on a loaded runner.
