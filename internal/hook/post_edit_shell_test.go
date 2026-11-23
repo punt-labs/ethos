@@ -180,6 +180,9 @@ cat
 					ctx, cancel := context.WithTimeout(context.Background(), bound)
 					defer cancel()
 					cmd := exec.CommandContext(ctx, filepath.Join(bin, "sh"), "-c", command)
+					if name == "busybox" {
+						cmd = exec.CommandContext(ctx, shell, "ash", "-c", command)
+					}
 					cmd.Stdin = reader
 					cmd.WaitDelay = 200 * time.Millisecond
 					start := time.Now()
