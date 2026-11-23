@@ -40,7 +40,9 @@ type LiveRepair struct {
 	Dropped   []LiveConflict // lines removed because the archive wins
 	// Complete is true when every complete line of the file has been judged.
 	// A chunked or deadline-limited call can leave a remainder.
-	Complete bool
+	Complete        bool
+	sealCursor      *liveCursor
+	sealCursorSaved bool
 }
 
 // Changed reports whether the live file was rewritten.
@@ -103,7 +105,8 @@ func RedactLive(ctx context.Context, p layout.Policy, s Stream, guard LineGuard,
 // RedactLiveUntil saves the judged prefix on deadline so another commit can
 // resume. The separate cursor belongs to this checkout and guard configuration.
 // A caller must hold the stream lock and still validate pending archival and
-// publication payloads before writing them out.
+// publication payloads before writing them out. A complete checkpoint can be
+// saved after the caller finishes local archival.
 func RedactLiveUntil(ctx context.Context, p layout.Policy, s Stream, guard LineGuard, guardScope string) (LiveRepair, error) {
 	return redactLive(ctx, p, s, guard, 0, sealLiveCursorPath(p, s, guardScope), true)
 }
@@ -116,6 +119,27 @@ func ResetLiveSealCursor(p layout.Policy, s Stream, guardScope string) error {
 		return err
 	}
 	return ReplaceLocalFile(p, path, []byte("{}"))
+}
+
+// SaveLiveSealCursor saves a complete checkpoint while the stream lock is
+// held. newest is the highest timestamp the caller just archived, if any.
+func (r LiveRepair) SaveLiveSealCursor(p layout.Policy, s Stream, guardScope string, newest *int64) error {
+	if r.sealCursor == nil || (r.sealCursorSaved && newest == nil) {
+		return nil
+	}
+	c := *r.sealCursor
+	if newest != nil {
+		chunks, err := archivedChunks(p, s)
+		if err != nil {
+			return err
+		}
+		c.ArchiveStamp, err = archiveInventoryStamp(chunks)
+		if err != nil {
+			return err
+		}
+		c.ArchiveMaxTS = max(c.ArchiveMaxTS, *newest)
+	}
+	return writeLiveCursor(p, sealLiveCursorPath(p, s, guardScope), c)
 }
 
 func sealLiveCursorPath(p layout.Policy, s Stream, guardScope string) string {
@@ -160,6 +184,10 @@ func redactLive(ctx context.Context, p layout.Policy, s Stream, guard LineGuard,
 	next := saved.Offset
 	if next == tail {
 		res.Complete = true
+		if checkpoint {
+			res.sealCursor = &saved
+			res.sealCursorSaved = true
+		}
 		return res, nil
 	}
 	lineNo := bytes.Count(b[:next], []byte{'\n'})
@@ -260,6 +288,7 @@ func redactLive(ctx context.Context, p layout.Policy, s Stream, guard LineGuard,
 			return LiveRepair{}, fmt.Errorf("replacing live audit %s with its redacted lines: %w", path, err)
 		}
 	}
+	res.Complete = next == tail
 	if cursor != "" && judged > 0 {
 		// The prefix through the last judged line, in its stored form.
 		n := next
@@ -269,16 +298,25 @@ func redactLive(ctx context.Context, p layout.Policy, s Stream, guard LineGuard,
 		if !checkpoint {
 			archiveMaxTS = 0
 		}
-		c, err := json.Marshal(liveCursor{Offset: n, SHA256: digest(out[:n]), ArchiveStamp: archiveStamp, ArchiveMaxTS: archiveMaxTS})
-		if err != nil {
-			return LiveRepair{}, fmt.Errorf("encoding the live audit cursor: %w", err)
-		}
-		if err := ReplaceLocalFile(p, cursor, c); err != nil {
-			return LiveRepair{}, fmt.Errorf("recording the live audit cursor: %w", err)
+		c := liveCursor{Offset: n, SHA256: digest(out[:n]), ArchiveStamp: archiveStamp, ArchiveMaxTS: archiveMaxTS}
+		if checkpoint && res.Complete {
+			res.sealCursor = &c
+		} else if err := writeLiveCursor(p, cursor, c); err != nil {
+			return LiveRepair{}, err
 		}
 	}
-	res.Complete = next == tail
 	return res, nil
+}
+
+func writeLiveCursor(p layout.Policy, path string, c liveCursor) error {
+	b, err := json.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("encoding the live audit cursor: %w", err)
+	}
+	if err := ReplaceLocalFile(p, path, b); err != nil {
+		return fmt.Errorf("recording the live audit cursor: %w", err)
+	}
+	return nil
 }
 
 // rewriteLive applies replace to the complete lines of b; a nil value drops

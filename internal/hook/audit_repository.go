@@ -168,9 +168,11 @@ func withSealStreamLock(p layout.Policy, s audit.Stream, bounded bool, run func(
 	return err
 }
 
-func sealPolicyStream(ctx context.Context, p layout.Policy, s audit.Stream, now time.Time, opts SealOptions, bounded bool) (int, string, error) {
+func sealPolicyStream(ctx context.Context, p layout.Policy, s audit.Stream, now time.Time, opts SealOptions, bounded bool) (_ int, _ string, sealErr error) {
 	guard := LiveLineGuard(p, s.Namespace)
 	var guardScope string
+	var newestArchived *int64
+	saveCheckpoint := true
 	// New writes are guarded before their append. A live line may predate that
 	// guard: it is redacted in place, and a line whose ts is archived with
 	// another payload is dropped (the archive wins), before the union read
@@ -185,6 +187,11 @@ func sealPolicyStream(ctx context.Context, p layout.Policy, s audit.Stream, now 
 			if !res.Complete {
 				return 0, "", fmt.Errorf("commit audit seal budget exhausted: %w", context.DeadlineExceeded)
 			}
+			defer func() {
+				if saveCheckpoint {
+					sealErr = errors.Join(sealErr, res.SaveLiveSealCursor(p, s, guardScope, newestArchived))
+				}
+			}()
 		} else if _, err := audit.RedactLive(ctx, p, s, guard, 0); err != nil {
 			return 0, "", err
 		}
@@ -197,6 +204,7 @@ func sealPolicyStream(ctx context.Context, p layout.Policy, s audit.Stream, now 
 		// A replaced archive can retain its size and mtime. The union read
 		// must still refuse conflicts; discard the hint so a retry repairs them.
 		if bounded && !opts.DryRun {
+			saveCheckpoint = false
 			err = errors.Join(err, audit.ResetLiveSealCursor(p, s, guardScope))
 		}
 		return 0, "", err
@@ -249,7 +257,11 @@ func sealPolicyStream(ctx context.Context, p layout.Policy, s audit.Stream, now 
 	for i, l := range pending {
 		if err := ctx.Err(); err != nil {
 			if archiveErr := writePendingPolicyChunk(p, s, dir, pending[:i], opts); archiveErr != nil {
+				saveCheckpoint = false
 				return 0, "", errors.Join(err, archiveErr)
+			}
+			if i > 0 {
+				newestArchived = &pending[i-1].TS
 			}
 			return i, "", err
 		}
@@ -279,7 +291,11 @@ func sealPolicyStream(ctx context.Context, p layout.Policy, s audit.Stream, now 
 		return 0, "", err
 	}
 	if err := writePendingPolicyChunk(p, s, dir, pending, opts); err != nil {
+		saveCheckpoint = false
 		return 0, "", err
+	}
+	if len(pending) > 0 {
+		newestArchived = &pending[len(pending)-1].TS
 	}
 	// Frozen legacy stays frozen and private. Its multiset identity must not
 	// be converted to the monotonic timestamp identity by migration/archival.

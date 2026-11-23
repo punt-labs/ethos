@@ -67,6 +67,10 @@ func TestBoundedSealResumesAfterBudgetExhaustion(t *testing.T) {
 	unsealed, err = audit.UnarchivedCount(p, s)
 	require.NoError(t, err)
 	require.Zero(t, unsealed)
+
+	// After the successful archive write, only the two seal checks should
+	// remain. Replaying the retained prefix would consume both of them.
+	require.NoError(t, seal(&sealCheckBudget{Context: context.Background(), remaining: 2}))
 }
 
 func TestSealRetriesReconciliationAfterArchiveStampCollision(t *testing.T) {
