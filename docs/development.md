@@ -135,6 +135,12 @@ make check                             # All gates: lint + docs + test + validat
 
 Expands to `make lint docs test validate-content fuzz-check check-opencode check-storage`: `go vet`, `staticcheck`, `shellcheck plugin/hooks/*.sh install.sh`, `markdownlint`, `go test -race -count=1 ./...`, `go run ./cmd/validate-content`, plus `fuzz` type-checking of every Z-specification `.tex` under `docs/` (content-detected; loud skip locally when `fuzz` is absent, hard failure in CI), offline native OpenCode configuration tests, and the real CLI/MCP/Git-hook storage acceptance gate. The storage gate requires every case to execute and records binary/source fingerprints; it is final-placement evidence, not proof of transient placement or crash durability. Live workstation checks are separate: `make doctor-opencode` and `make smoke-opencode`; product `make doctor` is unchanged.
 
+CI checks the eight-second audit redaction budget in a dedicated uninstrumented
+step. To run the same check locally on an unloaded worker, run
+`ETHOS_TEST_PERF_BUDGET=1 go test -count=1 ./internal/hook -run '^TestRedactLiveLongSessionBudget$'`.
+Default, race, and coverage test runs still verify that the entire session is
+redacted, but do not enforce a wall-clock deadline.
+
 ### Coverage baseline
 
 `make coverage-check` compares per-package statement coverage in `coverage.out` (written by `make test`) with `coverage-baseline.txt`. A package may drop at most 0.1 point; `overall-target` is the overall floor.

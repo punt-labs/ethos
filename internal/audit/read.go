@@ -74,11 +74,7 @@ func DecodeChunkStrict(data []byte, path string) ([]Line, error) {
 	lineNo := 0
 	for _, raw := range SplitLines(data) {
 		lineNo++
-		var h tsHolder
-		if err := json.Unmarshal(raw, &h); err != nil {
-			return nil, fmt.Errorf("corrupt chunk %s: line %d: %w", path, lineNo, err)
-		}
-		ts, err := ParseLineTS(h.TS)
+		ts, err := chunkLineTimestamp(raw)
 		if err != nil {
 			return nil, fmt.Errorf("corrupt chunk %s: line %d: %w", path, lineNo, err)
 		}
@@ -87,6 +83,14 @@ func DecodeChunkStrict(data []byte, path string) ([]Line, error) {
 		out = append(out, Line{TS: ts, Raw: cp})
 	}
 	return out, nil
+}
+
+func chunkLineTimestamp(raw []byte) (int64, error) {
+	var h tsHolder
+	if err := json.Unmarshal(raw, &h); err != nil {
+		return 0, err
+	}
+	return ParseLineTS(h.TS)
 }
 
 // ChunkReadError is a failure to read a chunk's bytes (permissions, I/O), as

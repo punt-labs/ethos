@@ -122,6 +122,8 @@ var Table = []Entry{
 	// The storage upgrade's progress through a live file it redacts in
 	// chunks; runtime state of the local zone, never published.
 	{Pattern: ".punt-labs/local/ethos/cursors/live-*.json", Class: Never},
+	{Pattern: ".punt-labs/local/ethos/cursors/seal-*.json", Class: Never},
+	{Pattern: ".punt-labs/local/ethos/cursors/history-*.json", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/missions/*/reflection-intent.yaml", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/missions/*/reflection-intents/*.yaml", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/missions/*/correction-intent.yaml", Class: Never},

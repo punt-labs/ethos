@@ -130,6 +130,10 @@ jobs:
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1
 
+      - name: Audit redaction performance budget
+        if: ${{ !cancelled() }}
+        run: ETHOS_TEST_PERF_BUDGET=1 go test -run TestRedactLiveLongSessionBudget -count=1 ./internal/hook/
+
   verify-tools:
     # Exercises `make tools` against the REAL golangci-lint release -- no
     # stubbing, no fixtures. Nothing else in this workflow runs the Makefile

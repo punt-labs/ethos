@@ -13,12 +13,17 @@ import (
 type SealOptions struct {
 	DryRun  bool
 	Verbose bool
+	// CommitBudget limits local archival (not required publication). Zero
+	// leaves a normal seal unbudgeted.
+	CommitBudget time.Duration
 	// Out receives per-stream dry-run/verbose reporting. Nil discards it.
 	Out io.Writer
 	// StartDate returns an authoritative session start date (YYYY-MM-DD).
 	// An existing archive directory wins; otherwise an empty result falls back
 	// to the first live line's date, then now.
 	StartDate func(sessionID string) string
+
+	checkpointHistory bool
 }
 
 // SealResult separates local archive completion from publication completion.

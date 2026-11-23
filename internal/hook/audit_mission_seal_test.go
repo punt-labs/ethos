@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,7 +93,7 @@ func TestSealMissionConcurrentSessions(t *testing.T) {
 		defer wg.Done()
 		s := audit.Stream{Namespace: audit.MissionNS, Mission: mid, Session: sessionID}
 		errs[idx] = audit.WithStreamLock(p, s, func() error {
-			_, _, e := sealPolicyStream(p, s, now, SealOptions{})
+			_, _, e := sealPolicyStream(context.Background(), p, s, now, SealOptions{}, false)
 			return e
 		})
 	}

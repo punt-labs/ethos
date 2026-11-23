@@ -76,10 +76,10 @@ Under record: full, additionally copies and stages only entries whose full-mode
 eligibility was captured when written. Missing legacy eligibility is private.
 Publication failure retains the archive for a later full-mode retry.
 
-The installed pre-commit hook passes --commit-context. Only in that context,
-blame archival errors warn and permit a source commit while retaining live data.
-Configuration errors and full-mode failures always block. Manual commands keep
-visible errors in both modes.
+In commit context, local archival is time-boxed and does not wait for a busy
+audit stream. Blame archival errors warn and permit a source commit while
+retaining live data. Configuration errors and full-mode failures always block.
+A regular manual seal has no archival budget and reports errors in both modes.
 
 Flags:
   --dry-run   print the per-session line counts it would seal, writing nothing
@@ -248,20 +248,15 @@ func sealRepository(out, errOut io.Writer, f sealFlags) error {
 		Out:       out,
 		StartDate: sessionStartDateResolver(),
 	}
+	if f.commitContext {
+		opts.CommitBudget = 5 * time.Second
+	}
 	res, err := hook.SealRepoWithPolicy(p, time.Now().UTC(), opts)
 	if err != nil {
 		fmt.Fprintf(errOut, "ethos: audit seal: %v\n", err)
-		// Captured full-consent publication is not an optional archival warning,
-		// even after switching to blame or when joined with an archive error.
-		var promptRetry *hook.PromptPublicationRetryError
-		if f.commitContext && p.RecordMode() == layout.RecordBlame && !errors.As(err, &promptRetry) {
-			fmt.Fprintln(errOut, "ethos: audit seal: retained-data warning: local archival incomplete; live data retained; allowing the source commit")
-			return nil
+		if !f.commitContext {
+			return failClosed{}
 		}
-		return failClosed{}
-	}
-	if res.Deferred {
-		return nil
 	}
 	// Vacuum cross-check after EVERY non-dry-run seal, not only the no-op path.
 	// A flagged tombstone's warning must repeat at every commit until the
@@ -277,6 +272,19 @@ func sealRepository(out, errOut io.Writer, f sealFlags) error {
 		} else {
 			fmt.Fprintf(errOut, "ethos: audit seal: skipping vacuum cross-check: cannot resolve home dir: %v\n", hErr)
 		}
+	}
+	if err != nil {
+		// Captured full-consent publication is not an optional archival warning,
+		// even after switching to blame or when joined with an archive error.
+		var promptRetry *hook.PromptPublicationRetryError
+		if p.RecordMode() == layout.RecordBlame && !errors.As(err, &promptRetry) {
+			fmt.Fprintln(errOut, "ethos: audit seal: retained-data warning: local archival incomplete; live data retained; allowing the source commit")
+			return nil
+		}
+		return failClosed{}
+	}
+	if res.Deferred {
+		return nil
 	}
 	if f.dryRun {
 		fmt.Fprintf(out, "audit seal: dry-run complete (%d line(s) pending)\n", res.LinesSealed)

@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Pre-commit audit sealing avoids redundant path checks and uses a five-second
+  cooperative budget for local archival. A busy stream is not waited on;
+  unfinished live data stays private and later seals resume both live
+  redaction and historical verification (PL-1417).
+
 - Generated agent edit hooks use a bounded POSIX shell reader instead of
   Bash, so checks run on NixOS and retain payloads when stdin stays open,
   including under macOS Bash 3.2. Ethos receives a fresh pipe rather than

@@ -59,3 +59,23 @@ func TestSessionStartPassSilencesFlaggedTombstoneWarning(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, strings.Count(string(logged), "retire-tombstone"), "retired with one log line")
 }
+
+func TestVacuumCrossCheckWarnsWhenFlaggedStreamCannotBeRead(t *testing.T) {
+	repo := t.TempDir()
+	gitRepoWithOrigin(t, repo, vacuumTestRepoID)
+	global := t.TempDir()
+	require.NoError(t, audit.WriteTombstone(globalSessionsDir(t, global), audit.Tombstone{
+		Session: "sess-lost", Repo: vacuumTestRepoID, UnsealedLines: true,
+	}))
+	p, err := layout.NewRepository(repo, repo, layout.RecordBlame)
+	require.NoError(t, err)
+	s := audit.Stream{Namespace: audit.SessionNS, Session: "sess-lost"}
+	dir, err := audit.ArchiveDir(p, s, "2026-11-04")
+	require.NoError(t, err)
+	name := audit.ChunkName{Namespace: audit.SessionNS, First: 100, Last: 100}
+	require.NoError(t, audit.WriteLocalAtomic(p, filepath.Join(dir, name.ChunkFile()), []byte("broken audit line\n")))
+
+	var out bytes.Buffer
+	require.ErrorContains(t, VacuumCrossCheckWithPolicy(p, global, nil, &out), "corrupt chunk")
+	require.Contains(t, out.String(), "session sess-lost has a retained purge loss flag")
+}

@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -74,9 +75,149 @@ func TestRedactLiveEqualArchivedLineStays(t *testing.T) {
 	cn := ChunkName{Namespace: SessionNS, First: 100, Last: 100}
 	require.NoError(t, WriteLocalAtomic(p, dir+"/"+cn.ChunkFile(), []byte(liveLine(100, "Read"))))
 	require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), []byte(liveLine(100, "Read"))))
-	res, err := RedactLive(context.Background(), p, s, maskGuard, 0)
+	res, err := RedactLive(context.Background(), p, s, func(raw []byte) ([]byte, string, bool) {
+		t.Error("a byte-equivalent archived payload should not be re-guarded")
+		return raw, "", false
+	}, 0)
 	require.NoError(t, err)
 	assert.False(t, res.Changed())
+}
+
+type auditDeadline struct {
+	context.Context
+	done bool
+}
+
+func (c *auditDeadline) Err() error {
+	if c.done {
+		return context.DeadlineExceeded
+	}
+	return c.Context.Err()
+}
+
+type auditCheckBudget struct {
+	context.Context
+	remaining int
+}
+
+func (c *auditCheckBudget) Err() error {
+	if c.remaining == 0 {
+		return context.DeadlineExceeded
+	}
+	c.remaining--
+	return c.Context.Err()
+}
+
+func TestRedactLiveUntilDoesNotReplayUnchangedArchive(t *testing.T) {
+	p := repositoryPolicy(t, layout.RecordBlame)
+	s := Stream{Namespace: SessionNS, Session: "s"}
+	dir, err := ArchiveDir(p, s, "2026-11-04")
+	require.NoError(t, err)
+	prefix := liveLine(100, "Read") + liveLine(200, "Read")
+	cn := ChunkName{Namespace: SessionNS, First: 100, Last: 200}
+	require.NoError(t, WriteLocalAtomic(p, dir+"/"+cn.ChunkFile(), []byte(prefix)))
+	require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), []byte(prefix+liveLine(300, "Secret"))))
+
+	ctx := &auditCheckBudget{Context: context.Background(), remaining: 2}
+	res, err := RedactLiveUntil(ctx, p, s, maskGuard, "home")
+	require.NoError(t, err)
+	require.False(t, res.Complete)
+	require.False(t, res.Changed())
+
+	ctx.remaining = 2
+	res, err = RedactLiveUntil(ctx, p, s, maskGuard, "home")
+	require.NoError(t, err)
+	require.True(t, res.Complete)
+	require.Equal(t, 1, res.Rewritten)
+	live, err := os.ReadFile(s.LivePath(p))
+	require.NoError(t, err)
+	require.Equal(t, prefix+liveLine(300, "Masked"), string(live))
+}
+
+func TestRedactLiveLimitDoesNotDecodeArchiveAfterCompletedCheckpoint(t *testing.T) {
+	p := repositoryPolicy(t, layout.RecordBlame)
+	s := Stream{Namespace: SessionNS, Session: "s"}
+	require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), []byte(liveLine(100, "Read"))))
+	res, err := RedactLive(context.Background(), p, s, maskGuard, 1)
+	require.NoError(t, err)
+	require.True(t, res.Complete)
+
+	dir, err := ArchiveDir(p, s, "2026-11-04")
+	require.NoError(t, err)
+	cn := ChunkName{Namespace: SessionNS, First: 100, Last: 100}
+	raw := strings.Replace(liveLine(100, "Read"), `"tool":"Read"`, `"tool":"Read","tool":"Read"`, 1)
+	require.NoError(t, WriteLocalAtomic(p, dir+"/"+cn.ChunkFile(), []byte(raw)))
+	res, err = RedactLive(context.Background(), p, s, maskGuard, 1)
+	require.NoError(t, err)
+	require.True(t, res.Complete)
+}
+
+func TestRedactLiveUntilResumesAndReconcilesNewArchive(t *testing.T) {
+	p := repositoryPolicy(t, layout.RecordBlame)
+	s := Stream{Namespace: SessionNS, Session: "s"}
+	torn := "{\"ts\":\"torn"
+	require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), []byte(secretLive(4)+torn)))
+	ctx := &auditDeadline{Context: context.Background()}
+	calls := 0
+	guard := func(raw []byte) ([]byte, string, bool) {
+		calls++
+		ctx.done = calls >= 2
+		return maskGuard(raw)
+	}
+	res, err := RedactLiveUntil(ctx, p, s, guard, "home")
+	require.NoError(t, err)
+	require.False(t, res.Complete)
+	require.Equal(t, 2, res.Rewritten)
+	live, err := os.ReadFile(s.LivePath(p))
+	require.NoError(t, err)
+	require.Equal(t, liveLine(100, "Masked")+liveLine(200, "Masked")+liveLine(300, "Secret")+liveLine(400, "Secret")+torn, string(live))
+
+	dir, err := ArchiveDir(p, s, "2026-11-04")
+	require.NoError(t, err)
+	cn := ChunkName{Namespace: SessionNS, First: 100, Last: 100}
+	require.NoError(t, WriteLocalAtomic(p, dir+"/"+cn.ChunkFile(), []byte(liveLine(100, "Read"))))
+	calls = 0
+	res, err = RedactLiveUntil(context.Background(), p, s, guard, "home")
+	require.NoError(t, err)
+	require.True(t, res.Complete)
+	require.Len(t, res.Dropped, 1)
+	require.Equal(t, int64(100), res.Dropped[0].TS)
+	require.Equal(t, 4, calls, "changed archive evidence invalidates the checkpoint")
+	live, err = os.ReadFile(s.LivePath(p))
+	require.NoError(t, err)
+	require.Equal(t, liveLine(200, "Masked")+liveLine(300, "Masked")+liveLine(400, "Masked")+torn, string(live))
+}
+
+func TestSaveLiveSealCursorDoesNotRescanOldArchive(t *testing.T) {
+	p := repositoryPolicy(t, layout.RecordBlame)
+	s := Stream{Namespace: SessionNS, Session: "s"}
+	dir, err := ArchiveDir(p, s, "2026-11-04")
+	require.NoError(t, err)
+	oldName := ChunkName{Namespace: SessionNS, First: 100, Last: 100}
+	oldPath := filepath.Join(dir, oldName.ChunkFile())
+	require.NoError(t, WriteLocalAtomic(p, oldPath, []byte(liveLine(100, "Read"))))
+	require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), []byte(liveLine(200, "Read"))))
+	res, err := RedactLiveUntil(context.Background(), p, s, maskGuard, "home")
+	require.NoError(t, err)
+	require.True(t, res.Complete)
+
+	newName := ChunkName{Namespace: SessionNS, First: 200, Last: 200}
+	newPath := filepath.Join(dir, newName.ChunkFile())
+	require.NoError(t, WriteLocalAtomic(p, newPath, []byte(liveLine(200, "Read"))))
+	heldPath := oldPath + ".held"
+	require.NoError(t, os.Rename(oldPath, heldPath))
+	require.NoError(t, os.Mkdir(oldPath, 0o700))
+
+	require.NoError(t, res.SaveLiveSealCursor(p, s, "home", newPath, 200))
+	_, err = RedactLiveUntil(context.Background(), p, s, maskGuard, "home")
+	require.Error(t, err)
+	require.NoError(t, os.Remove(oldPath))
+	require.NoError(t, os.Rename(heldPath, oldPath))
+
+	ctx := &auditDeadline{Context: context.Background(), done: true}
+	res, err = RedactLiveUntil(ctx, p, s, maskGuard, "home")
+	require.NoError(t, err)
+	require.True(t, res.Complete, "the checkpoint covers both archived chunks")
 }
 
 func TestTryWithStreamLockBusy(t *testing.T) {

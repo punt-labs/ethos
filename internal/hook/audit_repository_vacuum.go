@@ -23,18 +23,19 @@ func VacuumCrossCheckWithPolicy(p layout.Policy, globalRoot string, active []Act
 	if err != nil {
 		return err
 	}
-	flagged := map[string]bool{}
+	sessions := map[string]struct{}{}
 	for _, t := range tombstones {
 		if t.Repo == repoID && t.Flagged() {
-			flagged[t.Session] = true
+			if _, seen := sessions[t.Session]; !seen {
+				fmt.Fprintf(w, "warning: session %s has a retained purge loss flag\n", t.Session)
+			}
+			sessions[t.Session] = struct{}{}
 		}
 	}
 	for _, a := range active {
-		if _, ok := flagged[a.Session]; !ok {
-			flagged[a.Session] = false
-		}
+		sessions[a.Session] = struct{}{}
 	}
-	for id, purged := range flagged {
+	for id := range sessions {
 		s := audit.Stream{Namespace: audit.SessionNS, Session: id}
 		if err := probeSharedLive(p, s, w); err != nil {
 			return err
@@ -47,9 +48,6 @@ func VacuumCrossCheckWithPolicy(p layout.Policy, globalRoot string, active []Act
 			if err := probeSharedLive(p, audit.Stream{Namespace: audit.MissionNS, Session: id, Mission: missionID}, w); err != nil {
 				return err
 			}
-		}
-		if purged {
-			fmt.Fprintf(w, "warning: session %s has a retained purge loss flag\n", id)
 		}
 	}
 	return nil
