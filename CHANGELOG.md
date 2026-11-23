@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.2.1] - 2026-11-23
+
 ### Security
 
 - Clear 10 open Dependabot alerts (3 high): `google.golang.org/grpc`
