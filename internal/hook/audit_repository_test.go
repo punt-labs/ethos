@@ -121,6 +121,30 @@ func TestManualSealRecordsVerifiedHistoryForBoundedSeal(t *testing.T) {
 	require.NoError(t, err, "no individual history rows need verification")
 }
 
+func TestUnbudgetedScopedSealsDoNotWriteHistoryCheckpoints(t *testing.T) {
+	p := hookPolicy(t, t.TempDir(), t.TempDir(), layout.RecordBlame)
+	now := time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)
+	s := audit.Stream{Namespace: audit.MissionNS, Mission: "m-2026-11-04-001", Session: "s"}
+	dir, err := audit.ArchiveDir(p, s, "")
+	require.NoError(t, err)
+	raw := []byte(`{"ts":"` + audit.FormatLineTS(100) + `","tool":"Read"}` + "\n")
+	require.NoError(t, audit.WriteLocalAtomic(p, filepath.Join(dir, audit.MissionChunkFile(s.Session, 100, 100)), raw))
+
+	_, err = SealMissionWithPolicy(p, s.Mission, now, SealOptions{})
+	require.NoError(t, err)
+	_, err = SealSessionWithPolicy(p, s.Session, now, SealOptions{})
+	require.NoError(t, err)
+	checkpoints, err := filepath.Glob(filepath.Join(p.LocalRoot(), "cursors", "history-*.json"))
+	require.NoError(t, err)
+	require.Empty(t, checkpoints)
+
+	_, err = SealRepoWithPolicy(p, now, SealOptions{})
+	require.NoError(t, err)
+	checkpoints, err = filepath.Glob(filepath.Join(p.LocalRoot(), "cursors", "history-*.json"))
+	require.NoError(t, err)
+	require.Len(t, checkpoints, 1)
+}
+
 func TestBoundedSealRetriesWithUpdatedLiveGuard(t *testing.T) {
 	root := t.TempDir()
 	policyGit(t, root, "init", "-q")

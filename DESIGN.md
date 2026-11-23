@@ -14233,14 +14233,16 @@ subcommand name, never a flag on these two.
 repository-wide five-second cooperative budget and does not wait for a busy
 audit stream lock. The live file and any unfinished tail stay at the canonical
 store. A checksum of the redaction prefix lets a subsequent commit continue
-judging the same bytes. Each seal also checkpoints the verified rows of
+judging the same bytes. A repository-wide seal checkpoints the verified rows of
 immutable chunks, including partial progress on deadline. Reuse requires an
 exact chunk content digest match. The union still compares every overlapping
 identity, including live lines and both record trees, before filtering
 already-archived lines. Only guarded payloads enter an immutable chunk. Blame
 mode warns and permits the source commit if work is deferred, whereas full mode
 refuses incomplete archival. A regular manual seal is unbudgeted and records
-the same verification progress. Required full audit and captured-prompt
+the same verification progress. Dry runs and unbudgeted mission- or
+session-scoped seals may reuse existing checkpoints but do not write them.
+Required full audit and captured-prompt
 publication remain synchronous and fail closed; the
 archival budget is not a deadline for the whole hook or for individual
 filesystem operations.
