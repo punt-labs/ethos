@@ -40,7 +40,7 @@ hooks:
     - matcher: "Write|Edit"
       hooks:
         - type: command
-          command: "if [ -f \"$HOME/.punt-hooks-kill\" ]; then exit 0; fi; bash -c 'IFS= read -r -d \"\" -t 10 p; printf %s \"$p\" | ethos hook post-edit --agent \"$1\"; true' _ 'adb' || true"
+          command: "if [ -f \"$HOME/.punt-hooks-kill\" ]; then exit 0; fi; ethos hook pipe-input | ethos hook post-edit --agent 'adb' || true"
           timeout: 70
 ---
 

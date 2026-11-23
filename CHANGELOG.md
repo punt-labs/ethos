@@ -9,8 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Generated agent edit hooks resolve Bash from PATH instead of assuming
-  `/bin/bash`, so edit checks also run on hosts such as NixOS.
+- Generated agent edit hooks use a bounded, binary-owned stdin forwarder
+  instead of Bash, so checks run on NixOS and preserve complete payloads
+  when stdin stays open, including under macOS Bash 3.2.
 
 ## [5.2.0] - 2026-11-23
 

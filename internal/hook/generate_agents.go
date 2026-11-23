@@ -800,7 +800,7 @@ func extractDescription(content string) string {
 }
 
 func postEditShellCommand(handle string) string {
-	return `if [ -f "$HOME/.punt-hooks-kill" ]; then exit 0; fi; bash -c 'IFS= read -r -d "" -t 10 p; printf %s "$p" | ethos hook post-edit --agent "$1"; true' _ '` + strings.ReplaceAll(handle, "'", `'"'"'`) + `' || true`
+	return `if [ -f "$HOME/.punt-hooks-kill" ]; then exit 0; fi; ethos hook pipe-input | ethos hook post-edit --agent '` + strings.ReplaceAll(handle, "'", `'"'"'`) + `' || true`
 }
 
 // yamlQuote wraps s in double quotes, escaping internal backslashes
