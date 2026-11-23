@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Clear 10 open Dependabot alerts (3 high): `google.golang.org/grpc`
+  1.80.0 → 1.83.2 (GHSA-2v4p-qf9q-27wj, GHSA-vp52-pcj8-j9qc,
+  GHSA-hrxh-6v49-42gf, GHSA-qc2q-p7wx-3px3), the `go.opentelemetry.io/otel`
+  modules 1.43.0 → 1.47.0 (GHSA-q7gw-24fr-5p69, GHSA-8wmf-6v46-5gfg), and
+  `golang.org/x/net` 0.53.0 → 0.59.0 (GHSA-5cv4-jp36-h3mw).
+
 ### Fixed
 
 - Generated agent edit hooks use a bounded POSIX shell reader instead of
