@@ -2043,6 +2043,31 @@ decision's first rejected alternative; that was reverted before merge, and
 the branch was verified in a real Claude Code session on Linux with only the
 branch's own wrappers loaded.
 
+### Amendment 2026-11-23: generated agent hooks use a POSIX shell reader
+
+The shell-read boundary remains mandatory: the shell reads Claude Code's
+inherited stdin, and Ethos receives a fresh pipe. Bash `read -t` is not the
+only reliable implementation of that boundary. Generated agent PostToolUse
+hooks now use POSIX sh because NixOS need not provide `/bin/bash`, and Bash
+3.2 discards partial input when its timed read expires with stdin still open.
+The plugin hook wrapper scripts keep Bash and their existing stdin handling.
+
+The generated command copies inherited stdin with `cat` into a private spool.
+Independent write/read descriptors are opened before the spool is unlinked,
+so payload bytes are never written to a named file. A reader-only file-size
+limit bounds disk use where supported; failure to set it does not skip checks.
+The shell forwards the completed spool with `cat` over a fresh pipe to Ethos.
+Closed stdin completes immediately; open stdin retains arrived bytes after a
+ten-second watchdog bound. The kill switch runs first, and hook failures remain
+advisory.
+
+Watchdog cancellation targets the sleeper's PID directly, not a signal trap
+in a subshell that may not yet have installed it. The watchdog publishes that
+PID through a second unlinked file before the parent may cancel it. Cleanup
+kills and reaps the reader and sleeper, waits for the watchdog, and closes the
+spool descriptors. Shell regression coverage includes dash, modern Bash,
+Bash 3.2 when supplied, and BusyBox ash when available.
+
 ## DES-030: Subprocess integration tests for hooks (SETTLED)
 
 **Status**: Settled. Implemented 2026-04-04.
