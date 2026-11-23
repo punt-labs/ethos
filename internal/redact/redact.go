@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -193,22 +194,43 @@ var (
 // pinned in TestSecrets_KnownFalsePositives and
 // TestSecrets_ColonFormFalsePositives.
 func SecretsString(s string) string {
-	s = pemRE.ReplaceAllString(s, SecretToken)
-	s = tokenShapes.ReplaceAllString(s, "${1}"+SecretToken)
-	s = urlUserinfo.ReplaceAllStringFunc(s, func(m string) string {
-		g := urlUserinfo.FindStringSubmatch(m)
-		if keepValue(g[2]) {
-			return m
+	if strings.Contains(s, "-----BEGIN ") {
+		s = pemRE.ReplaceAllString(s, SecretToken)
+	}
+	if strings.ContainsAny(s, "_-.A") {
+		s = tokenShapes.ReplaceAllString(s, "${1}"+SecretToken)
+	}
+	if strings.Contains(s, "://") && strings.Contains(s, "@") {
+		s = urlUserinfo.ReplaceAllStringFunc(s, func(m string) string {
+			g := urlUserinfo.FindStringSubmatch(m)
+			if keepValue(g[2]) {
+				return m
+			}
+			return g[1] + SecretToken + "@"
+		})
+	}
+	if strings.ContainsAny(s, ":=") {
+		s = authHeader.ReplaceAllString(s, "${1}"+SecretToken)
+	}
+	if strings.Contains(strings.ToLower(s), "bearer") {
+		s = bearer.ReplaceAllString(s, "${1}"+SecretToken)
+	}
+	if strings.Contains(s, ":") && strings.Contains(s, `"`) {
+		s = jsonPair.ReplaceAllString(s, `${1}"`+SecretToken+`"`)
+		if strings.Contains(s, `\"`) {
+			s = jsonPairEsc.ReplaceAllString(s, `${1}\"`+SecretToken+`\"`)
 		}
-		return g[1] + SecretToken + "@"
-	})
-	s = authHeader.ReplaceAllString(s, "${1}"+SecretToken)
-	s = bearer.ReplaceAllString(s, "${1}"+SecretToken)
-	s = jsonPair.ReplaceAllString(s, `${1}"`+SecretToken+`"`)
-	s = jsonPairEsc.ReplaceAllString(s, `${1}\"`+SecretToken+`\"`)
-	s = replaceValue(envAssign, s)
-	s = replaceValue(colonAssign, s)
-	return replaceValue(flagValue, s)
+	}
+	if strings.Contains(s, "=") {
+		s = replaceValue(envAssign, s)
+	}
+	if strings.Contains(s, ":") {
+		s = replaceValue(colonAssign, s)
+	}
+	if strings.Contains(s, "--") {
+		s = replaceValue(flagValue, s)
+	}
+	return s
 }
 
 // keepValue reports whether a credential-position value is left alone: a
@@ -1151,13 +1173,25 @@ func RepoRelative(v string) bool {
 
 func leakRule(s, home string, mode int) string {
 	unesc := strings.ReplaceAll(s, `\/`, "/")
-	for _, c := range []string{s, unesc, pctDecode(s), pctDecode(unesc)} {
-		for _, v := range [][2]string{
-			{c, home},
-			{strings.ToLower(c), strings.ToLower(home)},
-			{normalizePath(c), normalizePath(home)},
-		} {
-			if r := leakRuleOf(v[0], v[1], mode); r != "" {
+	spellings := [...]string{s, unesc, pctDecode(s), pctDecode(unesc)}
+	lowerHome := strings.ToLower(home)
+	normalHome := normalizePath(lowerHome)
+	for i, c := range spellings {
+		if slices.Contains(spellings[:i], c) {
+			continue
+		}
+		if r := leakRuleOf(c, home, mode); r != "" {
+			return r
+		}
+		lower := strings.ToLower(c)
+		if lower != c || lowerHome != home {
+			if r := leakRuleOf(lower, lowerHome, mode); r != "" {
+				return r
+			}
+		}
+		normal := normalizePath(lower)
+		if normal != lower || normalHome != lowerHome {
+			if r := leakRuleOf(normal, normalHome, mode); r != "" {
 				return r
 			}
 		}
@@ -1178,13 +1212,15 @@ func leakRuleOf(n, home string, mode int) string {
 	if mode == ruleOwn {
 		return ""
 	}
-	if mode != ruleInside && mode != ruleHomeRel && leakPath.MatchString(n) {
+	inside := mode == ruleInside || mode == ruleHomeRel
+	if !inside && (strings.Contains(n, "/home/") || strings.Contains(n, "/users/")) && leakPath.MatchString(n) {
 		return "contains a /home/ or /Users/ path"
 	}
-	if leakSlug.MatchString(n) || ((mode == ruleInside || mode == ruleHomeRel) && leakSlugEndTilde.MatchString(n)) || (mode != ruleInside && mode != ruleHomeRel && leakSlugEnd.MatchString(n)) {
+	if (strings.Contains(n, "-home-") || strings.Contains(n, "-users-")) &&
+		(leakSlug.MatchString(n) || (inside && leakSlugEndTilde.MatchString(n)) || (!inside && leakSlugEnd.MatchString(n))) {
 		return "contains a home-directory slug"
 	}
-	if climbOut.MatchString(n) {
+	if strings.Contains(n, "..") && (strings.Contains(n, "~") || strings.Contains(n, "<repo>")) && climbOut.MatchString(n) {
 		return "climbs out of a ~ or <repo> placeholder with .."
 	}
 	return ""
@@ -1197,12 +1233,14 @@ func normalizePath(s string) string {
 	for {
 		t := strings.ReplaceAll(s, "//", "/")
 		t = strings.ReplaceAll(t, "/./", "/")
-		t = upDir.ReplaceAllStringFunc(t, func(m string) string {
-			if seg := m[1 : len(m)-4]; seg == ".." || seg == "." {
-				return m
-			}
-			return "/"
-		})
+		if strings.Contains(t, "/../") {
+			t = upDir.ReplaceAllStringFunc(t, func(m string) string {
+				if seg := m[1 : len(m)-4]; seg == ".." || seg == "." {
+					return m
+				}
+				return "/"
+			})
+		}
 		if t == s {
 			return s
 		}

@@ -37,7 +37,7 @@ type LiveRepair struct {
 	Rewritten int            // lines replaced by their redacted form
 	Dropped   []LiveConflict // lines removed because the archive wins
 	// Complete is true when every complete line of the file has been judged.
-	// It is false only after a chunked call (limit > 0) that stopped early.
+	// A chunked or deadline-limited call can leave a remainder.
 	Complete bool
 }
 
@@ -59,8 +59,8 @@ func liveCursorPath(p layout.Policy, s Stream) string {
 
 // readLiveCursor returns the byte length of the prefix of b already judged, or
 // 0 when there is no cursor or b no longer begins with the prefix it names.
-func readLiveCursor(p layout.Policy, s Stream, b []byte) int {
-	raw, err := os.ReadFile(liveCursorPath(p, s))
+func readLiveCursor(path string, b []byte) int {
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return 0
 	}
@@ -89,6 +89,23 @@ func readLiveCursor(p layout.Policy, s Stream, b []byte) int {
 // large for one budget is finished across calls. Complete says whether any
 // lines remain. limit == 0 judges the whole file and keeps no record.
 func RedactLive(ctx context.Context, p layout.Policy, s Stream, guard LineGuard, limit int) (LiveRepair, error) {
+	cursor := ""
+	if limit > 0 {
+		cursor = liveCursorPath(p, s)
+	}
+	return redactLive(ctx, p, s, guard, limit, cursor, false)
+}
+
+// RedactLiveUntil saves the judged prefix on deadline so another commit can
+// resume. The separate cursor belongs to this checkout and guard configuration.
+// A caller must hold the stream lock and still validate pending archival and
+// publication payloads before writing them out.
+func RedactLiveUntil(ctx context.Context, p layout.Policy, s Stream, guard LineGuard, guardScope string) (LiveRepair, error) {
+	cursor := filepath.Join(p.LocalRoot(), "cursors", fmt.Sprintf("seal-%x.json", sha256.Sum256([]byte(s.Key()+"\x00"+p.CheckoutRecordRoot()+"\x00"+guardScope))))
+	return redactLive(ctx, p, s, guard, 0, cursor, true)
+}
+
+func redactLive(ctx context.Context, p layout.Policy, s Stream, guard LineGuard, limit int, cursor string, checkpoint bool) (LiveRepair, error) {
 	var res LiveRepair
 	live, err := ReadLiveLines(p, s)
 	if err != nil {
@@ -108,17 +125,17 @@ func RedactLive(ctx context.Context, p layout.Policy, s Stream, guard LineGuard,
 		return LiveRepair{}, fmt.Errorf("live audit %s changed while it was read", path)
 	}
 	start, end := 0, len(live)
-	if limit > 0 {
-		skip := readLiveCursor(p, s, b)
+	if cursor != "" {
+		skip := readLiveCursor(cursor, b)
 		for start < len(live) && ends[start] <= skip {
 			start++
 		}
-		if start+limit < end {
+		if limit > 0 && start+limit < end {
 			end = start + limit
 		}
 	}
-	res.Complete = end == len(live)
-	if start == end {
+	if start == end && !checkpoint {
+		res.Complete = end == len(live)
 		return res, nil
 	}
 	archived, err := archivedPayloads(p, s)
@@ -126,24 +143,41 @@ func RedactLive(ctx context.Context, p layout.Policy, s Stream, guard LineGuard,
 		return LiveRepair{}, err
 	}
 	replace := map[string][]byte{} // raw live line -> its redacted form; nil drops it
-	for _, l := range live[start:end] {
+	first := start
+	if checkpoint {
+		// The archive may have changed since the cursor was written. In
+		// that case, still reconcile conflicts inside the checked prefix.
+		first = 0
+	}
+	for i := first; i < end; i++ {
 		if err := ctx.Err(); err != nil {
-			return LiveRepair{}, err
+			if !checkpoint || err != context.DeadlineExceeded {
+				return LiveRepair{}, err
+			}
+			end = i
+			break
+		}
+		l := live[i]
+		want, archived := archived[l.TS]
+		if checkpoint && i < start && !archived {
+			continue
 		}
 		got, err := CanonicalPayload(l.Raw)
 		if err != nil {
 			return LiveRepair{}, err
+		}
+		if archived && bytes.Equal(want, got) {
+			continue
 		}
 		out, _, _ := guard(l.Raw)
 		after, err := CanonicalPayload(out)
 		if err != nil {
 			return LiveRepair{}, fmt.Errorf("guarded audit payload at ts %d is not a valid line: %w", l.TS, err)
 		}
-		if want, ok := archived[l.TS]; ok {
+		if archived {
 			// Compare the guarded form: a live line whose redaction is what
 			// the archive holds is already archived, not a conflict.
 			switch {
-			case bytes.Equal(want, got):
 			case bytes.Equal(want, after):
 				replace[string(l.Raw)] = out
 				res.Rewritten++
@@ -165,17 +199,18 @@ func RedactLive(ctx context.Context, p layout.Policy, s Stream, guard LineGuard,
 			return LiveRepair{}, fmt.Errorf("replacing live audit %s with its redacted lines: %w", path, err)
 		}
 	}
-	if limit > 0 {
+	if cursor != "" && (end > start || (end > 0 && res.Changed())) {
 		// The prefix through the last judged line, in its stored form.
 		n := len(rewriteLive(b[:ends[end-1]], replace))
 		c, err := json.Marshal(liveCursor{Offset: n, SHA256: digest(out[:n])})
 		if err != nil {
 			return LiveRepair{}, fmt.Errorf("encoding the live audit cursor: %w", err)
 		}
-		if err := ReplaceLocalFile(p, liveCursorPath(p, s), c); err != nil {
+		if err := ReplaceLocalFile(p, cursor, c); err != nil {
 			return LiveRepair{}, fmt.Errorf("recording the live audit cursor: %w", err)
 		}
 	}
+	res.Complete = end == len(live)
 	return res, nil
 }
 

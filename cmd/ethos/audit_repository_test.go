@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -103,6 +104,48 @@ func TestRepositoryAuditPreCommitExitPolicy(t *testing.T) {
 				require.Error(t, err, "invalid policy/full failure must block the commit: %s", out)
 				assert.NotContains(t, string(out), "allowing the source commit")
 			}
+		})
+	}
+}
+
+func TestRepositoryAuditPreCommitDefersBusyStream(t *testing.T) {
+	require.NotEmpty(t, ethosBinary)
+	for _, mode := range []string{"blame", "full"} {
+		t.Run(mode, func(t *testing.T) {
+			p, s := repositoryAuditCLI(t, mode)
+			root := filepath.Dir(filepath.Dir(p.RecordRoot()))
+			raw := []byte("{\"ts\":\"" + audit.FormatLineTS(1000) + "\",\"tool\":\"Read\"}\n")
+			require.NoError(t, audit.WriteLocalAtomic(p, s.LivePath(p), raw))
+			run := func() ([]byte, error) {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				cmd := exec.CommandContext(ctx, ethosBinary, "hook", "pre-commit")
+				cmd.Dir = root
+				out, err := cmd.CombinedOutput()
+				require.NoError(t, ctx.Err(), "%s", out)
+				return out, err
+			}
+			require.NoError(t, audit.WithStreamLock(p, s, func() error {
+				out, err := run()
+				require.Contains(t, string(out), "stream lock busy")
+				if mode == "blame" {
+					require.NoError(t, err, "%s", out)
+					require.Contains(t, string(out), "retained-data warning")
+				} else {
+					var exit *exec.ExitError
+					require.ErrorAs(t, err, &exit, "%s", out)
+					require.Equal(t, 2, exit.ExitCode(), "%s", out)
+				}
+				unsealed, err := audit.UnarchivedCount(p, s)
+				require.NoError(t, err)
+				require.Equal(t, 1, unsealed)
+				return nil
+			}))
+			out, err := run()
+			require.NoError(t, err, "%s", out)
+			unsealed, err := audit.UnarchivedCount(p, s)
+			require.NoError(t, err)
+			require.Zero(t, unsealed)
 		})
 	}
 }

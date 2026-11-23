@@ -92,17 +92,34 @@ func SealMissionWithPolicy(p layout.Policy, missionID string, now time.Time, opt
 }
 
 func sealPolicyStreams(p layout.Policy, streams []audit.Stream, now time.Time, opts SealOptions) (SealResult, error) {
+	ctx := context.Background()
+	bounded := opts.CommitBudget > 0 && !opts.DryRun
+	if bounded {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, opts.CommitBudget)
+		defer cancel()
+	}
 	var res SealResult
-	var publish []string
+	type streamArchive struct {
+		stream audit.Stream
+		dir    string
+	}
+	var archives []streamArchive
 	var archiveErrors []error
 	for _, s := range streams {
-		err := audit.WithStreamLock(p, s, func() error {
-			n, paths, err := sealPolicyStream(p, s, now, opts)
+		if ctx.Err() != nil {
+			archiveErrors = append(archiveErrors, fmt.Errorf("commit audit seal budget exhausted; remaining live data retained: %w", ctx.Err()))
+			break
+		}
+		err := withSealStreamLock(p, s, bounded, func() error {
+			n, dir, err := sealPolicyStream(ctx, p, s, now, opts, bounded)
 			res.LinesSealed += n
 			if n > 0 {
 				res.SessionsSealed++
 			}
-			publish = append(publish, paths...)
+			if dir != "" && !opts.DryRun && p.RecordMode() == layout.RecordFull {
+				archives = append(archives, streamArchive{s, dir})
+			}
 			return err
 		})
 		if err != nil {
@@ -118,6 +135,17 @@ func sealPolicyStreams(p layout.Policy, streams []audit.Stream, now time.Time, o
 	if opts.DryRun || p.RecordMode() == layout.RecordBlame {
 		return res, nil
 	}
+	var publish []string
+	for _, entry := range archives {
+		err := withSealStreamLock(p, entry.stream, bounded, func() error {
+			paths, err := prepareStreamPublication(p, entry.stream, entry.dir)
+			publish = append(publish, paths...)
+			return err
+		})
+		if err != nil {
+			return res, fmt.Errorf("full audit publication incomplete; local archive retained: %w", err)
+		}
+	}
 	if err := audit.StagePublication(p, publish); err != nil {
 		return res, fmt.Errorf("full audit publication incomplete; local archive retained: %w", err)
 	}
@@ -125,20 +153,43 @@ func sealPolicyStreams(p layout.Policy, streams []audit.Stream, now time.Time, o
 	return res, nil
 }
 
-func sealPolicyStream(p layout.Policy, s audit.Stream, now time.Time, opts SealOptions) (int, []string, error) {
+func withSealStreamLock(p layout.Policy, s audit.Stream, bounded bool, run func() error) error {
+	if !bounded {
+		return audit.WithStreamLock(p, s, run)
+	}
+	busy, err := audit.TryWithStreamLock(p, s, run)
+	if busy {
+		return errors.New("stream lock busy")
+	}
+	return err
+}
+
+func sealPolicyStream(ctx context.Context, p layout.Policy, s audit.Stream, now time.Time, opts SealOptions, bounded bool) (int, string, error) {
 	guard := LiveLineGuard(p, s.Namespace)
 	// New writes are guarded before their append. A live line may predate that
 	// guard: it is redacted in place, and a line whose ts is archived with
 	// another payload is dropped (the archive wins), before the union read
 	// would refuse it and before anything immutable is written.
 	if !opts.DryRun {
-		if _, err := audit.RedactLive(context.Background(), p, s, guard, 0); err != nil {
-			return 0, nil, err
+		if bounded {
+			home, _ := os.UserHomeDir()
+			res, err := audit.RedactLiveUntil(ctx, p, s, guard, home)
+			if err != nil {
+				return 0, "", err
+			}
+			if !res.Complete {
+				return 0, "", fmt.Errorf("commit audit seal budget exhausted: %w", context.DeadlineExceeded)
+			}
+		} else if _, err := audit.RedactLive(ctx, p, s, guard, 0); err != nil {
+			return 0, "", err
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, "", err
 	}
 	data, err := audit.ReadStream(p, s)
 	if err != nil {
-		return 0, nil, err
+		return 0, "", err
 	}
 	date := ""
 	if s.Namespace == audit.SessionNS && opts.StartDate != nil {
@@ -152,7 +203,7 @@ func sealPolicyStream(p layout.Policy, s audit.Stream, now time.Time, opts SealO
 	}
 	dir, err := audit.ArchiveDir(p, s, date)
 	if err != nil {
-		return 0, nil, err
+		return 0, "", err
 	}
 	session := ""
 	if s.Namespace == audit.MissionNS {
@@ -160,13 +211,13 @@ func sealPolicyStream(p layout.Policy, s audit.Stream, now time.Time, opts SealO
 	}
 	scan, err := audit.ScanSealedDir(dir, s.Namespace, session)
 	if err != nil {
-		return 0, nil, err
+		return 0, "", err
 	}
 	archived := map[int64]bool{}
 	for _, c := range scan.Chunks {
 		lines, err := audit.ReadChunkVerified(filepath.Join(dir, c.ChunkFile()), c.Last)
 		if err != nil {
-			return 0, nil, err
+			return 0, "", err
 		}
 		for _, l := range lines {
 			archived[l.TS] = true
@@ -180,37 +231,45 @@ func sealPolicyStream(p layout.Policy, s audit.Stream, now time.Time, opts SealO
 	}
 	if opts.DryRun {
 		reportf(opts, "would archive %d line(s) for stream %s\n", len(pending), s.Key())
-		return len(pending), nil, nil
+		return len(pending), "", nil
 	}
 	// Any pending line a source other than the live file would still change
 	// (frozen legacy, a published copy) is not ours to rewrite; do not
 	// manufacture a conflict with its retained source on the next union read.
-	for _, l := range pending {
+	for i, l := range pending {
+		if err := ctx.Err(); err != nil {
+			if archiveErr := writePendingPolicyChunk(p, s, dir, pending[:i], opts); archiveErr != nil {
+				return 0, "", errors.Join(err, archiveErr)
+			}
+			return i, "", err
+		}
 		out, _, _ := guard(l.Raw)
 		changed, err := payloadChanged(l, out)
 		if err != nil {
-			return 0, nil, err
+			return 0, "", err
 		}
 		if changed {
-			return 0, nil, errNeedsMigration(l.TS)
+			return 0, "", errNeedsMigration(l.TS)
 		}
 	}
 	for _, l := range data.Legacy {
+		if err := ctx.Err(); err != nil {
+			return 0, "", err
+		}
 		out, _, _ := guard(l.Raw)
 		changed, err := payloadChanged(l, out)
 		if err != nil {
-			return 0, nil, err
+			return 0, "", err
 		}
 		if changed {
-			return 0, nil, errNeedsMigration(l.TS)
+			return 0, "", errNeedsMigration(l.TS)
 		}
 	}
-	if len(pending) > 0 {
-		name := policyChunkName(s, pending[0].TS, pending[len(pending)-1].TS)
-		if err := audit.WriteLocalAtomic(p, filepath.Join(dir, name), auditLinesBytes(pending)); err != nil {
-			return 0, nil, err
-		}
-		reportf(opts, "archived %d line(s) for stream %s into %s\n", len(pending), s.Key(), name)
+	if err := ctx.Err(); err != nil {
+		return 0, "", err
+	}
+	if err := writePendingPolicyChunk(p, s, dir, pending, opts); err != nil {
+		return 0, "", err
 	}
 	// Frozen legacy stays frozen and private. Its multiset identity must not
 	// be converted to the monotonic timestamp identity by migration/archival.
@@ -220,23 +279,29 @@ func sealPolicyStream(p layout.Policy, s audit.Stream, now time.Time, opts SealO
 			name = "log.jsonl"
 		}
 		if err := audit.ReplaceLocalFile(p, filepath.Join(dir, name), auditLinesBytes(data.Legacy)); err != nil {
-			return len(pending), nil, err
+			return len(pending), "", err
 		}
 	}
-	if p.RecordMode() != layout.RecordFull {
-		return len(pending), nil, nil
-	}
+	return len(pending), dir, nil
+}
+
+func prepareStreamPublication(p layout.Policy, s audit.Stream, dir string) ([]string, error) {
 	// Publish from immutable archive chunks, never by copying the live file
 	// or the whole local directory. This also retries prior full publication.
-	scan, err = audit.ScanSealedDir(dir, s.Namespace, session)
+	session := ""
+	if s.Namespace == audit.MissionNS {
+		session = s.Session
+	}
+	guard := LiveLineGuard(p, s.Namespace)
+	scan, err := audit.ScanSealedDir(dir, s.Namespace, session)
 	if err != nil {
-		return len(pending), nil, err
+		return nil, err
 	}
 	var paths []string
 	for _, c := range audit.SortChunks(scan.Chunks) {
 		lines, err := audit.ReadChunkVerified(filepath.Join(dir, c.ChunkFile()), c.Last)
 		if err != nil {
-			return len(pending), nil, err
+			return nil, err
 		}
 		var eligible []audit.Line
 		for _, l := range lines {
@@ -248,11 +313,11 @@ func sealPolicyStream(p layout.Policy, s audit.Stream, now time.Time, opts SealO
 			// not silently publish or silently omit it; the operator must see it.
 			before, err := audit.CanonicalPayload(l.Raw)
 			if err != nil {
-				return len(pending), nil, err
+				return nil, err
 			}
 			after, err := audit.CanonicalPayload(out)
 			if err != nil || !bytes.Equal(before, after) {
-				return len(pending), nil, fmt.Errorf("eligible audit payload at ts %d no longer passes redaction unchanged", l.TS)
+				return nil, fmt.Errorf("eligible audit payload at ts %d no longer passes redaction unchanged", l.TS)
 			}
 			eligible = append(eligible, l)
 		}
@@ -261,15 +326,27 @@ func sealPolicyStream(p layout.Policy, s audit.Stream, now time.Time, opts SealO
 		}
 		rel, err := filepath.Rel(audit.ArchiveRoot(p), dir)
 		if err != nil {
-			return len(pending), nil, err
+			return nil, err
 		}
 		path := filepath.Join(p.CheckoutRecordRoot(), rel, policyChunkName(s, eligible[0].TS, eligible[len(eligible)-1].TS))
 		if err := audit.WriteLocalAtomic(p, path, auditLinesBytes(eligible)); err != nil {
-			return len(pending), nil, err
+			return nil, err
 		}
 		paths = append(paths, path)
 	}
-	return len(pending), paths, nil
+	return paths, nil
+}
+
+func writePendingPolicyChunk(p layout.Policy, s audit.Stream, dir string, pending []audit.Line, opts SealOptions) error {
+	if len(pending) == 0 {
+		return nil
+	}
+	name := policyChunkName(s, pending[0].TS, pending[len(pending)-1].TS)
+	if err := audit.WriteLocalAtomic(p, filepath.Join(dir, name), auditLinesBytes(pending)); err != nil {
+		return err
+	}
+	reportf(opts, "archived %d line(s) for stream %s into %s\n", len(pending), s.Key(), name)
+	return nil
 }
 
 // payloadChanged reports whether guarding l produced a different payload.

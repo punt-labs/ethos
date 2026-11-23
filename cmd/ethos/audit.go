@@ -76,10 +76,10 @@ Under record: full, additionally copies and stages only entries whose full-mode
 eligibility was captured when written. Missing legacy eligibility is private.
 Publication failure retains the archive for a later full-mode retry.
 
-The installed pre-commit hook passes --commit-context. Only in that context,
-blame archival errors warn and permit a source commit while retaining live data.
-Configuration errors and full-mode failures always block. Manual commands keep
-visible errors in both modes.
+In commit context, local archival is time-boxed and does not wait for a busy
+audit stream. Blame archival errors warn and permit a source commit while
+retaining live data. Configuration errors and full-mode failures always block.
+A regular manual seal has no archival budget and reports errors in both modes.
 
 Flags:
   --dry-run   print the per-session line counts it would seal, writing nothing
@@ -247,6 +247,9 @@ func sealRepository(out, errOut io.Writer, f sealFlags) error {
 		Verbose:   f.verbose,
 		Out:       out,
 		StartDate: sessionStartDateResolver(),
+	}
+	if f.commitContext {
+		opts.CommitBudget = 5 * time.Second
 	}
 	res, err := hook.SealRepoWithPolicy(p, time.Now().UTC(), opts)
 	if err != nil {

@@ -13,6 +13,9 @@ import (
 type SealOptions struct {
 	DryRun  bool
 	Verbose bool
+	// CommitBudget limits local archival (not required publication). Zero
+	// leaves a normal seal unbudgeted.
+	CommitBudget time.Duration
 	// Out receives per-stream dry-run/verbose reporting. Nil discards it.
 	Out io.Writer
 	// StartDate returns an authoritative session start date (YYYY-MM-DD).

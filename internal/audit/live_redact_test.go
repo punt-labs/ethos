@@ -74,9 +74,60 @@ func TestRedactLiveEqualArchivedLineStays(t *testing.T) {
 	cn := ChunkName{Namespace: SessionNS, First: 100, Last: 100}
 	require.NoError(t, WriteLocalAtomic(p, dir+"/"+cn.ChunkFile(), []byte(liveLine(100, "Read"))))
 	require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), []byte(liveLine(100, "Read"))))
-	res, err := RedactLive(context.Background(), p, s, maskGuard, 0)
+	res, err := RedactLive(context.Background(), p, s, func(raw []byte) ([]byte, string, bool) {
+		t.Error("a byte-equivalent archived payload should not be re-guarded")
+		return raw, "", false
+	}, 0)
 	require.NoError(t, err)
 	assert.False(t, res.Changed())
+}
+
+type auditDeadline struct {
+	context.Context
+	done bool
+}
+
+func (c *auditDeadline) Err() error {
+	if c.done {
+		return context.DeadlineExceeded
+	}
+	return c.Context.Err()
+}
+
+func TestRedactLiveUntilResumesAndReconcilesNewArchive(t *testing.T) {
+	p := repositoryPolicy(t, layout.RecordBlame)
+	s := Stream{Namespace: SessionNS, Session: "s"}
+	torn := "{\"ts\":\"torn"
+	require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), []byte(secretLive(4)+torn)))
+	ctx := &auditDeadline{Context: context.Background()}
+	calls := 0
+	guard := func(raw []byte) ([]byte, string, bool) {
+		calls++
+		ctx.done = calls >= 2
+		return maskGuard(raw)
+	}
+	res, err := RedactLiveUntil(ctx, p, s, guard, "home")
+	require.NoError(t, err)
+	require.False(t, res.Complete)
+	require.Equal(t, 2, res.Rewritten)
+	live, err := os.ReadFile(s.LivePath(p))
+	require.NoError(t, err)
+	require.Equal(t, liveLine(100, "Masked")+liveLine(200, "Masked")+liveLine(300, "Secret")+liveLine(400, "Secret")+torn, string(live))
+
+	dir, err := ArchiveDir(p, s, "2026-11-04")
+	require.NoError(t, err)
+	cn := ChunkName{Namespace: SessionNS, First: 100, Last: 100}
+	require.NoError(t, WriteLocalAtomic(p, dir+"/"+cn.ChunkFile(), []byte(liveLine(100, "Read"))))
+	calls = 0
+	res, err = RedactLiveUntil(context.Background(), p, s, guard, "home")
+	require.NoError(t, err)
+	require.True(t, res.Complete)
+	require.Len(t, res.Dropped, 1)
+	require.Equal(t, int64(100), res.Dropped[0].TS)
+	require.Equal(t, 3, calls, "reconcile the archive conflict, skip the clean prefix line, and guard the remainder")
+	live, err = os.ReadFile(s.LivePath(p))
+	require.NoError(t, err)
+	require.Equal(t, liveLine(200, "Masked")+liveLine(300, "Masked")+liveLine(400, "Masked")+torn, string(live))
 }
 
 func TestTryWithStreamLockBusy(t *testing.T) {

@@ -439,12 +439,10 @@ func childCtx(c leakCtx, k string) leakCtx {
 	return ctxOther
 }
 
-// previewExempt reports whether the entry k=e of the line map x is the
-// tool_input_preview the writer derives from the line's own tool_input, and
-// that tool_input passes the check: the preview is a copy of text already
-// judged, and quotes the same path-field values, so it is not judged again as
-// free text.
-func previewExempt(x map[string]any, k string, e any) bool {
+// previewMatchesInput reports whether k=e is the preview derived from the
+// line's own tool_input. Once that input has passed the check, its preview
+// need not be judged again as free text.
+func previewMatchesInput(x map[string]any, k string, e any) bool {
 	s, ok := e.(string)
 	if !ok || k != "tool_input_preview" {
 		return false
@@ -454,7 +452,7 @@ func previewExempt(x map[string]any, k string, e any) bool {
 	if hasInput {
 		env["tool_input"] = ti
 	}
-	return s == ToolInputPreview(env) && valueRuleIn(ti, ctxInput) == ""
+	return s == ToolInputPreview(env)
 }
 
 func valueRule(v any) string { return valueRuleIn(v, ctxLine) }
@@ -484,7 +482,8 @@ func valueRuleIn(v any, c leakCtx) string {
 			if r := mission.LeakRule(k); r != "" {
 				return r
 			}
-			if c == ctxLine && previewExempt(x, k, x[k]) {
+			// tool_input sorts before its preview and has already passed.
+			if c == ctxLine && previewMatchesInput(x, k, x[k]) {
 				continue
 			}
 			if r := valueRuleIn(x[k], childCtx(c, k)); r != "" {
@@ -533,7 +532,7 @@ func scrubAuditIn(v any, c leakCtx) any {
 			}
 			return k
 		}, c == ctxLine, func(k string, e any) any {
-			if c == ctxLine && previewExempt(x, k, e) {
+			if c == ctxLine && previewMatchesInput(x, k, e) && valueRuleIn(x["tool_input"], ctxInput) == "" {
 				return e
 			}
 			return scrubAuditIn(e, childCtx(c, k))
