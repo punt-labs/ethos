@@ -317,12 +317,25 @@ there are none; Bash commands are not parsed to discover additional roots.
 Otherwise the root keeps an empty file list: glob checks skip it, but
 `files: all` checks still run. Same-store linked worktrees
 run independently with their own matching paths, cwd and `{root}`, while policy
-is resolved separately for each attributed checkout. Vanished audited files are omitted, but
-their checkout attribution is retained through the nearest existing physical
-ancestor directory, including when parent directories have disappeared. A path
+is resolved separately for each attributed checkout. For vanished attributed paths, handoff
+uses Git rename detection against HEAD with a copied temporary index below the
+canonical store's untracked `.punt-labs/local/ethos/tmp/` (not ambient `TMPDIR`) and
+intent-to-add entries for untracked files. Only exact-content (`R100`) renames
+count as attribution. Similarity alone, including edits since HEAD, is insufficient
+and produces advisory feedback instead. A discovered target must still exist
+under the same accepted root and must not be another agent's known path. This
+covers unstaged `mv` and staged `git mv` without changing the real index or
+widening dirty-tree fallback. Lookup failures are advisory and non-blocking;
+outright deletions remain omitted. Known deletions, rejected targets and lookup
+failures do not activate dirty-tree fallback. Historical paths absent from Git
+retain the existing exclusive-linked-worktree fallback. The temporary candidate directory is removed
+on success and failure. Untracked discovery accepts at most 512 paths and 64 KiB
+of path output. Enumeration, intent-to-add and diff each have a one-second Git
+budget; exhaustion skips inference with advice. Checkout attribution is retained through the
+nearest existing physical ancestor, including missing parent directories. A path
 whose root is indeterminate disables dirty-tree fallback without blocking the
-stop; attributed files and `files: all` checks still run. An unreadable audit
-fails closed rather than silently narrowing the scope.
+stop; attributed files and `files: all` checks still run. With selected handoff
+checks, an unreadable audit fails closed rather than silently narrowing the scope.
 
 A provably read-only stop skips every handoff check, `files: all` included.
 SubagentStart records a fingerprint on the agent's roster entry when its
