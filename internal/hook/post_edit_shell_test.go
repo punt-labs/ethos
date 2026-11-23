@@ -360,6 +360,29 @@ func TestGeneratedPostEditShellClosedInput(t *testing.T) {
 	}
 }
 
+func TestGeneratedPostEditShellTermBeforeUnlink(t *testing.T) {
+	rm, err := exec.LookPath("rm")
+	require.NoError(t, err)
+	bin, scratch, processes := postEditShellFixture(t)
+	postEditShellEthos(t, bin, "exit 9\n")
+	require.NoError(t, os.Remove(filepath.Join(bin, "rm")))
+	postEditTool(t, bin, "rm", `if [ ! -f "$HOME/signalled" ]; then
+: > "$HOME/signalled"
+kill -TERM "$PPID"
+exit 1
+fi
+exec "`+rm+`" "$@"
+`)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", postEditShellCommand("bwk"))
+	cmd.Stdin = strings.NewReader("{}")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	require.FileExists(t, filepath.Join(os.Getenv("HOME"), "signalled"))
+	postEditShellClean(t, scratch, processes)
+}
+
 func TestGeneratedPostEditShellNoPIDPublication(t *testing.T) {
 	bin, scratch, processes := postEditShellFixture(t)
 	postEditShellEthos(t, bin, "cat\n")

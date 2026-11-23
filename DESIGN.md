@@ -2067,7 +2067,9 @@ After `InputTimeout` it sends TERM to the shell reader; TERM or INT cancels the
 timer immediately. This does not cross the inherited-stdin boundary: only the
 shell reader handles Claude Code's input, and the watchdog has `/dev/null` as
 stdin. Its stdout, stderr, and spool descriptor are redirected or closed.
-The parent installs cleanup traps only after spawning the reader and watchdog,
+Early cleanup traps protect the empty spool between creation and unlinking;
+they are cleared before spawning either child, preserving default signal
+dispositions. The parent installs full cleanup traps after spawning the reader and watchdog,
 then kills and waits for the watchdog when the reader finishes. There are no
 shell sleepers, PID handshakes, or watchdog grandchildren to orphan. A TERM
 before parent trap installation can leave at most the ten-second bounded
