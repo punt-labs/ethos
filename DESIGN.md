@@ -2061,11 +2061,12 @@ Closed stdin completes immediately; open stdin retains arrived bytes after a
 ten-second watchdog bound. The kill switch runs first, and hook failures remain
 advisory.
 
-Watchdog cancellation targets the sleeper's PID directly, not a signal trap
-in a subshell that may not yet have installed it. The watchdog publishes that
-PID through a second unlinked file before the parent may cancel it. Cleanup
-kills and reaps the reader and sleeper, waits for the watchdog, and closes the
-spool descriptors. Shell regression coverage includes dash, modern Bash,
+The watchdog has no cancellation trap or PID-publication handshake. Its
+stdin, stdout, stderr, and spool descriptor are closed or redirected before
+it starts. Cleanup kills and reaps the reader and watchdog and closes the
+spool descriptors. A sleeper orphaned by watchdog cancellation holds no hook
+descriptor and exits after its remaining ten-second delay; it cannot delay
+closed-input completion. Shell regression coverage includes dash, modern Bash,
 Bash 3.2 when supplied, and BusyBox ash when available.
 
 ## DES-030: Subprocess integration tests for hooks (SETTLED)

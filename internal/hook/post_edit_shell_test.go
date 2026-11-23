@@ -24,11 +24,8 @@ func postEditShellFixture(t *testing.T) (bin, scratch, processes string) {
 	for _, name := range []string{"mktemp", "rm", "cat", "sleep"} {
 		path, err := exec.LookPath(name)
 		require.NoError(t, err)
-		if name == "cat" || name == "sleep" {
+		if name == "cat" {
 			pids := `"$$"`
-			if name == "sleep" {
-				pids += ` "$PPID"`
-			}
 			postEditTool(t, bin, name, "printf '%s\\n' "+pids+" >> \"$PROCESS_LOG\"\nexec \""+path+"\" \"$@\"\n")
 		} else {
 			require.NoError(t, os.Symlink(path, filepath.Join(bin, name)))
@@ -246,7 +243,7 @@ func TestGeneratedPostEditShellInterrupted(t *testing.T) {
 	require.NoError(t, cmd.Start())
 	require.Eventually(t, func() bool {
 		data, err := os.ReadFile(processes)
-		return err == nil && len(strings.Fields(string(data))) >= 3
+		return err == nil && len(strings.Fields(string(data))) >= 1
 	}, time.Second, 10*time.Millisecond)
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
 	require.NoError(t, cmd.Wait(), "%s", out.String())
@@ -311,30 +308,55 @@ func TestGeneratedPostEditShellKilled(t *testing.T) {
 	require.Empty(t, entries, "SIGKILL after reading a payload must not leave a named spool")
 }
 
-func TestGeneratedPostEditShellBusyboxClosedInput(t *testing.T) {
-	busybox, err := exec.LookPath("busybox")
-	if err != nil {
-		t.Skip("BusyBox ash is not available")
+func TestGeneratedPostEditShellClosedInput(t *testing.T) {
+	shells := map[string][]string{"sh": {"/bin/sh"}}
+	if bash, err := exec.LookPath("bash"); err == nil {
+		shells["bash"] = []string{bash}
 	}
+	if bash32 := os.Getenv("ETHOS_TEST_BASH32"); bash32 != "" {
+		shells["bash32"] = []string{bash32}
+	}
+	if busybox, err := exec.LookPath("busybox"); err == nil {
+		shells["busybox-ash"] = []string{busybox, "ash"}
+	}
+	for name, shell := range shells {
+		t.Run(name, func(t *testing.T) {
+			bin, scratch, processes := postEditShellFixture(t)
+			postEditTool(t, bin, "ethos", "cat\n")
+			var longest time.Duration
+			for range 20 {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				args := append(append([]string{}, shell[1:]...), "-c", postEditShellCommand("bwk"))
+				cmd := exec.CommandContext(ctx, shell[0], args...)
+				cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+				cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+				cmd.WaitDelay = 200 * time.Millisecond
+				cmd.Stdin = strings.NewReader("{}")
+				start := time.Now()
+				out, err := cmd.CombinedOutput()
+				elapsed := time.Since(start)
+				cancel()
+				require.NoError(t, err, "%s", out)
+				require.Equal(t, "{}", string(out))
+				require.Less(t, elapsed, time.Second)
+				longest = max(longest, elapsed)
+			}
+			t.Logf("20 closed-input runs, max %s", longest)
+			postEditShellClean(t, scratch, processes)
+		})
+	}
+}
+
+func TestGeneratedPostEditShellNoPIDPublication(t *testing.T) {
 	bin, scratch, processes := postEditShellFixture(t)
 	postEditTool(t, bin, "ethos", "cat\n")
-	var longest time.Duration
-	for range 100 {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		cmd := exec.CommandContext(ctx, busybox, "ash", "-c", postEditShellCommand("bwk"))
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-		cmd.WaitDelay = 200 * time.Millisecond
-		cmd.Stdin = strings.NewReader("{}")
-		start := time.Now()
-		out, err := cmd.CombinedOutput()
-		elapsed := time.Since(start)
-		cancel()
-		require.NoError(t, err, "%s", out)
-		require.Equal(t, "{}", string(out))
-		require.Less(t, elapsed, time.Second)
-		longest = max(longest, elapsed)
-	}
-	t.Logf("BusyBox ash: 100 closed-input runs, max %s", longest)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", "echo() { :; }; "+postEditShellCommand("bwk"))
+	cmd.Stdin = strings.NewReader("{}")
+	cmd.WaitDelay = 200 * time.Millisecond
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	require.Equal(t, "{}", string(out))
 	postEditShellClean(t, scratch, processes)
 }
