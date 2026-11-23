@@ -73,17 +73,22 @@ func BenchmarkRedactLiveLongSession(b *testing.B) {
 func TestRedactLiveLongSessionBudget(t *testing.T) {
 	p, s, data := longAuditStream(t)
 	require.NoError(t, audit.ReplaceLocalFile(p, s.LivePath(p), data))
-	budget := 8 * time.Second
-	if testing.CoverMode() != "" {
-		budget = 35 * time.Second
+	const budget = 8 * time.Second
+	enforceBudget := !raceEnabled && testing.CoverMode() == ""
+	ctx := context.Background()
+	if enforceBudget {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, budget)
+		defer cancel()
 	}
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), budget)
-	defer cancel()
 	res, err := audit.RedactLive(ctx, p, s, LiveLineGuard(p, s.Namespace), 0)
-	t.Logf("RedactLive: %d bytes, %d lines, %v", len(data), longAuditLines, time.Since(start))
+	elapsed := time.Since(start)
+	t.Logf("RedactLive: %d bytes, %d lines, %v", len(data), longAuditLines, elapsed)
 	require.NoError(t, err)
-	require.Less(t, time.Since(start), budget)
+	if enforceBudget {
+		require.Less(t, elapsed, budget)
+	}
 	require.True(t, res.Complete)
 	require.Positive(t, res.Rewritten)
 }
