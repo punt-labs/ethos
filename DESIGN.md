@@ -2043,6 +2043,63 @@ decision's first rejected alternative; that was reverted before merge, and
 the branch was verified in a real Claude Code session on Linux with only the
 branch's own wrappers loaded.
 
+### Amendment 2026-11-23: generated agent hooks use a POSIX shell reader
+
+The shell-read boundary remains mandatory: the shell reads Claude Code's
+inherited stdin, and Ethos receives a fresh pipe. Bash `read -t` is not the
+only reliable implementation of that boundary. Generated agent PostToolUse
+hooks now use POSIX sh because NixOS need not provide `/bin/bash`, and Bash
+3.2 discards partial input when its timed read expires with stdin still open.
+The plugin hook wrapper scripts keep Bash and their existing stdin handling.
+
+The generated command copies inherited stdin with `cat` into a private spool.
+Independent write/read descriptors are opened before the spool is unlinked,
+so payload bytes are never written to a named file. A reader-only file-size
+limit bounds disk use where supported; failure to set it does not skip checks.
+The shell forwards the completed spool with `cat` over a fresh pipe to Ethos.
+Closed stdin completes immediately; open stdin retains arrived bytes after a
+ten-second watchdog bound. The kill switch runs first, and hook failures remain
+advisory.
+
+The hidden `ethos hook stdin-watchdog <pid>` command provides the timer in Go,
+without reading stdin, resolving or repairing storage, or spawning children.
+After `InputTimeout` it sends TERM to the shell reader; TERM or INT cancels the
+timer immediately. This does not cross the inherited-stdin boundary: only the
+shell reader handles Claude Code's input, and the watchdog has `/dev/null` as
+stdin. Its stdout, stderr, and spool descriptor are redirected or closed.
+Early cleanup traps protect the empty spool between creation and unlinking.
+A cheap, storage/log-free `stdin-watchdog --probe` checks the binary found on
+PATH before the reader starts, while early cleanup traps remain active. Those
+traps are then cleared before spawning the reader and timer, preserving default
+signal dispositions. The parent installs full cleanup traps after spawning
+both, then kills and waits for the watchdog when the reader finishes.
+If an older binary rejects it, the shell uses a redirected ten-second
+`sleep; kill` timer instead. This legacy-only fallback preserves the input
+bound across binary/version skew; cancellation may leave a sleeper for at most
+ten seconds, holding no hook descriptors. With a supporting binary there are
+no shell sleepers, PID handshakes, or watchdog grandchildren to orphan. A TERM
+before parent trap installation can leave at most the ten-second bounded
+reader and watchdog. Shell regression coverage includes 300 closed-input runs
+each under dash, modern Bash, Bash 3.2 when supplied, and BusyBox ash when
+available, with watchdog PID cleanup assertions.
+
+Timing measured on implementation commit
+`747139d6fc6bceafa80fd382f671d5bb1025e859`: 20 runs per input mode of the
+exact generated `bwk` command through `/bin/sh -c`, using the built binary
+and a realistic Edit payload selecting shellcheck:
+
+| Stdin | Median | p95 |
+|-------|-------:|----:|
+| Closed | 0.083046 s | 0.088592 s |
+| Left open | 10.142661 s | 10.162882 s |
+
+These measurements use the Go watchdog and capability probe, not the legacy
+shell timer. Open-input totals include the ten-second timer plus process
+startup and check execution. The modern path uses an unlinked spool, shell
+reader/forwarder, a short Go capability probe, and one Go timer process;
+the shell sleeper is used only for an older binary on PATH. Native macOS was
+not measured; Bash 3.2.57 was built and tested on Linux.
+
 ## DES-030: Subprocess integration tests for hooks (SETTLED)
 
 **Status**: Settled. Implemented 2026-04-04.

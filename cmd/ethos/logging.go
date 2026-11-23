@@ -25,6 +25,12 @@ func startLogging() {
 		command = found
 	}
 	path := strings.TrimPrefix(command.CommandPath(), "ethos ")
+	if path == "hook stdin-watchdog" {
+		processLogger = diagnostic.Discard()
+		processUsage = nil
+		finishProcess = func(int, error) {}
+		return
+	}
 	role := "cli"
 	top := command
 	for top.HasParent() && top.Parent().HasParent() {

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Generated agent edit hooks use a bounded POSIX shell reader instead of
+  Bash, so checks run on NixOS and retain payloads when stdin stays open,
+  including under macOS Bash 3.2. Ethos receives a fresh pipe rather than
+  Claude Code's inherited stdin; a reader file-size limit bounds temporary
+  storage where supported. The spool is unlinked before reading, so abrupt
+  termination cannot leave edit payloads in a named file; watchdogs and file
+  descriptors are cleaned up. A storage-free Go timer replaces shell sleepers,
+  preventing watchdog startup races and orphaned sleep processes while the
+  inherited stdin reader remains entirely in the shell. A capability probe
+  selects a bounded legacy shell timer when an older Ethos is on PATH.
+
 - Quote the seeded review agents' descriptions so YAML-significant punctuation
   cannot invalidate their frontmatter (PL-1385). Strict YAML regression coverage
   checks every deployed review agent.
