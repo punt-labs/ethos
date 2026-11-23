@@ -37,5 +37,6 @@ func init() {
 		},
 	}
 	cmd.Flags().Bool("probe", false, "Check watchdog support without starting a timer")
+	cmd.Flags().Bool("cancel", false, "With --probe, also check that post-edit stops its checks when signalled")
 	hookCmd.AddCommand(cmd)
 }

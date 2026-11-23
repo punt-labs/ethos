@@ -2106,9 +2106,13 @@ shell waited out a foreground `ethos hook post-edit`, and a killed shell left
 post-edit running, each leaving checks to their ten-second timeout. The shell
 now runs the forwarder and post-edit in the background, waits for them, and
 its exit trap sends TERM to post-edit. Post-edit cancels its checks' context
-when TERM, INT, or HUP arrives or its parent changes (polled every 100 ms, for
-a SIGKILLed shell), kills their groups, writes no feedback, and ends with the
-signal it received. Regression coverage cancels the generated hook under dash,
+when TERM, INT, or HUP arrives, its parent changes, or the shell named by
+`ETHOS_HOOK_SHELL` (the hook's `$$`) is gone, which covers a shell SIGKILLed
+before post-edit read its parent (polled every 100 ms). It kills their
+groups, writes no feedback, and ends with the signal it received. The exit
+trap sends TERM only when `stdin-watchdog --probe --cancel` succeeds; an older
+binary, whose post-edit would die and orphan checks without their deadline,
+is left to finish on its own. Regression coverage cancels the generated hook under dash,
 Bash, and BusyBox ash by TERM, INT, and HUP to the shell, TERM to its group,
 and KILL to the shell; each case failed on
 `6f88ce45b8e15b1264a6e2bf083c6642f7d2d236`. With a CPU-bound check, the

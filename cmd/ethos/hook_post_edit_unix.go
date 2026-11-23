@@ -4,8 +4,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 )
@@ -15,7 +17,9 @@ import (
 const postEditOrphanPoll = 100 * time.Millisecond
 
 // runPostEdit runs post-edit under a context that ends when the process is
-// signalled or its parent, the hook shell, dies. Ending it stops in-flight
+// signalled or its hook shell dies: its parent changes, or the shell named by
+// ETHOS_HOOK_SHELL is gone, which also catches a shell that died before
+// post-edit read its parent. Ending it stops in-flight
 // edit checks, which run in process groups of their own that a signal to the
 // hook's group does not reach. After a signal, post-edit ends itself with it
 // once run returns, so its exit status still reports the signal. See DES-029.
@@ -35,6 +39,16 @@ func runPostEdit(parent context.Context, run func(context.Context)) {
 	done := make(chan struct{})
 	watched := make(chan struct{})
 	ppid := os.Getppid()
+	shell, _ := strconv.Atoi(os.Getenv("ETHOS_HOOK_SHELL"))
+	orphaned := func() bool {
+		if os.Getppid() != ppid {
+			return true
+		}
+		return shell > 1 && errors.Is(syscall.Kill(shell, 0), syscall.ESRCH)
+	}
+	if orphaned() {
+		cancel()
+	}
 	go func() {
 		defer close(watched)
 		tick := time.NewTicker(postEditOrphanPoll)
@@ -46,7 +60,7 @@ func runPostEdit(parent context.Context, run func(context.Context)) {
 				cancel()
 				return
 			case <-tick.C:
-				if os.Getppid() != ppid {
+				if orphaned() {
 					cancel()
 					return
 				}
