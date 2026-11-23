@@ -360,6 +360,46 @@ func TestGeneratedPostEditShellClosedInput(t *testing.T) {
 	}
 }
 
+func TestGeneratedPostEditShellLegacyWatchdog(t *testing.T) {
+	sleep, err := exec.LookPath("sleep")
+	require.NoError(t, err)
+	shells := map[string]string{"sh": "/bin/sh"}
+	if bash, err := exec.LookPath("bash"); err == nil {
+		shells["bash"] = bash
+	}
+	for name, shell := range shells {
+		t.Run(name, func(t *testing.T) {
+			bin, scratch, processes := postEditShellFixture(t)
+			require.NoError(t, os.Symlink(sleep, filepath.Join(bin, "sleep")))
+			postEditTool(t, bin, "ethos", `if [ "$1 $2" = 'hook stdin-watchdog' ]; then exit 1; fi
+test "$1 $2" = 'hook post-edit' || exit 9
+test -p /dev/stdin || exit 9
+cat
+`)
+			reader, writer, err := os.Pipe()
+			require.NoError(t, err)
+			defer reader.Close()
+			defer writer.Close()
+			payload := `{"tool_input":{"file_path":"edited.go"}}`
+			_, err = writer.WriteString(payload)
+			require.NoError(t, err)
+			ctx, cancel := context.WithTimeout(context.Background(), 13*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, shell, "-c", postEditShellCommand("bwk"))
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+			cmd.WaitDelay = 200 * time.Millisecond
+			cmd.Stdin = reader
+			start := time.Now()
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "%s", out)
+			require.Equal(t, payload, string(out))
+			require.Less(t, time.Since(start), 13*time.Second)
+			postEditShellClean(t, scratch, processes)
+		})
+	}
+}
+
 func TestGeneratedPostEditShellTermBeforeUnlink(t *testing.T) {
 	rm, err := exec.LookPath("rm")
 	require.NoError(t, err)

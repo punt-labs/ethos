@@ -2070,8 +2070,13 @@ stdin. Its stdout, stderr, and spool descriptor are redirected or closed.
 Early cleanup traps protect the empty spool between creation and unlinking;
 they are cleared before spawning either child, preserving default signal
 dispositions. The parent installs full cleanup traps after spawning the reader and watchdog,
-then kills and waits for the watchdog when the reader finishes. There are no
-shell sleepers, PID handshakes, or watchdog grandchildren to orphan. A TERM
+then kills and waits for the watchdog when the reader finishes. A cheap,
+storage/log-free `stdin-watchdog --probe` checks the binary found on PATH.
+If an older binary rejects it, the shell uses a redirected ten-second
+`sleep; kill` timer instead. This legacy-only fallback preserves the input
+bound across binary/version skew; cancellation may leave a sleeper for at most
+ten seconds, holding no hook descriptors. With a supporting binary there are
+no shell sleepers, PID handshakes, or watchdog grandchildren to orphan. A TERM
 before parent trap installation can leave at most the ten-second bounded
 reader and watchdog. Shell regression coverage includes 300 closed-input runs
 each under dash, modern Bash, Bash 3.2 when supplied, and BusyBox ash when

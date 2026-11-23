@@ -11,12 +11,22 @@ import (
 )
 
 func init() {
-	hookCmd.AddCommand(&cobra.Command{
+	cmd := &cobra.Command{
 		Use:    "stdin-watchdog <pid>",
 		Short:  "Bound the lifetime of a shell stdin reader",
 		Hidden: true,
-		Args:   cobra.ExactArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			probe, _ := cmd.Flags().GetBool("probe")
+			if probe {
+				return cobra.NoArgs(cmd, args)
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
 		Run: func(cmd *cobra.Command, args []string) {
+			probe, _ := cmd.Flags().GetBool("probe")
+			if probe {
+				return
+			}
 			pid, err := strconv.Atoi(args[0])
 			if err != nil || pid <= 0 {
 				return
@@ -25,5 +35,7 @@ func init() {
 			defer stop()
 			hook.StdinWatchdog(ctx, pid, hook.InputTimeout)
 		},
-	})
+	}
+	cmd.Flags().Bool("probe", false, "Check watchdog support without starting a timer")
+	hookCmd.AddCommand(cmd)
 }

@@ -21,3 +21,14 @@ func TestHookStdinWatchdog(t *testing.T) {
 	}
 	require.Error(t, cmd.ValidateArgs(nil))
 }
+
+func TestHookStdinWatchdogProbe(t *testing.T) {
+	cmd, _, err := rootCmd.Find([]string{"hook", "stdin-watchdog"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cmd.Flags().Set("probe", "false") })
+	t.Setenv("ETHOS_REPO_ROOT", "/missing/watchdog-store")
+	out, stderr, err := execHandler(t, "hook", "stdin-watchdog", "--probe")
+	require.NoError(t, err)
+	require.Empty(t, out)
+	require.Empty(t, stderr)
+}

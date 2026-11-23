@@ -30,10 +30,12 @@ func TestStdinWatchdogWritesNoDiagnosticsOrUsage(t *testing.T) {
 		rootCmd.SetContext(oldContext)
 		processLogger, processUsage, finishProcess = oldLogger, oldUsage, oldFinish
 	})
-	os.Args = []string{"ethos", "hook", "stdin-watchdog", "123"}
-	startLogging()
-	finishProcess(0, nil)
-	finishProcess(1, errors.New("cancelled"))
+	for _, argument := range []string{"123", "--probe"} {
+		os.Args = []string{"ethos", "hook", "stdin-watchdog", argument}
+		startLogging()
+		finishProcess(0, nil)
+		finishProcess(1, errors.New("cancelled"))
+	}
 	entries, err := os.ReadDir(home)
 	require.NoError(t, err)
 	require.Empty(t, entries, "watchdog startup and exit must not write logs or usage")
