@@ -210,34 +210,38 @@ func TestGeneratedPostEditShellSparesOldPostEdit(t *testing.T) {
 
 // TestPostEditStopsChecksWhenHookShellAlreadyGone proves post-edit cancels its
 // checks when the shell named by ETHOS_HOOK_SHELL died before post-edit could
-// see its parent change.
+// see its parent change. A control run with a live shell PID first proves the
+// fixture reaches the check and returns its feedback.
 func TestPostEditStopsChecksWhenHookShellAlreadyGone(t *testing.T) {
 	require.NotEmpty(t, ethosBinary)
 	gone := exec.Command("true")
 	require.NoError(t, gone.Run())
-	sleep, err := exec.LookPath("sleep")
-	require.NoError(t, err)
 	root, bin := postEditFixture(t)
-	require.NoError(t, os.Symlink(sleep, filepath.Join(bin, "sleep")))
 	checkPID := filepath.Join(t.TempDir(), "check.pid")
 	t.Setenv("CHECK_PID", checkPID)
-	postEditTool(t, bin, "shellcheck", "echo $$ > \"$CHECK_PID\"\nexec sleep 30\n")
+	postEditTool(t, bin, "shellcheck", "echo $$ > \"$CHECK_PID\"\necho 'SC2086: quote this'\nexit 1\n")
 	edited := filepath.Join(root, "edited.sh")
-	writeFile(t, edited, "echo hi\n")
-	cmd := exec.Command(ethosBinary, "hook", "post-edit", "--agent", "bwk")
-	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "ETHOS_HOOK_SHELL="+strconv.Itoa(gone.Process.Pid), "CLAUDE_PROJECT_DIR="+root)
-	cmd.Stdin = strings.NewReader(`{"tool_input":{"file_path":"` + edited + `"}}`)
+	writeFile(t, edited, "echo $1\n")
+	postEdit := func(shell int) ([]byte, error) {
+		cmd := exec.Command(ethosBinary, "hook", "post-edit", "--agent", "bwk")
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "ETHOS_HOOK_SHELL="+strconv.Itoa(shell))
+		cmd.Stdin = strings.NewReader(`{"tool_input":{"file_path":"` + edited + `"}}`)
+		return cmd.CombinedOutput()
+	}
+
+	out, err := postEdit(os.Getpid())
+	require.NoError(t, err, "%s", out)
+	require.Contains(t, string(out), "SC2086", "the control run must reach the check")
+	require.FileExists(t, checkPID)
+	require.NoError(t, os.Remove(checkPID))
+
 	started := time.Now()
-	out, err := cmd.CombinedOutput()
+	out, err = postEdit(gone.Process.Pid)
 	require.Less(t, time.Since(started), 3*time.Second, "%s", out)
 	var exit *exec.ExitError
 	require.ErrorAs(t, err, &exit, "an orphaned post-edit must not report success: %s", out)
 	require.Equal(t, 1, exit.ExitCode())
-	require.NotContains(t, string(out), "hookSpecificOutput", "a cancelled post-edit writes no feedback")
-	if data, err := os.ReadFile(checkPID); err == nil {
-		pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-		require.NoError(t, err)
-		require.Eventually(t, func() bool { return !postEditProcessAlive(pid) }, time.Second, 10*time.Millisecond)
-	}
+	require.NotContains(t, string(out), "SC2086", "a cancelled post-edit writes no feedback")
+	require.NoFileExists(t, checkPID, "an orphaned post-edit must not start its checks")
 }
