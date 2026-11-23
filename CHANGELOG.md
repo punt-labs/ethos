@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- SubagentStop skips handoff checks, `files: all` included, when the agent
+  made no Write/Edit call and the checkout is unchanged since SubagentStart.
+  A read-only stop in a repository with a `make check` handoff gate no longer
+  waits for the full gate; Bash edits still run it.
+
 - The baseline-ops skill no longer tells sub-agents to run `make check`
   after every edit. Edit checks run automatically (DES-085); the full gate
   runs once at handoff or commit.
