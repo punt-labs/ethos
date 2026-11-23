@@ -13,7 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Bash, so checks run on NixOS and retain payloads when stdin stays open,
   including under macOS Bash 3.2. Ethos receives a fresh pipe rather than
   Claude Code's inherited stdin; a reader file-size limit bounds temporary
-  storage where supported, and temporary files and watchdogs are cleaned up.
+  storage where supported. The spool is unlinked before reading, so abrupt
+  termination cannot leave edit payloads in a named file; watchdogs and file
+  descriptors are cleaned up.
 
 ## [5.2.0] - 2026-11-23
 

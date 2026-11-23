@@ -81,6 +81,8 @@ func TestGeneratedPostEditShellPipe(t *testing.T) {
 			t.Setenv("STDIN_LOG", log)
 			postEditTool(t, bin, "ethos", `test "$1 $2" = 'hook post-edit' || exit 9
 test -p /dev/stdin || exit 9
+if (: <&4) 2>/dev/null; then exit 9; fi
+if (: <&5) 2>/dev/null; then exit 9; fi
 cat > "$STDIN_LOG"
 exit `+tc.exit+"\n")
 			if tc.killed {
@@ -250,17 +252,13 @@ func TestGeneratedPostEditShellInterrupted(t *testing.T) {
 
 func TestGeneratedPostEditShellOversizedInput(t *testing.T) {
 	const capBlocks = 131073
-	rm, err := exec.LookPath("rm")
-	require.NoError(t, err)
 	wc, err := exec.LookPath("wc")
 	require.NoError(t, err)
 	bin, scratch, processes := postEditShellFixture(t)
 	require.NoError(t, os.Symlink(wc, filepath.Join(bin, "wc")))
 	sizeLog := filepath.Join(os.Getenv("HOME"), "size")
 	t.Setenv("SIZE_LOG", sizeLog)
-	require.NoError(t, os.Remove(filepath.Join(bin, "rm")))
-	postEditTool(t, bin, "rm", "wc -c < \"$2\" > \"$SIZE_LOG\"\nexec \""+rm+"\" \"$@\"\n")
-	postEditTool(t, bin, "ethos", "test -p /dev/stdin || exit 9\ncat > /dev/null\nexit 42\n")
+	postEditTool(t, bin, "ethos", "test -p /dev/stdin || exit 9\nwc -c > \"$SIZE_LOG\"\nexit 42\n")
 	input, err := os.Create(filepath.Join(os.Getenv("HOME"), "input"))
 	require.NoError(t, err)
 	defer input.Close()
@@ -279,4 +277,33 @@ func TestGeneratedPostEditShellOversizedInput(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, size == capBlocks*512 || size == capBlocks*1024, "temporary input size %d must match the shell's file-size limit", size)
 	postEditShellClean(t, scratch, processes)
+}
+
+func TestGeneratedPostEditShellKilled(t *testing.T) {
+	bin, scratch, _ := postEditShellFixture(t)
+	log := filepath.Join(os.Getenv("HOME"), "stdin")
+	ready := filepath.Join(os.Getenv("HOME"), "ready")
+	t.Setenv("STDIN_LOG", log)
+	t.Setenv("READY", ready)
+	postEditTool(t, bin, "ethos", "cat > \"$STDIN_LOG\"\nprintf ready > \"$READY\"\nsleep 30\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", postEditShellCommand("bwk"))
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	payload := `{"tool_input":{"file_path":"file.go"}}`
+	cmd.Stdin = strings.NewReader(payload)
+	require.NoError(t, cmd.Start())
+	defer func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }()
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(ready)
+		return err == nil
+	}, time.Second, 10*time.Millisecond)
+	data, err := os.ReadFile(log)
+	require.NoError(t, err)
+	require.Equal(t, payload, string(data))
+	require.NoError(t, syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL))
+	require.Error(t, cmd.Wait())
+	entries, err := os.ReadDir(scratch)
+	require.NoError(t, err)
+	require.Empty(t, entries, "SIGKILL after reading a payload must not leave a named spool")
 }

@@ -52,7 +52,7 @@ hooks:
     - matcher: "Write|Edit"
       hooks:
         - type: command
-          command: "if [ -f \"$HOME/.punt-hooks-kill\" ]; then exit 0; fi; f=$(mktemp) || exit 0; c= w=; trap 'if [ -n \"$w\" ]; then kill \"$w\" 2>/dev/null; wait \"$w\" 2>/dev/null; fi; if [ -n \"$c\" ]; then kill \"$c\" 2>/dev/null; wait \"$c\" 2>/dev/null; fi; rm -f \"$f\"' 0; trap 'exit 0' 1 2 15; exec 3<&0; (ulimit -f 131073 2>/dev/null || :; exec cat <&3 3<&-) >\"$f\" & c=$!; exec 3<&-; (trap 'kill \"$!\" 2>/dev/null; wait \"$!\" 2>/dev/null; exit 0' 1 2 15; sleep 10 & wait \"$!\"; kill \"$c\" 2>/dev/null) </dev/null >/dev/null 2>&1 & w=$!; wait \"$c\" 2>/dev/null; c=; kill \"$w\" 2>/dev/null; wait \"$w\" 2>/dev/null; w=; cat \"$f\" | ethos hook post-edit --agent 'jms' || true"
+          command: "if [ -f \"$HOME/.punt-hooks-kill\" ]; then exit 0; fi; f=$(mktemp) || exit 0; c= w=; trap 'if [ -n \"$w\" ]; then kill \"$w\" 2>/dev/null; wait \"$w\" 2>/dev/null; fi; if [ -n \"$c\" ]; then kill \"$c\" 2>/dev/null; wait \"$c\" 2>/dev/null; fi; exec 4>&- 5<&-; rm -f \"$f\"' 0; trap 'exit 0' 1 2 15; exec 4>\"$f\" 5<\"$f\"; rm -f \"$f\" 4>&- 5<&- || exit 0; exec 3<&0; (ulimit -f 131073 2>/dev/null || :; exec cat <&3 >&4 3<&- 4>&- 5<&-) & c=$!; exec 3<&- 4>&-; (trap 'kill \"$!\" 2>/dev/null; wait \"$!\" 2>/dev/null; exit 0' 1 2 15; sleep 10 & wait \"$!\"; kill \"$c\" 2>/dev/null) 5<&- </dev/null >/dev/null 2>&1 & w=$!; wait \"$c\" 2>/dev/null; c=; kill \"$w\" 2>/dev/null; wait \"$w\" 2>/dev/null; w=; cat <&5 5<&- | ethos hook post-edit --agent 'jms' 5<&- || true"
           timeout: 70
 ---
 
