@@ -229,8 +229,11 @@ func TestPostEditStopsChecksWhenHookShellAlreadyGone(t *testing.T) {
 	cmd.Env = append(os.Environ(), "ETHOS_HOOK_SHELL="+strconv.Itoa(gone.Process.Pid), "CLAUDE_PROJECT_DIR="+root)
 	cmd.Stdin = strings.NewReader(`{"tool_input":{"file_path":"` + edited + `"}}`)
 	started := time.Now()
-	out, _ := cmd.CombinedOutput()
+	out, err := cmd.CombinedOutput()
 	require.Less(t, time.Since(started), 3*time.Second, "%s", out)
+	var exit *exec.ExitError
+	require.ErrorAs(t, err, &exit, "an orphaned post-edit must not report success: %s", out)
+	require.Equal(t, 1, exit.ExitCode())
 	require.NotContains(t, string(out), "hookSpecificOutput", "a cancelled post-edit writes no feedback")
 	if data, err := os.ReadFile(checkPID); err == nil {
 		pid, err := strconv.Atoi(strings.TrimSpace(string(data)))

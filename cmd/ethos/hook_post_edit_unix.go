@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -46,7 +47,9 @@ func runPostEdit(parent context.Context, run func(context.Context)) {
 		}
 		return shell > 1 && errors.Is(syscall.Kill(shell, 0), syscall.ESRCH)
 	}
+	var orphan atomic.Bool
 	if orphaned() {
+		orphan.Store(true)
 		cancel()
 	}
 	go func() {
@@ -61,6 +64,7 @@ func runPostEdit(parent context.Context, run func(context.Context)) {
 				return
 			case <-tick.C:
 				if orphaned() {
+					orphan.Store(true)
 					cancel()
 					return
 				}
@@ -77,7 +81,13 @@ func runPostEdit(parent context.Context, run func(context.Context)) {
 		dieOf(s.(syscall.Signal))
 	default:
 	}
+	if orphan.Load() {
+		finishProcess(1, errPostEditOrphaned)
+		os.Exit(1)
+	}
 }
+
+var errPostEditOrphaned = errors.New("post-edit cancelled: its hook shell exited")
 
 // dieOf records the invocation's end, restores sig's default disposition and
 // raises it on the process.
