@@ -2100,6 +2100,22 @@ reader/forwarder, a short Go capability probe, and one Go timer process;
 the shell sleeper is used only for an older binary on PATH. Native macOS was
 not measured; Bash 3.2.57 was built and tested on Linux.
 
+Cancellation stops the checks. Edit checks run in process groups of their
+own, so a signal to the hook shell or its group never reached them: the
+shell waited out a foreground `ethos hook post-edit`, and a killed shell left
+post-edit running, each leaving checks to their ten-second timeout. The shell
+now runs the forwarder and post-edit in the background, waits for them, and
+its exit trap sends TERM to post-edit. Post-edit cancels its checks' context
+when TERM, INT, or HUP arrives or its parent changes (polled every 100 ms, for
+a SIGKILLed shell), kills their groups, writes no feedback, and ends with the
+signal it received. Regression coverage cancels the generated hook under dash,
+Bash, and BusyBox ash by TERM, INT, and HUP to the shell, TERM to its group,
+and KILL to the shell; each case failed on
+`6f88ce45b8e15b1264a6e2bf083c6642f7d2d236`. With a CPU-bound check, the
+check survived a TERM to the hook shell for a median 9.998 s before and
+0.005 s after; the uncancelled hook path was unchanged (200 interleaved
+runs: median 0.0270 s before, 0.0265 s after).
+
 ## DES-030: Subprocess integration tests for hooks (SETTLED)
 
 **Status**: Settled. Implemented 2026-04-04.
