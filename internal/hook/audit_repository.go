@@ -170,14 +170,15 @@ func withSealStreamLock(p layout.Policy, s audit.Stream, bounded bool, run func(
 
 func sealPolicyStream(ctx context.Context, p layout.Policy, s audit.Stream, now time.Time, opts SealOptions, bounded bool) (int, string, error) {
 	guard := LiveLineGuard(p, s.Namespace)
+	var guardScope string
 	// New writes are guarded before their append. A live line may predate that
 	// guard: it is redacted in place, and a line whose ts is archived with
 	// another payload is dropped (the archive wins), before the union read
 	// would refuse it and before anything immutable is written.
 	if !opts.DryRun {
 		if bounded {
-			home, _ := os.UserHomeDir()
-			res, err := audit.RedactLiveUntil(ctx, p, s, guard, home)
+			guardScope, _ = os.UserHomeDir()
+			res, err := audit.RedactLiveUntil(ctx, p, s, guard, guardScope)
 			if err != nil {
 				return 0, "", err
 			}
@@ -193,6 +194,11 @@ func sealPolicyStream(ctx context.Context, p layout.Policy, s audit.Stream, now 
 	}
 	data, err := audit.ReadStream(p, s)
 	if err != nil {
+		// A replaced archive can retain its size and mtime. The union read
+		// must still refuse conflicts; discard the hint so a retry repairs them.
+		if bounded && !opts.DryRun {
+			err = errors.Join(err, audit.ResetLiveSealCursor(p, s, guardScope))
+		}
 		return 0, "", err
 	}
 	date := ""

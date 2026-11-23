@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -52,10 +51,10 @@ func (r LiveRepair) Changed() bool { return r.Rewritten > 0 || len(r.Dropped) > 
 // the file still begins with exactly those bytes, so a replaced or truncated
 // file is judged again from the start.
 type liveCursor struct {
-	Offset        int    `json:"offset"`
-	SHA256        string `json:"sha256"`
-	ArchiveSHA256 string `json:"archive_sha256,omitempty"`
-	ArchiveMaxTS  int64  `json:"archive_max_ts,omitempty"`
+	Offset       int    `json:"offset"`
+	SHA256       string `json:"sha256"`
+	ArchiveStamp string `json:"archive_stamp,omitempty"`
+	ArchiveMaxTS int64  `json:"archive_max_ts,omitempty"`
 }
 
 func liveCursorPath(p layout.Policy, s Stream) string {
@@ -64,7 +63,7 @@ func liveCursorPath(p layout.Policy, s Stream) string {
 
 // readLiveCursor returns the checked prefix only while both its live bytes and
 // the archive evidence used to judge it are unchanged.
-func readLiveCursor(path string, b []byte, archiveSHA256 string) liveCursor {
+func readLiveCursor(path string, b []byte, archiveStamp string) liveCursor {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return liveCursor{}
@@ -73,7 +72,7 @@ func readLiveCursor(path string, b []byte, archiveSHA256 string) liveCursor {
 	if json.Unmarshal(raw, &c) != nil || c.Offset <= 0 || c.Offset > len(b) || b[c.Offset-1] != '\n' {
 		return liveCursor{}
 	}
-	if c.ArchiveSHA256 != archiveSHA256 || digest(b[:c.Offset]) != c.SHA256 {
+	if c.ArchiveStamp != archiveStamp || digest(b[:c.Offset]) != c.SHA256 {
 		return liveCursor{}
 	}
 	return c
@@ -106,8 +105,21 @@ func RedactLive(ctx context.Context, p layout.Policy, s Stream, guard LineGuard,
 // A caller must hold the stream lock and still validate pending archival and
 // publication payloads before writing them out.
 func RedactLiveUntil(ctx context.Context, p layout.Policy, s Stream, guard LineGuard, guardScope string) (LiveRepair, error) {
-	cursor := filepath.Join(p.LocalRoot(), "cursors", fmt.Sprintf("seal-%x.json", sha256.Sum256([]byte(s.Key()+"\x00"+p.CheckoutRecordRoot()+"\x00"+guardScope))))
-	return redactLive(ctx, p, s, guard, 0, cursor, true)
+	return redactLive(ctx, p, s, guard, 0, sealLiveCursorPath(p, s, guardScope), true)
+}
+
+// ResetLiveSealCursor makes the next bounded seal reconcile from the start.
+// The caller holds the stream lock.
+func ResetLiveSealCursor(p layout.Policy, s Stream, guardScope string) error {
+	path := sealLiveCursorPath(p, s, guardScope)
+	if present, err := auditReadFilePresent(path); err != nil || !present {
+		return err
+	}
+	return ReplaceLocalFile(p, path, []byte("{}"))
+}
+
+func sealLiveCursorPath(p layout.Policy, s Stream, guardScope string) string {
+	return filepath.Join(p.LocalRoot(), "cursors", fmt.Sprintf("seal-%x.json", sha256.Sum256([]byte(s.Key()+"\x00"+p.CheckoutRecordRoot()+"\x00"+guardScope))))
 }
 
 func redactLive(ctx context.Context, p layout.Policy, s Stream, guard LineGuard, limit int, cursor string, checkpoint bool) (LiveRepair, error) {
@@ -134,25 +146,30 @@ func redactLive(ctx context.Context, p layout.Policy, s Stream, guard LineGuard,
 	if err != nil {
 		return LiveRepair{}, err
 	}
-	var archiveSHA256 string
+	var archiveStamp string
 	if checkpoint {
-		archiveSHA256, err = archiveDigest(chunks)
+		archiveStamp, err = archiveInventoryStamp(chunks)
 		if err != nil {
 			return LiveRepair{}, err
 		}
 	}
 	var saved liveCursor
 	if cursor != "" {
-		saved = readLiveCursor(cursor, b[:tail], archiveSHA256)
+		saved = readLiveCursor(cursor, b[:tail], archiveStamp)
 	}
 	next := saved.Offset
 	lineNo := bytes.Count(b[:next], []byte{'\n'})
 	var archived map[int64][]byte
 	archiveMaxTS := saved.ArchiveMaxTS
-	if !checkpoint || saved.Offset == 0 {
-		archived, archiveMaxTS, err = archivedPayloads(chunks, !checkpoint)
+	if !checkpoint {
+		archived, archiveMaxTS, err = archivedPayloads(chunks, true)
 		if err != nil {
 			return res, err
+		}
+	} else if saved.Offset == 0 {
+		archiveMaxTS = math.MinInt64
+		if len(chunks) > 0 {
+			archiveMaxTS = math.MaxInt64
 		}
 	}
 	replace := map[string][]byte{} // raw live line -> its redacted form; nil drops it
@@ -188,7 +205,7 @@ func redactLive(ctx context.Context, p layout.Policy, s Stream, guard LineGuard,
 		}
 		next, judged = end, judged+1
 		if archived == nil && ts <= archiveMaxTS {
-			archived, _, err = archivedPayloads(chunks, false)
+			archived, archiveMaxTS, err = archivedPayloads(chunks, false)
 			if err != nil {
 				return res, err
 			}
@@ -248,7 +265,7 @@ func redactLive(ctx context.Context, p layout.Policy, s Stream, guard LineGuard,
 		if !checkpoint {
 			archiveMaxTS = 0
 		}
-		c, err := json.Marshal(liveCursor{Offset: n, SHA256: digest(out[:n]), ArchiveSHA256: archiveSHA256, ArchiveMaxTS: archiveMaxTS})
+		c, err := json.Marshal(liveCursor{Offset: n, SHA256: digest(out[:n]), ArchiveStamp: archiveStamp, ArchiveMaxTS: archiveMaxTS})
 		if err != nil {
 			return LiveRepair{}, fmt.Errorf("encoding the live audit cursor: %w", err)
 		}
@@ -310,22 +327,19 @@ func archivedChunks(p layout.Policy, s Stream) ([]archivedChunk, error) {
 	return out, nil
 }
 
-func archiveDigest(chunks []archivedChunk) (string, error) {
+// The inventory of immutable chunks is a checkpoint hint, not evidence for
+// sealing. ReadStream still compares payloads before anything can be archived.
+func archiveInventoryStamp(chunks []archivedChunk) (string, error) {
 	h := sha256.New()
 	for _, c := range chunks {
-		f, err := os.Open(c.path)
+		info, err := os.Lstat(c.path)
 		if err != nil {
-			return "", fmt.Errorf("reading archived audit %s: %w", c.path, err)
+			return "", fmt.Errorf("examining archived audit %s: %w", c.path, err)
 		}
-		chunkHash := sha256.New()
-		_, err = io.Copy(chunkHash, f)
-		if closeErr := f.Close(); err == nil {
-			err = closeErr
+		if !info.Mode().IsRegular() {
+			return "", &NotRegularFileError{Path: c.path}
 		}
-		if err != nil {
-			return "", fmt.Errorf("reading archived audit %s: %w", c.path, err)
-		}
-		fmt.Fprintf(h, "%q:%x\n", c.path, chunkHash.Sum(nil))
+		fmt.Fprintf(h, "%q:%d:%d\n", c.path, info.Size(), info.ModTime().UnixNano())
 	}
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }

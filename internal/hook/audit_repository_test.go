@@ -2,6 +2,7 @@ package hook
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +25,36 @@ func policyGit(t *testing.T, root string, args ...string) string {
 		t.Fatalf("git %v: %v: %s", args, err, out)
 	}
 	return string(out)
+}
+
+func TestSealRetriesReconciliationAfterArchiveStampCollision(t *testing.T) {
+	root := t.TempDir()
+	p := hookPolicy(t, root, root, layout.RecordBlame)
+	s := audit.Stream{Namespace: audit.SessionNS, Session: "s"}
+	now := time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)
+	dir, err := audit.ArchiveDir(p, s, now.Format(audit.SessionDateFormat))
+	require.NoError(t, err)
+	path := filepath.Join(dir, audit.SessionChunkFile(100, 100))
+	line := []byte(`{"ts":"` + audit.FormatLineTS(100) + `","tool":"Read"}` + "\n")
+	require.NoError(t, audit.WriteLocalAtomic(p, path, line))
+	require.NoError(t, audit.ReplaceLocalFile(p, s.LivePath(p), line))
+
+	seal := func() error {
+		return audit.WithStreamLock(p, s, func() error {
+			_, _, err := sealPolicyStream(context.Background(), p, s, now, SealOptions{}, true)
+			return err
+		})
+	}
+	require.NoError(t, seal())
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, bytes.Replace(line, []byte("Read"), []byte("Edit"), 1), 0o600))
+	require.NoError(t, os.Chtimes(path, info.ModTime(), info.ModTime()))
+	require.ErrorContains(t, seal(), "audit identity conflict")
+	require.NoError(t, seal())
+	live, err := audit.ReadLiveLines(p, s)
+	require.NoError(t, err)
+	require.Empty(t, live)
 }
 
 func TestRepositoryConcurrentSiblingAppendAndLocalSeal(t *testing.T) {
