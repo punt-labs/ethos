@@ -25,7 +25,7 @@ func init() {
 		Run: func(cmd *cobra.Command, args []string) {
 			probe, _ := cmd.Flags().GetBool("probe")
 			if probe {
-				if cancel, _ := cmd.Flags().GetBool("cancel"); cancel && !postEditCancels {
+				if cancel, _ := cmd.Flags().GetBool("cancel"); !stdinWatchdogProbe(cancel, postEditCancels) {
 					os.Exit(1)
 				}
 				return
@@ -42,4 +42,10 @@ func init() {
 	cmd.Flags().Bool("probe", false, "Check watchdog support without starting a timer")
 	cmd.Flags().Bool("cancel", false, "With --probe, also check that post-edit stops its checks when signalled")
 	hookCmd.AddCommand(cmd)
+}
+
+// stdinWatchdogProbe reports whether the probe succeeds: with cancel it also
+// requires that post-edit stops its checks when signalled.
+func stdinWatchdogProbe(cancel, cancels bool) bool {
+	return !cancel || cancels
 }
