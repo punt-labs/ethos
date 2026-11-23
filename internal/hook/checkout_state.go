@@ -140,7 +140,8 @@ func sessionAuditEntries(checkout, sessionID string) ([]auditEntry, error) {
 }
 
 // checkoutState hashes HEAD, the index entries that differ from HEAD and
-// the content of every changed or untracked, non-ignored worktree path.
+// the content of every changed, untracked or status-hidden, non-ignored
+// worktree path.
 // Ethos's own machine-local session and audit files are excluded: hooks
 // write them on every tool call, read-only ones included.
 func checkoutState(checkout string) (string, error) {
@@ -185,7 +186,35 @@ func checkoutState(checkout string) (string, error) {
 			return "", err
 		}
 	}
+	if err := hashHiddenPaths(h, checkout); err != nil {
+		return "", err
+	}
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// hashHiddenPaths hashes tracked files marked assume-unchanged or
+// skip-worktree, whose edits git status does not report.
+func hashHiddenPaths(h io.Writer, checkout string) error {
+	out, err := gitenv.Output(checkout, "git", "--no-optional-locks", "ls-files", "-v", "-z",
+		"--", ":(top)", ":(top,exclude).punt-labs/local", ":(top,exclude).punt-labs/ethos/sessions")
+	if err != nil {
+		return fmt.Errorf("git ls-files: %w", err)
+	}
+	for _, record := range strings.Split(string(out), "\x00") {
+		if len(record) < 3 {
+			continue
+		}
+		tag := record[0]
+		if tag != 'S' && (tag < 'a' || tag > 'z') {
+			continue
+		}
+		path := record[2:]
+		fmt.Fprintf(h, "hidden %c %s\x00", tag, path)
+		if err := hashWorktreePath(h, filepath.Join(checkout, filepath.FromSlash(path))); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func statusPath(record string, fields int) string {

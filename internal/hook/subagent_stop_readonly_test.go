@@ -38,6 +38,14 @@ func TestHandoffReadOnlyStop(t *testing.T) {
 		{name: "bash edits a renamed file", act: func(t *testing.T, root string) { writeFile(t, filepath.Join(root, "renamed file.go"), "package c\n") }, runs: true},
 		{name: "bash edits an untracked file", act: func(t *testing.T, root string) { writeFile(t, filepath.Join(root, "untracked.go"), "package d\n") }, runs: true},
 		{name: "bash creates a file", act: func(t *testing.T, root string) { writeFile(t, filepath.Join(root, "new.go"), "") }, runs: true},
+		{name: "bash edits an assume-unchanged file", act: func(t *testing.T, root string) {
+			stageGit(t, root, "update-index", "--assume-unchanged", "clean.go")
+			writeFile(t, filepath.Join(root, "clean.go"), "package hidden\n")
+		}, runs: true},
+		{name: "bash edits a skip-worktree file", act: func(t *testing.T, root string) {
+			stageGit(t, root, "update-index", "--skip-worktree", "clean.go")
+			writeFile(t, filepath.Join(root, "clean.go"), "package hidden\n")
+		}, runs: true},
 		{name: "bash removes a file", act: func(t *testing.T, root string) { require.NoError(t, os.Remove(filepath.Join(root, "clean.go"))) }, runs: true},
 		{name: "bash stages a file", act: func(t *testing.T, root string) { stageGit(t, root, "add", "dirty.go") }, runs: true},
 		{name: "bash commits", act: func(t *testing.T, root string) {
