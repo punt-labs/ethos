@@ -94,6 +94,45 @@ func (c *auditDeadline) Err() error {
 	return c.Context.Err()
 }
 
+type auditCheckBudget struct {
+	context.Context
+	remaining int
+}
+
+func (c *auditCheckBudget) Err() error {
+	if c.remaining == 0 {
+		return context.DeadlineExceeded
+	}
+	c.remaining--
+	return c.Context.Err()
+}
+
+func TestRedactLiveUntilDoesNotReplayUnchangedArchive(t *testing.T) {
+	p := repositoryPolicy(t, layout.RecordBlame)
+	s := Stream{Namespace: SessionNS, Session: "s"}
+	dir, err := ArchiveDir(p, s, "2026-11-04")
+	require.NoError(t, err)
+	prefix := liveLine(100, "Read") + liveLine(200, "Read")
+	cn := ChunkName{Namespace: SessionNS, First: 100, Last: 200}
+	require.NoError(t, WriteLocalAtomic(p, dir+"/"+cn.ChunkFile(), []byte(prefix)))
+	require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), []byte(prefix+liveLine(300, "Secret"))))
+
+	ctx := &auditCheckBudget{Context: context.Background(), remaining: 2}
+	res, err := RedactLiveUntil(ctx, p, s, maskGuard, "home")
+	require.NoError(t, err)
+	require.False(t, res.Complete)
+	require.False(t, res.Changed())
+
+	ctx.remaining = 2
+	res, err = RedactLiveUntil(ctx, p, s, maskGuard, "home")
+	require.NoError(t, err)
+	require.True(t, res.Complete)
+	require.Equal(t, 1, res.Rewritten)
+	live, err := os.ReadFile(s.LivePath(p))
+	require.NoError(t, err)
+	require.Equal(t, prefix+liveLine(300, "Masked"), string(live))
+}
+
 func TestRedactLiveUntilResumesAndReconcilesNewArchive(t *testing.T) {
 	p := repositoryPolicy(t, layout.RecordBlame)
 	s := Stream{Namespace: SessionNS, Session: "s"}
@@ -124,7 +163,7 @@ func TestRedactLiveUntilResumesAndReconcilesNewArchive(t *testing.T) {
 	require.True(t, res.Complete)
 	require.Len(t, res.Dropped, 1)
 	require.Equal(t, int64(100), res.Dropped[0].TS)
-	require.Equal(t, 3, calls, "reconcile the archive conflict, skip the clean prefix line, and guard the remainder")
+	require.Equal(t, 4, calls, "changed archive evidence invalidates the checkpoint")
 	live, err = os.ReadFile(s.LivePath(p))
 	require.NoError(t, err)
 	require.Equal(t, liveLine(200, "Masked")+liveLine(300, "Masked")+liveLine(400, "Masked")+torn, string(live))

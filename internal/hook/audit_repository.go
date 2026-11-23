@@ -136,6 +136,7 @@ func sealPolicyStreams(p layout.Policy, streams []audit.Stream, now time.Time, o
 		return res, nil
 	}
 	var publish []string
+	var publicationErrors []error
 	for _, entry := range archives {
 		err := withSealStreamLock(p, entry.stream, bounded, func() error {
 			paths, err := prepareStreamPublication(p, entry.stream, entry.dir)
@@ -143,8 +144,11 @@ func sealPolicyStreams(p layout.Policy, streams []audit.Stream, now time.Time, o
 			return err
 		})
 		if err != nil {
-			return res, fmt.Errorf("full audit publication incomplete; local archive retained: %w", err)
+			publicationErrors = append(publicationErrors, fmt.Errorf("preparing stream %s: %w", entry.stream.Key(), err))
 		}
+	}
+	if len(publicationErrors) > 0 {
+		return res, fmt.Errorf("full audit publication incomplete; local archive retained: %w", errors.Join(publicationErrors...))
 	}
 	if err := audit.StagePublication(p, publish); err != nil {
 		return res, fmt.Errorf("full audit publication incomplete; local archive retained: %w", err)

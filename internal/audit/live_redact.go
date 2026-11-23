@@ -5,7 +5,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
 
@@ -49,29 +52,31 @@ func (r LiveRepair) Changed() bool { return r.Rewritten > 0 || len(r.Dropped) > 
 // the file still begins with exactly those bytes, so a replaced or truncated
 // file is judged again from the start.
 type liveCursor struct {
-	Offset int    `json:"offset"`
-	SHA256 string `json:"sha256"`
+	Offset        int    `json:"offset"`
+	SHA256        string `json:"sha256"`
+	ArchiveSHA256 string `json:"archive_sha256,omitempty"`
+	ArchiveMaxTS  int64  `json:"archive_max_ts,omitempty"`
 }
 
 func liveCursorPath(p layout.Policy, s Stream) string {
 	return filepath.Join(p.LocalRoot(), "cursors", fmt.Sprintf("live-%x.json", sha256.Sum256([]byte(s.Key()))))
 }
 
-// readLiveCursor returns the byte length of the prefix of b already judged, or
-// 0 when there is no cursor or b no longer begins with the prefix it names.
-func readLiveCursor(path string, b []byte) int {
+// readLiveCursor returns the checked prefix only while both its live bytes and
+// the archive evidence used to judge it are unchanged.
+func readLiveCursor(path string, b []byte, archiveSHA256 string) liveCursor {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return 0
+		return liveCursor{}
 	}
 	var c liveCursor
-	if json.Unmarshal(raw, &c) != nil || c.Offset <= 0 || c.Offset > len(b) {
-		return 0
+	if json.Unmarshal(raw, &c) != nil || c.Offset <= 0 || c.Offset > len(b) || b[c.Offset-1] != '\n' {
+		return liveCursor{}
 	}
-	if digest(b[:c.Offset]) != c.SHA256 {
-		return 0
+	if c.ArchiveSHA256 != archiveSHA256 || digest(b[:c.Offset]) != c.SHA256 {
+		return liveCursor{}
 	}
-	return c.Offset
+	return c
 }
 
 // RedactLive makes a stream's live file safe to archive. Each complete line
@@ -107,88 +112,123 @@ func RedactLiveUntil(ctx context.Context, p layout.Policy, s Stream, guard LineG
 
 func redactLive(ctx context.Context, p layout.Policy, s Stream, guard LineGuard, limit int, cursor string, checkpoint bool) (LiveRepair, error) {
 	var res LiveRepair
-	live, err := ReadLiveLines(p, s)
-	if err != nil {
+	path := s.LivePath(p)
+	if present, err := auditReadFilePresent(path); err != nil || !present {
+		res.Complete = err == nil
 		return res, err
 	}
-	if len(live) == 0 {
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
 		res.Complete = true
 		return res, nil
 	}
-	path := s.LivePath(p)
-	b, err := os.ReadFile(path)
 	if err != nil {
 		return LiveRepair{}, fmt.Errorf("reading live audit %s: %w", path, err)
 	}
-	ends := liveLineEnds(b)
-	if len(ends) != len(live) {
-		return LiveRepair{}, fmt.Errorf("live audit %s changed while it was read", path)
-	}
-	start, end := 0, len(live)
-	if cursor != "" {
-		skip := readLiveCursor(cursor, b)
-		for start < len(live) && ends[start] <= skip {
-			start++
-		}
-		if limit > 0 && start+limit < end {
-			end = start + limit
-		}
-	}
-	if start == end && !checkpoint {
-		res.Complete = end == len(live)
+	tail := bytes.LastIndexByte(b, '\n') + 1
+	if len(bytes.TrimSpace(b[:tail])) == 0 {
+		res.Complete = true
 		return res, nil
 	}
-	archived, err := archivedPayloads(p, s)
+	chunks, err := archivedChunks(p, s)
 	if err != nil {
 		return LiveRepair{}, err
 	}
-	replace := map[string][]byte{} // raw live line -> its redacted form; nil drops it
-	first := start
+	var archiveSHA256 string
 	if checkpoint {
-		// The archive may have changed since the cursor was written. In
-		// that case, still reconcile conflicts inside the checked prefix.
-		first = 0
+		archiveSHA256, err = archiveDigest(chunks)
+		if err != nil {
+			return LiveRepair{}, err
+		}
 	}
-	for i := first; i < end; i++ {
+	var saved liveCursor
+	if cursor != "" {
+		saved = readLiveCursor(cursor, b[:tail], archiveSHA256)
+	}
+	next := saved.Offset
+	lineNo := bytes.Count(b[:next], []byte{'\n'})
+	var archived map[int64][]byte
+	archiveMaxTS := saved.ArchiveMaxTS
+	if !checkpoint || saved.Offset == 0 {
+		archived, archiveMaxTS, err = archivedPayloads(chunks, !checkpoint)
+		if err != nil {
+			return res, err
+		}
+	}
+	replace := map[string][]byte{} // raw live line -> its redacted form; nil drops it
+	judged := 0
+	for next < tail {
+		end := next + bytes.IndexByte(b[next:tail], '\n') + 1
+		raw := b[next : end-1]
+		lineNo++
+		if len(bytes.TrimSpace(raw)) == 0 {
+			next = end
+			continue
+		}
+		if limit > 0 && judged == limit {
+			break
+		}
 		if err := ctx.Err(); err != nil {
 			if !checkpoint || err != context.DeadlineExceeded {
 				return LiveRepair{}, err
 			}
-			end = i
 			break
 		}
-		l := live[i]
-		want, archived := archived[l.TS]
-		if checkpoint && i < start && !archived {
-			continue
-		}
-		got, err := CanonicalPayload(l.Raw)
+		got, err := CanonicalPayload(raw)
 		if err != nil {
-			return LiveRepair{}, err
+			return LiveRepair{}, fmt.Errorf("live audit %s line %d: %w", path, lineNo, err)
 		}
-		if archived && bytes.Equal(want, got) {
-			continue
+		var header tsHolder
+		if err := json.Unmarshal(raw, &header); err != nil {
+			return LiveRepair{}, fmt.Errorf("live audit %s line %d: %w", path, lineNo, err)
 		}
-		out, _, _ := guard(l.Raw)
+		ts, err := ParseLineTS(header.TS)
+		if err != nil {
+			return LiveRepair{}, fmt.Errorf("live audit %s line %d: %w", path, lineNo, err)
+		}
+		next, judged = end, judged+1
+		if archived == nil && ts <= archiveMaxTS {
+			archived, _, err = archivedPayloads(chunks, false)
+			if err != nil {
+				return res, err
+			}
+		}
+		var want []byte
+		if prior, ok := archived[ts]; ok {
+			want = prior
+			if checkpoint {
+				if bytes.Equal(prior, raw) {
+					continue
+				}
+				want, err = CanonicalPayload(prior)
+				if err != nil {
+					return LiveRepair{}, err
+				}
+			}
+			if bytes.Equal(want, got) {
+				continue
+			}
+		}
+		out, _, _ := guard(raw)
 		after, err := CanonicalPayload(out)
 		if err != nil {
-			return LiveRepair{}, fmt.Errorf("guarded audit payload at ts %d is not a valid line: %w", l.TS, err)
+			return LiveRepair{}, fmt.Errorf("guarded audit payload at ts %d is not a valid line: %w", ts, err)
 		}
-		if archived {
+		if want != nil {
 			// Compare the guarded form: a live line whose redaction is what
 			// the archive holds is already archived, not a conflict.
 			switch {
 			case bytes.Equal(want, after):
-				replace[string(l.Raw)] = out
+				replace[string(raw)] = out
 				res.Rewritten++
 			default:
-				res.Dropped = append(res.Dropped, LiveConflict{TS: l.TS, ArchiveDigest: digest(want), LiveDigest: digest(after)})
-				replace[string(l.Raw)] = nil
+				res.Dropped = append(res.Dropped, LiveConflict{TS: ts, ArchiveDigest: digest(want), LiveDigest: digest(after)})
+				replace[string(raw)] = nil
 			}
 			continue
 		}
 		if !bytes.Equal(got, after) {
-			replace[string(l.Raw)] = out
+			replace[string(raw)] = out
 			res.Rewritten++
 		}
 	}
@@ -199,10 +239,16 @@ func redactLive(ctx context.Context, p layout.Policy, s Stream, guard LineGuard,
 			return LiveRepair{}, fmt.Errorf("replacing live audit %s with its redacted lines: %w", path, err)
 		}
 	}
-	if cursor != "" && (end > start || (end > 0 && res.Changed())) {
+	if cursor != "" && judged > 0 {
 		// The prefix through the last judged line, in its stored form.
-		n := len(rewriteLive(b[:ends[end-1]], replace))
-		c, err := json.Marshal(liveCursor{Offset: n, SHA256: digest(out[:n])})
+		n := next
+		if res.Changed() {
+			n = len(rewriteLive(b[:next], replace))
+		}
+		if !checkpoint {
+			archiveMaxTS = 0
+		}
+		c, err := json.Marshal(liveCursor{Offset: n, SHA256: digest(out[:n]), ArchiveSHA256: archiveSHA256, ArchiveMaxTS: archiveMaxTS})
 		if err != nil {
 			return LiveRepair{}, fmt.Errorf("encoding the live audit cursor: %w", err)
 		}
@@ -210,25 +256,8 @@ func redactLive(ctx context.Context, p layout.Policy, s Stream, guard LineGuard,
 			return LiveRepair{}, fmt.Errorf("recording the live audit cursor: %w", err)
 		}
 	}
-	res.Complete = end == len(live)
+	res.Complete = next == tail
 	return res, nil
-}
-
-// liveLineEnds returns, for each complete non-blank line of b in order, the
-// offset just past its newline. It mirrors readCompleteLive's choice of lines.
-func liveLineEnds(b []byte) []int {
-	var ends []int
-	for pos := 0; pos < len(b); {
-		i := bytes.IndexByte(b[pos:], '\n')
-		if i < 0 {
-			break
-		}
-		if len(bytes.TrimSpace(b[pos:pos+i])) != 0 {
-			ends = append(ends, pos+i+1)
-		}
-		pos += i + 1
-	}
-	return ends
 }
 
 // rewriteLive applies replace to the complete lines of b; a nil value drops
@@ -254,8 +283,12 @@ func rewriteLive(b []byte, replace map[string][]byte) []byte {
 
 func digest(b []byte) string { return fmt.Sprintf("%x", sha256.Sum256(b)) }
 
-// archivedPayloads maps each archived ts of the stream to its canonical payload.
-func archivedPayloads(p layout.Policy, s Stream) (map[int64][]byte, error) {
+type archivedChunk struct {
+	path string
+	last int64
+}
+
+func archivedChunks(p layout.Policy, s Stream) ([]archivedChunk, error) {
 	dirs, err := StreamDirs(p, s)
 	if err != nil {
 		return nil, err
@@ -264,27 +297,62 @@ func archivedPayloads(p layout.Policy, s Stream) (map[int64][]byte, error) {
 	if s.Namespace == MissionNS {
 		session = s.Session
 	}
-	out := map[int64][]byte{}
+	var out []archivedChunk
 	for _, dir := range dirs {
 		scan, err := ScanSealedDir(dir, s.Namespace, session)
 		if err != nil {
 			return nil, err
 		}
 		for _, c := range scan.Chunks {
-			lines, err := ReadChunkVerified(filepath.Join(dir, c.ChunkFile()), c.Last)
-			if err != nil {
-				// A chunk that does not decode is not evidence; salvaging it is
-				// the corrupt-chunk step's job, and a later read still reports it.
-				continue
-			}
-			for _, l := range lines {
-				b, err := CanonicalPayload(l.Raw)
-				if err != nil {
-					return nil, err
-				}
-				out[l.TS] = b
-			}
+			out = append(out, archivedChunk{path: filepath.Join(dir, c.ChunkFile()), last: c.Last})
 		}
 	}
 	return out, nil
+}
+
+func archiveDigest(chunks []archivedChunk) (string, error) {
+	h := sha256.New()
+	for _, c := range chunks {
+		f, err := os.Open(c.path)
+		if err != nil {
+			return "", fmt.Errorf("reading archived audit %s: %w", c.path, err)
+		}
+		chunkHash := sha256.New()
+		_, err = io.Copy(chunkHash, f)
+		if closeErr := f.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return "", fmt.Errorf("reading archived audit %s: %w", c.path, err)
+		}
+		fmt.Fprintf(h, "%q:%x\n", c.path, chunkHash.Sum(nil))
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+// archivedPayloads records the maximum decoded ts rather than trusting the
+// chunk name: ReadChunkVerified checks the last row, not the order of rows.
+func archivedPayloads(chunks []archivedChunk, canonical bool) (map[int64][]byte, int64, error) {
+	out := map[int64][]byte{}
+	maxTS := int64(math.MinInt64)
+	for _, c := range chunks {
+		lines, err := ReadChunkVerified(c.path, c.last)
+		if err != nil {
+			// A chunk that does not decode is not evidence; salvaging it is
+			// the corrupt-chunk step's job, and a later read still reports it.
+			continue
+		}
+		for _, l := range lines {
+			b := l.Raw
+			if canonical {
+				b, err = CanonicalPayload(b)
+				if err != nil {
+					return nil, 0, err
+				}
+			}
+			maxTS = max(maxTS, l.TS)
+			out[l.TS] = b
+		}
+	}
+	return out, maxTS, nil
 }

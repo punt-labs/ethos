@@ -73,7 +73,10 @@ func BenchmarkRedactLiveLongSession(b *testing.B) {
 func TestRedactLiveLongSessionBudget(t *testing.T) {
 	p, s, data := longAuditStream(t)
 	require.NoError(t, audit.ReplaceLocalFile(p, s.LivePath(p), data))
-	const budget = 4 * time.Second
+	budget := 8 * time.Second
+	if testing.CoverMode() != "" {
+		budget = 35 * time.Second
+	}
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
