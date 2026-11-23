@@ -37,15 +37,15 @@ func TestReadStreamForSealResumesAndInvalidatesChangedBytes(t *testing.T) {
 	check := func(rows int, persist bool) (StreamData, error) {
 		return ReadStreamForSeal(&historyBudget{Context: context.Background(), rows: rows}, p, s, dir, persist)
 	}
-	_, err = check(1, false)
+	_, err = check(2, false)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-	_, err = check(1, true)
+	_, err = check(2, true)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-	data, err := check(1, true)
+	data, err := check(2, true)
 	require.NoError(t, err)
 	require.Len(t, data.Lines, 1)
 	require.Equal(t, int64(300), data.Lines[0].TS)
-	_, err = check(0, true)
+	_, err = check(1, true)
 	require.NoError(t, err)
 
 	info, err := os.Stat(path)
@@ -54,9 +54,9 @@ func TestReadStreamForSealResumesAndInvalidatesChangedBytes(t *testing.T) {
 	require.Len(t, changed, len(old))
 	require.NoError(t, os.WriteFile(path, []byte(changed), 0o600))
 	require.NoError(t, os.Chtimes(path, info.ModTime(), info.ModTime()))
-	_, err = check(0, true)
+	_, err = check(1, true)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-	_, err = check(2, true)
+	_, err = check(3, true)
 	require.ErrorContains(t, err, "audit identity conflict")
 }
 
@@ -93,4 +93,20 @@ func TestVerifyHistoryChunkRefusesInvalidEvidence(t *testing.T) {
 	require.NoError(t, verify(), "invalid cache offsets do not hide evidence or make valid history fail")
 	require.NoError(t, os.WriteFile(cache, []byte("damaged checkpoint"), 0o600))
 	require.NoError(t, verify(), "invalid checkpoint bytes are rebuilt")
+}
+
+func TestReadStreamForSealChecksDeadlineBetweenCachedChunks(t *testing.T) {
+	p := repositoryPolicy(t, layout.RecordFull)
+	s := Stream{Namespace: SessionNS, Session: "s"}
+	dir, err := ArchiveDir(p, s, "2026-11-04")
+	require.NoError(t, err)
+	for _, ts := range []int64{100, 200} {
+		path := filepath.Join(dir, SessionChunkFile(ts, ts))
+		require.NoError(t, WriteLocalAtomic(p, path, []byte(liveLine(ts, "Read"))))
+	}
+	_, err = ReadStreamForSeal(context.Background(), p, s, dir, true)
+	require.NoError(t, err)
+	ctx := &historyBudget{Context: context.Background(), rows: 1}
+	_, err = ReadStreamForSeal(ctx, p, s, dir, true)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 }

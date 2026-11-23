@@ -96,6 +96,9 @@ func ReadStreamForSeal(ctx context.Context, p layout.Policy, s Stream, dir strin
 }
 
 func verifyHistoryChunk(ctx context.Context, p layout.Policy, path string, last int64, cache string, persist bool) ([]Line, []verifiedHistoryLine, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, &ChunkReadError{Path: path, Err: err}

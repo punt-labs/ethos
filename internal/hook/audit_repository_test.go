@@ -68,9 +68,9 @@ func TestBoundedSealResumesAfterBudgetExhaustion(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, unsealed)
 
-	// Verify the two new archive rows and perform the two seal checks, but
+	// Verify the new chunk and its two rows and perform the two seal checks, but
 	// do not replay the two already-checked live rows.
-	require.NoError(t, seal(&sealCheckBudget{Context: context.Background(), remaining: 4}))
+	require.NoError(t, seal(&sealCheckBudget{Context: context.Background(), remaining: 5}))
 }
 
 func TestFullSealResumesHistoryAndStagesLaterStream(t *testing.T) {
@@ -116,9 +116,9 @@ func TestManualSealRecordsVerifiedHistoryForBoundedSeal(t *testing.T) {
 	require.NoError(t, audit.WriteLocalAtomic(p, filepath.Join(dir, audit.SessionChunkFile(100, 100)), raw))
 	_, err = SealRepoWithPolicy(p, now, SealOptions{})
 	require.NoError(t, err)
-	ctx := &sealCheckBudget{Context: context.Background(), remaining: 3}
+	ctx := &sealCheckBudget{Context: context.Background(), remaining: 4}
 	_, err = sealPolicyStreamsContext(ctx, p, []audit.Stream{s}, now, SealOptions{}, true)
-	require.NoError(t, err, "only stream, union and final seal checks remain")
+	require.NoError(t, err, "no individual history rows need verification")
 }
 
 func TestBoundedSealRetriesWithUpdatedLiveGuard(t *testing.T) {
