@@ -475,3 +475,10 @@ func TestCheckUnclassifiedFiles_HistoryCheckpointIsClassified(t *testing.T) {
 	r := CheckUnclassifiedFiles(root)
 	assert.Equal(t, "PASS", r.Status, r.Detail)
 }
+
+func TestCheckUnclassifiedFiles_SealCursorIsClassified(t *testing.T) {
+	root := repoTemp(t)
+	touch(t, root, ".punt-labs/local/ethos/cursors/seal-0123abcd.json")
+	r := CheckUnclassifiedFiles(root)
+	assert.Equal(t, "PASS", r.Status, r.Detail)
+}
