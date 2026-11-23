@@ -147,6 +147,7 @@ var Table = []Entry{
 	{Pattern: ".punt-labs/local/ethos/sessions/*.audit.jsonl", Class: Trace},
 	{Pattern: ".punt-labs/local/ethos/missions/*/*.log.jsonl", Class: Trace},
 	{Pattern: ".punt-labs/local/ethos/missions/*.jsonl", Class: Trace},
+	{Pattern: ".punt-labs/local/ethos/cursors/history-*.json", Class: Trace},
 	{Pattern: ".punt-labs/local/ethos/trace/**", Class: Trace},
 	{Pattern: ".punt-labs/ethos/missions/*/delegations/*/prompt.md", Class: Trace},
 	{Pattern: ".punt-labs/ethos/missions/*/reflections.yaml", Class: Trace},

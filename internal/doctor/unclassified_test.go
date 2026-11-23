@@ -468,3 +468,10 @@ func TestCheckUnclassifiedFiles_LiveCursorIsClassified(t *testing.T) {
 	r := CheckUnclassifiedFiles(root)
 	assert.Equal(t, "PASS", r.Status, r.Detail)
 }
+
+func TestCheckUnclassifiedFiles_HistoryCheckpointIsClassified(t *testing.T) {
+	root := repoTemp(t)
+	touch(t, root, ".punt-labs/local/ethos/cursors/history-v1-0123abcd.json")
+	r := CheckUnclassifiedFiles(root)
+	assert.Equal(t, "PASS", r.Status, r.Detail)
+}
