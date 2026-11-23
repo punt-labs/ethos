@@ -53,10 +53,10 @@ func (r LiveRepair) Changed() bool { return r.Rewritten > 0 || len(r.Dropped) > 
 // the file still begins with exactly those bytes, so a replaced or truncated
 // file is judged again from the start.
 type liveCursor struct {
-	Offset       int    `json:"offset"`
-	SHA256       string `json:"sha256"`
-	ArchiveStamp string `json:"archive_stamp,omitempty"`
-	ArchiveMaxTS int64  `json:"archive_max_ts,omitempty"`
+	Offset       int               `json:"offset"`
+	SHA256       string            `json:"sha256"`
+	ArchiveStamp [sha256.Size]byte `json:"archive_stamp"`
+	ArchiveMaxTS int64             `json:"archive_max_ts,omitempty"`
 }
 
 func liveCursorPath(p layout.Policy, s Stream) string {
@@ -65,7 +65,7 @@ func liveCursorPath(p layout.Policy, s Stream) string {
 
 // readLiveCursor returns the checked prefix only while both its live bytes and
 // the archive evidence used to judge it are unchanged.
-func readLiveCursor(path string, b []byte, archiveStamp string) liveCursor {
+func readLiveCursor(path string, b []byte, archiveStamp [sha256.Size]byte) liveCursor {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return liveCursor{}
@@ -122,22 +122,17 @@ func ResetLiveSealCursor(p layout.Policy, s Stream, guardScope string) error {
 }
 
 // SaveLiveSealCursor saves a complete checkpoint while the stream lock is
-// held. newest is the highest timestamp the caller just archived, if any.
-func (r LiveRepair) SaveLiveSealCursor(p layout.Policy, s Stream, guardScope string, newest *int64) error {
-	if r.sealCursor == nil || (r.sealCursorSaved && newest == nil) {
+// held. chunk is the new immutable file, if any, and newest is its last timestamp.
+func (r LiveRepair) SaveLiveSealCursor(p layout.Policy, s Stream, guardScope string, chunk string, newest int64) error {
+	if r.sealCursor == nil || (r.sealCursorSaved && chunk == "") {
 		return nil
 	}
 	c := *r.sealCursor
-	if newest != nil {
-		chunks, err := archivedChunks(p, s)
-		if err != nil {
+	if chunk != "" {
+		if err := addArchiveStamp(&c.ArchiveStamp, chunk); err != nil {
 			return err
 		}
-		c.ArchiveStamp, err = archiveInventoryStamp(chunks)
-		if err != nil {
-			return err
-		}
-		c.ArchiveMaxTS = max(c.ArchiveMaxTS, *newest)
+		c.ArchiveMaxTS = max(c.ArchiveMaxTS, newest)
 	}
 	return writeLiveCursor(p, sealLiveCursorPath(p, s, guardScope), c)
 }
@@ -170,7 +165,7 @@ func redactLive(ctx context.Context, p layout.Policy, s Stream, guard LineGuard,
 	if err != nil {
 		return LiveRepair{}, err
 	}
-	var archiveStamp string
+	var archiveStamp [sha256.Size]byte
 	if checkpoint {
 		archiveStamp, err = archiveInventoryStamp(chunks)
 		if err != nil {
@@ -371,19 +366,32 @@ func archivedChunks(p layout.Policy, s Stream) ([]archivedChunk, error) {
 
 // The inventory of immutable chunks is a checkpoint hint, not evidence for
 // sealing. ReadStream still compares payloads before anything can be archived.
-func archiveInventoryStamp(chunks []archivedChunk) (string, error) {
-	h := sha256.New()
+func archiveInventoryStamp(chunks []archivedChunk) ([sha256.Size]byte, error) {
+	var stamp [sha256.Size]byte
 	for _, c := range chunks {
-		info, err := os.Lstat(c.path)
-		if err != nil {
-			return "", fmt.Errorf("examining archived audit %s: %w", c.path, err)
+		if err := addArchiveStamp(&stamp, c.path); err != nil {
+			return stamp, err
 		}
-		if !info.Mode().IsRegular() {
-			return "", &NotRegularFileError{Path: c.path}
-		}
-		fmt.Fprintf(h, "%q:%d:%d\n", c.path, info.Size(), info.ModTime().UnixNano())
 	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
+	return stamp, nil
+}
+
+func addArchiveStamp(stamp *[sha256.Size]byte, path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("examining archived audit %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return &NotRegularFileError{Path: path}
+	}
+	// Paths are unique; combine their hashes without depending on directory order.
+	entry := sha256.Sum256(fmt.Appendf(nil, "%q:%d:%d", path, info.Size(), info.ModTime().UnixNano()))
+	var sum uint16
+	for i := range entry {
+		sum = uint16(stamp[i]) + uint16(entry[i]) + (sum >> 8)
+		stamp[i] = byte(sum)
+	}
+	return nil
 }
 
 // archivedPayloads records the maximum decoded ts rather than trusting the

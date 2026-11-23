@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -185,6 +186,30 @@ func TestRedactLiveUntilResumesAndReconcilesNewArchive(t *testing.T) {
 	live, err = os.ReadFile(s.LivePath(p))
 	require.NoError(t, err)
 	require.Equal(t, liveLine(200, "Masked")+liveLine(300, "Masked")+liveLine(400, "Masked")+torn, string(live))
+}
+
+func TestSaveLiveSealCursorDoesNotRescanOldArchive(t *testing.T) {
+	p := repositoryPolicy(t, layout.RecordBlame)
+	s := Stream{Namespace: SessionNS, Session: "s"}
+	dir, err := ArchiveDir(p, s, "2026-11-04")
+	require.NoError(t, err)
+	oldName := ChunkName{Namespace: SessionNS, First: 100, Last: 100}
+	oldPath := filepath.Join(dir, oldName.ChunkFile())
+	require.NoError(t, WriteLocalAtomic(p, oldPath, []byte(liveLine(100, "Read"))))
+	require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), []byte(liveLine(200, "Read"))))
+	res, err := RedactLiveUntil(context.Background(), p, s, maskGuard, "home")
+	require.NoError(t, err)
+	require.True(t, res.Complete)
+
+	newName := ChunkName{Namespace: SessionNS, First: 200, Last: 200}
+	newPath := filepath.Join(dir, newName.ChunkFile())
+	require.NoError(t, WriteLocalAtomic(p, newPath, []byte(liveLine(200, "Read"))))
+	require.NoError(t, os.Remove(oldPath))
+	require.NoError(t, os.Mkdir(oldPath, 0o700))
+
+	require.NoError(t, res.SaveLiveSealCursor(p, s, "home", newPath, 200))
+	_, err = RedactLiveUntil(context.Background(), p, s, maskGuard, "home")
+	require.Error(t, err)
 }
 
 func TestTryWithStreamLockBusy(t *testing.T) {
