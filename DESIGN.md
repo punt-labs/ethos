@@ -14229,6 +14229,18 @@ section copied before the shim keeps working with a new binary, because
 exist. A later change that needs the shim to pass something new adds a new
 subcommand name, never a flag on these two.
 
+**Commit seal budget (PL-1417).** Commit-context local archival uses a
+repository-wide five-second cooperative budget and does not wait for a busy
+audit stream lock. The live file and any unfinished tail stay at the canonical
+store. A checksum of the redaction prefix lets a subsequent commit continue
+judging the same bytes; conflicts against the current archive are still
+reconciled. Only guarded payloads enter an immutable chunk. Blame mode warns
+and permits the source commit if work is deferred, whereas full mode refuses
+incomplete archival. A regular manual seal is unbudgeted. Required full audit
+and captured-prompt publication remain synchronous and fail closed; the
+archival budget is not a deadline for the whole hook or for individual
+filesystem operations.
+
 `ethos doctor` reads the new argv through `HookSpec.InvokeArgs`, so a section
 copied before the shim, which calls `audit seal`, is reported stale. A new "Hook
 binary" row resolves the binary the shim would run (PATH, then
