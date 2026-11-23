@@ -63,6 +63,7 @@ func SealRepoWithPolicy(p layout.Policy, now time.Time, opts SealOptions) (SealR
 	streams, err := audit.ListStreams(p)
 	var res SealResult
 	if err == nil {
+		opts.checkpointHistory = true
 		res, err = sealPolicyStreams(p, streams, now, opts)
 	}
 	// This is a retry of previously captured full consent, not new eligibility
@@ -218,7 +219,7 @@ func sealPolicyStream(ctx context.Context, p layout.Policy, s audit.Stream, now 
 	if err != nil {
 		return 0, "", err
 	}
-	data, err := audit.ReadStreamForSeal(ctx, p, s, dir, !opts.DryRun)
+	data, err := audit.ReadStreamForSeal(ctx, p, s, dir, !opts.DryRun && (bounded || opts.checkpointHistory))
 	if err != nil {
 		// Keep separate live-redaction progress on a history deadline. A
 		// conflict, however, may require replaying it against current bytes.

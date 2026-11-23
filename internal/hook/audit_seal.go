@@ -22,6 +22,8 @@ type SealOptions struct {
 	// An existing archive directory wins; otherwise an empty result falls back
 	// to the first live line's date, then now.
 	StartDate func(sessionID string) string
+
+	checkpointHistory bool
 }
 
 // SealResult separates local archive completion from publication completion.
