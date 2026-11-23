@@ -15,6 +15,10 @@ import (
 
 // postEditOrphanPoll is how often post-edit checks whether its hook shell
 // has died.
+// postEditCancels reports that post-edit stops its checks when signalled; the
+// generated hook probes it with stdin-watchdog --probe --cancel.
+const postEditCancels = true
+
 const postEditOrphanPoll = 100 * time.Millisecond
 
 // runPostEdit runs post-edit under a context that ends when the process is

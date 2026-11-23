@@ -25,6 +25,9 @@ func init() {
 		Run: func(cmd *cobra.Command, args []string) {
 			probe, _ := cmd.Flags().GetBool("probe")
 			if probe {
+				if cancel, _ := cmd.Flags().GetBool("cancel"); cancel && !postEditCancels {
+					os.Exit(1)
+				}
 				return
 			}
 			pid, err := strconv.Atoi(args[0])
