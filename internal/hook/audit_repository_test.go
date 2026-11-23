@@ -27,6 +27,48 @@ func policyGit(t *testing.T, root string, args ...string) string {
 	return string(out)
 }
 
+type sealCheckBudget struct {
+	context.Context
+	remaining int
+}
+
+func (c *sealCheckBudget) Err() error {
+	if c.remaining == 0 {
+		return context.DeadlineExceeded
+	}
+	c.remaining--
+	return c.Context.Err()
+}
+
+func TestBoundedSealResumesAfterBudgetExhaustion(t *testing.T) {
+	root := t.TempDir()
+	p := hookPolicy(t, root, root, layout.RecordBlame)
+	s := audit.Stream{Namespace: audit.SessionNS, Session: "s"}
+	now := time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)
+	live := []byte(`{"ts":"` + audit.FormatLineTS(100) + `","tool":"Read"}` + "\n" +
+		`{"ts":"` + audit.FormatLineTS(200) + `","tool":"Read"}` + "\n")
+	require.NoError(t, audit.ReplaceLocalFile(p, s.LivePath(p), live))
+	seal := func(ctx context.Context) error {
+		return audit.WithStreamLock(p, s, func() error {
+			_, _, err := sealPolicyStream(ctx, p, s, now, SealOptions{}, true)
+			return err
+		})
+	}
+	require.ErrorIs(t, seal(&sealCheckBudget{Context: context.Background(), remaining: 1}), context.DeadlineExceeded)
+	retained, err := os.ReadFile(s.LivePath(p))
+	require.NoError(t, err)
+	require.Equal(t, live, retained)
+	unsealed, err := audit.UnarchivedCount(p, s)
+	require.NoError(t, err)
+	require.Equal(t, 2, unsealed)
+
+	// The final check expires if the second invocation replays the first line.
+	require.NoError(t, seal(&sealCheckBudget{Context: context.Background(), remaining: 5}))
+	unsealed, err = audit.UnarchivedCount(p, s)
+	require.NoError(t, err)
+	require.Zero(t, unsealed)
+}
+
 func TestSealRetriesReconciliationAfterArchiveStampCollision(t *testing.T) {
 	root := t.TempDir()
 	p := hookPolicy(t, root, root, layout.RecordBlame)
