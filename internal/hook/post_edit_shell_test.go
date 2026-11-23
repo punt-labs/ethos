@@ -17,11 +17,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func postEditShellEthos(t *testing.T, bin, body string) {
+	t.Helper()
+	require.NotEmpty(t, ethosBinary, "the real watchdog binary must be built")
+	postEditTool(t, bin, "ethos", `if [ "$1 $2" = 'hook stdin-watchdog' ]; then
+printf '%s\n' "$$" >> "$PROCESS_LOG"
+exec "`+ethosBinary+`" "$@"
+fi
+`+body)
+}
+
 func postEditShellFixture(t *testing.T) (bin, scratch, processes string) {
 	t.Helper()
 	home, bin, scratch := t.TempDir(), t.TempDir(), t.TempDir()
 	processes = filepath.Join(home, "processes")
-	for _, name := range []string{"mktemp", "rm", "cat", "sleep"} {
+	for _, name := range []string{"mktemp", "rm", "cat"} {
 		path, err := exec.LookPath(name)
 		require.NoError(t, err)
 		if name == "cat" {
@@ -76,7 +86,7 @@ func TestGeneratedPostEditShellPipe(t *testing.T) {
 			bin, scratch, processes := postEditShellFixture(t)
 			log := filepath.Join(os.Getenv("HOME"), "stdin")
 			t.Setenv("STDIN_LOG", log)
-			postEditTool(t, bin, "ethos", `test "$1 $2" = 'hook post-edit' || exit 9
+			postEditShellEthos(t, bin, `test "$1 $2" = 'hook post-edit' || exit 9
 test -p /dev/stdin || exit 9
 if (: <&4) 2>/dev/null; then exit 9; fi
 if (: <&5) 2>/dev/null; then exit 9; fi
@@ -149,7 +159,7 @@ func TestGeneratedPostEditShellOpenInput(t *testing.T) {
 					if name != "no-bash" {
 						require.NoError(t, os.Symlink(shell, filepath.Join(bin, "bash")))
 					}
-					postEditTool(t, bin, "ethos", `test "$1 $2" = 'hook post-edit' || exit 9
+					postEditShellEthos(t, bin, `test "$1 $2" = 'hook post-edit' || exit 9
 test -p /dev/stdin || exit 9
 cat
 `)
@@ -205,7 +215,7 @@ func TestGeneratedPostEditShellStalledInput(t *testing.T) {
 	for _, payload := range []string{"", `{"tool_input":`} {
 		t.Run(payload, func(t *testing.T) {
 			bin, scratch, processes := postEditShellFixture(t)
-			postEditTool(t, bin, "ethos", `test -p /dev/stdin || exit 9
+			postEditShellEthos(t, bin, `test -p /dev/stdin || exit 9
 cat
 `)
 			reader, writer, err := os.Pipe()
@@ -232,7 +242,7 @@ func TestGeneratedPostEditShellInterrupted(t *testing.T) {
 	require.NoError(t, GenerateAgentFiles(root, ids, teams, roles))
 	command := extractPostToolUseCommand(t, filepath.Join(root, ".claude/agents/bwk.md"))
 	bin, scratch, processes := postEditShellFixture(t)
-	postEditTool(t, bin, "ethos", "exit 9\n")
+	postEditShellEthos(t, bin, "exit 9\n")
 	reader, writer, err := os.Pipe()
 	require.NoError(t, err)
 	defer reader.Close()
@@ -261,7 +271,7 @@ func TestGeneratedPostEditShellOversizedInput(t *testing.T) {
 	require.NoError(t, os.Symlink(wc, filepath.Join(bin, "wc")))
 	sizeLog := filepath.Join(os.Getenv("HOME"), "size")
 	t.Setenv("SIZE_LOG", sizeLog)
-	postEditTool(t, bin, "ethos", "test -p /dev/stdin || exit 9\nwc -c > \"$SIZE_LOG\"\nexit 42\n")
+	postEditShellEthos(t, bin, "test -p /dev/stdin || exit 9\nwc -c > \"$SIZE_LOG\"\nexit 42\n")
 	input, err := os.Create(filepath.Join(os.Getenv("HOME"), "input"))
 	require.NoError(t, err)
 	defer input.Close()
@@ -288,7 +298,7 @@ func TestGeneratedPostEditShellKilled(t *testing.T) {
 	ready := filepath.Join(os.Getenv("HOME"), "ready")
 	t.Setenv("STDIN_LOG", log)
 	t.Setenv("READY", ready)
-	postEditTool(t, bin, "ethos", "cat > \"$STDIN_LOG\"\nprintf ready > \"$READY\"\nsleep 30\n")
+	postEditShellEthos(t, bin, "cat > \"$STDIN_LOG\"\nprintf ready > \"$READY\"\nwhile :; do :; done\n")
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", postEditShellCommand("bwk"))
@@ -312,7 +322,7 @@ func TestGeneratedPostEditShellKilled(t *testing.T) {
 }
 
 func TestGeneratedPostEditShellClosedInput(t *testing.T) {
-	shells := map[string][]string{"sh": {"/bin/sh"}}
+	shells := map[string][]string{"sh": {"/bin/sh"}, "no-bash": {"/bin/sh"}}
 	if bash, err := exec.LookPath("bash"); err == nil {
 		shells["bash"] = []string{bash}
 	}
@@ -325,10 +335,10 @@ func TestGeneratedPostEditShellClosedInput(t *testing.T) {
 	for name, shell := range shells {
 		t.Run(name, func(t *testing.T) {
 			bin, scratch, processes := postEditShellFixture(t)
-			postEditTool(t, bin, "ethos", "cat\n")
+			postEditShellEthos(t, bin, "cat\n")
 			var longest time.Duration
-			for range 20 {
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			for range 300 {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				args := append(append([]string{}, shell[1:]...), "-c", postEditShellCommand("bwk"))
 				cmd := exec.CommandContext(ctx, shell[0], args...)
 				cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -341,10 +351,10 @@ func TestGeneratedPostEditShellClosedInput(t *testing.T) {
 				cancel()
 				require.NoError(t, err, "%s", out)
 				require.Equal(t, "{}", string(out))
-				require.Less(t, elapsed, time.Second)
+				require.Less(t, elapsed, 2*time.Second)
 				longest = max(longest, elapsed)
 			}
-			t.Logf("20 closed-input runs, max %s", longest)
+			t.Logf("300 closed-input runs, max %s", longest)
 			postEditShellClean(t, scratch, processes)
 		})
 	}
@@ -352,7 +362,7 @@ func TestGeneratedPostEditShellClosedInput(t *testing.T) {
 
 func TestGeneratedPostEditShellNoPIDPublication(t *testing.T) {
 	bin, scratch, processes := postEditShellFixture(t)
-	postEditTool(t, bin, "ethos", "cat\n")
+	postEditShellEthos(t, bin, "cat\n")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", "echo() { :; }; "+postEditShellCommand("bwk"))

@@ -2061,13 +2061,19 @@ Closed stdin completes immediately; open stdin retains arrived bytes after a
 ten-second watchdog bound. The kill switch runs first, and hook failures remain
 advisory.
 
-The watchdog has no cancellation trap or PID-publication handshake. Its
-stdin, stdout, stderr, and spool descriptor are closed or redirected before
-it starts. Cleanup kills and reaps the reader and watchdog and closes the
-spool descriptors. A sleeper orphaned by watchdog cancellation holds no hook
-descriptor and exits after its remaining ten-second delay; it cannot delay
-closed-input completion. Shell regression coverage includes dash, modern Bash,
-Bash 3.2 when supplied, and BusyBox ash when available.
+The hidden `ethos hook stdin-watchdog <pid>` command provides the timer in Go,
+without reading stdin, resolving or repairing storage, or spawning children.
+After `InputTimeout` it sends TERM to the shell reader; TERM or INT cancels the
+timer immediately. This does not cross the inherited-stdin boundary: only the
+shell reader handles Claude Code's input, and the watchdog has `/dev/null` as
+stdin. Its stdout, stderr, and spool descriptor are redirected or closed.
+The parent installs cleanup traps only after spawning the reader and watchdog,
+then kills and waits for the watchdog when the reader finishes. There are no
+shell sleepers, PID handshakes, or watchdog grandchildren to orphan. A TERM
+before parent trap installation can leave at most the ten-second bounded
+reader and watchdog. Shell regression coverage includes 300 closed-input runs
+each under dash, modern Bash, Bash 3.2 when supplied, and BusyBox ash when
+available, with watchdog PID cleanup assertions.
 
 ## DES-030: Subprocess integration tests for hooks (SETTLED)
 

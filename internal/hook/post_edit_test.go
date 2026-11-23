@@ -20,7 +20,7 @@ func TestPostEditGeneratedCommand(t *testing.T) {
 	root, ids, teams, roles := setupTestRepo(t)
 	require.NoError(t, GenerateAgentFiles(root, ids, teams, roles))
 	command := extractPostToolUseCommand(t, filepath.Join(root, ".claude", "agents", "bwk.md"))
-	require.Equal(t, `if [ -f "$HOME/.punt-hooks-kill" ]; then exit 0; fi; f=$(mktemp) || exit 0; c= w=; trap 'if [ -n "$w" ]; then kill "$w" 2>/dev/null; wait "$w" 2>/dev/null; fi; if [ -n "$c" ]; then kill "$c" 2>/dev/null; wait "$c" 2>/dev/null; fi; exec 4>&- 5<&-; rm -f "$f"' 0; trap 'exit 0' 1 2 15; exec 4>"$f" 5<"$f"; rm -f "$f" 4>&- 5<&- || exit 0; exec 3<&0; (ulimit -f 131073 2>/dev/null || :; exec cat <&3 >&4 3<&- 4>&- 5<&-) & c=$!; exec 3<&- 4>&-; (sleep 10; kill "$c" 2>/dev/null) 5<&- </dev/null >/dev/null 2>&1 & w=$!; wait "$c" 2>/dev/null; c=; kill "$w" 2>/dev/null; wait "$w" 2>/dev/null; w=; cat <&5 5<&- | ethos hook post-edit --agent 'bwk' 5<&- || true`, command)
+	require.Equal(t, `if [ -f "$HOME/.punt-hooks-kill" ]; then exit 0; fi; f=$(mktemp) || exit 0; c= w=; exec 4>"$f" 5<"$f"; rm -f "$f" 4>&- 5<&- || exit 0; exec 3<&0; (ulimit -f 131073 2>/dev/null || :; exec cat <&3 >&4 3<&- 4>&- 5<&-) & c=$!; exec 3<&- 4>&-; ethos hook stdin-watchdog "$c" </dev/null >/dev/null 2>&1 5<&- & w=$!; trap 'if [ -n "$w" ]; then kill "$w" 2>/dev/null; wait "$w" 2>/dev/null; fi; if [ -n "$c" ]; then kill "$c" 2>/dev/null; wait "$c" 2>/dev/null; fi; exec 4>&- 5<&-; rm -f "$f"' 0; trap 'exit 0' 1 2 15; wait "$c" 2>/dev/null; c=; kill "$w" 2>/dev/null; wait "$w" 2>/dev/null; w=; cat <&5 5<&- | ethos hook post-edit --agent 'bwk' 5<&- || true`, command)
 	data, err := os.ReadFile(filepath.Join(root, ".claude", "agents", "bwk.md"))
 	require.NoError(t, err)
 	require.Contains(t, string(data), "timeout: 70")
@@ -34,7 +34,7 @@ func postEditFixture(t *testing.T) (string, string) {
 	git, err := exec.LookPath("git")
 	require.NoError(t, err)
 	require.NoError(t, os.Symlink(git, filepath.Join(bin, "git")))
-	for _, name := range []string{"mktemp", "sleep", "rm"} {
+	for _, name := range []string{"mktemp", "rm"} {
 		path, err := exec.LookPath(name)
 		require.NoError(t, err)
 		require.NoError(t, os.Symlink(path, filepath.Join(bin, name)))
