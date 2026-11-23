@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inherited stdin reader remains entirely in the shell. A capability probe
   selects a bounded legacy shell timer when an older Ethos is on PATH.
 
+- Cancelling a generated agent edit hook now stops the edit checks it
+  started. The hook shell runs `ethos hook post-edit` in the background and
+  stops it from its exit trap; post-edit stops its checks' process groups when
+  it is signalled or its hook shell dies, instead of letting them run to their
+  ten-second timeout. Regenerate agent files to pick up the hook change.
+
 - Quote the seeded review agents' descriptions so YAML-significant punctuation
   cannot invalidate their frontmatter (PL-1385). Strict YAML regression coverage
   checks every deployed review agent.
