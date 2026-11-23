@@ -29,6 +29,10 @@ type StreamData struct {
 // live file. In particular, overlapping live bytes are checked for conflicts
 // before a watermark can hide them. It does not consult Git or recording mode.
 func ReadStream(p layout.Policy, s Stream) (StreamData, error) {
+	return readStream(p, s, ReadChunkVerified, readRepositoryLive, MergeLines)
+}
+
+func readStream(p layout.Policy, s Stream, loadChunk func(string, int64) ([]Line, error), loadLive func(layout.Policy, Stream) ([]Line, error), merge func([]Line) ([]Line, error)) (StreamData, error) {
 	dirs, err := StreamDirs(p, s)
 	if err != nil {
 		return StreamData{}, err
@@ -66,7 +70,7 @@ func ReadStream(p layout.Policy, s Stream) (StreamData, error) {
 			}
 		}
 		for _, c := range SortChunks(scan.Chunks) {
-			lines, err := ReadChunkVerified(filepath.Join(dir, c.ChunkFile()), c.Last)
+			lines, err := loadChunk(filepath.Join(dir, c.ChunkFile()), c.Last)
 			if err != nil {
 				return StreamData{}, err
 			}
@@ -108,12 +112,12 @@ func ReadStream(p layout.Policy, s Stream) (StreamData, error) {
 			}
 		}
 	}
-	live, err := readRepositoryLive(p, s)
+	live, err := loadLive(p, s)
 	if err != nil {
 		return StreamData{}, err
 	}
 	data.Lines = append(data.Lines, live...)
-	data.Lines, err = MergeLines(data.Lines)
+	data.Lines, err = merge(data.Lines)
 	if err != nil {
 		return StreamData{}, fmt.Errorf("stream %s: %w", s.Key(), err)
 	}
@@ -161,6 +165,15 @@ func readRepositoryLive(p layout.Policy, s Stream) ([]Line, error) {
 // A torn live tail remains in place for the writer's reopen repair. Complete
 // invalid data is not absence and must not disappear behind a sealed watermark.
 func readCompleteLive(path, session string) ([]Line, error) {
+	return readCompleteLiveWith(path, session, func(raw []byte) (int64, error) {
+		if _, err := CanonicalPayload(raw); err != nil {
+			return 0, err
+		}
+		return chunkLineTimestamp(raw)
+	})
+}
+
+func readCompleteLiveWith(path, session string, check func([]byte) (int64, error)) ([]Line, error) {
 	if present, err := auditReadFilePresent(path); err != nil || !present {
 		return nil, err
 	}
@@ -179,14 +192,7 @@ func readCompleteLive(path, session string) ([]Line, error) {
 		if len(bytes.TrimSpace(raw)) == 0 {
 			continue
 		}
-		if _, err := CanonicalPayload(raw); err != nil {
-			return nil, fmt.Errorf("live audit %s line %d: %w", path, n+1, err)
-		}
-		var h tsHolder
-		if err := json.Unmarshal(raw, &h); err != nil {
-			return nil, fmt.Errorf("live audit %s line %d: %w", path, n+1, err)
-		}
-		ts, err := ParseLineTS(h.TS)
+		ts, err := check(raw)
 		if err != nil {
 			return nil, fmt.Errorf("live audit %s line %d: %w", path, n+1, err)
 		}

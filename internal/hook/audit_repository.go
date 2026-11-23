@@ -99,6 +99,10 @@ func sealPolicyStreams(p layout.Policy, streams []audit.Stream, now time.Time, o
 		ctx, cancel = context.WithTimeout(ctx, opts.CommitBudget)
 		defer cancel()
 	}
+	return sealPolicyStreamsContext(ctx, p, streams, now, opts, bounded)
+}
+
+func sealPolicyStreamsContext(ctx context.Context, p layout.Policy, streams []audit.Stream, now time.Time, opts SealOptions, bounded bool) (SealResult, error) {
 	var res SealResult
 	type streamArchive struct {
 		stream audit.Stream
@@ -200,16 +204,6 @@ func sealPolicyStream(ctx context.Context, p layout.Policy, s audit.Stream, now 
 	if err := ctx.Err(); err != nil {
 		return 0, "", err
 	}
-	data, err := audit.ReadStream(p, s)
-	if err != nil {
-		// A replaced archive can retain its size and mtime. The union read
-		// must still refuse conflicts; discard the hint so a retry repairs them.
-		if bounded && !opts.DryRun {
-			saveCheckpoint = false
-			err = errors.Join(err, audit.ResetLiveSealCursor(p, s, guardScope))
-		}
-		return 0, "", err
-	}
 	date := ""
 	if s.Namespace == audit.SessionNS && opts.StartDate != nil {
 		date = opts.StartDate(s.Session)
@@ -224,30 +218,17 @@ func sealPolicyStream(ctx context.Context, p layout.Policy, s audit.Stream, now 
 	if err != nil {
 		return 0, "", err
 	}
-	session := ""
-	if s.Namespace == audit.MissionNS {
-		session = s.Session
-	}
-	scan, err := audit.ScanSealedDir(dir, s.Namespace, session)
+	data, err := audit.ReadStreamForSeal(ctx, p, s, dir, !opts.DryRun)
 	if err != nil {
+		// Keep separate live-redaction progress on a history deadline. A
+		// conflict, however, may require replaying it against current bytes.
+		if bounded && !errors.Is(err, context.DeadlineExceeded) {
+			saveCheckpoint = false
+			err = errors.Join(err, audit.ResetLiveSealCursor(p, s, guardScope))
+		}
 		return 0, "", err
 	}
-	archived := map[int64]bool{}
-	for _, c := range scan.Chunks {
-		lines, err := audit.ReadChunkVerified(filepath.Join(dir, c.ChunkFile()), c.Last)
-		if err != nil {
-			return 0, "", err
-		}
-		for _, l := range lines {
-			archived[l.TS] = true
-		}
-	}
-	var pending []audit.Line
-	for _, l := range data.Lines {
-		if !archived[l.TS] {
-			pending = append(pending, l)
-		}
-	}
+	pending := data.Lines
 	if opts.DryRun {
 		reportf(opts, "would archive %d line(s) for stream %s\n", len(pending), s.Key())
 		return len(pending), "", nil

@@ -335,6 +335,10 @@ func Eligible(_ Stream, l Line) bool {
 // MergeLines compares every duplicate before any timestamp filtering. The
 // eligibility evidence is part of the payload: disagreement is a conflict too.
 func MergeLines(in []Line) ([]Line, error) {
+	return mergeLines(in, func(l Line) ([]byte, error) { return CanonicalPayload(l.Raw) })
+}
+
+func mergeLines(in []Line, payload func(Line) ([]byte, error)) ([]Line, error) {
 	type key struct {
 		session string
 		ts      int64
@@ -343,7 +347,7 @@ func MergeLines(in []Line) ([]Line, error) {
 	sources := map[key]string{}
 	out := make([]Line, 0, len(in))
 	for _, l := range in {
-		b, err := CanonicalPayload(l.Raw)
+		b, err := payload(l)
 		if err != nil {
 			return nil, err
 		}

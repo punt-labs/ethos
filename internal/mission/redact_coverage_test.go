@@ -282,6 +282,7 @@ var writerRegistry = map[string]writerEntry{
 	"internal/audit.redactLive":                    checkpoint("guard", "CanonicalPayload", "archivedPayloads", "ReplaceLocalFile", "writeLiveCursor"),
 	"internal/audit.LiveRepair.SaveLiveSealCursor": checkpoint("addArchiveStamp", "writeLiveCursor"),
 	"internal/audit.writeLiveCursor":               exempt("writes only the checked offset, timestamps and inventory/prefix stamps; no audit payload"),
+	"internal/audit.writeHistoryCheckpoint":        exempt("writes only checked chunk and canonical payload digests, timestamps and offsets"),
 	"internal/audit.ResetLiveSealCursor":           exempt("clears a local checkpoint by replacing it with a constant empty JSON object; no record payload"),
 	"internal/audit.TryLock":                       exempt(reasonLock),
 	"internal/autorepair.repairOrphan":             checkpoint("QuarantineLocal", "salvage"),

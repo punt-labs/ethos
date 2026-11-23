@@ -68,17 +68,66 @@ func TestBoundedSealResumesAfterBudgetExhaustion(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, unsealed)
 
-	// After the successful archive write, only the two seal checks should
-	// remain. Replaying the retained prefix would consume both of them.
-	require.NoError(t, seal(&sealCheckBudget{Context: context.Background(), remaining: 2}))
+	// Verify the two new archive rows and perform the two seal checks, but
+	// do not replay the two already-checked live rows.
+	require.NoError(t, seal(&sealCheckBudget{Context: context.Background(), remaining: 4}))
+}
+
+func TestFullSealResumesHistoryAndStagesLaterStream(t *testing.T) {
+	root := t.TempDir()
+	policyGit(t, root, "init", "-q")
+	p := hookPolicy(t, root, root, layout.RecordFull)
+	now := time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)
+	first := audit.Stream{Namespace: audit.SessionNS, Session: "aaa-history"}
+	later := audit.Stream{Namespace: audit.SessionNS, Session: "zzz-pending"}
+	dir, err := audit.ArchiveDir(p, first, now.Format(audit.SessionDateFormat))
+	require.NoError(t, err)
+	var history bytes.Buffer
+	for i := int64(1); i <= 30; i++ {
+		history.WriteString(`{"ts":"` + audit.FormatLineTS(i) + `","tool":"Read"}` + "\n")
+	}
+	require.NoError(t, audit.WriteLocalAtomic(p, filepath.Join(dir, audit.SessionChunkFile(1, 30)), history.Bytes()))
+	require.NoError(t, audit.ReplaceLocalFile(p, later.LivePath(p), []byte(`{"ts":"`+audit.FormatLineTS(100)+`","tool":"Read","record":"full"}`+"\n")))
+	for attempt := 0; attempt < 8; attempt++ {
+		ctx := &sealCheckBudget{Context: context.Background(), remaining: 12}
+		res, err := sealPolicyStreamsContext(ctx, p, []audit.Stream{first, later}, now, SealOptions{}, true)
+		if attempt == 0 {
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+		}
+		if err == nil {
+			require.Positive(t, res.ChunksStaged)
+			require.Contains(t, policyGit(t, root, "diff", "--cached", "--name-only"), "zzz-pending")
+			return
+		}
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Empty(t, policyGit(t, root, "diff", "--cached", "--name-only"))
+	}
+	t.Fatal("bounded retries never staged the later stream")
+}
+
+func TestManualSealRecordsVerifiedHistoryForBoundedSeal(t *testing.T) {
+	root := t.TempDir()
+	p := hookPolicy(t, root, root, layout.RecordBlame)
+	now := time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)
+	s := audit.Stream{Namespace: audit.SessionNS, Session: "s"}
+	dir, err := audit.ArchiveDir(p, s, now.Format(audit.SessionDateFormat))
+	require.NoError(t, err)
+	raw := []byte(`{"ts":"` + audit.FormatLineTS(100) + `","tool":"Read"}` + "\n")
+	require.NoError(t, audit.WriteLocalAtomic(p, filepath.Join(dir, audit.SessionChunkFile(100, 100)), raw))
+	_, err = SealRepoWithPolicy(p, now, SealOptions{})
+	require.NoError(t, err)
+	ctx := &sealCheckBudget{Context: context.Background(), remaining: 3}
+	_, err = sealPolicyStreamsContext(ctx, p, []audit.Stream{s}, now, SealOptions{}, true)
+	require.NoError(t, err, "only stream, union and final seal checks remain")
 }
 
 func TestBoundedSealRetriesWithUpdatedLiveGuard(t *testing.T) {
 	root := t.TempDir()
-	p := hookPolicy(t, root, root, layout.RecordBlame)
+	policyGit(t, root, "init", "-q")
+	p := hookPolicy(t, root, root, layout.RecordFull)
 	s := audit.Stream{Namespace: audit.SessionNS, Session: "s"}
 	now := time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)
-	raw := []byte(`{"ts":"` + audit.FormatLineTS(100) + `","tool":"Read","tool_input":{"file_path":"/Users/test/workspace/private.txt"}}` + "\n")
+	raw := []byte(`{"ts":"` + audit.FormatLineTS(100) + `","tool":"Read","record":"full","tool_input":{"file_path":"/Users/test/workspace/private.txt"}}` + "\n")
 	require.NoError(t, audit.ReplaceLocalFile(p, s.LivePath(p), raw))
 	guard := LiveLineGuard(p, s.Namespace)
 	out, _, _ := guard(bytes.TrimSpace(raw))
@@ -92,16 +141,24 @@ func TestBoundedSealRetriesWithUpdatedLiveGuard(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, passed.Complete)
 		require.NoError(t, passed.SaveLiveSealCursor(p, s, home, "", 0))
-		_, _, err = sealPolicyStream(context.Background(), p, s, now, SealOptions{}, true)
-		require.ErrorContains(t, err, "no longer matches the seal guard")
-		_, _, err = sealPolicyStream(context.Background(), p, s, now, SealOptions{}, true)
-		require.NoError(t, err)
-		data, err := audit.ReadStream(p, s)
-		require.NoError(t, err)
-		require.Len(t, data.Lines, 1)
-		require.JSONEq(t, string(out), string(data.Lines[0].Raw))
 		return nil
 	}))
+	seal := func(checks int) (SealResult, error) {
+		ctx := &sealCheckBudget{Context: context.Background(), remaining: checks}
+		return sealPolicyStreamsContext(ctx, p, []audit.Stream{s}, now, SealOptions{}, true)
+	}
+	_, err := seal(8)
+	require.ErrorContains(t, err, "no longer matches the seal guard")
+	_, err = seal(1)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Empty(t, policyGit(t, root, "diff", "--cached", "--name-only"))
+	res, err := seal(8)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.ChunksStaged)
+	data, err := audit.ReadStream(p, s)
+	require.NoError(t, err)
+	require.Len(t, data.Lines, 1)
+	require.JSONEq(t, string(out), string(data.Lines[0].Raw))
 }
 
 func TestSealRetriesReconciliationAfterArchiveStampCollision(t *testing.T) {
