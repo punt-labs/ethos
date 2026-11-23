@@ -27,6 +27,7 @@ func TestHandoffReadOnlyStop(t *testing.T) {
 		noStart bool
 		global  bool
 		before  bool
+		hide    string
 		runs    bool
 	}{
 		{name: "read-only", runs: false},
@@ -38,12 +39,11 @@ func TestHandoffReadOnlyStop(t *testing.T) {
 		{name: "bash edits a renamed file", act: func(t *testing.T, root string) { writeFile(t, filepath.Join(root, "renamed file.go"), "package c\n") }, runs: true},
 		{name: "bash edits an untracked file", act: func(t *testing.T, root string) { writeFile(t, filepath.Join(root, "untracked.go"), "package d\n") }, runs: true},
 		{name: "bash creates a file", act: func(t *testing.T, root string) { writeFile(t, filepath.Join(root, "new.go"), "") }, runs: true},
-		{name: "bash edits an assume-unchanged file", act: func(t *testing.T, root string) {
-			stageGit(t, root, "update-index", "--assume-unchanged", "clean.go")
+		{name: "read-only with an assume-unchanged file", hide: "--assume-unchanged", runs: false},
+		{name: "bash edits an assume-unchanged file", hide: "--assume-unchanged", act: func(t *testing.T, root string) {
 			writeFile(t, filepath.Join(root, "clean.go"), "package hidden\n")
 		}, runs: true},
-		{name: "bash edits a skip-worktree file", act: func(t *testing.T, root string) {
-			stageGit(t, root, "update-index", "--skip-worktree", "clean.go")
+		{name: "bash edits a skip-worktree file", hide: "--skip-worktree", act: func(t *testing.T, root string) {
 			writeFile(t, filepath.Join(root, "clean.go"), "package hidden\n")
 		}, runs: true},
 		{name: "bash removes a file", act: func(t *testing.T, root string) { require.NoError(t, os.Remove(filepath.Join(root, "clean.go"))) }, runs: true},
@@ -96,6 +96,9 @@ func TestHandoffReadOnlyStop(t *testing.T) {
 			stageGit(t, nested, "add", "other.txt")
 			stageGit(t, nested, "-c", "user.name=T", "-c", "user.email=t@t", "commit", "-qm", "nested")
 			writeFile(t, filepath.Join(nested, "dirty.txt"), "dirty\n")
+			if tc.hide != "" {
+				stageGit(t, root, "update-index", tc.hide, "clean.go")
+			}
 
 			ss := session.NewStore(t.TempDir())
 			require.NoError(t, ss.Create("ro", session.Participant{AgentID: "human"}, session.Participant{AgentID: "main"}, "", ""))
