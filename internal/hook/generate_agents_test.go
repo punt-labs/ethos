@@ -410,7 +410,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 						"    - matcher: \"Write|Edit\"\n"+
 						"      hooks:\n"+
 						"        - type: command\n"+
-						"          command: \"if [ -f \\\"$HOME/.punt-hooks-kill\\\" ]; then exit 0; fi; f=$(mktemp) || exit 0; c= w=; trap 'if [ -n \\\"$w\\\" ]; then kill \\\"$w\\\" 2>/dev/null; wait \\\"$w\\\" 2>/dev/null; fi; if [ -n \\\"$c\\\" ]; then kill \\\"$c\\\" 2>/dev/null; wait \\\"$c\\\" 2>/dev/null; fi; rm -f \\\"$f\\\"' 0; trap 'exit 0' 1 2 15; exec 3<&0; cat <&3 3<&- >\\\"$f\\\" & c=$!; exec 3<&-; (trap 'kill \\\"$!\\\" 2>/dev/null; wait \\\"$!\\\" 2>/dev/null; exit 0' 1 2 15; sleep 10 & wait \\\"$!\\\"; kill \\\"$c\\\" 2>/dev/null) </dev/null >/dev/null 2>&1 & w=$!; wait \\\"$c\\\" 2>/dev/null; c=; kill \\\"$w\\\" 2>/dev/null; wait \\\"$w\\\" 2>/dev/null; w=; cat \\\"$f\\\" | ethos hook post-edit --agent 'bwk' || true\"\n"+
+						"          command: \"if [ -f \\\"$HOME/.punt-hooks-kill\\\" ]; then exit 0; fi; f=$(mktemp) || exit 0; c= w=; trap 'if [ -n \\\"$w\\\" ]; then kill \\\"$w\\\" 2>/dev/null; wait \\\"$w\\\" 2>/dev/null; fi; if [ -n \\\"$c\\\" ]; then kill \\\"$c\\\" 2>/dev/null; wait \\\"$c\\\" 2>/dev/null; fi; rm -f \\\"$f\\\"' 0; trap 'exit 0' 1 2 15; exec 3<&0; (ulimit -f 131073 2>/dev/null || :; exec cat <&3 3<&-) >\\\"$f\\\" & c=$!; exec 3<&-; (trap 'kill \\\"$!\\\" 2>/dev/null; wait \\\"$!\\\" 2>/dev/null; exit 0' 1 2 15; sleep 10 & wait \\\"$!\\\"; kill \\\"$c\\\" 2>/dev/null) </dev/null >/dev/null 2>&1 & w=$!; wait \\\"$c\\\" 2>/dev/null; c=; kill \\\"$w\\\" 2>/dev/null; wait \\\"$w\\\" 2>/dev/null; w=; cat \\\"$f\\\" | ethos hook post-edit --agent 'bwk' || true\"\n"+
 						"          timeout: 70\n"+
 						"---\n")
 
@@ -667,7 +667,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 						"    - matcher: \"Write|Edit\"\n"+
 						"      hooks:\n"+
 						"        - type: command\n"+
-						"          command: \"if [ -f \\\"$HOME/.punt-hooks-kill\\\" ]; then exit 0; fi; f=$(mktemp) || exit 0; c= w=; trap 'if [ -n \\\"$w\\\" ]; then kill \\\"$w\\\" 2>/dev/null; wait \\\"$w\\\" 2>/dev/null; fi; if [ -n \\\"$c\\\" ]; then kill \\\"$c\\\" 2>/dev/null; wait \\\"$c\\\" 2>/dev/null; fi; rm -f \\\"$f\\\"' 0; trap 'exit 0' 1 2 15; exec 3<&0; cat <&3 3<&- >\\\"$f\\\" & c=$!; exec 3<&-; (trap 'kill \\\"$!\\\" 2>/dev/null; wait \\\"$!\\\" 2>/dev/null; exit 0' 1 2 15; sleep 10 & wait \\\"$!\\\"; kill \\\"$c\\\" 2>/dev/null) </dev/null >/dev/null 2>&1 & w=$!; wait \\\"$c\\\" 2>/dev/null; c=; kill \\\"$w\\\" 2>/dev/null; wait \\\"$w\\\" 2>/dev/null; w=; cat \\\"$f\\\" | ethos hook post-edit --agent 'bwk' || true\"\n"+
+						"          command: \"if [ -f \\\"$HOME/.punt-hooks-kill\\\" ]; then exit 0; fi; f=$(mktemp) || exit 0; c= w=; trap 'if [ -n \\\"$w\\\" ]; then kill \\\"$w\\\" 2>/dev/null; wait \\\"$w\\\" 2>/dev/null; fi; if [ -n \\\"$c\\\" ]; then kill \\\"$c\\\" 2>/dev/null; wait \\\"$c\\\" 2>/dev/null; fi; rm -f \\\"$f\\\"' 0; trap 'exit 0' 1 2 15; exec 3<&0; (ulimit -f 131073 2>/dev/null || :; exec cat <&3 3<&-) >\\\"$f\\\" & c=$!; exec 3<&-; (trap 'kill \\\"$!\\\" 2>/dev/null; wait \\\"$!\\\" 2>/dev/null; exit 0' 1 2 15; sleep 10 & wait \\\"$!\\\"; kill \\\"$c\\\" 2>/dev/null) </dev/null >/dev/null 2>&1 & w=$!; wait \\\"$c\\\" 2>/dev/null; c=; kill \\\"$w\\\" 2>/dev/null; wait \\\"$w\\\" 2>/dev/null; w=; cat \\\"$f\\\" | ethos hook post-edit --agent 'bwk' || true\"\n"+
 						"          timeout: 70\n")
 
 				// Log the generated file so binary verification is visible
@@ -698,7 +698,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 					"    - matcher: \"Write|Edit\"\n" +
 					"      hooks:\n" +
 					"        - type: command\n" +
-					"          command: \"if [ -f \\\"$HOME/.punt-hooks-kill\\\" ]; then exit 0; fi; f=$(mktemp) || exit 0; c= w=; trap 'if [ -n \\\"$w\\\" ]; then kill \\\"$w\\\" 2>/dev/null; wait \\\"$w\\\" 2>/dev/null; fi; if [ -n \\\"$c\\\" ]; then kill \\\"$c\\\" 2>/dev/null; wait \\\"$c\\\" 2>/dev/null; fi; rm -f \\\"$f\\\"' 0; trap 'exit 0' 1 2 15; exec 3<&0; cat <&3 3<&- >\\\"$f\\\" & c=$!; exec 3<&-; (trap 'kill \\\"$!\\\" 2>/dev/null; wait \\\"$!\\\" 2>/dev/null; exit 0' 1 2 15; sleep 10 & wait \\\"$!\\\"; kill \\\"$c\\\" 2>/dev/null) </dev/null >/dev/null 2>&1 & w=$!; wait \\\"$c\\\" 2>/dev/null; c=; kill \\\"$w\\\" 2>/dev/null; wait \\\"$w\\\" 2>/dev/null; w=; cat \\\"$f\\\" | ethos hook post-edit --agent 'bwk' || true\"\n" +
+					"          command: \"if [ -f \\\"$HOME/.punt-hooks-kill\\\" ]; then exit 0; fi; f=$(mktemp) || exit 0; c= w=; trap 'if [ -n \\\"$w\\\" ]; then kill \\\"$w\\\" 2>/dev/null; wait \\\"$w\\\" 2>/dev/null; fi; if [ -n \\\"$c\\\" ]; then kill \\\"$c\\\" 2>/dev/null; wait \\\"$c\\\" 2>/dev/null; fi; rm -f \\\"$f\\\"' 0; trap 'exit 0' 1 2 15; exec 3<&0; (ulimit -f 131073 2>/dev/null || :; exec cat <&3 3<&-) >\\\"$f\\\" & c=$!; exec 3<&-; (trap 'kill \\\"$!\\\" 2>/dev/null; wait \\\"$!\\\" 2>/dev/null; exit 0' 1 2 15; sleep 10 & wait \\\"$!\\\"; kill \\\"$c\\\" 2>/dev/null) </dev/null >/dev/null 2>&1 & w=$!; wait \\\"$c\\\" 2>/dev/null; c=; kill \\\"$w\\\" 2>/dev/null; wait \\\"$w\\\" 2>/dev/null; w=; cat \\\"$f\\\" | ethos hook post-edit --agent 'bwk' || true\"\n" +
 					"          timeout: 70\n" +
 					"---\n"
 				assert.Contains(t, content, want)
@@ -1012,7 +1012,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 					"    - matcher: \"Write|Edit\"\n" +
 					"      hooks:\n" +
 					"        - type: command\n" +
-					"          command: \"if [ -f \\\"$HOME/.punt-hooks-kill\\\" ]; then exit 0; fi; f=$(mktemp) || exit 0; c= w=; trap 'if [ -n \\\"$w\\\" ]; then kill \\\"$w\\\" 2>/dev/null; wait \\\"$w\\\" 2>/dev/null; fi; if [ -n \\\"$c\\\" ]; then kill \\\"$c\\\" 2>/dev/null; wait \\\"$c\\\" 2>/dev/null; fi; rm -f \\\"$f\\\"' 0; trap 'exit 0' 1 2 15; exec 3<&0; cat <&3 3<&- >\\\"$f\\\" & c=$!; exec 3<&-; (trap 'kill \\\"$!\\\" 2>/dev/null; wait \\\"$!\\\" 2>/dev/null; exit 0' 1 2 15; sleep 10 & wait \\\"$!\\\"; kill \\\"$c\\\" 2>/dev/null) </dev/null >/dev/null 2>&1 & w=$!; wait \\\"$c\\\" 2>/dev/null; c=; kill \\\"$w\\\" 2>/dev/null; wait \\\"$w\\\" 2>/dev/null; w=; cat \\\"$f\\\" | ethos hook post-edit --agent 'eon' || true\"\n" +
+					"          command: \"if [ -f \\\"$HOME/.punt-hooks-kill\\\" ]; then exit 0; fi; f=$(mktemp) || exit 0; c= w=; trap 'if [ -n \\\"$w\\\" ]; then kill \\\"$w\\\" 2>/dev/null; wait \\\"$w\\\" 2>/dev/null; fi; if [ -n \\\"$c\\\" ]; then kill \\\"$c\\\" 2>/dev/null; wait \\\"$c\\\" 2>/dev/null; fi; rm -f \\\"$f\\\"' 0; trap 'exit 0' 1 2 15; exec 3<&0; (ulimit -f 131073 2>/dev/null || :; exec cat <&3 3<&-) >\\\"$f\\\" & c=$!; exec 3<&-; (trap 'kill \\\"$!\\\" 2>/dev/null; wait \\\"$!\\\" 2>/dev/null; exit 0' 1 2 15; sleep 10 & wait \\\"$!\\\"; kill \\\"$c\\\" 2>/dev/null) </dev/null >/dev/null 2>&1 & w=$!; wait \\\"$c\\\" 2>/dev/null; c=; kill \\\"$w\\\" 2>/dev/null; wait \\\"$w\\\" 2>/dev/null; w=; cat \\\"$f\\\" | ethos hook post-edit --agent 'eon' || true\"\n" +
 					"          timeout: 70\n" +
 					"---\n"
 				assert.Contains(t, content, want)
@@ -1024,7 +1024,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 				require.NoError(t, err)
 				data, readErr := os.ReadFile(filepath.Join(root, ".claude", "agents", "bwk.md"))
 				require.NoError(t, readErr)
-				assert.Contains(t, string(data), `command: "if [ -f \"$HOME/.punt-hooks-kill\" ]; then exit 0; fi; f=$(mktemp) || exit 0; c= w=; trap 'if [ -n \"$w\" ]; then kill \"$w\" 2>/dev/null; wait \"$w\" 2>/dev/null; fi; if [ -n \"$c\" ]; then kill \"$c\" 2>/dev/null; wait \"$c\" 2>/dev/null; fi; rm -f \"$f\"' 0; trap 'exit 0' 1 2 15; exec 3<&0; cat <&3 3<&- >\"$f\" & c=$!; exec 3<&-; (trap 'kill \"$!\" 2>/dev/null; wait \"$!\" 2>/dev/null; exit 0' 1 2 15; sleep 10 & wait \"$!\"; kill \"$c\" 2>/dev/null) </dev/null >/dev/null 2>&1 & w=$!; wait \"$c\" 2>/dev/null; c=; kill \"$w\" 2>/dev/null; wait \"$w\" 2>/dev/null; w=; cat \"$f\" | ethos hook post-edit --agent 'bwk' || true"`)
+				assert.Contains(t, string(data), `command: "if [ -f \"$HOME/.punt-hooks-kill\" ]; then exit 0; fi; f=$(mktemp) || exit 0; c= w=; trap 'if [ -n \"$w\" ]; then kill \"$w\" 2>/dev/null; wait \"$w\" 2>/dev/null; fi; if [ -n \"$c\" ]; then kill \"$c\" 2>/dev/null; wait \"$c\" 2>/dev/null; fi; rm -f \"$f\"' 0; trap 'exit 0' 1 2 15; exec 3<&0; (ulimit -f 131073 2>/dev/null || :; exec cat <&3 3<&-) >\"$f\" & c=$!; exec 3<&-; (trap 'kill \"$!\" 2>/dev/null; wait \"$!\" 2>/dev/null; exit 0' 1 2 15; sleep 10 & wait \"$!\"; kill \"$c\" 2>/dev/null) </dev/null >/dev/null 2>&1 & w=$!; wait \"$c\" 2>/dev/null; c=; kill \"$w\" 2>/dev/null; wait \"$w\" 2>/dev/null; w=; cat \"$f\" | ethos hook post-edit --agent 'bwk' || true"`)
 			},
 		},
 	}
@@ -2035,7 +2035,7 @@ func TestGenerateAgentFiles_WorktreeResolution(t *testing.T) {
 	require.NoError(t, GenerateAgentFiles(root, ids, teams, roles))
 	data, readErr := os.ReadFile(filepath.Join(root, ".claude", "agents", "bwk.md"))
 	require.NoError(t, readErr)
-	assert.Contains(t, string(data), `command: "if [ -f \"$HOME/.punt-hooks-kill\" ]; then exit 0; fi; f=$(mktemp) || exit 0; c= w=; trap 'if [ -n \"$w\" ]; then kill \"$w\" 2>/dev/null; wait \"$w\" 2>/dev/null; fi; if [ -n \"$c\" ]; then kill \"$c\" 2>/dev/null; wait \"$c\" 2>/dev/null; fi; rm -f \"$f\"' 0; trap 'exit 0' 1 2 15; exec 3<&0; cat <&3 3<&- >\"$f\" & c=$!; exec 3<&-; (trap 'kill \"$!\" 2>/dev/null; wait \"$!\" 2>/dev/null; exit 0' 1 2 15; sleep 10 & wait \"$!\"; kill \"$c\" 2>/dev/null) </dev/null >/dev/null 2>&1 & w=$!; wait \"$c\" 2>/dev/null; c=; kill \"$w\" 2>/dev/null; wait \"$w\" 2>/dev/null; w=; cat \"$f\" | ethos hook post-edit --agent 'bwk' || true"`)
+	assert.Contains(t, string(data), `command: "if [ -f \"$HOME/.punt-hooks-kill\" ]; then exit 0; fi; f=$(mktemp) || exit 0; c= w=; trap 'if [ -n \"$w\" ]; then kill \"$w\" 2>/dev/null; wait \"$w\" 2>/dev/null; fi; if [ -n \"$c\" ]; then kill \"$c\" 2>/dev/null; wait \"$c\" 2>/dev/null; fi; rm -f \"$f\"' 0; trap 'exit 0' 1 2 15; exec 3<&0; (ulimit -f 131073 2>/dev/null || :; exec cat <&3 3<&-) >\"$f\" & c=$!; exec 3<&-; (trap 'kill \"$!\" 2>/dev/null; wait \"$!\" 2>/dev/null; exit 0' 1 2 15; sleep 10 & wait \"$!\"; kill \"$c\" 2>/dev/null) </dev/null >/dev/null 2>&1 & w=$!; wait \"$c\" 2>/dev/null; c=; kill \"$w\" 2>/dev/null; wait \"$w\" 2>/dev/null; w=; cat \"$f\" | ethos hook post-edit --agent 'bwk' || true"`)
 }
 
 // TestGenerateAgentFiles_MalformedConfig covers bug ethos-9ai.6: a

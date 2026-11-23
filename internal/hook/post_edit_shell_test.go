@@ -68,6 +68,7 @@ func TestGeneratedPostEditShellPipe(t *testing.T) {
 		killed, noTemp      bool
 	}{
 		{"payload", `{"tool_input":{"file_path":"a b.go"}}`, "0", false, false},
+		{"limit failure", `{"tool_input":{"file_path":"a b.go"}}`, "0", false, false},
 		{"empty", "", "0", false, false},
 		{"malformed", "{invalid", "0", false, false},
 		{"failure", "{}", "42", false, false},
@@ -96,7 +97,11 @@ exit `+tc.exit+"\n")
 			defer stdin.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
+			shellCommand := command
+			if tc.name == "limit failure" {
+				shellCommand = "ulimit() { return 1; }; " + shellCommand
+			}
+			cmd := exec.CommandContext(ctx, "/bin/sh", "-c", shellCommand)
 			cmd.Stdin = stdin
 			cmd.WaitDelay = 200 * time.Millisecond
 			start := time.Now()
@@ -126,6 +131,8 @@ func TestGeneratedPostEditShellOpenInput(t *testing.T) {
 	}
 	if bash32 := os.Getenv("ETHOS_TEST_BASH32"); bash32 != "" {
 		shells["bash32"] = bash32
+	} else {
+		t.Log("Bash 3.2 coverage requires ETHOS_TEST_BASH32")
 	}
 	for name, shell := range shells {
 		t.Run(name, func(t *testing.T) {
@@ -238,5 +245,38 @@ func TestGeneratedPostEditShellInterrupted(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
 	require.NoError(t, cmd.Wait(), "%s", out.String())
+	postEditShellClean(t, scratch, processes)
+}
+
+func TestGeneratedPostEditShellOversizedInput(t *testing.T) {
+	const capBlocks = 131073
+	rm, err := exec.LookPath("rm")
+	require.NoError(t, err)
+	wc, err := exec.LookPath("wc")
+	require.NoError(t, err)
+	bin, scratch, processes := postEditShellFixture(t)
+	require.NoError(t, os.Symlink(wc, filepath.Join(bin, "wc")))
+	sizeLog := filepath.Join(os.Getenv("HOME"), "size")
+	t.Setenv("SIZE_LOG", sizeLog)
+	require.NoError(t, os.Remove(filepath.Join(bin, "rm")))
+	postEditTool(t, bin, "rm", "wc -c < \"$2\" > \"$SIZE_LOG\"\nexec \""+rm+"\" \"$@\"\n")
+	postEditTool(t, bin, "ethos", "test -p /dev/stdin || exit 9\ncat > /dev/null\nexit 42\n")
+	input, err := os.Create(filepath.Join(os.Getenv("HOME"), "input"))
+	require.NoError(t, err)
+	defer input.Close()
+	require.NoError(t, input.Truncate(capBlocks*1024+4096))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", postEditShellCommand("bwk"))
+	cmd.Stdin = input
+	cmd.WaitDelay = 200 * time.Millisecond
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	require.Empty(t, out)
+	data, err := os.ReadFile(sizeLog)
+	require.NoError(t, err)
+	size, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	require.NoError(t, err)
+	require.True(t, size == capBlocks*512 || size == capBlocks*1024, "temporary input size %d must match the shell's file-size limit", size)
 	postEditShellClean(t, scratch, processes)
 }
