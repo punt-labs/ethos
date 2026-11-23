@@ -86,9 +86,6 @@ jobs:
           uname -sr
           strace --version
 
-      - name: Audit redaction performance budget
-        run: ETHOS_TEST_PERF_BUDGET=1 go test -run TestRedactLiveLongSessionBudget -count=1 ./internal/hook/
-
       - name: Test
         # -timeout matches the Makefile's: cmd/ethos under -race runs past
         # go test's 10-minute per-package default on a loaded runner.
@@ -132,6 +129,10 @@ jobs:
 
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1
+
+      - name: Audit redaction performance budget
+        if: ${{ !cancelled() }}
+        run: ETHOS_TEST_PERF_BUDGET=1 go test -run TestRedactLiveLongSessionBudget -count=1 ./internal/hook/
 
   verify-tools:
     # Exercises `make tools` against the REAL golangci-lint release -- no
