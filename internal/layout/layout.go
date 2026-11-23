@@ -123,6 +123,7 @@ var Table = []Entry{
 	// chunks; runtime state of the local zone, never published.
 	{Pattern: ".punt-labs/local/ethos/cursors/live-*.json", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/cursors/seal-*.json", Class: Never},
+	{Pattern: ".punt-labs/local/ethos/cursors/history-*.json", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/missions/*/reflection-intent.yaml", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/missions/*/reflection-intents/*.yaml", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/missions/*/correction-intent.yaml", Class: Never},
@@ -148,7 +149,6 @@ var Table = []Entry{
 	{Pattern: ".punt-labs/local/ethos/sessions/*.audit.jsonl", Class: Trace},
 	{Pattern: ".punt-labs/local/ethos/missions/*/*.log.jsonl", Class: Trace},
 	{Pattern: ".punt-labs/local/ethos/missions/*.jsonl", Class: Trace},
-	{Pattern: ".punt-labs/local/ethos/cursors/history-*.json", Class: Trace},
 	{Pattern: ".punt-labs/local/ethos/trace/**", Class: Trace},
 	{Pattern: ".punt-labs/ethos/missions/*/delegations/*/prompt.md", Class: Trace},
 	{Pattern: ".punt-labs/ethos/missions/*/reflections.yaml", Class: Trace},

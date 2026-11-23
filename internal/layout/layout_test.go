@@ -130,7 +130,6 @@ func TestClassify(t *testing.T) {
 		{".punt-labs/ethos/missions/m-1/reflections.yaml", layout.Trace, true},
 		{".punt-labs/ethos/missions/m-1/artifacts/notes.md", layout.Trace, true},
 		{".punt-labs/local/ethos/trace/missions/m-1/reflections.yaml", layout.Trace, true},
-		{".punt-labs/local/ethos/cursors/history-v1-0123abcd.json", layout.Trace, true},
 		// Class 4 wins over the class that would otherwise match.
 		{".punt-labs/ethos/missions/m-1/.lock", layout.Never, true},
 		{".punt-labs/ethos/missions/.create.lock", layout.Never, true},
@@ -138,6 +137,7 @@ func TestClassify(t *testing.T) {
 		{".punt-labs/ethos/identities/bwk.ext/quarry.local.yaml", layout.Never, true},
 		{".punt-labs/ethos/identities/bwk.yaml.lock", layout.Never, true},
 		{".punt-labs/local/ethos/missions/m-1/s-1.lock", layout.Never, true},
+		{".punt-labs/local/ethos/cursors/history-v1-0123abcd.json", layout.Never, true},
 		{".punt-labs/local/ethos/missions/m-1/reflection-intent.yaml", layout.Never, true},
 		{".punt-labs/local/ethos/missions/m-1/correction-intent.yaml", layout.Never, true},
 		// The repository layout stamp (DES-084).
