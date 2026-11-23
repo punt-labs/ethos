@@ -19,6 +19,8 @@ func TestGeneratedGateStorageBoundary(t *testing.T) {
 	root, ids, teams, roles := setupTestRepo(t)
 	require.NoError(t, GenerateAgentFiles(root, ids, teams, roles))
 	command := extractPostToolUseCommand(t, filepath.Join(root, ".claude", "agents", "bwk.md"))
+	cat, err := exec.LookPath("cat")
+	require.NoError(t, err)
 	for _, tc := range []struct {
 		name, path string
 		checks     bool
@@ -35,6 +37,7 @@ func TestGeneratedGateStorageBoundary(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			project, bin := postEditFixture(t)
+			require.NoError(t, os.Symlink(cat, filepath.Join(bin, "cat")))
 			file := filepath.Join(project, tc.path)
 			writeFile(t, file, "")
 			marker := filepath.Join(project, "check-ran")

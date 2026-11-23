@@ -52,6 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   canonical store's untracked local area and are removed on success and failure.
   Lookup errors are advisory;
   deletions and the existing dirty-tree fallback rules are unchanged.
+- Generated agent post-edit hooks forward stdin over a fresh shell pipe on
+  Linux (DES-029), preserve the kill switch, and fail open even if Ethos fails
+  or is missing from PATH.
 - Unconfigured handoffs do not block on audit or file-discovery failures;
   handoff policies found only in a linked worktree still apply.
 - Vendor preview and apply refuse to overwrite a different project-only check

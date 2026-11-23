@@ -1935,6 +1935,18 @@ This replaces `ethos hook session-start < /dev/stdin`. The Go binary
 receives stdin from `printf` via a fresh pipe (not inherited), which
 `ReadAll` handles correctly on all platforms.
 
+Generated project agent `PostToolUse` hooks launch a Bash forwarding process:
+`if [ -f "$HOME/.punt-hooks-kill" ]; then exit 0; fi; /bin/bash -c 'IFS= read -r -d "" -t 10 p; printf %s "$p" | ethos hook post-edit --agent "$1"; true' _ 'bwk' || true`.
+Bash reads until EOF or a 10-second deadline, then `printf` gives the binary a
+fresh pipe. Bash 4+ preserves a partial payload on timeout; macOS Bash 3.2 may
+discard it, which is acceptable for this fail-open advisory hook. The agent
+handle is single-quoted with embedded quotes escaped; no hook depends on
+`CLAUDE_PLUGIN_ROOT`, which is a plugin-scoped resource path, not a portable
+location for independently generated project agents. Empty or malformed input
+remains advisory/fail-open, and the existing hook timeout bounds the pipeline.
+The Git pre-commit hook does not consume Claude JSON; SubagentStop already uses
+the shipped shell-stdin wrapper. Neither needs this generated-hook correction.
+
 ### Why This Works
 
 - `IFS= read -r -t 1` is a bash built-in with 1-second timeout —

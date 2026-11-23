@@ -249,9 +249,16 @@ hooks:
     - matcher: "Write|Edit"
       hooks:
         - type: command
-          command: "ethos hook post-edit --agent bwk"
+          command: "if [ -f \"$HOME/.punt-hooks-kill\" ]; then exit 0; fi; /bin/bash -c 'IFS= read -r -d \"\" -t 10 p; printf %s \"$p\" | ethos hook post-edit --agent \"$1\"; true' _ 'bwk' || true"
           timeout: 70          # edit-stage budget + 10 s
 ```
+
+The bounded Bash read avoids DES-029's inherited-stdin hazard without
+requiring a plugin-root environment variable in project agent hooks. The kill
+switch exits before reading input; the handle is shell-quoted. After EOF or a
+10-second deadline, `printf` forwards the payload over a fresh pipe. Bash 3.2
+may discard partial input on timeout; this advisory hook remains fail-open.
+Empty or malformed input remains fail-open and the hook timeout is unchanged.
 
 An agent whose resolved set has no edit checks gets no `hooks:` block.
 `ethos hook post-edit`:
