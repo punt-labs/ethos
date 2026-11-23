@@ -239,6 +239,7 @@ func joinParticipant(roster *Roster, key string, p Participant) {
 		if p.Ext != nil {
 			existing.Ext = p.Ext
 		}
+		existing.CheckoutState = p.CheckoutState
 		return
 	}
 	p.AgentID = key

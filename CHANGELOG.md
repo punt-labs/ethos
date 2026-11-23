@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- SubagentStop skips handoff checks, `files: all` included, when the agent
+  made no Write/Edit call and the checkout is unchanged since SubagentStart.
+  A read-only stop in a repository with a `make check` handoff gate no longer
+  waits for the full gate; Bash edits still run it.
+
 - The baseline-ops skill no longer tells sub-agents to run `make check`
   after every edit. Edit checks run automatically (DES-085); the full gate
   runs once at handoff or commit.
@@ -41,10 +46,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Handoff rename inference bounds untracked discovery to 512 paths and 64 KiB,
+  with one-second Git enumeration, intent-to-add and diff budgets. Exhaustion
+  skips inference with advisory feedback instead of delaying handoff.
+- Handoff rename attribution accepts only exact-content renames, not Git
+  similarity alone. Modified or unrelated similar targets are skipped with
+  advice; vanished paths do not trigger a broader dirty-tree fallback.
+- Handoff glob checks follow an agent's vanished Write/Edit paths to Git rename
+  targets in the same checkout, including untracked `mv` destinations and staged
+  `git mv` renames. Discovery uses a private index, excludes other agents' known
+  paths, and leaves the real index unchanged. Temporary indexes stay under the
+  canonical store's untracked local area and are removed on success and failure.
+  Lookup errors are advisory;
+  deletions and the existing dirty-tree fallback rules are unchanged.
 - Generated agent post-edit hooks forward stdin over a fresh shell pipe on
   Linux (DES-029), preserve the kill switch, and fail open even if Ethos fails
   or is missing from PATH.
-
 - Unconfigured handoffs do not block on audit or file-discovery failures;
   handoff policies found only in a linked worktree still apply.
 - Vendor preview and apply refuse to overwrite a different project-only check

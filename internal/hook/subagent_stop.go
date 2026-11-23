@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -38,6 +39,7 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 		return nil
 	}
 
+	start := startedParticipant(ss, sessionID, agentID)
 	if leaveErr := ss.Leave(sessionID, agentID); leaveErr != nil {
 		fmt.Fprintf(errOut, "ethos: failed to leave session %s: %v\n", sessionID, leaveErr)
 	}
@@ -47,13 +49,15 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 		stopFeedback(out, errOut, StageFeedback{Blocking: "handoff scope: " + err.Error()}, active)
 		return nil
 	}
-	agent, _ := input["agent_type"].(string)
-	if handle, _ := input["agent_handle"].(string); handle != "" {
-		agent = handle
+	agent := stopAgent(input)
+	if readOnlyStop(ctx, checkout, agent, sessionID, start) {
+		return nil
 	}
+	var notes []string
 	feedback := runStageRootChecks(ctx, checkout, agent, "handoff", func() (map[string][]string, error) {
-		return handoffFiles(checkout, sessionID, agentID)
+		return handoffFilesWithAdvice(checkout, sessionID, agentID, func(note string) { notes = append(notes, note) })
 	})
+	feedback.Advisory = strings.TrimSpace(strings.Join(append(notes, feedback.Advisory), "\n"))
 	stopFeedback(out, errOut, feedback, active)
 	return nil
 }
@@ -73,6 +77,10 @@ func stopFeedback(out, errOut io.Writer, feedback StageFeedback, active bool) {
 }
 
 func handoffFiles(checkout, sessionID, agentID string) (map[string][]string, error) {
+	return handoffFilesWithAdvice(checkout, sessionID, agentID, nil)
+}
+
+func handoffFilesWithAdvice(checkout, sessionID, agentID string, advice func(string)) (map[string][]string, error) {
 	store, err := resolve.StoreOf(checkout)
 	if err != nil {
 		return nil, err
@@ -92,6 +100,8 @@ func handoffFiles(checkout, sessionID, agentID string) (map[string][]string, err
 	seen := map[string]bool{}
 	files := map[string][]string{}
 	otherWriters := map[string]bool{}
+	otherPaths := map[string]bool{}
+	vanished := map[string][]string{}
 	fallbackUncertain := false
 	for _, entry := range entries {
 		if entry.Tool != "Write" && entry.Tool != "Edit" {
@@ -121,21 +131,59 @@ func handoffFiles(checkout, sessionID, agentID string) (map[string][]string, err
 		}
 		if entry.AgentID != agentID {
 			otherWriters[root] = true
+			otherPaths[physical] = true
 			continue
 		}
 		if _, ok := files[root]; !ok {
 			files[root] = nil
 		}
-		if _, err := os.Stat(physical); os.IsNotExist(err) {
-			continue
-		} else if err != nil {
-			return nil, err
-		}
 		rel, err := filepath.Rel(root, physical)
 		if err != nil {
 			return nil, err
 		}
+		if _, err := os.Stat(physical); os.IsNotExist(err) {
+			vanished[root] = append(vanished[root], filepath.ToSlash(rel))
+			continue
+		} else if err != nil {
+			return nil, err
+		}
 		if !seen[physical] {
+			seen[physical] = true
+			files[root] = append(files[root], rel)
+		}
+	}
+	noFallback := map[string]bool{}
+	for root, oldPaths := range vanished {
+		renamed, err := handoffRenames(root)
+		if err != nil {
+			if advice != nil {
+				advice("ethos: handoff rename lookup: " + err.Error())
+			}
+			if renamed == nil {
+				noFallback[root] = true
+				continue
+			}
+		}
+		for _, old := range oldPaths {
+			target, known := renamed[old]
+			if known {
+				noFallback[root] = true
+			}
+			if target == "" {
+				continue
+			}
+			accepted, physical, err := postEditScope(root, filepath.Join(root, target))
+			if err != nil || accepted != root || seen[physical] || otherPaths[physical] {
+				continue
+			}
+			info, err := os.Stat(physical)
+			if err != nil || info.IsDir() {
+				continue
+			}
+			rel, err := filepath.Rel(root, physical)
+			if err != nil {
+				continue
+			}
 			seen[physical] = true
 			files[root] = append(files[root], rel)
 		}
@@ -144,7 +192,7 @@ func handoffFiles(checkout, sessionID, agentID string) (map[string][]string, err
 		files[checkout] = nil
 	}
 	for root, paths := range files {
-		if len(paths) == 0 && root != store && !otherWriters[root] && !fallbackUncertain {
+		if len(paths) == 0 && !noFallback[root] && root != store && !otherWriters[root] && !fallbackUncertain {
 			paths, err = stageFiles(root, "handoff")
 			if err != nil {
 				return nil, err
