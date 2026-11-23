@@ -128,6 +128,9 @@ func TestGeneratedPostEditShellOpenInput(t *testing.T) {
 	require.NoError(t, GenerateAgentFiles(root, ids, teams, roles))
 	command := extractPostToolUseCommand(t, filepath.Join(root, ".claude/agents/bwk.md"))
 	shells := map[string]string{"sh": "/bin/sh", "no-bash": "/bin/sh"}
+	if busybox, err := exec.LookPath("busybox"); err == nil {
+		shells["busybox"] = busybox
+	}
 	if bash, err := exec.LookPath("bash"); err == nil {
 		shells["bash"] = bash
 	}
@@ -306,4 +309,32 @@ func TestGeneratedPostEditShellKilled(t *testing.T) {
 	entries, err := os.ReadDir(scratch)
 	require.NoError(t, err)
 	require.Empty(t, entries, "SIGKILL after reading a payload must not leave a named spool")
+}
+
+func TestGeneratedPostEditShellBusyboxClosedInput(t *testing.T) {
+	busybox, err := exec.LookPath("busybox")
+	if err != nil {
+		t.Skip("BusyBox ash is not available")
+	}
+	bin, scratch, processes := postEditShellFixture(t)
+	postEditTool(t, bin, "ethos", "cat\n")
+	var longest time.Duration
+	for range 100 {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		cmd := exec.CommandContext(ctx, busybox, "ash", "-c", postEditShellCommand("bwk"))
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+		cmd.WaitDelay = 200 * time.Millisecond
+		cmd.Stdin = strings.NewReader("{}")
+		start := time.Now()
+		out, err := cmd.CombinedOutput()
+		elapsed := time.Since(start)
+		cancel()
+		require.NoError(t, err, "%s", out)
+		require.Equal(t, "{}", string(out))
+		require.Less(t, elapsed, time.Second)
+		longest = max(longest, elapsed)
+	}
+	t.Logf("BusyBox ash: 100 closed-input runs, max %s", longest)
+	postEditShellClean(t, scratch, processes)
 }
