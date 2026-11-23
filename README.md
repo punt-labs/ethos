@@ -23,7 +23,7 @@ records under `~/.punt-labs/ethos` never leave the machine; disable them with
 Install ethos:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/cb596af/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/83aaba3/install.sh | sh
 ```
 
 Create your identity and team:
@@ -49,13 +49,13 @@ For a harness other than Claude Code, or a Claude Code install where
 organization policy blocks plugins:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/cb596af/install.sh | sh -s -- --no-plugin
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/83aaba3/install.sh | sh -s -- --no-plugin
 ```
 
 Where arguments cannot pass through the pipe, set `ETHOS_NO_PLUGIN=1`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/cb596af/install.sh | ETHOS_NO_PLUGIN=1 sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/83aaba3/install.sh | ETHOS_NO_PLUGIN=1 sh
 ```
 
 `--no-plugin` skips only the marketplace registration and plugin install. The
