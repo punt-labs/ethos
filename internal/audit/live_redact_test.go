@@ -133,6 +133,24 @@ func TestRedactLiveUntilDoesNotReplayUnchangedArchive(t *testing.T) {
 	require.Equal(t, prefix+liveLine(300, "Masked"), string(live))
 }
 
+func TestRedactLiveLimitDoesNotDecodeArchiveAfterCompletedCheckpoint(t *testing.T) {
+	p := repositoryPolicy(t, layout.RecordBlame)
+	s := Stream{Namespace: SessionNS, Session: "s"}
+	require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), []byte(liveLine(100, "Read"))))
+	res, err := RedactLive(context.Background(), p, s, maskGuard, 1)
+	require.NoError(t, err)
+	require.True(t, res.Complete)
+
+	dir, err := ArchiveDir(p, s, "2026-11-04")
+	require.NoError(t, err)
+	cn := ChunkName{Namespace: SessionNS, First: 100, Last: 100}
+	raw := strings.Replace(liveLine(100, "Read"), `"tool":"Read"`, `"tool":"Read","tool":"Read"`, 1)
+	require.NoError(t, WriteLocalAtomic(p, dir+"/"+cn.ChunkFile(), []byte(raw)))
+	res, err = RedactLive(context.Background(), p, s, maskGuard, 1)
+	require.NoError(t, err)
+	require.True(t, res.Complete)
+}
+
 func TestRedactLiveUntilResumesAndReconcilesNewArchive(t *testing.T) {
 	p := repositoryPolicy(t, layout.RecordBlame)
 	s := Stream{Namespace: SessionNS, Session: "s"}

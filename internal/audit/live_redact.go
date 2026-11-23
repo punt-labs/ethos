@@ -158,6 +158,10 @@ func redactLive(ctx context.Context, p layout.Policy, s Stream, guard LineGuard,
 		saved = readLiveCursor(cursor, b[:tail], archiveStamp)
 	}
 	next := saved.Offset
+	if next == tail {
+		res.Complete = true
+		return res, nil
+	}
 	lineNo := bytes.Count(b[:next], []byte{'\n'})
 	var archived map[int64][]byte
 	archiveMaxTS := saved.ArchiveMaxTS
