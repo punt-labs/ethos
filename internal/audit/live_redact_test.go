@@ -204,12 +204,20 @@ func TestSaveLiveSealCursorDoesNotRescanOldArchive(t *testing.T) {
 	newName := ChunkName{Namespace: SessionNS, First: 200, Last: 200}
 	newPath := filepath.Join(dir, newName.ChunkFile())
 	require.NoError(t, WriteLocalAtomic(p, newPath, []byte(liveLine(200, "Read"))))
-	require.NoError(t, os.Remove(oldPath))
+	heldPath := oldPath + ".held"
+	require.NoError(t, os.Rename(oldPath, heldPath))
 	require.NoError(t, os.Mkdir(oldPath, 0o700))
 
 	require.NoError(t, res.SaveLiveSealCursor(p, s, "home", newPath, 200))
 	_, err = RedactLiveUntil(context.Background(), p, s, maskGuard, "home")
 	require.Error(t, err)
+	require.NoError(t, os.Remove(oldPath))
+	require.NoError(t, os.Rename(heldPath, oldPath))
+
+	ctx := &auditDeadline{Context: context.Background(), done: true}
+	res, err = RedactLiveUntil(ctx, p, s, maskGuard, "home")
+	require.NoError(t, err)
+	require.True(t, res.Complete, "the checkpoint covers both archived chunks")
 }
 
 func TestTryWithStreamLockBusy(t *testing.T) {
