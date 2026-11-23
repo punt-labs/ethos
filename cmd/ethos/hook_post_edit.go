@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/spf13/cobra"
 )
@@ -12,7 +14,9 @@ func init() {
 		Hidden: true,
 		Run: func(cmd *cobra.Command, _ []string) {
 			agent, _ := cmd.Flags().GetString("agent")
-			hook.PostEdit(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), agent)
+			runPostEdit(cmd.Context(), func(ctx context.Context) {
+				hook.PostEdit(ctx, cmd.InOrStdin(), cmd.OutOrStdout(), agent)
+			})
 		},
 	}
 	cmd.Flags().String("agent", "", "Agent handle for check-set resolution")

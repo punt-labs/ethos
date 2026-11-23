@@ -29,7 +29,10 @@ func PostEdit(ctx context.Context, input io.Reader, output io.Writer, agent ...s
 			postEditAdvice(output, fmt.Sprintf("post-edit: %v", recovered))
 		}
 	}()
-	payload, err := ReadInput(input, InputTimeout)
+	payload, err := postEditInput(ctx, input)
+	if ctx.Err() != nil {
+		return
+	}
 	if err != nil {
 		postEditAdvice(output, "post-edit input: "+err.Error())
 		return
@@ -78,6 +81,9 @@ func PostEdit(ctx context.Context, input io.Reader, output io.Writer, agent ...s
 		}()
 	}
 	wg.Wait()
+	if ctx.Err() != nil {
+		return
+	}
 	var advisory, blocking []string
 	for i, result := range results {
 		if result != "" {
@@ -90,6 +96,26 @@ func PostEdit(ctx context.Context, input io.Reader, output io.Writer, agent ...s
 	}
 	if len(advisory) > 0 || len(blocking) > 0 {
 		postEditFeedback(output, strings.Join(advisory, "\n\n"), strings.Join(blocking, "\n\n"))
+	}
+}
+
+// postEditInput reads the payload, giving up when ctx ends: a cancelled hook
+// must not wait out InputTimeout on a writer that never closes.
+func postEditInput(ctx context.Context, input io.Reader) (map[string]any, error) {
+	type read struct {
+		payload map[string]any
+		err     error
+	}
+	done := make(chan read, 1)
+	go func() {
+		payload, err := ReadInput(input, InputTimeout)
+		done <- read{payload, err}
+	}()
+	select {
+	case r := <-done:
+		return r.payload, r.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
