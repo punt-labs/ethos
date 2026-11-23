@@ -2,6 +2,7 @@ package seed
 
 import (
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -13,6 +14,47 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
+
+func TestSeedAllAgentFrontmatter(t *testing.T) {
+	agents := t.TempDir()
+	_, err := SeedVersion(t.TempDir(), t.TempDir(), agents, "test", false)
+	require.NoError(t, err)
+	files, err := filepath.Glob(filepath.Join(agents, "*.md"))
+	require.NoError(t, err)
+	embedded, err := fs.Glob(Agents, "sidecar/agents/*.md")
+	require.NoError(t, err)
+	require.NotEmpty(t, embedded)
+	var expected []string
+	for _, path := range embedded {
+		if filepath.Base(path) != "README.md" {
+			expected = append(expected, filepath.Join(agents, filepath.Base(path)))
+		}
+	}
+	require.NotEmpty(t, expected)
+	require.ElementsMatch(t, expected, files, "every embedded agent must deploy")
+	for _, path := range files {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			data, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.True(t, strings.HasPrefix(string(data), "---\n"))
+			frontmatter, _, found := strings.Cut(string(data[len("---\n"):]), "\n---\n")
+			require.True(t, found, "frontmatter must have a closing delimiter")
+			var fm struct {
+				Name        string   `yaml:"name"`
+				Description string   `yaml:"description"`
+				Tools       []string `yaml:"tools"`
+				Model       string   `yaml:"model"`
+				Color       string   `yaml:"color"`
+			}
+			decoder := yaml.NewDecoder(strings.NewReader(frontmatter))
+			decoder.KnownFields(true)
+			require.NoError(t, decoder.Decode(&fm), "seeded frontmatter must be valid YAML")
+			require.ErrorIs(t, decoder.Decode(new(any)), io.EOF, "only one YAML document is allowed")
+			assert.Equal(t, strings.TrimSuffix(filepath.Base(path), ".md"), fm.Name)
+			assert.NotEmpty(t, fm.Description)
+		})
+	}
+}
 
 func TestSeedEmptyDir(t *testing.T) {
 	dest := t.TempDir()
