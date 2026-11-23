@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Quote the seeded review agents' descriptions so YAML-significant punctuation
+  cannot invalidate their frontmatter (PL-1385). Strict YAML regression coverage
+  checks every deployed review agent.
+
 ## [5.2.0] - 2026-11-23
 
 ### Changed
