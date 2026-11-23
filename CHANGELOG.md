@@ -9,9 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Generated agent edit hooks use a bounded, binary-owned stdin forwarder
-  instead of Bash, so checks run on NixOS and preserve complete payloads
-  when stdin stays open, including under macOS Bash 3.2.
+- Generated agent edit hooks use a bounded POSIX shell reader instead of
+  Bash, so checks run on NixOS and retain payloads when stdin stays open,
+  including under macOS Bash 3.2. Ethos receives a fresh pipe rather than
+  Claude Code's inherited stdin; temporary files and watchdogs are cleaned up.
 
 ## [5.2.0] - 2026-11-23
 
