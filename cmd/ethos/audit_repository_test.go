@@ -114,6 +114,13 @@ func TestRepositoryAuditPreCommitDefersBusyStream(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			p, s := repositoryAuditCLI(t, mode)
 			root := filepath.Dir(filepath.Dir(p.RecordRoot()))
+			home, err := os.UserHomeDir()
+			require.NoError(t, err)
+			repoID, err := audit.RepoIdentity(root)
+			require.NoError(t, err)
+			require.NoError(t, audit.WriteTombstone(filepath.Join(home, ".punt-labs", "ethos", "sessions"), audit.Tombstone{
+				Session: "sess-lost", Repo: repoID, UnsealedLines: true,
+			}))
 			raw := []byte("{\"ts\":\"" + audit.FormatLineTS(1000) + "\",\"tool\":\"Read\"}\n")
 			require.NoError(t, audit.WriteLocalAtomic(p, s.LivePath(p), raw))
 			run := func() ([]byte, error) {
@@ -128,6 +135,7 @@ func TestRepositoryAuditPreCommitDefersBusyStream(t *testing.T) {
 			require.NoError(t, audit.WithStreamLock(p, s, func() error {
 				out, err := run()
 				require.Contains(t, string(out), "stream lock busy")
+				require.Contains(t, string(out), "session sess-lost has a retained purge loss flag")
 				if mode == "blame" {
 					require.NoError(t, err, "%s", out)
 					require.Contains(t, string(out), "retained-data warning")
