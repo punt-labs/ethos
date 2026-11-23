@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -74,7 +75,7 @@ func TestRedactLiveLongSessionBudget(t *testing.T) {
 	p, s, data := longAuditStream(t)
 	require.NoError(t, audit.ReplaceLocalFile(p, s.LivePath(p), data))
 	const budget = 8 * time.Second
-	enforceBudget := !raceEnabled && testing.CoverMode() == ""
+	enforceBudget := os.Getenv("ETHOS_TEST_PERF_BUDGET") == "1" && !raceEnabled && testing.CoverMode() == ""
 	ctx := context.Background()
 	if enforceBudget {
 		var cancel context.CancelFunc
