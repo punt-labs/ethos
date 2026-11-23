@@ -20,7 +20,7 @@ func TestPostEditGeneratedCommand(t *testing.T) {
 	root, ids, teams, roles := setupTestRepo(t)
 	require.NoError(t, GenerateAgentFiles(root, ids, teams, roles))
 	command := extractPostToolUseCommand(t, filepath.Join(root, ".claude", "agents", "bwk.md"))
-	require.Equal(t, `if [ -f "$HOME/.punt-hooks-kill" ]; then exit 0; fi; /bin/bash -c 'IFS= read -r -d "" -t 10 p; printf %s "$p" | ethos hook post-edit --agent "$1"; true' _ 'bwk' || true`, command)
+	require.Equal(t, `if [ -f "$HOME/.punt-hooks-kill" ]; then exit 0; fi; bash -c 'IFS= read -r -d "" -t 10 p; printf %s "$p" | ethos hook post-edit --agent "$1"; true' _ 'bwk' || true`, command)
 	data, err := os.ReadFile(filepath.Join(root, ".claude", "agents", "bwk.md"))
 	require.NoError(t, err)
 	require.Contains(t, string(data), "timeout: 70")
@@ -34,6 +34,9 @@ func postEditFixture(t *testing.T) (string, string) {
 	git, err := exec.LookPath("git")
 	require.NoError(t, err)
 	require.NoError(t, os.Symlink(git, filepath.Join(bin, "git")))
+	bash, err := exec.LookPath("bash")
+	require.NoError(t, err)
+	require.NoError(t, os.Symlink(bash, filepath.Join(bin, "bash")))
 	t.Setenv("CLAUDE_PROJECT_DIR", root)
 	t.Setenv("PATH", bin)
 	return root, bin

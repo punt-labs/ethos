@@ -17,6 +17,11 @@ func TestGeneratedPostEditShellPipe(t *testing.T) {
 	root, ids, teams, roles := setupTestRepo(t)
 	require.NoError(t, GenerateAgentFiles(root, ids, teams, roles))
 	command := extractPostToolUseCommand(t, filepath.Join(root, ".claude/agents/bwk.md"))
+	require.NotContains(t, command, "/bin/bash")
+	bash, err := exec.LookPath("bash")
+	require.NoError(t, err)
+	cat, err := exec.LookPath("cat")
+	require.NoError(t, err)
 	for _, tc := range []struct {
 		name, payload, exit string
 		killed              bool
@@ -30,7 +35,9 @@ func TestGeneratedPostEditShellPipe(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			home, bin := t.TempDir(), t.TempDir()
 			t.Setenv("HOME", home)
-			t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+			require.NoError(t, os.Symlink(bash, filepath.Join(bin, "bash")))
+			require.NoError(t, os.Symlink(cat, filepath.Join(bin, "cat")))
+			t.Setenv("PATH", bin)
 			log := filepath.Join(home, "stdin")
 			t.Setenv("STDIN_LOG", log)
 			postEditTool(t, bin, "ethos", "test -p /dev/stdin || exit 9\ncat > \"$STDIN_LOG\"\nexit "+tc.exit+"\n")
@@ -80,7 +87,7 @@ func TestGeneratedPostEditShellOpenInput(t *testing.T) {
 	cmd.WaitDelay = time.Second
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err)
-	version, err := exec.Command("/bin/bash", "-c", `printf %s "${BASH_VERSINFO[0]}"`).Output()
+	version, err := exec.Command("bash", "-c", `printf %s "${BASH_VERSINFO[0]}"`).Output()
 	require.NoError(t, err)
 	if string(version) == "3" {
 		require.Empty(t, out, "Bash 3.2 discards a partial read on timeout")

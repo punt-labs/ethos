@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Generated agent edit hooks resolve Bash from PATH instead of assuming
+  `/bin/bash`, so edit checks also run on hosts such as NixOS.
+
 ## [5.2.0] - 2026-11-23
 
 ### Changed
