@@ -84,11 +84,9 @@ func OutsideRepo(t testing.TB) string {
 	return dir
 }
 
-// IsolateGit prepares the test process for running git: it unsets every git
-// location, configuration and identity variable and sets
-// GIT_CEILING_DIRECTORIES to the temporary root, so a temporary directory
-// never resolves to an enclosing repository. Call it from TestMain before
-// m.Run.
+// IsolateGit clears ambient Git variables, disables global and system Git
+// config, and stops discovery at the temporary root. Tests that need Git
+// config can supply their own. Call it from TestMain before m.Run.
 func IsolateGit() error {
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
@@ -101,6 +99,12 @@ func IsolateGit() error {
 	}
 	if err := os.Setenv("GIT_CEILING_DIRECTORIES", GitCeiling()); err != nil {
 		return fmt.Errorf("setting GIT_CEILING_DIRECTORIES: %w", err)
+	}
+	if err := os.Setenv("GIT_CONFIG_GLOBAL", os.DevNull); err != nil {
+		return fmt.Errorf("setting GIT_CONFIG_GLOBAL: %w", err)
+	}
+	if err := os.Setenv("GIT_CONFIG_NOSYSTEM", "1"); err != nil {
+		return fmt.Errorf("setting GIT_CONFIG_NOSYSTEM: %w", err)
 	}
 	return nil
 }

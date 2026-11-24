@@ -2,6 +2,7 @@ package testhelpers
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -38,12 +39,37 @@ func TestIsolateGit(t *testing.T) {
 		t.Setenv(v, "x")
 	}
 	t.Setenv("GIT_CEILING_DIRECTORIES", "/elsewhere")
+	t.Setenv("GIT_CONFIG_GLOBAL", "")
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "")
 	require.NoError(t, IsolateGit())
 	for _, v := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG_COUNT", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME"} {
 		_, set := os.LookupEnv(v)
 		assert.False(t, set, v)
 	}
 	assert.Equal(t, os.TempDir(), os.Getenv("GIT_CEILING_DIRECTORIES"))
+}
+
+func TestIsolateGitIgnoresHomeConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("GIT_CONFIG_GLOBAL", "")
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CEILING_DIRECTORIES", "")
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(`[url "file:///rewritten/"]
+	insteadOf = https://github.com/
+`), 0o600))
+	require.NoError(t, IsolateGit())
+
+	repo := t.TempDir()
+	require.NoError(t, GitCommand("init", repo).Run())
+	const origin = "https://github.com/punt-labs/ethos.git"
+	require.NoError(t, GitCommand("-C", repo, "remote", "add", "origin", origin).Run())
+	cmd := exec.CommandContext(t.Context(), "git", "-C", repo, "remote", "get-url", "origin")
+	out, err := cmd.Output()
+	require.NoError(t, err)
+	assert.Equal(t, origin, strings.TrimSpace(string(out)))
 }
 
 func TestOutsideRepo(t *testing.T) {
