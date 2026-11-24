@@ -1,3 +1,5 @@
+//go:build race || behavioral
+
 package behavioral
 
 import (
