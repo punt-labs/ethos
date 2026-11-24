@@ -3,6 +3,12 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - install.sh
+      - scripts/smoke-release.sh
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -11,6 +17,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      version: ${{ steps.dist.outputs.version }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
@@ -26,23 +34,38 @@ jobs:
       # this python-version pin in sync with tests/e2e/pyproject.toml's
       # requires-python.
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        if: github.event_name == 'push'
         with:
           python-version: '3.13'
 
       - name: Sync tests/e2e
+        if: github.event_name == 'push'
         run: uv sync --project tests/e2e
 
       # make lint runs golangci-lint (bundles staticcheck); `make tools`
       # installs it from the Makefile's pinned GOLANGCI_LINT_VERSION to the
       # GOBIN path make lint resolves — single source for the version.
       - name: Install tools
+        if: github.event_name == 'push'
         run: make tools
 
       - name: Run quality gates
+        if: github.event_name == 'push'
         run: make lint test
 
       - name: Build binaries
-        run: make dist VERSION="${GITHUB_REF_NAME#v}"
+        id: dist
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version=$(sed -n 's/^VERSION="\([^"]*\)"$/\1/p' install.sh)
+          fi
+          case "$version" in
+            ''|*[!A-Za-z0-9.+-]*) echo "::error::Invalid release version"; exit 1 ;;
+          esac
+          make dist VERSION="$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Validate binaries
         run: |
@@ -85,10 +108,13 @@ jobs:
           name: release-candidate
           path: dist
       - name: Install and exercise the native candidate
-        run: sh scripts/smoke-release.sh candidate "${GITHUB_REF_NAME#v}" install.sh dist
+        env:
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+        run: sh scripts/smoke-release.sh candidate "$RELEASE_VERSION" install.sh dist
 
   publish:
     needs: candidate-smoke
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
     runs-on: ubuntu-latest
