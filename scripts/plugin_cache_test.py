@@ -10,12 +10,13 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def run_make(home, target):
+def run_make(home, target, *options):
     env = os.environ.copy()
     for name in ("MAKEFLAGS", "MAKEOVERRIDES", "MFLAGS", "GNUMAKEFLAGS", "PLUGIN_CACHE"):
         env.pop(name, None)
     return subprocess.run(
-        ["make", "--no-print-directory", "-o", "install", f"HOME={home}", target],
+        ["make", "--no-print-directory", "-o", "install", *options,
+         f"HOME={home}", f"GOBIN={Path(home) / 'bin'}", target],
         cwd=ROOT,
         env={**env, "HOME": str(home)},
         capture_output=True,
@@ -25,6 +26,27 @@ def run_make(home, target):
 
 
 class PluginCacheTests(unittest.TestCase):
+    def test_bad_registry_is_only_reported_by_cache_targets(self):
+        with tempfile.TemporaryDirectory() as home:
+            cache = Path(home) / ".claude/plugins/cache/punt-labs"
+            prod = cache / "ethos/5.2.1"
+            prod.mkdir(parents=True)
+            (cache / "ethos-dev/5.2.1").mkdir(parents=True)
+            (cache.parents[1] / "installed_plugins.json").write_text("{", encoding="utf-8")
+
+            for target in ("help", "build"):
+                with self.subTest(target=target):
+                    result = run_make(home, target, "-n")
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
+                    self.assertNotIn("invalid Claude plugin registry", result.stderr)
+
+            result = run_make(home, "dev")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("invalid Claude plugin registry", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertFalse(prod.is_symlink())
+
     def test_inherited_make_overrides_cannot_redirect_cache_access(self):
         with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as outer:
             version = Path(home) / ".claude/plugins/cache/punt-labs/ethos/5.2.1"

@@ -1,14 +1,6 @@
 VERSION := $(or $(shell git describe --tags --always 2>/dev/null | sed 's/^v//'),dev)
 LDFLAGS := -X main.version=$(VERSION)
 
-PLUGIN_STATE_DIR := $(HOME)/.claude/plugins
-PLUGIN_CACHE_ROOT := $(PLUGIN_STATE_DIR)/cache/punt-labs
-PLUGIN_REGISTRY := $(PLUGIN_STATE_DIR)/installed_plugins.json
-plugin-cache-version = $(shell ls -1 "$(1)" 2>/dev/null | grep -v '\.bak$$' | sort -V | tail -1)
-dev-plugin-installed = $(if $(wildcard $(PLUGIN_REGISTRY)),$(shell python3 -c 'import json,sys; print("yes" if json.load(sys.stdin)["plugins"].get("ethos-dev@punt-labs") else "")' < "$(PLUGIN_REGISTRY)"),yes)
-PLUGIN_CACHE := $(if $(and $(call plugin-cache-version,$(PLUGIN_CACHE_ROOT)/ethos-dev),$(dev-plugin-installed)),$(PLUGIN_CACHE_ROOT)/ethos-dev,$(PLUGIN_CACHE_ROOT)/ethos)
-PLUGIN_VERSION := $(call plugin-cache-version,$(PLUGIN_CACHE))
-
 # golangci-lint is the Go lint gate (Go Report Card successor). Pinned so
 # local and CI run the same analyzer versions; keep in sync with
 # .github/workflows/test.yml. Config lives in .golangci.yml.
@@ -308,55 +300,11 @@ install: build ## Build and install to ~/.local/bin
 # it at the repo root would resolve ${CLAUDE_PLUGIN_ROOT}/hooks/*.sh to a
 # path that no longer exists.
 #
-# Both recipes are ONE shell each. There is no .ONESHELL here, so a guard on
-# its own line ends only that line's shell and make runs the next line
-# regardless — the previous `@if ...; exit 0; fi` guards printed their message
-# and then fell straight through to the work they were meant to skip. A second
-# `make dev` moved the symlink *into* the existing .bak directory (leaving a
-# stray .bak/$(PLUGIN_VERSION) link behind; the real backup survived) and
-# `make undev` outside dev mode ran `rm` against the real cache directory,
-# failing the target instead of no-opping.
-#
-# dev handles three states, because after the move a stale link is actively
-# broken rather than merely redundant: a link left over from before DES-072
-# points at the repo root, where there is no hooks/, so every
-# ${CLAUDE_PLUGIN_ROOT}/hooks/*.sh silently fails. Only a genuine directory
-# is ever backed up; retargeting a link leaves the existing .bak alone.
 dev: install ## Install and symlink plugin cache for development
-	@set -e; \
-	if [ -z "$(PLUGIN_VERSION)" ]; then \
-	  echo "error: no plugin cache found at $(PLUGIN_CACHE)" >&2; exit 1; \
-	fi; \
-	link="$(PLUGIN_CACHE)/$(PLUGIN_VERSION)"; want="$(CURDIR)/plugin"; \
-	if [ -L "$$link" ]; then \
-	  have=$$(readlink "$$link"); \
-	  if [ "$$have" = "$$want" ]; then \
-	    echo "plugin cache already symlinked → $$want"; exit 0; \
-	  fi; \
-	  echo "retargeting stale symlink ($$have → $$want)"; \
-	  rm "$$link"; \
-	else \
-	  [ -e "$$link.bak" ] && { echo "error: $$link.bak already exists; refusing to overwrite" >&2; exit 1; }; \
-	  mv "$$link" "$$link.bak"; \
-	  echo "original cached at $$link.bak"; \
-	fi; \
-	ln -s "$$want" "$$link"; \
-	echo "symlinked $$link → $$want"
+	@python3 -B scripts/plugin_cache.py dev "$(HOME)" "$(CURDIR)" "$(PLUGIN_CACHE)"
 
 undev: ## Restore plugin cache from backup
-	@set -e; \
-	if [ -z "$(PLUGIN_VERSION)" ]; then \
-	  echo "error: no plugin cache found at $(PLUGIN_CACHE)" >&2; exit 1; \
-	fi; \
-	link="$(PLUGIN_CACHE)/$(PLUGIN_VERSION)"; \
-	if [ ! -L "$$link" ]; then echo "not in dev mode"; exit 0; fi; \
-	if [ ! -d "$$link.bak" ]; then \
-	  echo "error: no backup at $$link.bak; leaving the symlink in place — reinstall with 'claude plugin install $(notdir $(PLUGIN_CACHE))@punt-labs' to repopulate the cache" >&2; \
-	  exit 1; \
-	fi; \
-	rm "$$link"; \
-	mv "$$link.bak" "$$link"; \
-	echo "restored $$link"
+	@python3 -B scripts/plugin_cache.py undev "$(HOME)" "$(CURDIR)" "$(PLUGIN_CACHE)"
 
 clean: clean-latex ## Remove build artifacts
 	rm -f ethos coverage.out
