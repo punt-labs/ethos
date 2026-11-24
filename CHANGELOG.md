@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when available, and record each edit, commit, and handoff check's duration
   and outcome.
 
+- Release CI installs each staged binary and verifies its version and an
+  identity create/get round trip before publishing. It repeats the smoke test
+  through the public GitHub Release installer path and checks the installed
+  binary against the candidate's SHA-256.
+
 ## [5.2.1] - 2026-11-23
 
 ### Security
