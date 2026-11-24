@@ -138,7 +138,7 @@ Expands to `make lint docs test validate-content fuzz-check check-opencode check
 `make check-installed` installs a native instrumented binary with
 `install.sh --no-plugin` outside the checkout and runs the storage suite against
 that installed executable. PR and main CI run it on Linux and macOS. Reports
-under `.tmp/installed-coverage/` measure statement coverage from the installed
+under `.tmp/opencode/installed-coverage/` measure statement coverage from the installed
 binary's storage-suite subprocesses, not installer startup or the package
 tests. CI uploads them separately from `coverage-out`, which still feeds the
 package coverage gate.

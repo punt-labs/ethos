@@ -294,10 +294,10 @@ check-installed: ## Install a coverage-instrumented ethos and exercise the insta
 		go tool covdata textfmt -i="$$sandbox/coverage" -o="$$sandbox/coverage.out"; \
 		awk 'NR > 1 && $$3 > 0 { covered = 1 } END { exit !covered }' "$$sandbox/coverage.out"; \
 		go tool cover -func="$$sandbox/coverage.out" > "$$sandbox/functions.txt"; \
-		mkdir -p .tmp/installed-coverage; \
-		cp "$$sandbox/coverage.out" "$$sandbox/functions.txt" .tmp/installed-coverage/; \
+		mkdir -p .tmp/opencode/installed-coverage; \
+		cp "$$sandbox/coverage.out" "$$sandbox/functions.txt" .tmp/opencode/installed-coverage/; \
 		printf 'Installed binary statement coverage (storage acceptance): '; \
-		tail -n 1 .tmp/installed-coverage/functions.txt
+		tail -n 1 .tmp/opencode/installed-coverage/functions.txt
 
 check: lint docs test coverage-check validate-content fuzz-check check-opencode check-storage check-plugin-cache ## Run all quality gates
 
