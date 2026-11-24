@@ -117,7 +117,7 @@ TEST_PARALLEL ?= 2
 test: ## Run tests with race detection and write coverage to coverage.out
 	go test -race -count=1 -timeout 30m -p $(TEST_PARALLEL) -coverprofile=coverage.out ./...
 
-.PHONY: hooks test-changed
+.PHONY: hooks test-changed test-push test-subprocess-fast
 hooks: ## Opt in to the repository's development Git hooks
 	@if path=$$(git config --get core.hooksPath) && [ "$$path" != .githooks ]; then \
 		echo "core.hooksPath is already $$path; chain .githooks manually" >&2; exit 1; \
@@ -125,7 +125,13 @@ hooks: ## Opt in to the repository's development Git hooks
 	git config --local core.hooksPath .githooks
 
 test-changed: ## Run default Go tests in packages affected by staged paths
-	bash scripts/test-changed.sh
+	bash scripts/test-timed.sh pre-commit 30 bash scripts/test-changed.sh
+
+test-push: ## Run the full default suite and a fast boundary check before pushing
+	bash scripts/test-timed.sh pre-push 180 $(MAKE) test test-subprocess-fast
+
+test-subprocess-fast: ## Exercise dormant and unresolvable Git hook entry points
+	go test -race -count=1 -run '^TestHooks(DormantRepositoryRunsNoProbe|FailLoudWhenRevParseFails)$$' ./plugin/hooks
 
 .PHONY: coverage-check coverage-baseline coverage-baseline-from-ci
 

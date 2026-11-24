@@ -16,29 +16,30 @@ while IFS= read -r -d '' path; do
       fi
       requested+=("$dir")
       ;;
-    go.mod|go.sum|Makefile|.githooks/*|scripts/test-changed.sh)
+    go.mod|go.sum|Makefile|.githooks/*|scripts/test-changed.sh|scripts/test-timed.sh)
       requested+=(test)
       ;;
   esac
 done < "$staged"
 
-if (("${#requested[@]}" == 0)); then
+if [[ ! ${requested[0]+selected} ]]; then
   echo "No staged Go packages to test."
   exit 0
 fi
 
+root=$(pwd -P)
 dirs=$(go list -f '{{.Dir}}' ./...)
 packages=()
 while IFS= read -r dir; do
   for path in "${requested[@]}"; do
-    if [[ "$dir" == "$(pwd -P)/$path" || ( "$path" == . && "$dir" == "$(pwd -P)" ) ]]; then
+    if [[ "$dir" == "$root/$path" || ( "$path" == . && "$dir" == "$root" ) ]]; then
       packages+=("./$path")
       break
     fi
   done
 done <<< "$dirs"
 
-if (("${#packages[@]}" == 0)); then
+if [[ ! ${packages[0]+selected} ]]; then
   echo "No staged paths belong to a default Go package."
   exit 0
 fi
