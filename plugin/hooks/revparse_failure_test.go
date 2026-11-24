@@ -229,6 +229,7 @@ func newHookRepo(t *testing.T, extraEnv ...string) (repo, home string, run func(
 	home = t.TempDir()
 	env := append(testhelpers.GitEnv(),
 		"HOME="+home, "PATH=/usr/bin:/bin", "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@x",
+		"GIT_CONFIG_GLOBAL="+filepath.Join(home, ".gitconfig"),
 		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@x")
 	env = append(env, extraEnv...)
 	run = func(args ...string) (string, error) {
@@ -364,6 +365,9 @@ func TestHooksIgnoreATraceOnStdout(t *testing.T) {
 			repo, home, run := newHookRepo(t, setup.env...)
 			if setup.cfg != "" {
 				require.NoError(t, os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(setup.cfg), 0o644))
+				out, err := run("rev-parse", "--show-toplevel")
+				require.NoError(t, err, out)
+				require.Contains(t, out, `"event":"cmd_name"`, "fixture Git must emit Trace2")
 			}
 			marker := filepath.Join(t.TempDir(), "sealed")
 			// Stub the pre-commit policy, but let the real commit-msg subcommand
