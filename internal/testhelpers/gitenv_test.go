@@ -72,6 +72,35 @@ func TestIsolateGitIgnoresHomeConfig(t *testing.T) {
 	assert.Equal(t, origin, strings.TrimSpace(string(out)))
 }
 
+func TestIsolateGitHomeUsesFixtureConfig(t *testing.T) {
+	ambient := t.TempDir()
+	t.Setenv("HOME", ambient)
+	t.Setenv("USERPROFILE", ambient)
+	t.Setenv("XDG_CONFIG_HOME", ambient)
+	config := filepath.Join(ambient, ".gitconfig")
+	t.Setenv("GIT_CONFIG_GLOBAL", config)
+	const original = "[user]\n\tname = Ambient\n"
+	require.NoError(t, os.WriteFile(config, []byte(original), 0o600))
+
+	t.Run("fixture", func(t *testing.T) {
+		IsolateGitHome(t)
+		home, err := os.UserHomeDir()
+		require.NoError(t, err)
+		require.NotEqual(t, ambient, home)
+		_, err = GitCommand("config", "--global", "user.name", "Fixture").CombinedOutput()
+		require.NoError(t, err)
+		got, err := os.ReadFile(filepath.Join(home, ".gitconfig"))
+		require.NoError(t, err)
+		assert.Contains(t, string(got), "name = Fixture")
+	})
+
+	assert.Equal(t, ambient, os.Getenv("HOME"))
+	assert.Equal(t, config, os.Getenv("GIT_CONFIG_GLOBAL"))
+	got, err := os.ReadFile(config)
+	require.NoError(t, err)
+	assert.Equal(t, original, string(got))
+}
+
 func TestOutsideRepo(t *testing.T) {
 	t.Setenv("GIT_CEILING_DIRECTORIES", "previous ceiling")
 	t.Run("owned ceiling excludes a broken ancestor", func(t *testing.T) {
