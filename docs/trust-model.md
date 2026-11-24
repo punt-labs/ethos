@@ -61,7 +61,10 @@ These come from the operator and are not reopened here.
   with, is acted on as an instruction, the way a Claude subagent acts on
   its spawner's prompt, within the host's normal permission prompts.
   Strangers and unsigned senders get summary-only behavior. A failed
-  signature is an alarm.
+  signature is an alarm. "Summary-only" is today's biff behavior: no
+  body is pushed into the session or placed in a channel event or tool
+  description; the body is shown only when the model explicitly pulls
+  it with `read_messages`, labeled as data it must not act on.
 - **Beadle is the reference model** (operator, 2026-11-23): two
   orthogonal checks, deny by default, no privileged owner role.
 - **Audience.** Team and Enterprise organizations first. Push delivery
@@ -193,7 +196,9 @@ vendored sets working in agent images.
 
 Every trust record has the same shape and the same signing rule:
 
-- `body` is the record without `id` and `sig`, serialized with RFC 8785
+- `body` is the record without `id`, `sig` and any type-specific proof
+  field (only `gpg_sig` on `ethos.gpg-link`, section 8), serialized with
+  RFC 8785
   JSON Canonicalization (JCS).
 - `id = SHA-256("ethos.trust.v1" || 0x00 || type || 0x00 || JCS(body))`.
   The prefix separates trust-record signatures from biff message
@@ -307,10 +312,18 @@ floor (section 5.6), and revocation. The identity key is the one that
 must stay out of reach, because it can mint new grants and delegations.
 
 **File loading rule.** Open with `O_NOFOLLOW`, `fstat` the open
-descriptor, accept mode 0400 or 0600 only, owner equal to the effective
-uid, no group- or world-writable parent directory. Any failure is fatal,
-never a fallback. Agent images mount the secret with `defaultMode: 0400`
-and a matching `runAsUser`.
+descriptor, and accept exactly one of two shapes:
+
+- owner equal to the effective uid, mode 0400 or 0600 (a user's own
+  key file; the agent-image tmpfs identity directory, which `agent-image`
+  creates as the agent user);
+- owner root, group equal to the effective gid, mode 0440, on a
+  read-only mount (a Kubernetes Secret volume: `runAsUser` changes the
+  process uid but not the file owner, so the pod sets `fsGroup` to the
+  process gid and `defaultMode: 0440`).
+
+No group- or world-writable parent directory in either case. Any other
+shape is fatal, never a fallback.
 
 **Deny rules are a backstop.** `ethos enable` adds host deny rules for
 `~/.punt-labs/local/ethos/keys/**` and the address book, and `ethos
@@ -569,9 +582,10 @@ content on Claude Code arrives as a wake line followed by a
 channels. DES-087 since made channels the Claude Code plugin's delivery
 path, and the 2026-11-22 scope change on Linear PL-225 moved Claude Code
 real-time delivery into that work. Under this design an `ask` or
-`instruct` body travels in the channel event; every other grade keeps
-R-CC.2's wake-line-then-pull behavior. A Claude Code session with
-channels off keeps R-CC.2 unchanged. The amendment needs the
+`instruct` body travels in the channel event; `read` and `notify` keep
+R-CC.2's wake-line-then-pull behavior; `untrusted` gets the alarm line
+only, as R-P.2 already requires. A Claude Code session with channels
+off keeps R-CC.2 unchanged. The amendment needs the
 operator's ruling (open question 8).
 
 ### 6.2 beadle
@@ -638,9 +652,15 @@ Biff keys are never exported in Nostr `nsec` form.
 - Stored kinds (write, wall, forward, plan): `created_at` ≤ now + 300 s
   and `exp` not passed. Senders set `exp` ≤ `created_at` + 30 days;
   larger is rejected. Mail held for hours is accepted.
-- The replay cache is mandatory, on disk (written with `fsync` before
-  delivery), one per machine, keyed by event id, entries kept until
-  their `exp`.
+- The replay cache is mandatory, on disk, one per machine, keyed by
+  (event id, recipient identity key, agent handle, instance), entries
+  kept until their `exp`. One event addressed to two sessions on the
+  same machine is delivered to each once.
+- A cache entry and the stored inbox copy of the message are written in
+  one `fsync`'d record. If biffd exits after that write and the relay
+  redelivers the event, the id is found with the message already in the
+  inbox: the duplicate is dropped and nothing is lost. An event is never
+  marked seen without being stored.
 - If the cache is lost, biffd cannot tell an unseen stored message from
   a replay. Talk events created before the process started are rejected
   (they are stale anyway). Stored events created before the process
@@ -699,6 +719,13 @@ class; an attested origin caps at the forwarder's own grade; a failed
 signature anywhere makes the whole message `invalid` (R-P.8). Display:
 `@jim via @claude (attested)`.
 
+Addressing applies to the outer event only. The forward's own `p` tag
+must name the new recipient (step 4 of 7.3). The inner event is checked
+for signature, chain, revocation and expiry, but not for its `p` tag,
+which names the original recipient by design; it is also not entered in
+the replay cache, so the same message can be forwarded to several
+people. The inner recipient is shown: `@jim to @kai, via @claude`.
+
 ## 8. Decision 5: one person across tools
 
 One person is one ethos identity, whichever key proved a message. A
@@ -713,8 +740,13 @@ The GPG link is one JCS statement signed twice:
 ```
 
 - The identity key signs it as a trust record (4.3).
-- The GPG primary key makes a detached signature over the same JCS bytes.
-  Verification uses `--status-fd`; `VALIDSIG`'s primary fingerprint must
+- The GPG primary key makes a detached signature over the same JCS bytes
+  of the body. It travels in a `gpg_sig` field holding the ASCII-armored
+  signature. `gpg_sig` is a proof field like `id` and `sig`: it is
+  excluded from the body that is canonicalized and hashed, and it is the
+  only extra field the `ethos.gpg-link` type allows (section 4.3's
+  unknown-field rule applies to everything else).
+- Verification uses `--status-fd`; `VALIDSIG`'s primary fingerprint must
   equal `fingerprint`; `EXPKEYSIG`, `REVKEYSIG` and `KEYEXPIRED` reject.
 
 Both signatures are required. One direction alone lets a person claim
@@ -763,6 +795,15 @@ a message, never that obeying it is safe.
 Each wave ships alone and leaves the system working. (b) and (d) start
 in parallel with (a), against the formats in sections 4 and 5 with
 fixtures, and merge after (a). (e) is independent of all others.
+
+Wave (d) ships in two parts. Its verification fixes (fingerprint match,
+no attached-key import, CLI enforcement) depend only on (a) and ship
+first. Its switch to the shared address book depends on (c), which
+ships the address book and `ethos contact`. The transition: `ethos
+contact import --from-beadle` reads each identity's beadle
+`contacts.json`, shows the result, and signs it once with the user
+present. Until a user has imported, beadle keeps reading its own file,
+with the new verification fixes applied.
 
 | Wave | Repos | Ships | User-visible change | Test |
 |------|-------|-------|---------------------|------|
