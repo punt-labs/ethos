@@ -1,8 +1,10 @@
 VERSION := $(or $(shell git describe --tags --always 2>/dev/null | sed 's/^v//'),dev)
 LDFLAGS := -X main.version=$(VERSION)
 
-PLUGIN_CACHE := $(HOME)/.claude/plugins/cache/punt-labs/ethos
-PLUGIN_VERSION := $(shell ls -1 $(PLUGIN_CACHE) 2>/dev/null | grep -v '\.bak$$' | sort -V | tail -1)
+PLUGIN_CACHE_ROOT := $(HOME)/.claude/plugins/cache/punt-labs
+plugin-cache-version = $(shell ls -1 "$(1)" 2>/dev/null | grep -v '\.bak$$' | sort -V | tail -1)
+PLUGIN_CACHE := $(if $(call plugin-cache-version,$(PLUGIN_CACHE_ROOT)/ethos),$(PLUGIN_CACHE_ROOT)/ethos,$(PLUGIN_CACHE_ROOT)/ethos-dev)
+PLUGIN_VERSION := $(call plugin-cache-version,$(PLUGIN_CACHE))
 
 # golangci-lint is the Go lint gate (Go Report Card successor). Pinned so
 # local and CI run the same analyzer versions; keep in sync with
@@ -264,13 +266,16 @@ smoke-opencode-health: ## Smoke root Code Mode health calls only (uses model cre
 smoke-opencode-formatter: ## Smoke formatter byte preservation only (uses model credits)
 	python3 -B scripts/opencode.py smoke --stage formatter
 
-.PHONY: check-storage
+.PHONY: check-storage check-plugin-cache
 
 check-storage: ## Exercise offline storage boundaries through the real CLI, wrappers and Git hooks
 	python3 -B -m unittest discover -s scripts -p 'storage_acceptance_test.py'
 	python3 -B scripts/storage_acceptance.py
 
-check: lint docs test coverage-check validate-content fuzz-check check-opencode check-storage ## Run all quality gates
+check-plugin-cache: ## Test Claude plugin cache switching
+	python3 -B scripts/plugin_cache_test.py
+
+check: lint docs test coverage-check validate-content fuzz-check check-opencode check-storage check-plugin-cache ## Run all quality gates
 
 # The legacy corpus (internal/autorepair/testdata) is real on-disk state written
 # by nine released binaries. Regenerating it builds each from its git tag, so it
@@ -343,7 +348,7 @@ undev: ## Restore plugin cache from backup
 	link="$(PLUGIN_CACHE)/$(PLUGIN_VERSION)"; \
 	if [ ! -L "$$link" ]; then echo "not in dev mode"; exit 0; fi; \
 	if [ ! -d "$$link.bak" ]; then \
-	  echo "error: no backup at $$link.bak; leaving the symlink in place — reinstall with 'claude plugin install ethos@punt-labs' to repopulate the cache" >&2; \
+	  echo "error: no backup at $$link.bak; leaving the symlink in place — reinstall with 'claude plugin install $(notdir $(PLUGIN_CACHE))@punt-labs' to repopulate the cache" >&2; \
 	  exit 1; \
 	fi; \
 	rm "$$link"; \
