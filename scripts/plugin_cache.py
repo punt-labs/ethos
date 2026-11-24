@@ -18,7 +18,7 @@ def dev_is_registered(registry, checkout):
         scope = record.get("scope")
         if scope == "user":
             return True
-        if scope == "project":
+        if scope in ("project", "local"):
             project = record.get("projectPath")
             if isinstance(project, str) and Path(project).is_absolute() and Path(project).resolve() == checkout:
                 return True

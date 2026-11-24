@@ -64,7 +64,8 @@ class PluginCacheTests(unittest.TestCase):
     def test_dev_registration_must_apply_to_the_checkout(self):
         for scope, correct_project, expected in (
             ("project", False, "ethos"),
-            ("local", True, "ethos"),
+            ("local", False, "ethos"),
+            ("local", True, "ethos-dev"),
             ("project", True, "ethos-dev"),
             ("user", False, "ethos-dev"),
         ):
