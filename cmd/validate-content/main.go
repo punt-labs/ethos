@@ -124,23 +124,29 @@ type report struct {
 }
 
 func main() {
-	defaultGlobalRoot, err := layout.MachineRoot()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "validate-content: cannot determine home directory: %v\n", err)
-		os.Exit(1)
-	}
-
 	var ethosRoot, globalRoot string
 	flag.StringVar(&ethosRoot, "ethos-root", "", "path to .punt-labs/ethos/ (default: located repository store)")
-	flag.StringVar(&globalRoot, "global-root", defaultGlobalRoot, "path to global ethos dir")
+	flag.StringVar(&globalRoot, "global-root", "", "path to global ethos dir (default: ~/.punt-labs/ethos)")
 	flag.Parse()
 
-	explicitTarget := false
+	var explicitTarget, explicitGlobalRoot bool
 	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "ethos-root" {
+		switch f.Name {
+		case "ethos-root":
 			explicitTarget = true
+		case "global-root":
+			explicitGlobalRoot = true
 		}
 	})
+	var err error
+	if !explicitGlobalRoot {
+		globalRoot, err = layout.MachineRoot()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "validate-content: cannot determine home directory: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	var loc resolve.Located
 	if explicitTarget {
 		loc, err = contentTarget(ethosRoot)
