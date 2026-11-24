@@ -143,7 +143,9 @@ test-subprocess: ## Run release smoke fixtures and the Git hook subprocess suite
 test-performance: ## Report race-instrumented long-session redaction timing
 	go test -race -count=1 -run '^TestRedactLiveLongSessionBudget$$' -v ./internal/hook
 
-test-live test-agent: test-behavioral ## Run live agent and judge tests (requires Claude and an Anthropic key)
+test-live: test-behavioral ## Run live provider and judge tests
+
+test-agent: test-behavioral ## Run real-agent behavioral tests
 
 test-nightly: ## Review quarantines and run the live suite under the Nightly budget
 	bash scripts/test-timed.sh nightly 3600 $(MAKE) test-quarantine test-behavioral
