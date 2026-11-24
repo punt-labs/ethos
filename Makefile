@@ -281,9 +281,15 @@ check-installed: ## Install a coverage-instrumented ethos and exercise the insta
 		(cd "$$sandbox/work" && env -i HOME="$$sandbox/home" PATH=/usr/bin:/bin TMPDIR="$$sandbox/tmp" \
 			GIT_CONFIG_NOSYSTEM=1 GIT_CEILING_DIRECTORIES="$$sandbox" PUNT_TELEMETRY=off \
 			GOCOVERDIR="$$sandbox/install-coverage" ETHOS_LOCAL_BINARY="$$sandbox/ethos" \
-			sh "$(CURDIR)/install.sh" --no-plugin); \
+			sh "$(CURDIR)/install.sh" --no-plugin) > "$$sandbox/install.log" 2>&1 \
+			|| { cat "$$sandbox/install.log"; exit 1; }; \
+		cat "$$sandbox/install.log"; \
 		installed="$$sandbox/home/.local/bin/ethos"; \
 		cmp "$$sandbox/ethos" "$$installed"; \
+		if grep -Fq 'Could not seed starter content' "$$sandbox/install.log" || \
+			! test -s "$$sandbox/home/.punt-labs/ethos/.seed-manifest.json"; then \
+			echo 'installed ethos did not seed starter content' >&2; exit 1; \
+		fi; \
 		python3 -B scripts/storage_acceptance.py --binary "$$installed" --coverdir "$$sandbox/coverage"; \
 		go tool covdata textfmt -i="$$sandbox/coverage" -o="$$sandbox/coverage.out"; \
 		awk 'NR > 1 && $$3 > 0 { covered = 1 } END { exit !covered }' "$$sandbox/coverage.out"; \
