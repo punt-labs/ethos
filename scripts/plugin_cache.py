@@ -106,6 +106,8 @@ def backup_path(link):
 
 
 def link_cache(link, target):
+    if not target.is_dir():
+        raise ValueError(f"plugin directory not found: {target}")
     backup = backup_path(link)
     if link.is_symlink():
         current = link.readlink()

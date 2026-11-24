@@ -207,6 +207,39 @@ class PluginCacheTests(unittest.TestCase):
             self.assertFalse(version.is_symlink())
             self.assertTrue((version / "original").is_file())
 
+    def test_dev_refuses_missing_plugin_directory_without_mutating_cache(self):
+        for dangling in (False, True):
+            with self.subTest(dangling=dangling), tempfile.TemporaryDirectory() as home:
+                cache = Path(home) / ".claude/plugins/cache/punt-labs/ethos-dev"
+                version = cache / "5.2.1"
+                backup = version.with_name(version.name + ".bak")
+                original = backup if dangling else version
+                original.mkdir(parents=True)
+                (original / "original").touch()
+                old_target = Path(home) / "old-checkout/plugin"
+                if dangling:
+                    version.symlink_to(old_target)
+                (cache.parents[2] / "installed_plugins.json").write_text(
+                    json.dumps({"plugins": {"ethos-dev@punt-labs": [{"scope": "user", "installPath": str(version)}]}}),
+                    encoding="utf-8",
+                )
+                checkout = Path(home) / "checkout"
+                checkout.mkdir()
+
+                result = subprocess.run(
+                    ["python3", "-B", str(ROOT / "scripts/plugin_cache.py"), "dev", home, str(checkout), ""],
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(f"plugin directory not found: {checkout / 'plugin'}", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertTrue((original / "original").is_file())
+                if dangling:
+                    self.assertEqual(version.readlink(), old_target)
+                else:
+                    self.assertFalse(version.is_symlink())
+                    self.assertEqual(list(cache.iterdir()), [version])
+
     def test_undev_restores_links_after_cache_selection_changes(self):
         for link_both in (False, True):
             with self.subTest(link_both=link_both), tempfile.TemporaryDirectory() as home:
