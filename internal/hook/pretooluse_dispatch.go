@@ -110,8 +110,12 @@ func dispatchAgent(w io.Writer, sessionID string, toolInput map[string]any, loc 
 	// spawn too. The lock is now acquired unconditionally, before
 	// either branch, so both the explicit and the matched path can
 	// consume under it.
+	missionID := os.Getenv("MISSION_ID")
 	globalRoot, err := tierBGlobalRoot()
 	if err != nil {
+		if missionID != "" {
+			return writeAgentBlock(w, fmt.Sprintf("ethos pre-tool-use: resolving global root for MISSION_ID: %v", err))
+		}
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: dispatch-pending: resolving global root: %v; "+
 				"falling through without pending-dispatch matching\n", err)
@@ -126,7 +130,7 @@ func dispatchAgent(w io.Writer, sessionID string, toolInput map[string]any, loc 
 	}
 	defer release()
 
-	if missionID := os.Getenv("MISSION_ID"); missionID != "" {
+	if missionID != "" {
 		return dispatchTierB(w, roots, sessionID, missionID, toolInput, mission.BoundViaMissionIDEnv,
 			func() { consumeDispatchBinding(sessionID, missionID) })
 	}
