@@ -16,13 +16,11 @@ import (
 )
 
 func TestSeedRejectsRelativeHome(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
 	t.Setenv("HOME", "relative-home")
 
 	_, err := execSeed(t, "seed")
 	require.ErrorContains(t, err, "home directory")
-	_, statErr := os.Stat(filepath.Join(dir, "relative-home"))
+	_, statErr := os.Stat("relative-home")
 	require.ErrorIs(t, statErr, os.ErrNotExist)
 }
 
