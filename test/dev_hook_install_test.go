@@ -58,6 +58,23 @@ func TestDevelopmentHooksFutureWorktreeKeepsExistingHooks(t *testing.T) {
 	require.NoError(t, err, "%s", out)
 	require.Contains(t, string(out), "existing pre-commit ran")
 	require.Contains(t, string(out), "existing commit-msg ran")
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-changed:\n\t@echo 'development gate ran'\n"), 0o600))
+	out, err = run(dir, "git", "add", ".githooks", "Makefile")
+	require.NoError(t, err, "%s", out)
+	out, err = run(dir, "git", "commit", "-m", "checkout with development gates")
+	require.NoError(t, err, "%s", out)
+	require.Contains(t, string(out), "development gate ran")
+
+	withGates := t.TempDir()
+	out, err = run(dir, "git", "worktree", "add", "--detach", withGates, "HEAD")
+	require.NoError(t, err, "%s", out)
+	require.FileExists(t, filepath.Join(withGates, ".githooks", "pre-commit"))
+	out, err = run(withGates, "git", "commit", "--allow-empty", "-m", "sibling with gates")
+	require.NoError(t, err, "%s", out)
+	require.Contains(t, string(out), "existing pre-commit ran")
+	require.Contains(t, string(out), "existing commit-msg ran")
+	require.NotContains(t, string(out), "development gate ran")
 }
 
 func buildFixtureEthos(t *testing.T, dir string) {
