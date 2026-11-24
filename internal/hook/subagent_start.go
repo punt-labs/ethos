@@ -7,12 +7,12 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/process"
 	"github.com/punt-labs/ethos/v4/internal/session"
@@ -1001,17 +1001,14 @@ func closeSkeletonOnHashRefusal(repoRoot string) {
 	// and produce a last-writer-wins verdict (Copilot MED on PR
 	// #327: closeSkeletonOnHashRefusal wrote record.yaml without
 	// the lock the rest of the dispatch path holds). Lock path is
-	// the same global tree the PreToolUse-on-Agent dispatch uses;
-	// derive it from os.UserHomeDir here to keep the close path
-	// independent of the dispatch's tierBGlobalRoot helper.
-	home, err := os.UserHomeDir()
+	// the same global tree the PreToolUse-on-Agent dispatch uses.
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos: subagent-start: hash refusal: user home dir: %v; "+
 				"skipping skeleton close for %q\n", err, delegationID)
 		return
 	}
-	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	release, err := mission.NewStoreWithRoots(repoRoot, globalRoot).AcquireDelegationLock(delegationID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,

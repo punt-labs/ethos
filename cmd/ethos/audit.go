@@ -125,13 +125,13 @@ func sessionStartDateResolver() func(string) string {
 	// let filepath.Join degrade to the relative ".punt-labs/ethos/sessions" —
 	// a relative path would consult the current working directory, reading a
 	// stray same-named tombstone from wherever the command happened to run.
-	home, homeErr := os.UserHomeDir()
+	globalRoot, homeErr := layout.MachineRoot()
 	return func(sessionID string) string {
 		if roster, err := ss.Load(sessionID); err == nil && len(roster.Started) >= 10 {
 			return roster.Started[:10]
 		}
 		if homeErr == nil {
-			globalSessions := filepath.Join(home, ".punt-labs", "ethos", "sessions")
+			globalSessions := filepath.Join(globalRoot, "sessions")
 			if tb, err := audit.ReadTombstone(filepath.Join(globalSessions, sessionID+".purged")); err == nil {
 				return tb.StartDate
 			}
@@ -264,8 +264,7 @@ func sealRepository(out, errOut io.Writer, f sealFlags) error {
 	// skipped it whenever anything sealed — i.e. on nearly every real commit,
 	// precisely when the repo is busiest. Warn-only; never blocks the commit.
 	if !f.dryRun {
-		if home, hErr := os.UserHomeDir(); hErr == nil {
-			globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+		if globalRoot, hErr := layout.MachineRoot(); hErr == nil {
 			if vErr := hook.VacuumCrossCheckWithPolicy(p, globalRoot, activeRepoSessions(repoRoot, errOut), errOut); vErr != nil {
 				fmt.Fprintf(errOut, "ethos: audit seal: vacuum cross-check: %v\n", vErr)
 			}
@@ -319,11 +318,11 @@ func runAuditShow(out, errOut io.Writer) error {
 		return usageError{}
 	}
 
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		return fmt.Errorf("resolving home directory: %w", err)
 	}
-	globalDir := filepath.Join(home, ".punt-labs", "ethos", "sessions")
+	globalDir := filepath.Join(globalRoot, "sessions")
 
 	entries, err := hook.QueryAuditByDelegationWithPolicy(p, globalDir, auditShowDelegation)
 	if err != nil {

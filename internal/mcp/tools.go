@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/adr"
@@ -16,6 +14,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/doctor"
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/repomiss"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -785,9 +784,6 @@ func jsonResult(v any) (*mcplib.CallToolResult, error) {
 
 // globalRoot is ~/.punt-labs/ethos, or "" when home cannot be determined.
 func (h *Handler) globalRoot() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".punt-labs", "ethos")
+	root, _ := layout.MachineRoot()
+	return root
 }

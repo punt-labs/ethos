@@ -214,7 +214,7 @@ func TestMCPVendor_LinkedLocalIgnoreNestedNegation(t *testing.T) {
 			previous := cmdRoots.Load()
 			t.Cleanup(func() { cmdRoots.Store(previous) })
 			srv := server.NewMCPServer("test", "0", server.WithToolCapabilities(true))
-			buildServeHandler(se.home, locateServeStore()).RegisterTools(srv)
+			buildServeHandler(filepath.Join(se.home, ".punt-labs", "ethos"), locateServeStore()).RegisterTools(srv)
 			root := store
 			if host == "checkout" {
 				root = se.repo
@@ -286,7 +286,7 @@ func TestMCPVendor_LinkedLocalIgnoreCapturedRoots(t *testing.T) {
 			previous := cmdRoots.Load()
 			t.Cleanup(func() { cmdRoots.Store(previous) })
 			srv := server.NewMCPServer("test", "0", server.WithToolCapabilities(true))
-			buildServeHandler(se.home, locateServeStore()).RegisterTools(srv)
+			buildServeHandler(filepath.Join(se.home, ".punt-labs", "ethos"), locateServeStore()).RegisterTools(srv)
 			captured := currentRoots().Located
 			require.Equal(t, store, captured.Store)
 			require.Equal(t, se.repo, captured.Checkout)

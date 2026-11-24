@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/autorepair"
 	"github.com/punt-labs/ethos/v4/internal/bundle"
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/process"
 	"github.com/punt-labs/ethos/v4/internal/repomiss"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -479,11 +479,11 @@ func planSessionAgents(loc resolve.Located, identities identity.IdentityStore, t
 	if err := loc.Err(); err != nil {
 		return AgentPlan{}, fmt.Errorf("locating agent generation inputs: %w", err)
 	}
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		return AgentPlan{}, fmt.Errorf("locating global bundle root: %w", err)
 	}
-	_, active, err := bundle.ResolveRootFromConfig(loc.Store, filepath.Join(home, ".punt-labs", "ethos"), loc.Config)
+	_, active, err := bundle.ResolveRootFromConfig(loc.Store, globalRoot, loc.Config)
 	if err != nil {
 		return AgentPlan{}, err
 	}

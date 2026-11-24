@@ -4,12 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/provenance"
 )
@@ -41,11 +40,11 @@ Ethos makes no remote calls and does not report merge success itself.`,
 			if err != nil {
 				return err
 			}
-			home, err := os.UserHomeDir()
+			globalRoot, err := layout.MachineRoot()
 			if err != nil {
 				return fmt.Errorf("mission publish: home directory: %w", err)
 			}
-			store := mission.NewRepositoryStore(policy, filepath.Join(home, ".punt-labs", "ethos"))
+			store := mission.NewRepositoryStore(policy, globalRoot)
 			snapshot, err := store.SnapshotSelection(cmd.Context(), args, adrs)
 			if err != nil {
 				return err

@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 // pluginID matches the install.sh PLUGIN_NAME@MARKETPLACE_NAME and --scope user.
@@ -64,11 +66,10 @@ func runUninstall() error {
 	}
 
 	// Step 2 (purge): Confirm before deleting data.
-	home, err := os.UserHomeDir()
+	dataDir, err := layout.MachineRoot()
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	dataDir := filepath.Join(home, ".punt-labs", "ethos")
 
 	bin, binErr := resolvedBinaryPath()
 	fmt.Printf("\nThis will permanently delete:\n")

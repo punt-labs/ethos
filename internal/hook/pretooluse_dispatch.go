@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -111,8 +110,12 @@ func dispatchAgent(w io.Writer, sessionID string, toolInput map[string]any, loc 
 	// spawn too. The lock is now acquired unconditionally, before
 	// either branch, so both the explicit and the matched path can
 	// consume under it.
+	missionID := os.Getenv("MISSION_ID")
 	globalRoot, err := tierBGlobalRoot()
 	if err != nil {
+		if missionID != "" {
+			return writeAgentBlock(w, fmt.Sprintf("ethos pre-tool-use: resolving global root for MISSION_ID: %v", err))
+		}
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: dispatch-pending: resolving global root: %v; "+
 				"falling through without pending-dispatch matching\n", err)
@@ -127,7 +130,7 @@ func dispatchAgent(w io.Writer, sessionID string, toolInput map[string]any, loc 
 	}
 	defer release()
 
-	if missionID := os.Getenv("MISSION_ID"); missionID != "" {
+	if missionID != "" {
 		return dispatchTierB(w, roots, sessionID, missionID, toolInput, mission.BoundViaMissionIDEnv,
 			func() { consumeDispatchBinding(sessionID, missionID) })
 	}
@@ -1066,29 +1069,28 @@ func tierBRepoRoot() (string, error) {
 // tierBGlobalRoot resolves the global ethos root used for per-
 // delegation lock files. DES-054 v5 §"Storage Layout" requires the
 // per-delegation flock to live at <globalRoot>/delegations/<id>.lock
-// so two checkouts of the same repo lock the same inode. Errors from
-// os.UserHomeDir surface to the caller — the hook fails closed when
+// so two checkouts of the same repo lock the same inode. Home resolution errors
+// surface to the caller — the hook fails closed when
 // its persistence layer is not reachable.
 func tierBGlobalRoot() (string, error) {
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		return "", fmt.Errorf("user home dir: %w", err)
 	}
-	return filepath.Join(home, ".punt-labs", "ethos"), nil
+	return globalRoot, nil
 }
 
 // tierBMissionStore builds the mission store from the dispatch's entry-time
 // roots and configuration, without a second location/configuration read.
 //
-// Errors from os.UserHomeDir surface as a block decision rather than
+// Home resolution errors surface as a block decision rather than
 // a silent allow; the hook fails closed when its persistence layer is
 // not reachable.
 func tierBMissionStore(roots tierBRoots) (*mission.Store, error) {
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		return nil, fmt.Errorf("user home dir: %w", err)
 	}
-	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	// NewStoreWithRoots activates the DES-054 two-tree dispatch:
 	// reads check the repo tree first (<repoRoot>/.punt-labs/ethos/missions/),
 	// then fall back to the global tree. WithRepoRoot alone is

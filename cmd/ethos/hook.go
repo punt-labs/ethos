@@ -14,6 +14,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/autorepair"
 	"github.com/punt-labs/ethos/v4/internal/enable"
 	"github.com/punt-labs/ethos/v4/internal/hook"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/spf13/cobra"
@@ -179,11 +180,10 @@ func refreshGitHooks(checkout, store string) (hook.HookRefresh, error) {
 // the cheap pass over dead session state, logged to the repair log.
 func repairSessions(loc resolve.Located) func(ctx context.Context) (int, error) {
 	return func(ctx context.Context) (int, error) {
-		home, err := os.UserHomeDir()
+		global, err := layout.MachineRoot()
 		if err != nil {
 			return 0, fmt.Errorf("locating the global store: %w", err)
 		}
-		global := filepath.Join(home, ".punt-labs", "ethos")
 		// The repair log's rotation and the session purge assume one writer: take
 		// the lock the engine holds. A busy lock means a repair is already
 		// running, so this start leaves the work to it without waiting: a
@@ -332,11 +332,10 @@ func runHookCommitTrailers(out io.Writer) error {
 		}
 		return nil
 	}
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		return fmt.Errorf("hook commit-trailers: %w", err)
 	}
-	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	if err := hook.WriteCommitTrailers(out, globalRoot, sessionID); err != nil {
 		return fmt.Errorf("hook commit-trailers: %w", err)
 	}
@@ -351,14 +350,14 @@ func runHookFormatOutput() error {
 }
 
 func runHookAuditLog() error {
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		return fmt.Errorf("hook audit-log: %w", err)
 	}
 	// A dropped or unlocked entry never blocks the tool call, but it is put
 	// in front of the session (systemMessage and additionalContext), not
 	// left on the hook's stderr, which goes to a log file nobody reads.
-	if notice := writeAuditLog(home + "/.punt-labs/ethos/sessions"); notice != nil {
+	if notice := writeAuditLog(filepath.Join(globalRoot, "sessions")); notice != nil {
 		if err := hook.WriteAuditNotice(os.Stdout, notice); err != nil {
 			fmt.Fprintf(os.Stderr, "ethos: audit-log: %v\n", err)
 		}

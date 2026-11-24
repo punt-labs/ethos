@@ -10,6 +10,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/bundle"
 	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/team"
@@ -42,11 +43,10 @@ func configuredStageChecks(checkout, agent, stage string) ([]checkset.Check, boo
 	if err != nil {
 		return nil, false, err
 	}
-	home, err := os.UserHomeDir()
+	global, err := layout.MachineRoot()
 	if err != nil {
 		return nil, false, err
 	}
-	global := filepath.Join(home, ".punt-labs", "ethos")
 	bundleRoot, active, err := bundle.ResolveRootFromConfig(store, global, cfg)
 	if err != nil {
 		return nil, false, err

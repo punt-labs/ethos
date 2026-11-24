@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -27,9 +28,9 @@ func TestServeToolCallsPassEnsureConcurrently(t *testing.T) {
 
 	srv := server.NewMCPServer("test", "0", server.WithToolCapabilities(true))
 	loc := locateServeStore()
-	h := buildServeHandler(se.home, loc)
+	h := buildServeHandler(filepath.Join(se.home, ".punt-labs", "ethos"), loc)
 	h.RelocateStore(loc, locateServeStore, func(l mcp.StoreLocation) *mcp.Handler {
-		return buildServeHandler(se.home, l)
+		return buildServeHandler(filepath.Join(se.home, ".punt-labs", "ethos"), l)
 	})
 	h.RegisterTools(srv)
 	st := srv.GetTool("talent")

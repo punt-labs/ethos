@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/hook"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 
@@ -259,11 +259,10 @@ func (h *Handler) bindDispatchedMission(req mcplib.CallToolRequest, missionID, w
 				"written; the worker's matching Agent() spawn will not be attributed to this mission", err),
 		}
 	}
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		return []string{fmt.Sprintf("binding mission: user home dir: %v", err)}
 	}
-	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
 	// This MCP call runs as its own process, so staging a new pending
 	// entry must take the dispatch-pending lock itself rather than
@@ -590,11 +589,10 @@ func (h *Handler) clearClosedMissionBindings(req mcplib.CallToolRequest, mission
 		}
 		return []string{fmt.Sprintf("clearing mission bindings: resolving session: %v", err)}
 	}
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		return []string{fmt.Sprintf("clearing mission bindings: user home dir: %v", err)}
 	}
-	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	return clearBindingWarnings(mission.ClearMissionBindings(globalRoot, sessionID, missionID))
 }
 

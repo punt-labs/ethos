@@ -10,6 +10,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/checkset"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,11 +37,11 @@ func NewStore(root string, opts ...StoreOption) *Store {
 
 // DefaultStore returns a Store using the default global directory (~/.punt-labs/ethos).
 func DefaultStore() (*Store, error) {
-	home, err := os.UserHomeDir()
+	root, err := layout.MachineRoot()
 	if err != nil {
 		return nil, fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	return &Store{root: filepath.Join(home, ".punt-labs", "ethos")}, nil
+	return &Store{root: root}, nil
 }
 
 // Root returns the store's root directory.

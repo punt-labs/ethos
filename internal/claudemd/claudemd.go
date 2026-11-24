@@ -209,12 +209,12 @@ func lockPathFor(real string, policies ...layout.Policy) (string, error) {
 	if len(policies) > 0 {
 		return policies[0].LockPath("claudemd", real)
 	}
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		return "", fmt.Errorf("resolving home dir for the lock: %w", err)
 	}
 	sum := sha256.Sum256([]byte(real))
-	dir := filepath.Join(home, ".punt-labs", "ethos", "locks")
+	dir := filepath.Join(globalRoot, "locks")
 	return filepath.Join(dir, hex.EncodeToString(sum[:])+".lock"), nil
 }
 

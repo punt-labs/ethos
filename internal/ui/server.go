@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 //go:embed templates/*.html
@@ -47,11 +48,10 @@ func NewServer(repoRoot, storeRoot string) (*Server, error) {
 	}
 	storeRoot = absStore
 
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		return nil, fmt.Errorf("determining home directory: %w", err)
 	}
-	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
 	funcMap := template.FuncMap{
 		"truncate": truncate,

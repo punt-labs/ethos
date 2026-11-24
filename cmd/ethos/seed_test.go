@@ -15,6 +15,15 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
+func TestSeedRejectsRelativeHome(t *testing.T) {
+	t.Setenv("HOME", "relative-home")
+
+	_, err := execSeed(t, "seed")
+	require.ErrorContains(t, err, "home directory")
+	_, statErr := os.Stat("relative-home")
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
 // TestSeed_UpgradeAndPreserve is the command-level walk of the manifest model:
 // a fresh seed deploys; an edit to a tracked file is skipped as a local edit
 // with the --force remedy printed; --force overwrites the edit and reports it

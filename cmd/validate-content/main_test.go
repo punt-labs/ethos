@@ -84,6 +84,24 @@ func TestValidateContent_LayeredModeUnchanged(t *testing.T) {
 	require.NoErrorf(t, err, "layered mode (unset resolution) must still pass: %s", out)
 }
 
+func TestValidateContent_ExplicitGlobalRootWithRelativeHome(t *testing.T) {
+	bin := buildValidateContent(t)
+	repoRoot, ethosRoot := minimalRepo(t, "")
+	globalRoot := t.TempDir()
+	t.Setenv("HOME", "relative-home")
+	t.Setenv("USERPROFILE", "relative-home")
+
+	out, err := runValidateContent(t, bin, repoRoot, ethosRoot, globalRoot)
+	require.NoErrorf(t, err, "explicit global root must bypass HOME: %s", out)
+	require.Contains(t, out, "all checks passed")
+
+	cmd := exec.Command(bin, "-ethos-root", ethosRoot)
+	cmd.Dir = repoRoot
+	output, err := cmd.CombinedOutput()
+	require.Error(t, err)
+	require.Contains(t, string(output), "home directory must be absolute")
+}
+
 func TestInvalidProjectCheckReferenceIsContentError(t *testing.T) {
 	repo, root := minimalRepo(t, "")
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs/ethos.yaml"), []byte("checks: Go_Default\n"), 0600))

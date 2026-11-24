@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/punt-labs/ethos/v4/internal/hook"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
@@ -76,12 +77,12 @@ func sessionTrailerIDs() (missionID, delegationID string, err error) {
 		}
 		return "", "", err
 	}
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		return "", "", err
 	}
 	var buf bytes.Buffer
-	if err := hook.WriteCommitTrailers(&buf, home+"/.punt-labs/ethos", sessionID); err != nil {
+	if err := hook.WriteCommitTrailers(&buf, globalRoot, sessionID); err != nil {
 		return "", "", err
 	}
 	for _, line := range strings.Split(buf.String(), "\n") {
