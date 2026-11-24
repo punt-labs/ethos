@@ -805,6 +805,21 @@ contact import --from-beadle` reads each identity's beadle
 present. Until a user has imported, beadle keeps reading its own file,
 with the new verification fixes applied.
 
+Import maps each beadle entry this way:
+
+- A glob entry imports as a glob entry, still capped at `r--`.
+- An exact entry whose stored GPG key resolves (by full fingerprint) to
+  an ethos identity with an attested GPG link imports keyed by that
+  handle and identity key, with all its grants.
+- An exact entry with no such identity imports as an email-only contact:
+  `handle` from its name, `identity_key` empty, its `emails` kept. Its
+  `r` and `w` grants carry over: `r` only governs showing mail to the
+  user, and `w` governs sending to an address, neither of which depends
+  on proving who the sender is. Its `x` grant is held, not applied,
+  because `x` acts on inbound mail whose sender an email-only entry
+  cannot prove. The import report lists each held `x`; it takes effect
+  once the user pins that contact's identity key.
+
 | Wave | Repos | Ships | User-visible change | Test |
 |------|-------|-------|---------------------|------|
 | (a) keys | ethos, biff | `keys` field; `ethos key init/renew/rotate/path`; trust records; `ethos trust resolve --json`; `biff who` key column | `ethos whoami` prints `identity key 9f3c…e1 (keychain) · biff key attested`; `biff who` shows `key ✓`, `key –` or `key ✗` | Go `TestKeyInitStoresPublicKeyTrackedAndPrivateKeyOutsideTree`: runs `ethos key init` with a test keychain, asserts `keys.identity.pubkey` in the YAML, the biff key file mode 0600 under `~/.punt-labs/local/ethos/keys/`, and no private bytes in the tracked tree. Plus JCS test vectors for `id`. |
