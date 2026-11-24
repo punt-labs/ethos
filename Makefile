@@ -60,7 +60,7 @@ lint: ## Lint (golangci-lint + windows vet + shellcheck + ruff + mypy)
 	@test -x $(GOLANGCI_LINT) || { echo "golangci-lint not found at $(GOLANGCI_LINT) — run 'make tools' to install $(GOLANGCI_LINT_VERSION)"; exit 1; }
 	$(GOLANGCI_LINT) run ./...
 	GOOS=windows go vet ./... # the windows build, tests included: a unix-only helper or test file must carry its build tag
-	shellcheck plugin/hooks/*.sh install.sh
+	shellcheck plugin/hooks/*.sh install.sh .githooks/* scripts/test-changed.sh scripts/test-timed.sh
 	cd tests/e2e && uv run ruff check .
 	cd tests/e2e && uv run ruff format --check .
 	cd tests/e2e && uv run mypy src/ tests/
@@ -116,6 +116,52 @@ TEST_PARALLEL ?= 2
 
 test: ## Run tests with race detection and write coverage to coverage.out
 	go test -race -count=1 -timeout 30m -p $(TEST_PARALLEL) -coverprofile=coverage.out ./...
+
+.PHONY: hooks test-changed test-push test-subprocess-fast
+hooks: ## Opt in to the repository's development Git hooks
+	python3 scripts/install-dev-hooks.py
+
+test-changed: ## Run default Go tests in packages affected by staged paths
+	bash scripts/test-timed.sh pre-commit 30 bash scripts/test-changed.sh
+
+test-push: ## Run the full default suite and a fast boundary check before pushing
+	bash scripts/test-timed.sh pre-push 180 $(MAKE) test test-subprocess-fast
+
+test-subprocess-fast: ## Exercise dormant and unresolvable Git hook entry points
+	go test -race -count=1 -run '^TestHooks(DormantRepositoryRunsNoProbe|FailLoudWhenRevParseFails)$$' ./plugin/hooks
+
+.PHONY: test-unit test-subprocess test-performance test-live test-agent test-nightly test-release-candidate test-post-release test-quarantine test-quarantine-run
+test-unit: ## Run an in-process sample of data-handling contracts
+	go test -race -count=1 ./internal/redact
+
+test-subprocess: ## Run release smoke fixtures and the Git hook subprocess suite
+	go test -race -count=1 ./test ./plugin/hooks
+
+test-performance: ## Report race-instrumented long-session redaction timing
+	go test -race -count=1 -run '^TestRedactLiveLongSessionBudget$$' -v ./internal/hook
+
+test-live: test-behavioral ## Run live provider and judge tests
+
+test-agent: test-behavioral ## Run real-agent behavioral tests
+
+test-nightly: ## Review quarantines and run the live suite under the Nightly budget
+	bash scripts/test-timed.sh nightly 3600 bash -c '"$$@" test-quarantine && "$$@" test-behavioral' bash $(MAKE)
+
+test-release-candidate: ## Verify the native candidate in checksummed dist/
+	@version=$$(sed -n 's/^VERSION="\([^"]*\)"$$/\1/p' install.sh); \
+		bash scripts/test-timed.sh release-candidate 300 sh scripts/smoke-release.sh candidate "$$version" install.sh dist
+
+test-post-release: ## Verify the published release against the staged dist/checksums.txt
+	@version=$$(sed -n 's/^VERSION="\([^"]*\)"$$/\1/p' install.sh); \
+		bash scripts/test-timed.sh post-release 120 sh scripts/smoke-release.sh published "$$version" install.sh dist
+
+test-quarantine: ## List quarantined Go tests and validate ownership and expiry
+	python3 scripts/test-quarantine.py list tests/quarantine.tsv
+
+test-quarantine-run: ## Run only the Go tests in the quarantine inventory
+	python3 scripts/test-quarantine.py run tests/quarantine.tsv
+
+check: test-quarantine
 
 .PHONY: coverage-check coverage-baseline coverage-baseline-from-ci
 
@@ -218,8 +264,10 @@ fuzz-check: ## Type-check Z specification .tex files with fuzz (ethos-cy70)
 sync-embed: ## Copy docs/ETHOS-SETUP.md to its DES-071 tier-C embed source
 	cp docs/ETHOS-SETUP.md internal/enable/setup/ETHOS-SETUP.md
 
-test-behavioral: build ## Run L4 behavioral tests (requires ANTHROPIC_API_KEY and claude CLI)
-	go test -tags behavioral -timeout 10m -v ./tests/behavioral/
+test-behavioral: ## Run L4 behavioral tests (requires ANTHROPIC_API_KEY and claude CLI)
+	@test -n "$$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY is required" >&2; exit 1; }
+	@command -v claude >/dev/null || { echo "claude CLI is required" >&2; exit 1; }
+	go test -race -count=1 -tags behavioral -timeout 10m -v ./tests/behavioral/
 
 e2e-bin: ## Build the ethos binary a non-hermetic E2E scenario's hooks run
 	@mkdir -p .tmp/e2e-bin

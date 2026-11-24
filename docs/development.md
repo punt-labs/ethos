@@ -127,7 +127,13 @@ PR review follows punt-kit/standards/pr-review.md: local review (qodo review + c
 
 ## Quality Gates
 
+Run `make hooks` once per checkout to opt into the [local test gates](../TESTING.md).
+It chains the gates into the existing Git hooks without changing
+`core.hooksPath` or replacing the Ethos audit hooks.
+
 The Makefile is the source of truth (`make help`).
+See [TESTING.md](../TESTING.md) for local hooks, tier selectors, budgets,
+quarantine, and the testing conformance record.
 
 ```bash
 make check                             # All gates: lint + docs + test + validate-content + fuzz-check

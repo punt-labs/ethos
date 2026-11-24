@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+head=
+tag_notice=
+while read -r local_ref local_oid remote_ref _remote_oid; do
+  [[ "$local_ref" == '(delete)' || "$local_oid" =~ ^0+$ ]] && continue
+  if [[ "$remote_ref" == refs/tags/v* && "${remote_ref#refs/tags/}" != */* ]]; then
+    if [[ -z "$tag_notice" ]]; then
+      printf '%s\n' "Version tags are gated by the release workflow's candidate smoke."
+      tag_notice=1
+    fi
+    continue
+  fi
+  head=${head:-$(git rev-parse HEAD)}
+  if ! commit=$(git rev-parse --verify --end-of-options "${local_oid}^{commit}" 2>/dev/null) ||
+    [[ "$commit" != "$head" ]]; then
+    printf 'Cannot test pushed ref %s: check it out and push it separately.\n' "$local_ref" >&2
+    exit 1
+  fi
+done
+if [[ -n "$head" ]]; then
+  make test-push </dev/null
+fi

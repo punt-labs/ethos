@@ -40,7 +40,10 @@ jobs:
           version: v2.13.1
 
       - name: ShellCheck
-        run: shellcheck plugin/hooks/*.sh install.sh
+        run: shellcheck plugin/hooks/*.sh install.sh .githooks/* scripts/test-changed.sh scripts/test-timed.sh
+
+      - name: Validate test quarantine inventory
+        run: make test-quarantine
 
       # fuzz has no distributed binary -- only source -- so CI builds it the
       # same way a developer would, via z-spec's own install.sh --fuzz-only.
