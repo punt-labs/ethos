@@ -150,8 +150,16 @@ class BoundaryTests(unittest.TestCase):
         self.assertNotIn("MISSION_ID", env)
         self.assertNotIn("GIT_INDEX_FILE", env)
         self.assertNotIn("ETHOS_REPO_ROOT", env)
+        self.assertNotIn("GOCOVERDIR", env)
         self.assertEqual(env["GIT_CONFIG_GLOBAL"], gate.os.devnull)
 
+    def test_explicit_coverage_directory_reaches_subprocess(self):
+        coverage = self.repo / "coverage"
+        runner = gate.Runner(self.repo / "commands", coverdir=coverage)
+        env = gate.clean_env(self.repo, self.repo, "/usr/bin:/bin")
+        result = runner.run([sys.executable, "-c", "import os; print(os.environ['GOCOVERDIR'])"], self.repo, env)
+        self.assertEqual(result.stdout.decode().strip(), str(coverage))
+        self.assertNotIn("GOCOVERDIR", env)
 
     def restored_snapshot(self, tag="v4.22.1"):
         snapshot = gate.CORPUS / tag

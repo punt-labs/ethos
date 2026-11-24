@@ -261,7 +261,7 @@ smoke-opencode-health: ## Smoke root Code Mode health calls only (uses model cre
 smoke-opencode-formatter: ## Smoke formatter byte preservation only (uses model credits)
 	python3 -B scripts/opencode.py smoke --stage formatter
 
-.PHONY: check-storage check-plugin-cache
+.PHONY: check-storage check-plugin-cache check-installed
 
 check-storage: ## Exercise offline storage boundaries through the real CLI, wrappers and Git hooks
 	python3 -B -m unittest discover -s scripts -p 'storage_acceptance_test.py'
@@ -269,6 +269,29 @@ check-storage: ## Exercise offline storage boundaries through the real CLI, wrap
 
 check-plugin-cache: ## Test Claude plugin cache switching
 	python3 -B scripts/plugin_cache_test.py
+
+check-installed: ## Install a coverage-instrumented ethos and exercise the installed CLI, MCP and Git hooks
+	@set -eu; \
+		sandbox=$$(mktemp -d "$${RUNNER_TEMP:-/tmp}/ethos-installed.XXXXXXXX"); \
+		trap 'rm -rf "$$sandbox"' EXIT; \
+		sandbox=$$(cd "$$sandbox" && pwd -P); \
+		case "$$sandbox/" in "$(CURDIR)/"*) echo "installer sandbox must be outside the checkout" >&2; exit 1;; esac; \
+		mkdir -p "$$sandbox/home" "$$sandbox/work" "$$sandbox/tmp" "$$sandbox/install-coverage" "$$sandbox/coverage"; \
+		CGO_ENABLED=0 go build -cover -ldflags="$(LDFLAGS)" -o "$$sandbox/ethos" ./cmd/ethos; \
+		(cd "$$sandbox/work" && env -i HOME="$$sandbox/home" PATH=/usr/bin:/bin TMPDIR="$$sandbox/tmp" \
+			GIT_CONFIG_NOSYSTEM=1 GIT_CEILING_DIRECTORIES="$$sandbox" PUNT_TELEMETRY=off \
+			GOCOVERDIR="$$sandbox/install-coverage" ETHOS_LOCAL_BINARY="$$sandbox/ethos" \
+			sh "$(CURDIR)/install.sh" --no-plugin); \
+		installed="$$sandbox/home/.local/bin/ethos"; \
+		cmp "$$sandbox/ethos" "$$installed"; \
+		python3 -B scripts/storage_acceptance.py --binary "$$installed" --coverdir "$$sandbox/coverage"; \
+		go tool covdata textfmt -i="$$sandbox/coverage" -o="$$sandbox/coverage.out"; \
+		awk 'NR > 1 && $$3 > 0 { covered = 1 } END { exit !covered }' "$$sandbox/coverage.out"; \
+		go tool cover -func="$$sandbox/coverage.out" > "$$sandbox/functions.txt"; \
+		mkdir -p .tmp/installed-coverage; \
+		cp "$$sandbox/coverage.out" "$$sandbox/functions.txt" .tmp/installed-coverage/; \
+		printf 'Installed binary statement coverage (storage acceptance): '; \
+		tail -n 1 .tmp/installed-coverage/functions.txt
 
 check: lint docs test coverage-check validate-content fuzz-check check-opencode check-storage check-plugin-cache ## Run all quality gates
 

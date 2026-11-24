@@ -150,9 +150,13 @@ def clean_env(home: Path, tmp: Path, path: str) -> dict[str, str]:
 
 
 class Runner:
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, coverdir: Path | None = None):
         self.directory = directory
         self.sequence = 0
+        self.coverdir = coverdir
+
+    def environment(self, env: dict[str, str]) -> dict[str, str]:
+        return env if self.coverdir is None else env | {"GOCOVERDIR": str(self.coverdir)}
 
     def run(self, args: list[str], cwd: Path, env: dict[str, str],
             data: str | None = None, ok: bool = True, timeout: int = 60) -> subprocess.CompletedProcess[bytes]:
@@ -160,7 +164,7 @@ class Runner:
         base = self.directory / f"{self.sequence:04d}"
         save_json(base.with_suffix(".command.json"), {"argv": args, "cwd": str(cwd), "stdin": data})
         try:
-            result = subprocess.run(args, cwd=cwd, env=env,
+            result = subprocess.run(args, cwd=cwd, env=self.environment(env),
                                     input=None if data is None else data.encode(),
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, check=False)
         except subprocess.TimeoutExpired as error:
@@ -735,7 +739,7 @@ class MCP:
     def __init__(self, f: Fixture):
         self.f = f
         self.stderr = (f.root / "mcp.stderr").open("wb")
-        self.process = subprocess.Popen([str(f.binary), "serve"], cwd=f.repo, env=f.env,
+        self.process = subprocess.Popen([str(f.binary), "serve"], cwd=f.repo, env=f.run.environment(f.env),
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr)
         self.messages: queue.Queue[bytes] = queue.Queue()
         self.reader = threading.Thread(target=self.read, daemon=True)
@@ -991,7 +995,11 @@ def source_evidence(runner: Runner, env: dict[str, str]) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, help="existing artifact; do not build or install")
+    parser.add_argument("--coverdir", type=Path, help="existing directory for an instrumented --binary to write coverage")
     args = parser.parse_args()
+    coverdir = args.coverdir.resolve() if args.coverdir else None
+    if coverdir is not None and (args.binary is None or not coverdir.is_dir()):
+        parser.error("--coverdir requires --binary and an existing directory")
     parent = ROOT / ".tmp/opencode/storage-acceptance"
     parent.mkdir(parents=True, exist_ok=True)
     directory = Path(tempfile.mkdtemp(prefix="run-", dir=parent)).resolve()
@@ -1000,7 +1008,7 @@ def main() -> int:
         "coverage_limits": ["Final walks do not prove transient placement; syscall/fault acceptance is separate.",
                             "No crash/fsync/EXDEV injection, competing-index writer, live UI or external-consumer checks.",
                             "The upgrade case replays the committed legacy corpus; it does not cover layouts absent from it."]}
-    runner = Runner(directory / "setup")
+    runner = Runner(directory / "setup", coverdir)
     tmp = directory / "build-tmp"
     tmp.mkdir()
     env = clean_env(Path.home(), tmp, os.environ.get("PATH", os.defpath))
@@ -1026,7 +1034,7 @@ def main() -> int:
         for case in CASES:
             start = time.monotonic()
             item: dict[str, Any] = {"name": case.__name__, "status": "fail"}
-            case_runner = Runner(directory / case.__name__)
+            case_runner = Runner(directory / case.__name__, coverdir)
             fixture = None
             try:
                 fixture = Fixture(case_runner, binary)
