@@ -19,8 +19,8 @@ The installed PR/main and Nightly rows describe the target state after
 | PR | [Test] and [Docs], hosted runners. Full `make test`, storage and plugin-cache checks, Linux/macOS installed verification [#670], offline OpenCode checks, Z specs, wire smoke against a local stub, and docs. | <10 min | Required `test` and `docs` block merge. Wire smoke and tool-install verification also report independently. |
 | Merge to main | Repeat PR jobs on the main commit. Coverage uploads are tied to that run and commit. | <10 min | A red main requires triage; do not update coverage from an unsuccessful run. |
 | Nightly | [Behavioral] (Nightly [#671]), daily 06:07 UTC or manual dispatch, hosted Linux on upstream main. `make test-nightly` is the authorized local equivalent: review the quarantine inventory, then run the `behavioral` selection. Requires Claude CLI, an Anthropic test key and the configured judge model after [#671]. | ≤1 h (30-minute hosted live job) | Live failures are red and Biff alerts on failed or canceled runs after [#671]. Not a PR check. |
-| Release candidate | [Release] stages four checksummed binaries; each native Linux/macOS runner installs through shipped `install.sh` in a temporary HOME and verifies version and identity create/get. PR path or dispatch runs this stage without publishing. | 20-minute build, 5 minutes per native smoke | All four smokes gate tag publication; publish uses the staged bytes. |
-| Post-release | [Release] native jobs install the published GitHub Release binary without source fallback; require the exact version, candidate SHA-256 and the same identity round trip. | <2 min; job timeout 2 min | A smoke failure fails release verification; it cannot undo publication. |
+| Release candidate | [Release] stages four checksummed binaries; each native Linux/macOS runner installs through shipped `install.sh` in a temporary HOME and verifies version and identity create/get. PR path or dispatch runs this stage without publishing. Local: `make test-release-candidate`. | 20-minute build, 5 minutes per native smoke | All four smokes gate tag publication; publish uses the staged bytes. |
+| Post-release | [Release] native jobs install the published GitHub Release binary without source fallback; require the exact version, candidate SHA-256 and the same identity round trip. Local: `make test-post-release`. | <2 min; job timeout 2 min | A smoke failure fails release verification; it cannot undo publication. |
 
 [Test]: .github/workflows/test.yml
 [Docs]: .github/workflows/docs.yml
@@ -34,6 +34,12 @@ common directory; the pre-commit hook does not run an audit seal twice if
 Ethos installs its seal directly into the tracked hook. The pre-push hook
 passes Git's original remote arguments and input to the existing hook and
 skips the test suite for deletion-only pushes.
+
+For a local release check, use the shipped `install.sh` for the intended
+version and place the version-matched staged artifact in `dist/`. Candidate
+smoke needs the native binary and `dist/checksums.txt`; post-release smoke
+needs that same candidate manifest and access to the public release.
+Both require a native Linux/macOS host, Bash, Python 3, and `shasum`.
 
 ## Test kinds and selectors
 

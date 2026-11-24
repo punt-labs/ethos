@@ -28,6 +28,11 @@ if [[ ! ${requested[0]+selected} ]]; then
 fi
 
 root=$(pwd -P)
+git_env=$(git rev-parse --local-env-vars)
+while IFS= read -r name; do
+  unset "$name"
+done <<< "$git_env"
+
 dirs=$(go list -f '{{.Dir}}' ./...)
 packages=()
 while IFS= read -r dir; do

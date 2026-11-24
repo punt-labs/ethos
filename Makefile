@@ -133,7 +133,7 @@ test-push: ## Run the full default suite and a fast boundary check before pushin
 test-subprocess-fast: ## Exercise dormant and unresolvable Git hook entry points
 	go test -race -count=1 -run '^TestHooks(DormantRepositoryRunsNoProbe|FailLoudWhenRevParseFails)$$' ./plugin/hooks
 
-.PHONY: test-unit test-subprocess test-performance test-live test-agent test-nightly test-quarantine test-quarantine-run
+.PHONY: test-unit test-subprocess test-performance test-live test-agent test-nightly test-release-candidate test-post-release test-quarantine test-quarantine-run
 test-unit: ## Run an in-process sample of data-handling contracts
 	go test -race -count=1 ./internal/redact
 
@@ -145,7 +145,16 @@ test-performance: ## Report race-instrumented long-session redaction timing
 
 test-live test-agent: test-behavioral ## Run live agent and judge tests (requires Claude and an Anthropic key)
 
-test-nightly: test-quarantine test-behavioral ## Review quarantines and run the live Nightly suite locally
+test-nightly: ## Review quarantines and run the live suite under the Nightly budget
+	bash scripts/test-timed.sh nightly 3600 $(MAKE) test-quarantine test-behavioral
+
+test-release-candidate: ## Verify the native candidate in checksummed dist/
+	@version=$$(sed -n 's/^VERSION="\([^"]*\)"$$/\1/p' install.sh); \
+		bash scripts/test-timed.sh release-candidate 300 sh scripts/smoke-release.sh candidate "$$version" install.sh dist
+
+test-post-release: ## Verify the published release against the staged dist/checksums.txt
+	@version=$$(sed -n 's/^VERSION="\([^"]*\)"$$/\1/p' install.sh); \
+		bash scripts/test-timed.sh post-release 120 sh scripts/smoke-release.sh published "$$version" install.sh dist
 
 test-quarantine: ## List quarantined Go tests and validate ownership and expiry
 	python3 scripts/test-quarantine.py list tests/quarantine.tsv

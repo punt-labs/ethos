@@ -108,3 +108,39 @@ func TestDevelopmentPrePush(t *testing.T) {
 		})
 	}
 }
+
+func TestChangedPackages(t *testing.T) {
+	dir := t.TempDir()
+	home := t.TempDir()
+	bin := t.TempDir()
+	index := filepath.Join(t.TempDir(), "index")
+	env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"HOME=" + home, "GIT_CONFIG_NOSYSTEM=1", "GIT_INDEX_FILE=" + index}
+	run := func(name string, args ...string) []byte {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), name, args...)
+		cmd.Dir = dir
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		return out
+	}
+	run("git", "init", "-q", "--template=")
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "changed"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "changed", "example.go"), []byte("package changed\n"), 0o600))
+	run("git", "add", "changed/example.go")
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "go"), []byte(`#!/bin/sh
+if [ "$1" = list ]; then
+    printf '%s\n' "$(pwd -P)/changed" "$(pwd -P)/untouched"
+else
+    if [ "${GIT_INDEX_FILE+x}" = x ]; then
+        echo "go test inherited the parent Git index"
+        exit 1
+    fi
+    printf 'go %s\n' "$*"
+fi
+`), 0o700))
+	script, err := filepath.Abs("../scripts/test-changed.sh")
+	require.NoError(t, err)
+	require.Equal(t, "go test -race -count=1 ./changed\n", string(run("bash", script)))
+}
