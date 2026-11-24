@@ -44,6 +44,11 @@ func TestDevelopmentPreCommit(t *testing.T) {
 			}
 			require.NoError(t, os.WriteFile(filepath.Join(dir, ".githooks", "pre-commit"), hook, 0o700))
 			require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-commit"), []byte("#!/bin/sh\necho existing hook\n"), 0o700))
+			commitMsg, err := os.ReadFile("../.githooks/commit-msg")
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(filepath.Join(dir, ".githooks", "commit-msg"), commitMsg, 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "hooks", "commit-msg"),
+				[]byte("#!/bin/sh\nprintf '\\nHost trailer: preserved\\n' >> \"$1\"\n"), 0o700))
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-changed:\n\t"+tc.gate+"\n"), 0o600))
 
 			out, err = git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
@@ -53,6 +58,9 @@ func TestDevelopmentPreCommit(t *testing.T) {
 				require.NotContains(t, string(out), "existing hook")
 			} else {
 				require.NoError(t, err, "%s", out)
+				msg, err := git("log", "-1", "--format=%B")
+				require.NoError(t, err, "%s", msg)
+				require.Contains(t, string(msg), "Host trailer: preserved")
 			}
 			require.Contains(t, string(out), tc.want)
 			if tc.sealed {
@@ -165,4 +173,29 @@ func TestDevelopmentLiveRequiresKey(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err, "%s", out)
 	require.Contains(t, string(out), "ANTHROPIC_API_KEY is required")
+}
+
+func TestDevelopmentHooksRefuseUnchainedHook(t *testing.T) {
+	dir := t.TempDir()
+	home := t.TempDir()
+	run := func(name string, args ...string) ([]byte, error) {
+		cmd := exec.CommandContext(t.Context(), name, args...)
+		cmd.Dir = dir
+		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "GIT_CONFIG_NOSYSTEM=1"}
+		return cmd.CombinedOutput()
+	}
+	out, err := run("git", "init", "-q")
+	require.NoError(t, err, "%s", out)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "hooks", "post-commit"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
+	mod, err := os.ReadFile("../go.mod")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), mod, 0o600))
+	makefile, err := filepath.Abs("../Makefile")
+	require.NoError(t, err)
+	out, err = run("make", "-f", makefile, "hooks")
+	require.Error(t, err, "%s", out)
+	require.Contains(t, string(out), "post-commit")
+	out, err = run("git", "config", "--get", "core.hooksPath")
+	require.Error(t, err, "%s", out)
 }

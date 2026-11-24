@@ -60,7 +60,7 @@ lint: ## Lint (golangci-lint + windows vet + shellcheck + ruff + mypy)
 	@test -x $(GOLANGCI_LINT) || { echo "golangci-lint not found at $(GOLANGCI_LINT) — run 'make tools' to install $(GOLANGCI_LINT_VERSION)"; exit 1; }
 	$(GOLANGCI_LINT) run ./...
 	GOOS=windows go vet ./... # the windows build, tests included: a unix-only helper or test file must carry its build tag
-	shellcheck plugin/hooks/*.sh install.sh .githooks/pre-commit .githooks/pre-push scripts/test-changed.sh scripts/test-timed.sh
+	shellcheck plugin/hooks/*.sh install.sh .githooks/* scripts/test-changed.sh scripts/test-timed.sh
 	cd tests/e2e && uv run ruff check .
 	cd tests/e2e && uv run ruff format --check .
 	cd tests/e2e && uv run mypy src/ tests/
@@ -119,9 +119,17 @@ test: ## Run tests with race detection and write coverage to coverage.out
 
 .PHONY: hooks test-changed test-push test-subprocess-fast
 hooks: ## Opt in to the repository's development Git hooks
-	@if path=$$(git config --get core.hooksPath) && [ "$$path" != .githooks ]; then \
+	@set -eu; \
+	if path=$$(git config --get core.hooksPath) && [ "$$path" != .githooks ]; then \
 		echo "core.hooksPath is already $$path; chain .githooks manually" >&2; exit 1; \
-	fi
+	fi; \
+	common=$$(git rev-parse --git-common-dir); \
+	for hook in "$$common"/hooks/*; do \
+		case "$$hook" in *.sample) continue;; esac; \
+		if [ -f "$$hook" ] && [ -x "$$hook" ] && [ ! -x ".githooks/$${hook##*/}" ]; then \
+			echo "Existing hook $$hook would be disabled; chain .githooks manually" >&2; exit 1; \
+		fi; \
+	done
 	git config --local core.hooksPath .githooks
 
 test-changed: ## Run default Go tests in packages affected by staged paths

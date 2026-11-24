@@ -28,12 +28,14 @@ The installed PR/main and Nightly rows describe the target state after
 [Release]: .github/workflows/release.yml
 
 `make hooks` sets the repository's `core.hooksPath` to `.githooks`; it refuses
-to replace a different configured path. If you manage a custom hooks path,
-chain these hooks yourself. The tracked hooks chain executable hooks in Git's
-common directory, including when Ethos adds an audit seal to the tracked
-pre-commit hook. The pre-push hook
-passes Git's original remote arguments and input to the existing hook and
-skips the test suite for deletion-only pushes.
+to replace a different configured path or to disable an executable hook
+without a tracked counterpart. The tracked hooks chain the common
+directory's pre-commit, commit-msg and pre-push hooks. In particular, opt-in
+keeps Ethos's audit seal and provenance trailers working. Pre-push passes
+Git's original remote arguments and input and skips the test suite for
+deletion-only pushes. When switching to a branch without these tracked hooks,
+unset the opt-in with `git config --local --unset core.hooksPath` to restore
+the default hooks.
 
 For a local release check, use the shipped `install.sh` for the intended
 version and place the version-matched staged artifact in `dist/`. Candidate
