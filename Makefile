@@ -3,7 +3,7 @@ LDFLAGS := -X main.version=$(VERSION)
 
 PLUGIN_CACHE_ROOT := $(HOME)/.claude/plugins/cache/punt-labs
 plugin-cache-version = $(shell ls -1 "$(1)" 2>/dev/null | grep -v '\.bak$$' | sort -V | tail -1)
-PLUGIN_CACHE := $(if $(call plugin-cache-version,$(PLUGIN_CACHE_ROOT)/ethos),$(PLUGIN_CACHE_ROOT)/ethos,$(PLUGIN_CACHE_ROOT)/ethos-dev)
+PLUGIN_CACHE := $(if $(call plugin-cache-version,$(PLUGIN_CACHE_ROOT)/ethos-dev),$(PLUGIN_CACHE_ROOT)/ethos-dev,$(PLUGIN_CACHE_ROOT)/ethos)
 PLUGIN_VERSION := $(call plugin-cache-version,$(PLUGIN_CACHE))
 
 # golangci-lint is the Go lint gate (Go Report Card successor). Pinned so
@@ -348,7 +348,7 @@ undev: ## Restore plugin cache from backup
 	link="$(PLUGIN_CACHE)/$(PLUGIN_VERSION)"; \
 	if [ ! -L "$$link" ]; then echo "not in dev mode"; exit 0; fi; \
 	if [ ! -d "$$link.bak" ]; then \
-	  echo "error: no backup at $$link.bak; leaving the symlink in place — reinstall with 'claude plugin install $(notdir $(PLUGIN_CACHE))@punt-labs' to repopulate the cache" >&2; \
+	  echo "error: no backup at $$link.bak; leaving the symlink in place — reinstall the $(notdir $(PLUGIN_CACHE)) plugin from its marketplace to repopulate the cache" >&2; \
 	  exit 1; \
 	fi; \
 	rm "$$link"; \

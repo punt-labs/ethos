@@ -10,15 +10,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class PluginCacheTests(unittest.TestCase):
     def test_dev_and_undev_restore_either_cache_layout(self):
-        for name in ("ethos", "ethos-dev"):
-            with self.subTest(name=name), tempfile.TemporaryDirectory() as home:
+        for name, both in (("ethos", False), ("ethos-dev", False), ("ethos-dev", True)):
+            with self.subTest(name=name, both=both), tempfile.TemporaryDirectory() as home:
                 cache = Path(home) / ".claude/plugins/cache/punt-labs"
                 installed = cache / name / "5.2.1"
                 installed.mkdir(parents=True)
                 marker = installed / "installed"
                 marker.touch()
-                if name == "ethos-dev":
-                    (cache / "ethos/5.2.0.bak").mkdir(parents=True)
+                if both:
+                    (cache / "ethos/5.2.1").mkdir(parents=True)
+                elif name == "ethos":
+                    (cache / "ethos-dev/5.2.0.bak").mkdir(parents=True)
                 backup = installed.with_name(installed.name + ".bak")
 
                 def run(target):
@@ -40,6 +42,9 @@ class PluginCacheTests(unittest.TestCase):
                 self.assertFalse(installed.is_symlink())
                 self.assertTrue(marker.is_file())
                 self.assertFalse(backup.exists())
+                if both:
+                    self.assertFalse((cache / "ethos/5.2.1").is_symlink())
+                    self.assertFalse((cache / "ethos/5.2.1.bak").exists())
 
 
 if __name__ == "__main__":
