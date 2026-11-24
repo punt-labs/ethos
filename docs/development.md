@@ -169,6 +169,10 @@ requires `BIFF_RELAY_TOKEN` and uses the configured Biff relay. A dispatch
 against a feature branch can confirm that both jobs skip, but cannot
 prove live test execution or Biff delivery.
 
+Cancelling an upstream main run is separate from forcing a failure. The
+`Nightly Cancellation` workflow sends and verifies the cancellation alert
+after Nightly ends, outside the cancelled run.
+
 ### Coverage baseline
 
 `make coverage-check` compares per-package statement coverage in `coverage.out` (written by `make test`) with `coverage-baseline.txt`. A package may drop at most 0.1 point; `overall-target` is the overall floor.

@@ -55,7 +55,7 @@ jobs:
     if: >-
       ${{ always() && github.repository == 'punt-labs/ethos' &&
           github.ref == 'refs/heads/main' &&
-          (needs.behavioral.result == 'failure' || needs.behavioral.result == 'cancelled') }}
+          needs.behavioral.result == 'failure' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
