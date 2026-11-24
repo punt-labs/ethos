@@ -3,6 +3,7 @@
 package behavioral
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,11 +12,6 @@ import (
 
 // TestLayerA_ContractReadBeforeWrite verifies that the worker reads the
 // mission contract (ethos mission show via MCP) before acting.
-//
-// The mission event log is the authoritative record. After the agent
-// runs, the log must contain at least the create event from mission
-// creation. If the agent called mission show via MCP, additional
-// events or tool calls will be visible in the agent output.
 func TestLayerA_ContractReadBeforeWrite(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
@@ -39,6 +35,7 @@ budget:
 	t.Logf("Mission created: %s", missionID)
 
 	opts := DefaultAgentOpts(workerPrompt(missionID))
+	opts.StreamJSON = true
 	opts.SystemPrompt = "You are a Go developer working in a test fixture repo. " +
 		"Your FIRST action must be to read the mission contract using the ethos MCP mission tool (method=show, mission_id set). " +
 		"Then write pkg/counter/counter_test.go with at least one test function for the Counter type. " +
@@ -49,22 +46,12 @@ budget:
 		"Call the mission tool with method=result, mission_id set, and the full YAML in the result argument."
 
 	output, err := f.SpawnAgent(t, opts)
-	t.Logf("Agent output (first 2000 chars): %.2000s", output)
-	if err != nil {
-		t.Logf("Agent error (may be expected): %v", err)
-	}
+	require.NoError(t, err, "worker invocation failed")
+	require.NoError(t, checkFirstMissionRead(output, missionID))
+	require.FileExists(t, filepath.Join(f.Repo, "pkg", "counter", "counter_test.go"))
 
-	// The mission event log is the authoritative record.
 	events := f.MissionLog(t, missionID)
-	t.Logf("Mission events: %d", len(events))
-	for i, e := range events {
-		t.Logf("  event[%d]: type=%v actor=%v", i, e["event"], e["actor"])
-	}
-
-	// At minimum: the mission was created and should have events.
 	require.NotEmpty(t, events, "mission should have at least a create event")
-
-	// The first event should be the create event.
 	assert.Equal(t, "create", events[0]["event"], "first event should be 'create'")
 }
 

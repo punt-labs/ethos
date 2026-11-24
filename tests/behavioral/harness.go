@@ -378,10 +378,14 @@ func (f *Fixture) SpawnAgent(t *testing.T, opts AgentOpts) (output string, err e
 	args := []string{
 		"--bare",
 		"--print",
-		"--output-format", "text",
 		"--no-session-persistence",
 		"--dangerously-skip-permissions",
 		"--max-budget-usd", fmt.Sprintf("%.2f", opts.BudgetUSD),
+	}
+	if opts.StreamJSON {
+		args = append(args, "--output-format", "stream-json", "--verbose")
+	} else {
+		args = append(args, "--output-format", "text")
 	}
 
 	if opts.SystemPrompt != "" {
@@ -421,6 +425,8 @@ func (f *Fixture) SpawnAgent(t *testing.T, opts AgentOpts) (output string, err e
 
 // AgentOpts configures an agent invocation.
 type AgentOpts struct {
+	StreamJSON bool
+
 	// SystemPrompt is an inline system prompt.
 	SystemPrompt string
 	// Prompt is the user-facing task prompt.
