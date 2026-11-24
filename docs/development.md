@@ -141,6 +141,30 @@ step. To run the same check locally on an unloaded worker, run
 Default, race, and coverage test runs still verify that the entire session is
 redacted, but do not enforce a wall-clock deadline.
 
+### Nightly behavioral tests
+
+Nightly runs daily at 06:07 UTC. Only `punt-labs/ethos` on `main` runs
+the live tests or sends Biff alerts. The tests require Claude Code on
+`PATH`, the `ANTHROPIC_API_KEY` secret, and a judge model. Nightly defaults
+to `claude-sonnet-4-6`; set the repository variable
+`ETHOS_BEHAVIORAL_JUDGE_MODEL` to override it. For local
+`make test-behavioral`, export the key and model in your shell.
+
+After merging a Nightly change, dispatch a normal run and wait for the
+behavioral job to pass before dispatching the deliberately failing drill:
+
+```bash
+gh workflow run behavioral.yml --repo punt-labs/ethos --ref main
+gh workflow run behavioral.yml --repo punt-labs/ethos --ref main -f force-failure=true
+gh run list --workflow behavioral.yml --repo punt-labs/ethos --branch main
+```
+
+The drill should fail before calling Claude, run the notification job,
+and leave a Biff wall message linking to the failed run. The notify job
+requires `BIFF_RELAY_TOKEN` and uses the configured Biff relay. A dispatch
+against a feature branch can confirm that both jobs skip, but cannot
+prove live test execution or Biff delivery.
+
 ### Coverage baseline
 
 `make coverage-check` compares per-package statement coverage in `coverage.out` (written by `make test`) with `coverage-baseline.txt`. A package may drop at most 0.1 point; `overall-target` is the overall floor.

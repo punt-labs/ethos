@@ -273,17 +273,34 @@ func (f *Fixture) MissionLog(t *testing.T, missionID string) []map[string]interf
 }
 
 // MissionResults returns the parsed results for a mission.
-// The JSON shape is a bare array: [...].
+// The JSON shape is {"results": [...], "corrections": [...]}.
 func (f *Fixture) MissionResults(t *testing.T, missionID string) []map[string]interface{} {
 	t.Helper()
 
 	stdout, _, err := f.runEthos(t, "mission", "results", missionID, "--json")
 	require.NoError(t, err, "mission results failed")
 
-	var results []map[string]interface{}
-	require.NoError(t, json.Unmarshal([]byte(stdout), &results),
-		"mission results output is not JSON array: %s", stdout)
-	return results
+	var payload struct {
+		Results []map[string]interface{} `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &payload),
+		"mission results output is not the expected shape: %s", stdout)
+	return payload.Results
+}
+
+func missionRecordPath(missionID string) string {
+	return filepath.Join(".punt-labs", "ethos", "missions", missionID)
+}
+
+func missionResultPath(missionID string) string {
+	return filepath.Join(missionRecordPath(missionID), "results.yaml")
+}
+
+func (f *Fixture) CommitMissionFixture(t *testing.T, missionID string) string {
+	t.Helper()
+	gitCmd(t, f.Repo, f.Env, "add", "--", missionRecordPath(missionID))
+	gitCmd(t, f.Repo, f.Env, "commit", "-m", "seed mission "+missionID)
+	return f.GitHead(t)
 }
 
 // GitDiffFiles returns every file changed since base, including committed,
