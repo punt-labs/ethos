@@ -1686,8 +1686,8 @@ func CheckoutOf(dir string) (string, error) {
 	return checkout, err
 }
 
-// CheckoutAndStoreOf also returns the canonical store, if it can be found
-// without making a second checkout lookup. A store error does not fail checkout discovery.
+// CheckoutAndStoreOf returns physical checkout and store roots from one lookup.
+// A store error does not fail checkout discovery.
 func CheckoutAndStoreOf(dir string) (checkout, store string, err error) {
 	r := locate(dir)
 	if errors.Is(r.err, ErrNotInRepo) {
@@ -1696,10 +1696,21 @@ func CheckoutAndStoreOf(dir string) (checkout, store string, err error) {
 	if r.err != nil {
 		return "", "", r.err
 	}
-	if r.loc.storeErr != nil {
-		return r.loc.root, "", nil
+	checkout, err = physicalRoot(r.loc.root, "checkout")
+	if err != nil {
+		return "", "", err
 	}
-	return r.loc.root, r.loc.store, nil
+	if r.loc.storeErr != nil {
+		return checkout, "", nil
+	}
+	if r.loc.root == r.loc.store {
+		return checkout, checkout, nil
+	}
+	store, err = physicalRoot(r.loc.store, "store")
+	if err != nil {
+		return checkout, "", nil
+	}
+	return checkout, store, nil
 }
 
 // StoreOf locates the canonical store for a supplied checkout using the same

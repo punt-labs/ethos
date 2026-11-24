@@ -219,6 +219,19 @@ func TestRootsNormalizesSuccessfulPartsWithoutHidingErrors(t *testing.T) {
 	})
 }
 
+func TestCheckoutAndStoreOfNormalizesSymlink(t *testing.T) {
+	root := t.TempDir()
+	testhelpersGitDir(t, root)
+	alias := filepath.Join(t.TempDir(), "project-alias")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	checkout, store, err := CheckoutAndStoreOf(alias)
+	require.NoError(t, err)
+	assert.Equal(t, realpath(t, root), checkout)
+	assert.Equal(t, realpath(t, root), store)
+}
+
 func TestPhysicalRootResolvesLinksBeforeParentComponents(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("requires Unix symlink/.. path semantics")

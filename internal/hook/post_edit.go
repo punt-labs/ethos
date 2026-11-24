@@ -176,9 +176,9 @@ func hookCheckout(ctx context.Context) (string, error) {
 	}
 	diagnostic.SetHookProject(ctx, store, checkout)
 	if checkout == "" {
-		checkout = cwd
+		return filepath.EvalSymlinks(cwd)
 	}
-	return filepath.EvalSymlinks(checkout)
+	return checkout, nil
 }
 
 func postEditRoot(checkout, file string) (string, string, error) {
