@@ -185,11 +185,11 @@ func TestSharedLoggingHookUnsafeIdentity(t *testing.T) {
 		home, cwd := t.TempDir(), testhelpers.OutsideRepo(t)
 		cmd := loggingProcess(t, home, cwd, "hook", "format-output")
 		cmd.Env = append(cmd.Env, "ETHOS_SESSION=env/session", "ETHOS_AGENT_ID=env\\agent", "CLAUDE_AGENT_TYPE=agent\nforge")
-		cmd.Stdin = strings.NewReader(`{"session_id":"https://fixture.invalid/path","agent_id":"/private/worker","agent_type":"` + agent + `"}`)
+		cmd.Stdin = strings.NewReader(`{"session_id":"https://fixture.invalid/path","agent_id":"/private/worker","agent_type":"` + agent + `","tool_name":"AKIA0000000000000000"}`)
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "%s", out)
 		log := diagnosticLog(t, home)
-		for _, field := range []string{"session_id=", "agent_id=", "agent=", "fixture.invalid", "private/worker", agent} {
+		for _, field := range []string{"session_id=", "agent_id=", "agent=", " tool=", "fixture.invalid", "private/worker", agent, "AKIA0000000000000000"} {
 			require.NotContains(t, log, field)
 		}
 	}
@@ -295,7 +295,8 @@ checks:
 }
 
 func TestSharedLoggingCheckWorkingDirectory(t *testing.T) {
-	repo := filepath.Join(t.TempDir(), "logging-project")
+	const repoFixture = "AKIA0000000000000001"
+	repo := filepath.Join(t.TempDir(), repoFixture)
 	checksDir := filepath.Join(repo, ".punt-labs", "ethos", "checks")
 	require.NoError(t, os.MkdirAll(checksDir, 0o700))
 	runGit(t, repo, "init", "-q")
@@ -320,11 +321,14 @@ checks:
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
 	log := diagnosticLog(t, home)
+	require.Regexp(t, `Invocation finished .*project=\[redacted-secret\]`, log)
+	require.Regexp(t, `Check finished .*check_checkout=\[redacted-secret\]`, log)
 	require.Regexp(t, "Check finished .*check=package-probe .*dir=first", log)
 	require.Regexp(t, "Check finished .*check=package-probe .*dir=nested/second", log)
 	require.Regexp(t, `Check finished .*check=package-probe .*dir=nested/\[redacted-secret\]`, log)
 	require.Equal(t, 3, strings.Count(log, "Check finished"), log)
 	require.NotContains(t, log, credentialFixture)
+	require.NotContains(t, log, repoFixture)
 	require.NotContains(t, log, repo)
 }
 

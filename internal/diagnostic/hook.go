@@ -34,12 +34,12 @@ func SetHookProject(ctx context.Context, project, checkout string) {
 		defer h.mu.Unlock()
 		h.project, h.checkout = "none", ""
 		if project != "" {
-			h.project = filepath.Base(project)
+			h.project = redact.Prose(filepath.Base(project))
 		} else if checkout != "" {
 			h.project = "unknown"
 		}
 		if checkout != "" && checkout != project {
-			h.checkout = filepath.Base(checkout)
+			h.checkout = redact.Prose(filepath.Base(checkout))
 		}
 	}
 }
@@ -61,7 +61,7 @@ func SetHookInput(ctx context.Context, input map[string]any) {
 	}
 	SetHookIdentity(ctx, sessionID, agentID, agentType)
 	if h, ok := ctx.Value(hookKey{}).(*HookInvocation); ok {
-		if tool, _ := input["tool_name"].(string); hookToolName.MatchString(tool) {
+		if tool, _ := input["tool_name"].(string); hookToolName.MatchString(tool) && redact.SecretsString(tool) == tool {
 			h.mu.Lock()
 			h.tool = tool
 			h.mu.Unlock()
@@ -117,7 +117,7 @@ func (h *HookInvocation) Attrs() []any {
 // LogHookCheck records a check's runtime without logging its arguments or output.
 func LogHookCheck(ctx context.Context, checkout, cwd, stage, name, outcome string, duration time.Duration) {
 	if h, ok := ctx.Value(hookKey{}).(*HookInvocation); ok {
-		attrs := append(h.Attrs(), "check_checkout", filepath.Base(checkout), "stage", stage, "check", name, "outcome", outcome, "duration_ms", duration.Milliseconds())
+		attrs := append(h.Attrs(), "check_checkout", redact.Prose(filepath.Base(checkout)), "stage", stage, "check", redact.Prose(name), "outcome", outcome, "duration_ms", duration.Milliseconds())
 		if cwd == "" {
 			cwd = checkout
 		}
