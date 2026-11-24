@@ -71,6 +71,6 @@ jobs:
           BIFF_RELAY_TLS_HANDSHAKE_FIRST: ${{ vars.BIFF_RELAY_TLS_HANDSHAKE_FIRST }}
         run: |
           : "${BIFF_RELAY_TOKEN:?BIFF_RELAY_TOKEN is required to deliver Nightly alerts}"
-          uvx --from punt-biff biff --user github-actions wall \
+          uvx --from punt-biff==1.24.2 biff --user github-actions wall \
             "Nightly QA ${{ needs.behavioral.result }} on Ethos — ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --duration 24h
