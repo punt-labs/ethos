@@ -1120,6 +1120,9 @@ in registry order: user-scope records and project- or local-scope records
 for this checkout. An isolated Claude Code 2.1.323 probe with distinct
 cached versions loaded the first applicable entry in both record orders
 for user/project and user/local pairs, with no scope override.
+With a dangling user entry first and a live project or local entry
+second, Claude skipped the dangling link and loaded the second entry's
+`hooks/hooks.json` in both cases.
 
 `make dev` symlinks the first registered `installPath` that points to an
 existing dev cache directory. If none exists, it can retarget a dangling

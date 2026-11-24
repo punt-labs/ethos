@@ -109,7 +109,7 @@ class PluginCacheTests(unittest.TestCase):
                 self.assertFalse(untouched.is_symlink())
 
     def test_dev_uses_first_existing_applicable_registration_in_registry_order(self):
-        for first in ("missing", "dangling", "pathless", "existing", "aliased", "foreign", "loop", "all-missing"):
+        for first in ("missing", "dangling", "recoverable", "pathless", "existing", "aliased", "foreign", "loop", "all-missing"):
             with self.subTest(first=first), tempfile.TemporaryDirectory() as home:
                 cache = Path(home) / ".claude/plugins/cache/punt-labs/ethos-dev"
                 preferred = cache / "5.2.0"
@@ -120,6 +120,9 @@ class PluginCacheTests(unittest.TestCase):
                 record = {"scope": "user", "installPath": str(missing)}
                 if first == "dangling":
                     missing.symlink_to(Path(home) / "gone")
+                elif first == "recoverable":
+                    missing.symlink_to(Path(home) / "old-checkout/plugin")
+                    missing.with_name(missing.name + ".bak").mkdir()
                 elif first == "pathless":
                     del record["installPath"]
                 elif first == "existing":
@@ -154,6 +157,8 @@ class PluginCacheTests(unittest.TestCase):
                 self.assertTrue(expected.is_symlink(), result.stdout)
                 self.assertEqual(expected.resolve(), ROOT / "plugin")
                 self.assertFalse(untouched.is_symlink())
+                if first == "recoverable":
+                    self.assertEqual(missing.readlink(), Path(home) / "old-checkout/plugin")
 
     def test_dev_preserves_claude_registry_order_across_scopes(self):
         for checkout_scope in ("project", "local"):
