@@ -83,21 +83,23 @@ func TestDevelopmentHooksFutureWorktreeKeepsExistingHooks(t *testing.T) {
 	require.NotContains(t, string(out), "development gate ran")
 }
 
-func buildFixtureEthos(t *testing.T, dir string) {
+func buildFixtureEthos(t *testing.T, dir string) string {
 	t.Helper()
-	build := exec.CommandContext(t.Context(), "go", "build", "-o", filepath.Join(dir, ".test-bin", "ethos"), "./cmd/ethos")
+	binary := filepath.Join(dir, ".test-bin", "ethos")
+	build := exec.CommandContext(t.Context(), "go", "build", "-o", binary, "./cmd/ethos")
 	build.Dir = ".."
 	out, err := build.CombinedOutput()
 	require.NoError(t, err, "%s", out)
+	return binary
 }
 
 func TestDevelopmentHooksDoctorPassesAfterOptIn(t *testing.T) {
 	dir, run := developmentHookFixture(t)
-	buildFixtureEthos(t, dir)
-	out, err := run(dir, "ethos", "enable")
+	binary := buildFixtureEthos(t, dir)
+	out, err := run(dir, binary, "enable")
 	require.NoError(t, err, "%s", out)
 	installDevelopmentHooks(t, dir, run)
-	out, err = run(dir, "ethos", "doctor")
+	out, err = run(dir, binary, "doctor")
 	require.NoError(t, err, "%s", out)
 	for _, label := range []string{"Audit seal hook", "Audit trailer hook", "Seal hook currency", "Trailer hook currency"} {
 		require.Regexp(t, label+`[ ]+PASS`, string(out))
@@ -120,8 +122,8 @@ func TestDevelopmentHooksRequireLegacySealUpgrade(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, legacy, got)
 	require.NoFileExists(t, filepath.Join(dir, ".git", "ethos-dev-hooks"))
-	buildFixtureEthos(t, dir)
-	out, err = run(dir, "ethos", "enable")
+	binary := buildFixtureEthos(t, dir)
+	out, err = run(dir, binary, "enable")
 	require.NoError(t, err, "%s", out)
 	installDevelopmentHooks(t, dir, run)
 	got, err = os.ReadFile(hook)
@@ -133,8 +135,8 @@ func TestDevelopmentHooksRequireLegacySealUpgrade(t *testing.T) {
 
 func TestDevelopmentHooksAcceptFencedSealWithLegacyHeader(t *testing.T) {
 	dir, run := developmentHookFixture(t)
-	buildFixtureEthos(t, dir)
-	out, err := run(dir, "ethos", "enable")
+	binary := buildFixtureEthos(t, dir)
+	out, err := run(dir, binary, "enable")
 	require.NoError(t, err, "%s", out)
 	hook := filepath.Join(dir, ".git", "hooks", "pre-commit")
 	fenced, err := os.ReadFile(hook)
@@ -143,7 +145,7 @@ func TestDevelopmentHooksAcceptFencedSealWithLegacyHeader(t *testing.T) {
 	require.True(t, ok)
 	const host = "# hooks/pre-commit.sh — Seal pending live audit lines\necho 'custom hook ran'\n"
 	require.NoError(t, os.WriteFile(hook, []byte("#!/bin/sh\n"+host+rest), 0o700))
-	out, err = run(dir, "ethos", "enable")
+	out, err = run(dir, binary, "enable")
 	require.NoError(t, err, "%s", out)
 	refreshed, err := os.ReadFile(hook)
 	require.NoError(t, err)
