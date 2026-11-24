@@ -9,6 +9,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/adr"
 	"github.com/punt-labs/ethos/v4/internal/attribute"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mcp"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 
@@ -29,7 +30,7 @@ func runServeImpl(opencodeSessionMetadata bool) (serveErr error) {
 		server.WithHooks(hooks),
 	)
 
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
@@ -38,12 +39,12 @@ func runServeImpl(opencodeSessionMetadata bool) (serveErr error) {
 		fmt.Fprintf(os.Stderr, "ethos serve: %v; guarded tools refuse writes (and, for identity, ADRs, and a bundle or policy failure, reads) until it is repaired\n", loc.Err)
 	}
 	metadata := mcp.WithOpenCodeSessionMetadata(opencodeSessionMetadata)
-	h := buildServeHandler(home, loc, metadata)
+	h := buildServeHandler(globalRoot, loc, metadata)
 	// The store is located again on every tool call, and the stores rebuilt
 	// when the answer changes: repairing .git, entering a repository, or a
 	// store created by enable or setup takes effect without a restart.
 	h.RelocateStore(loc, locateServeStore, func(loc mcp.StoreLocation) *mcp.Handler {
-		return buildServeHandler(home, loc, metadata)
+		return buildServeHandler(globalRoot, loc, metadata)
 	})
 	h.RegisterTools(s)
 	stopLogging := beginServerLogging(processLogger)
@@ -105,7 +106,7 @@ func locatedFrom(loc mcp.StoreLocation) resolve.Located {
 // error itself, so its constructors take the global stores for it. extra options
 // (the OpenCode session metadata opt-in) are applied to every handler built, so a
 // relocated handler keeps them.
-func buildServeHandler(home string, loc mcp.StoreLocation, extra ...mcp.Option) *mcp.Handler {
+func buildServeHandler(globalRoot string, loc mcp.StoreLocation, extra ...mcp.Option) *mcp.Handler {
 	storeErr := loc.Err
 	located := locatedFrom(loc)
 	cmdRoots.Store(&repoRoots{Located: located, Global: true})
@@ -113,7 +114,7 @@ func buildServeHandler(home string, loc mcp.StoreLocation, extra ...mcp.Option) 
 	talents := layeredAttributeStore(is, attribute.Talents)
 	personalities := layeredAttributeStore(is, attribute.Personalities)
 	writingStyles := layeredAttributeStore(is, attribute.WritingStyles)
-	legacyADRDir := filepath.Join(home, ".punt-labs", "ethos", "adrs")
+	legacyADRDir := filepath.Join(globalRoot, "adrs")
 	adrStore := adr.NewStore(legacyADRDir)
 	if storeErr == nil && located.Store != "" {
 		policy, err := located.Layout()

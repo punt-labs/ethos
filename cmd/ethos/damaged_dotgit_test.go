@@ -171,7 +171,7 @@ func TestDamagedDotGitServe(t *testing.T) {
 					t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(p.se.repo))
 					t.Chdir(p.dir)
 					srv := server.NewMCPServer("test", "0", server.WithToolCapabilities(true))
-					buildServeHandler(p.se.home, locateServeStore()).RegisterTools(srv)
+					buildServeHandler(filepath.Join(p.se.home, ".punt-labs", "ethos"), locateServeStore()).RegisterTools(srv)
 					var req mcp.CallToolRequest
 					req.Params.Name = "identity"
 					req.Params.Arguments = map[string]any{"method": "create"}

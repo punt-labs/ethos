@@ -141,7 +141,7 @@ func TestServeSurvivesABrokenConfig(t *testing.T) {
 	}
 	build := func() *server.MCPServer {
 		srv := server.NewMCPServer("test", "0", server.WithToolCapabilities(true))
-		h := buildServeHandler(se.home, locateServeStore())
+		h := buildServeHandler(filepath.Join(se.home, ".punt-labs", "ethos"), locateServeStore())
 		h.RegisterTools(srv)
 		return srv
 	}
@@ -172,7 +172,7 @@ func TestServeDoctorShowsAFailingStoreRow(t *testing.T) {
 	t.Chdir(se.repo)
 	cfg := breakConfig(t, se.repo, "malformed")
 	srv := server.NewMCPServer("test", "0", server.WithToolCapabilities(true))
-	buildServeHandler(se.home, locateServeStore()).RegisterTools(srv)
+	buildServeHandler(filepath.Join(se.home, ".punt-labs", "ethos"), locateServeStore()).RegisterTools(srv)
 	var req mcp.CallToolRequest
 	req.Params.Name = "doctor"
 	res, err := srv.GetTool("doctor").Handler(context.Background(), req)
@@ -253,7 +253,7 @@ func TestServeTeamForRepoUnderADanglingAncestorGit(t *testing.T) {
 	t.Chdir(sub)
 
 	srv := server.NewMCPServer("test", "0", server.WithToolCapabilities(true))
-	buildServeHandler(se.home, locateServeStore()).RegisterTools(srv)
+	buildServeHandler(filepath.Join(se.home, ".punt-labs", "ethos"), locateServeStore()).RegisterTools(srv)
 	var req mcp.CallToolRequest
 	req.Params.Name = "team"
 	req.Params.Arguments = map[string]any{"method": "for_repo"}
@@ -323,7 +323,7 @@ func TestUnreadableGitConfigIsReportedEverywhere(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
 	t.Chdir(se.repo)
 	srv := server.NewMCPServer("test", "0", server.WithToolCapabilities(true))
-	buildServeHandler(se.home, locateServeStore()).RegisterTools(srv)
+	buildServeHandler(filepath.Join(se.home, ".punt-labs", "ethos"), locateServeStore()).RegisterTools(srv)
 	var req mcp.CallToolRequest
 	req.Params.Name = "identity"
 	req.Params.Arguments = map[string]any{"method": "whoami"}
@@ -405,7 +405,7 @@ func TestBundleErrorIsToldEverywhere(t *testing.T) {
 	t.Setenv("HOME", se.home)
 	t.Chdir(se.repo)
 	srv := server.NewMCPServer("test", "0", server.WithToolCapabilities(true))
-	buildServeHandler(se.home, locateServeStore()).RegisterTools(srv)
+	buildServeHandler(filepath.Join(se.home, ".punt-labs", "ethos"), locateServeStore()).RegisterTools(srv)
 	call := func(tool, method string) *mcp.CallToolResult {
 		var req mcp.CallToolRequest
 		req.Params.Name = tool
