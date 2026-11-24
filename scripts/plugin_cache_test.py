@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -10,16 +11,29 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class PluginCacheTests(unittest.TestCase):
     def test_dev_and_undev_restore_either_cache_layout(self):
-        for name, both in (("ethos", False), ("ethos-dev", False), ("ethos-dev", True)):
-            with self.subTest(name=name, both=both), tempfile.TemporaryDirectory() as home:
+        for name, other in (
+            ("ethos", "backup"),
+            ("ethos-dev", None),
+            ("ethos-dev", "installed"),
+            ("ethos", "uninstalled"),
+        ):
+            with self.subTest(name=name, other=other), tempfile.TemporaryDirectory() as home:
                 cache = Path(home) / ".claude/plugins/cache/punt-labs"
                 installed = cache / name / "5.2.1"
                 installed.mkdir(parents=True)
                 marker = installed / "installed"
                 marker.touch()
-                if both:
-                    (cache / "ethos/5.2.1").mkdir(parents=True)
-                elif name == "ethos":
+                other_name = "ethos-dev" if name == "ethos" else "ethos"
+                other_path = cache / other_name / "5.2.1"
+                if other in ("installed", "uninstalled"):
+                    other_path.mkdir(parents=True)
+                    registered = [installed, other_path] if other == "installed" else [installed]
+                    registry = {f"{path.parent.name}@punt-labs": [{"installPath": str(path)}]
+                                for path in registered}
+                    (cache.parents[1] / "installed_plugins.json").write_text(
+                        json.dumps({"version": 2, "plugins": registry}), encoding="utf-8"
+                    )
+                elif other == "backup":
                     (cache / "ethos-dev/5.2.0.bak").mkdir(parents=True)
                 backup = installed.with_name(installed.name + ".bak")
 
@@ -42,9 +56,9 @@ class PluginCacheTests(unittest.TestCase):
                 self.assertFalse(installed.is_symlink())
                 self.assertTrue(marker.is_file())
                 self.assertFalse(backup.exists())
-                if both:
-                    self.assertFalse((cache / "ethos/5.2.1").is_symlink())
-                    self.assertFalse((cache / "ethos/5.2.1.bak").exists())
+                if other in ("installed", "uninstalled"):
+                    self.assertFalse(other_path.is_symlink())
+                    self.assertFalse(other_path.with_name(other_path.name + ".bak").exists())
 
 
 if __name__ == "__main__":
