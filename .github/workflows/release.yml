@@ -6,6 +6,9 @@ on:
   pull_request:
     paths:
       - .github/workflows/release.yml
+      - Makefile
+      - go.mod
+      - go.sum
       - install.sh
       - scripts/smoke-release.sh
   workflow_dispatch:
