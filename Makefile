@@ -60,7 +60,7 @@ lint: ## Lint (golangci-lint + windows vet + shellcheck + ruff + mypy)
 	@test -x $(GOLANGCI_LINT) || { echo "golangci-lint not found at $(GOLANGCI_LINT) — run 'make tools' to install $(GOLANGCI_LINT_VERSION)"; exit 1; }
 	$(GOLANGCI_LINT) run ./...
 	GOOS=windows go vet ./... # the windows build, tests included: a unix-only helper or test file must carry its build tag
-	shellcheck plugin/hooks/*.sh install.sh
+	shellcheck plugin/hooks/*.sh install.sh .githooks/pre-commit .githooks/pre-push scripts/test-changed.sh scripts/test-timed.sh
 	cd tests/e2e && uv run ruff check .
 	cd tests/e2e && uv run ruff format --check .
 	cd tests/e2e && uv run mypy src/ tests/
@@ -132,6 +132,26 @@ test-push: ## Run the full default suite and a fast boundary check before pushin
 
 test-subprocess-fast: ## Exercise dormant and unresolvable Git hook entry points
 	go test -race -count=1 -run '^TestHooks(DormantRepositoryRunsNoProbe|FailLoudWhenRevParseFails)$$' ./plugin/hooks
+
+.PHONY: test-unit test-subprocess test-performance test-live test-agent test-nightly test-quarantine test-quarantine-run
+test-unit: ## Run an in-process sample of data-handling contracts
+	go test -race -count=1 ./internal/redact
+
+test-subprocess: ## Run release smoke fixtures and the Git hook subprocess suite
+	go test -race -count=1 ./test ./plugin/hooks
+
+test-performance: ## Report race-instrumented long-session redaction timing
+	go test -race -count=1 -run '^TestRedactLiveLongSessionBudget$$' -v ./internal/hook
+
+test-live test-agent: test-behavioral ## Run live agent and judge tests (requires Claude and an Anthropic key)
+
+test-nightly: test-quarantine test-behavioral ## Review quarantines and run the live Nightly suite locally
+
+test-quarantine: ## List quarantined Go tests and validate ownership and expiry
+	python3 scripts/test-quarantine.py list tests/quarantine.tsv
+
+test-quarantine-run: ## Run only the Go tests in the quarantine inventory
+	python3 scripts/test-quarantine.py run tests/quarantine.tsv
 
 .PHONY: coverage-check coverage-baseline coverage-baseline-from-ci
 
@@ -235,7 +255,7 @@ sync-embed: ## Copy docs/ETHOS-SETUP.md to its DES-071 tier-C embed source
 	cp docs/ETHOS-SETUP.md internal/enable/setup/ETHOS-SETUP.md
 
 test-behavioral: build ## Run L4 behavioral tests (requires ANTHROPIC_API_KEY and claude CLI)
-	go test -tags behavioral -timeout 10m -v ./tests/behavioral/
+	go test -race -count=1 -tags behavioral -timeout 10m -v ./tests/behavioral/
 
 e2e-bin: ## Build the ethos binary a non-hermetic E2E scenario's hooks run
 	@mkdir -p .tmp/e2e-bin
@@ -287,6 +307,7 @@ check-plugin-cache: ## Test Claude plugin cache switching
 	python3 -B scripts/plugin_cache_test.py
 
 check: lint docs test coverage-check validate-content fuzz-check check-opencode check-storage check-plugin-cache ## Run all quality gates
+check: test-quarantine
 
 # The legacy corpus (internal/autorepair/testdata) is real on-disk state written
 # by nine released binaries. Regenerating it builds each from its git tag, so it

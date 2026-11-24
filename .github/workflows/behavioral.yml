@@ -24,6 +24,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Review test quarantine inventory
+        run: make test-quarantine
+
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
@@ -34,4 +37,4 @@ jobs:
       - name: Run behavioral tests
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: go test -tags behavioral -timeout 20m -v ./tests/behavioral/
+        run: go test -race -count=1 -tags behavioral -timeout 20m -v ./tests/behavioral/
