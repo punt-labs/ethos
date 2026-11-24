@@ -181,7 +181,7 @@ func TestSharedLoggingHookSessionSwitch(t *testing.T) {
 }
 
 func TestSharedLoggingHookUnsafeIdentity(t *testing.T) {
-	for _, agent := range []string{"../not-a-persona", "C:private-agent"} {
+	for _, agent := range []string{"../not-a-persona", "C:private-agent", "AKIA0000000000000000"} {
 		home, cwd := t.TempDir(), testhelpers.OutsideRepo(t)
 		cmd := loggingProcess(t, home, cwd, "hook", "format-output")
 		cmd.Env = append(cmd.Env, "ETHOS_SESSION=env/session", "ETHOS_AGENT_ID=env\\agent", "CLAUDE_AGENT_TYPE=agent\nforge")
@@ -308,7 +308,8 @@ checks:
     cwd: package_dir
     run: [sh, -c, 'true']
 `), 0o600))
-	for _, dir := range []string{"first", "nested/second"} {
+	const credentialFixture = "AKIA0000000000000000"
+	for _, dir := range []string{"first", "nested/second", "nested/" + credentialFixture} {
 		require.NoError(t, os.MkdirAll(filepath.Join(repo, dir), 0o700))
 		file := dir + "/sample.txt"
 		require.NoError(t, os.WriteFile(filepath.Join(repo, filepath.FromSlash(file)), nil, 0o600))
@@ -321,7 +322,9 @@ checks:
 	log := diagnosticLog(t, home)
 	require.Regexp(t, "Check finished .*check=package-probe .*dir=first", log)
 	require.Regexp(t, "Check finished .*check=package-probe .*dir=nested/second", log)
-	require.Equal(t, 2, strings.Count(log, "Check finished"), log)
+	require.Regexp(t, `Check finished .*check=package-probe .*dir=nested/\[redacted-secret\]`, log)
+	require.Equal(t, 3, strings.Count(log, "Check finished"), log)
+	require.NotContains(t, log, credentialFixture)
 	require.NotContains(t, log, repo)
 }
 

@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"sync"
 	"time"
+
+	"github.com/punt-labs/ethos/v4/internal/redact"
 )
 
 type hookKey struct{}
@@ -43,11 +45,10 @@ func SetHookProject(ctx context.Context, project, checkout string) {
 }
 
 var hookToolName = regexp.MustCompile(`^[a-zA-Z0-9_.:-]{1,128}$`)
-var hookID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
 var hookAgent = regexp.MustCompile(`^([a-zA-Z0-9_-]{2,127}:)?[a-zA-Z0-9_-]{1,128}$`)
 
 func safeHookAgent(agent string) bool {
-	return len(agent) <= 128 && hookAgent.MatchString(agent)
+	return len(agent) <= 128 && hookAgent.MatchString(agent) && redact.SecretsString(agent) == agent
 }
 
 // SetHookInput records allowlisted identifiers, never tool inputs or output.
@@ -73,13 +74,13 @@ func SetHookIdentity(ctx context.Context, sessionID, agentID, agent string) {
 	if h, ok := ctx.Value(hookKey{}).(*HookInvocation); ok {
 		h.mu.Lock()
 		defer h.mu.Unlock()
-		if hookID.MatchString(sessionID) {
+		if redact.IsSessionID(sessionID) {
 			if h.sessionID != "" && h.sessionID != sessionID {
 				h.agentID, h.agent = "", ""
 			}
 			h.sessionID = sessionID
 		}
-		if hookID.MatchString(agentID) {
+		if redact.IsSessionID(agentID) {
 			if agentID != h.agentID {
 				h.agent = ""
 			}
@@ -121,7 +122,7 @@ func LogHookCheck(ctx context.Context, checkout, cwd, stage, name, outcome strin
 			cwd = checkout
 		}
 		if dir, err := filepath.Rel(checkout, cwd); err == nil && filepath.IsLocal(dir) {
-			attrs = append(attrs, "dir", filepath.ToSlash(dir))
+			attrs = append(attrs, "dir", redact.Prose(filepath.ToSlash(dir)))
 		}
 		FromContext(ctx).Info("Check finished", attrs...)
 	}
