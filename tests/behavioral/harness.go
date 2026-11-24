@@ -172,6 +172,9 @@ members:
 
 	writeFile(t, filepath.Join(repo, ".punt-labs", "ethos.yaml"),
 		"agent: test-agent\n")
+	writeFile(t, filepath.Join(ethosGlobal, "archetypes", "implement.yaml"),
+		"name: implement\ndescription: Behavioral fixture mission\n")
+	writeFile(t, filepath.Join(repo, ".gitignore"), ".punt-labs/local/\n")
 
 	// --- Fixture Go code: a simple counter package ---
 
