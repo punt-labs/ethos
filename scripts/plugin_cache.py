@@ -4,25 +4,33 @@ import subprocess
 import sys
 
 
-def dev_registration(registry, checkout):
+def resolves_to(path, target):
+    try:
+        return path.resolve() == target
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def dev_registrations(registry, checkout):
     try:
         state = json.loads(registry.read_text(encoding="utf-8"))
         records = state["plugins"].get("ethos-dev@punt-labs", [])
         if not isinstance(records, list) or not all(isinstance(row, dict) for row in records):
             raise ValueError("expected a list of install records")
     except FileNotFoundError:
-        return {}
+        return None
     except (AttributeError, KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"invalid Claude plugin registry {registry}: {exc}") from exc
+    applicable = []
     for record in records:
         scope = record.get("scope")
         if scope == "user":
-            return record
-        if scope in ("project", "local"):
+            applicable.append(record)
+        elif scope in ("project", "local"):
             project = record.get("projectPath")
-            if isinstance(project, str) and Path(project).is_absolute() and Path(project).resolve() == checkout:
-                return record
-    return None
+            if isinstance(project, str) and Path(project).is_absolute() and resolves_to(Path(project), checkout):
+                applicable.append(record)
+    return applicable
 
 
 def cache_versions(cache):
@@ -45,18 +53,30 @@ def missing_cache(caches):
     return ValueError(f"no plugin cache found at {', '.join(str(cache) for cache in caches)}")
 
 
+def registered_version(cache, install_paths):
+    versions = {entry.name: entry for entry in cache_versions(cache) if entry.is_dir()}
+    if versions:
+        root = cache.resolve()
+        for install_path in install_paths:
+            if not isinstance(install_path, str):
+                continue
+            path = Path(install_path)
+            if path.is_absolute() and path.name in versions and resolves_to(path.parent, root):
+                return versions[path.name]
+    raise ValueError(f"no registered ethos-dev installPath points to a cached version under {cache}")
+
+
 def select_version(state, checkout, override):
     caches = plugin_caches(state, override)
     if not override:
-        registration = dev_registration(state / "installed_plugins.json", checkout)
-        if registration is None:
+        registrations = dev_registrations(state / "installed_plugins.json", checkout)
+        if registrations == []:
             caches = caches[1:]
-        else:
-            install_path = registration.get("installPath")
-            if install_path not in (None, ""):
-                if not isinstance(install_path, str) or Path(install_path) not in cache_versions(caches[0]):
-                    raise ValueError(f"registered ethos-dev installPath is not a cached version: {install_path!r}")
-                return Path(install_path)
+        elif registrations:
+            paths = [record.get("installPath") for record in registrations]
+            paths = [path for path in paths if path not in (None, "")]
+            if paths:
+                return registered_version(caches[0], paths)
     for cache in caches:
         versions = cache_versions(cache)
         if versions:

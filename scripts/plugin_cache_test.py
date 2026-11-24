@@ -108,6 +108,53 @@ class PluginCacheTests(unittest.TestCase):
                 self.assertEqual(expected.resolve(), ROOT / "plugin")
                 self.assertFalse(untouched.is_symlink())
 
+    def test_dev_uses_first_existing_applicable_registration_in_registry_order(self):
+        for first in ("missing", "dangling", "pathless", "existing", "aliased", "foreign", "loop", "all-missing"):
+            with self.subTest(first=first), tempfile.TemporaryDirectory() as home:
+                cache = Path(home) / ".claude/plugins/cache/punt-labs/ethos-dev"
+                preferred = cache / "5.2.0"
+                newer = cache / "5.2.1"
+                missing = cache / "5.1.0"
+                preferred.mkdir(parents=True)
+                newer.mkdir()
+                record = {"scope": "user", "installPath": str(missing)}
+                if first == "dangling":
+                    missing.symlink_to(Path(home) / "gone")
+                elif first == "pathless":
+                    del record["installPath"]
+                elif first == "existing":
+                    record["installPath"] = str(newer)
+                elif first == "aliased":
+                    alias = Path(home) / "alias"
+                    alias.symlink_to(cache, target_is_directory=True)
+                    record["installPath"] = str(alias / preferred.name)
+                elif first == "foreign":
+                    record = {"scope": "local", "projectPath": str(Path(home) / "other"), "installPath": str(newer)}
+                elif first == "loop":
+                    loop = Path(home) / "loop"
+                    loop.symlink_to(loop)
+                    record = {"scope": "local", "projectPath": str(loop), "installPath": str(newer)}
+                next_record = {"scope": "local", "projectPath": str(ROOT)}
+                if first != "all-missing":
+                    next_record["installPath"] = str(newer if first == "aliased" else preferred)
+                (cache.parents[2] / "installed_plugins.json").write_text(
+                    json.dumps({"plugins": {"ethos-dev@punt-labs": [record, next_record]}}),
+                    encoding="utf-8",
+                )
+
+                result = run_make(home, "dev")
+                if first == "all-missing":
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("no registered ethos-dev installPath points to a cached version", result.stderr)
+                    self.assertFalse(preferred.is_symlink())
+                    self.assertFalse(newer.is_symlink())
+                    continue
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                expected, untouched = (newer, preferred) if first == "existing" else (preferred, newer)
+                self.assertTrue(expected.is_symlink(), result.stdout)
+                self.assertEqual(expected.resolve(), ROOT / "plugin")
+                self.assertFalse(untouched.is_symlink())
+
     def test_undev_restores_links_after_cache_selection_changes(self):
         for link_both in (False, True):
             with self.subTest(link_both=link_both), tempfile.TemporaryDirectory() as home:
