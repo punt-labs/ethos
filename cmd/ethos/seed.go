@@ -33,8 +33,10 @@ func runSeed(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("finding home directory: %w", err)
 	}
-
-	destRoot := filepath.Join(home, ".punt-labs", "ethos")
+	destRoot, err := layout.MachineRootFromHome(home)
+	if err != nil {
+		return fmt.Errorf("finding home directory: %w", err)
+	}
 	skillsRoot := filepath.Join(home, ".claude", "skills")
 
 	// agentsRoot is repo-local, not under destRoot: the seeded review-checklist
