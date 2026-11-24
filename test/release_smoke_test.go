@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,16 +61,42 @@ esac
 				version = "1.2.3"
 			}
 			installer := releaseSmokeInstaller(t, dist, version)
+			var pythonCalls string
+			if tc.wantError == "" {
+				pythonCalls = useReleaseSmokePython(t)
+			}
 			output, err := runReleaseSmoke(t, "candidate", installer, dist)
 			if tc.wantError == "" {
 				require.NoError(t, err, "%s", output)
 				assert.Contains(t, output, "PASS: identity round trip")
+				calls, err := os.ReadFile(pythonCalls)
+				require.NoError(t, err)
+				assert.Equal(t, "python3\npython3\n", string(calls))
 			} else {
 				require.Error(t, err, "%s", output)
 				assert.Contains(t, output, tc.wantError)
 			}
 		})
 	}
+}
+
+func useReleaseSmokePython(t *testing.T) string {
+	t.Helper()
+	python, err := exec.CommandContext(t.Context(), "python3", "-I", "-c", "import sys; print(sys.executable)").Output()
+	require.NoError(t, err)
+	dir := t.TempDir()
+	require.NoError(t, os.Symlink(strings.TrimSpace(string(python)), filepath.Join(dir, "real-python3")))
+	wrapper := filepath.Join(dir, "python3")
+	require.NoError(t, os.WriteFile(wrapper, []byte(`#!/bin/sh
+if [ "$1" = "-I" ]; then
+  printf '%s\n' "$0"
+  exit
+fi
+echo python3 >> "$0.called"
+exec "${0%/*}/real-python3" "$@"
+`), 0o700))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return wrapper + ".called"
 }
 
 func releaseSmokeInstaller(t *testing.T, dir, version string) string {

@@ -38,6 +38,9 @@ digest() {
     printf '%s\n' "${hash%% *}"
 }
 
+python=$(python3 -I -c 'import sys; print(sys.executable)') || fail "python3 is required"
+[ -x "$python" ] || fail "could not resolve the Python interpreter"
+
 checkout=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 sandbox=$(mktemp -d "${RUNNER_TEMP:-/tmp}/ethos-release-smoke.XXXXXXXX")
 trap 'rm -rf -- "$sandbox"' EXIT
@@ -72,7 +75,7 @@ ethos="$sandbox/home/.local/bin/ethos"
 [ -x "$ethos" ] || fail "the installer did not install an executable"
 [ "$(digest "$ethos")" = "$expected" ] || fail "installed SHA-256 differs from the candidate"
 if ! clean "$ethos" version --json > version.json ||
-    ! clean python3 -c 'import json, sys; sys.exit(json.load(sys.stdin) != {"version": sys.argv[1]})' "$version" < version.json; then
+    ! clean "$python" -c 'import json, sys; sys.exit(json.load(sys.stdin) != {"version": sys.argv[1]})' "$version" < version.json; then
     cat version.json >&2
     fail "expected ethos version $version"
 fi
@@ -84,7 +87,7 @@ kind: human
 YAML
 clean "$ethos" identity create -f identity.yaml || fail "identity create failed"
 clean "$ethos" identity get release-smoke --json > identity.json || fail "identity get failed"
-if ! clean python3 -c '
+if ! clean "$python" -c '
 import json, sys
 identity = json.load(sys.stdin)
 expected = {"handle": "release-smoke", "name": "Release Smoke", "kind": "human"}
