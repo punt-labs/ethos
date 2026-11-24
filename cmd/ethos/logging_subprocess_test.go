@@ -263,6 +263,37 @@ checks:
 	}
 }
 
+func TestSharedLoggingCheckWorkingDirectory(t *testing.T) {
+	repo := filepath.Join(t.TempDir(), "logging-project")
+	checksDir := filepath.Join(repo, ".punt-labs", "ethos", "checks")
+	require.NoError(t, os.MkdirAll(checksDir, 0o700))
+	runGit(t, repo, "init", "-q")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos.yaml"), []byte("checks: timing\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(checksDir, "timing.yaml"), []byte(`name: timing
+checks:
+  - name: package-probe
+    stage: commit
+    files: all
+    cwd: package_dir
+    run: [sh, -c, 'true']
+`), 0o600))
+	for _, dir := range []string{"first", "nested/second"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(repo, dir), 0o700))
+		file := dir + "/sample.txt"
+		require.NoError(t, os.WriteFile(filepath.Join(repo, filepath.FromSlash(file)), nil, 0o600))
+		runGit(t, repo, "add", "--", file)
+	}
+	home := t.TempDir()
+	cmd := loggingProcess(t, home, repo, "hook", "pre-commit")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	log := diagnosticLog(t, home)
+	require.Regexp(t, "Check finished .*check=package-probe .*dir=first", log)
+	require.Regexp(t, "Check finished .*check=package-probe .*dir=nested/second", log)
+	require.Equal(t, 2, strings.Count(log, "Check finished"), log)
+	require.NotContains(t, log, repo)
+}
+
 func TestSharedLoggingMCP(t *testing.T) {
 	runLoggingMCP(t)
 }

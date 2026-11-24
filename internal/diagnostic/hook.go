@@ -107,9 +107,15 @@ func (h *HookInvocation) Attrs() []any {
 }
 
 // LogHookCheck records a check's runtime without logging its arguments or output.
-func LogHookCheck(ctx context.Context, checkout, stage, name, outcome string, duration time.Duration) {
+func LogHookCheck(ctx context.Context, checkout, cwd, stage, name, outcome string, duration time.Duration) {
 	if h, ok := ctx.Value(hookKey{}).(*HookInvocation); ok {
 		attrs := append(h.Attrs(), "check_checkout", filepath.Base(checkout), "stage", stage, "check", name, "outcome", outcome, "duration_ms", duration.Milliseconds())
+		if cwd == "" {
+			cwd = checkout
+		}
+		if dir, err := filepath.Rel(checkout, cwd); err == nil && filepath.IsLocal(dir) {
+			attrs = append(attrs, "dir", filepath.ToSlash(dir))
+		}
 		FromContext(ctx).Info("Check finished", attrs...)
 	}
 }

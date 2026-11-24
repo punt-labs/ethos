@@ -329,7 +329,7 @@ func runLoggedCheck(ctx context.Context, root, stage string, check editCheck) st
 	if failure != "" {
 		outcome = "failed"
 	}
-	diagnostic.LogHookCheck(ctx, root, stage, check.name, outcome, time.Since(started))
+	diagnostic.LogHookCheck(ctx, root, check.cwd, stage, check.name, outcome, time.Since(started))
 	return failure
 }
 
