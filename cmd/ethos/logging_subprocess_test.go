@@ -177,6 +177,19 @@ func TestSharedLoggingLifecycleHookIdentity(t *testing.T) {
 	}
 }
 
+func TestSharedLoggingHookRepoDiscoveryFailure(t *testing.T) {
+	home, cwd := t.TempDir(), testhelpers.OutsideRepo(t)
+	override := filepath.Join(home, "missing-repository")
+	cmd := loggingProcess(t, home, cwd, "hook", "format-output")
+	cmd.Env = append(cmd.Env, "ETHOS_REPO_ROOT="+override)
+	cmd.Stdin = strings.NewReader(`{"tool_name":"fixture"}`)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	log := diagnosticLog(t, home)
+	require.Regexp(t, "Invocation finished command=hook format-output .*project=unknown", log)
+	require.NotContains(t, log, override)
+}
+
 func TestSharedLoggingKilledHooks(t *testing.T) {
 	repo := filepath.Join(t.TempDir(), "logging-project")
 	require.NoError(t, os.Mkdir(repo, 0o700))

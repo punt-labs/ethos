@@ -183,7 +183,7 @@ func establishRoots(cmd *cobra.Command, _ []string) error {
 	// Repair before anything reads storage, so a refusal below is judged on the
 	// converted layout (DES-084 Wiring).
 	r = ensureForCommand(cmd, r)
-	if ctx := cmd.Context(); ctx != nil {
+	if ctx := cmd.Context(); ctx != nil && (r.Store != "" || r.Checkout != "" || r.err() == nil) {
 		diagnostic.SetHookProject(ctx, r.Store, r.Checkout)
 	}
 	if !r.Global {
