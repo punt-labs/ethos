@@ -44,12 +44,11 @@ import (
 // only wire the trace summary and leave per-mission storage on the
 // global tree (m-2026-05-23-004 escalation).
 func missionStore() *mission.Store {
-	home, err := os.UserHomeDir()
+	root, err := layout.MachineRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission: cannot determine home directory: %v\n", err)
 		exitProcess(1, err)
 	}
-	root := filepath.Join(home, ".punt-labs", "ethos")
 	repoRoot := storeRootForStores()
 	warnIfGlobalFallback(repoRoot)
 	// The record resolves to the store root (main in a worktree); the DES-058
@@ -116,8 +115,8 @@ func warnIfGlobalFallback(repoRoot string) {
 		return
 	}
 	root := "~/.punt-labs/ethos"
-	if home, err := os.UserHomeDir(); err == nil {
-		root = filepath.Join(home, ".punt-labs", "ethos")
+	if machineRoot, err := layout.MachineRoot(); err == nil {
+		root = machineRoot
 	}
 	// Say why there is no repo store: the located error, or that the
 	// directory is outside any repository.
@@ -171,12 +170,11 @@ func currentSessionIDBestEffort() string {
 // bug Phase 3.5 exists to prevent. The operator sees an actionable
 // error at the create path instead of a silently-disabled check.
 func missionStoreForCreate() *mission.Store {
-	home, err := os.UserHomeDir()
+	root, err := layout.MachineRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission: cannot determine home directory: %v\n", err)
 		exitProcess(1, err)
 	}
-	root := filepath.Join(home, ".punt-labs", "ethos")
 	// NewStoreWithRoots activates the DES-054 two-tree storage layout:
 	// Create writes to the repo tree, Load reads repo-first with global
 	// fallback. NewStore + WithRepoRoot would only wire the trace
@@ -2228,11 +2226,10 @@ func runMissionClaim(idOrPrefix string) error {
 		return fmt.Errorf("mission claim: loading %q: %w", id, err)
 	}
 
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		return fmt.Errorf("mission claim: user home dir: %w", err)
 	}
-	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	// Locked (mission.WithDispatchPendingLock): `session.Store.Delete`
 	// (and Purge/PurgeTombstoned, which funnel through it) hold this
 	// same per-session lock across their whole clear-then-remove-roster
@@ -2276,11 +2273,10 @@ func runMissionRelease() error {
 	if err != nil {
 		return fmt.Errorf("mission release: %w", err)
 	}
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		return fmt.Errorf("mission release: user home dir: %w", err)
 	}
-	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	if err := mission.ClearActiveMission(globalRoot, sessionID); err != nil {
 		return fmt.Errorf("mission release: %w", err)
 	}
@@ -2360,12 +2356,11 @@ func bindDispatchedMission(op, missionID, worker string) {
 	if sessionID == "" {
 		return
 	}
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission %s: user home dir: %v\n", op, err)
 		return
 	}
-	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
 	// `mission dispatch`/`create` runs as its own process, so staging a
 	// new pending entry must take the dispatch-pending lock itself
@@ -2440,12 +2435,11 @@ func clearClosedSessionBindings(missionID string) {
 	if sessionID == "" {
 		return
 	}
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission close: user home dir: %v\n", err)
 		return
 	}
-	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	if err := mission.ClearMissionBindings(globalRoot, sessionID, missionID); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission close: %v\n", err)
 	}

@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 // counterDateFormat is the per-day suffix on the counter file.
@@ -21,24 +23,10 @@ const (
 	NamespaceDelegations = "delegations"
 )
 
-// defaultCounterRoot is the production root for the counters/ tree.
-// Tests use NewIDAt with t.TempDir() so production state is never
-// touched.
-func defaultCounterRoot() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		// Falling back to "." would race other test packages and
-		// hide configuration bugs in production. An empty string
-		// surfaces the failure at counterPath construction time.
-		return ""
-	}
-	return filepath.Join(home, ".punt-labs", "ethos")
-}
-
 // NewID allocates the next ID for the given namespace and date.
 //
 // The counter file lives at
-// <defaultCounterRoot>/counters/<namespace>-YYYY-MM-DD as a single
+// ~/.punt-labs/ethos/counters/<namespace>-YYYY-MM-DD as a single
 // integer, lock-guarded (flock on Unix, LockFileEx on Windows — see
 // flock_unix.go/flock_windows.go). New namespaces add sibling files;
 // existing files never change shape (DES-054 I9-counter).
@@ -58,7 +46,11 @@ func defaultCounterRoot() string {
 // Locking the counter file itself would race the temp+rename pattern
 // since the post-rename file is a different underlying file on disk.
 func NewID(namespace string, now time.Time) (string, func(commit bool), error) {
-	return NewIDAt(defaultCounterRoot(), namespace, now)
+	root, err := layout.MachineRoot()
+	if err != nil {
+		return "", noopRelease, fmt.Errorf("resolving counter root: %w", err)
+	}
+	return NewIDAt(root, namespace, now)
 }
 
 // NewIDAt is the testable form of NewID: the caller supplies the root

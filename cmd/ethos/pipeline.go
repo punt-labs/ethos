@@ -3,11 +3,11 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/spf13/cobra"
 )
@@ -17,12 +17,11 @@ import (
 // from EthosRootIfAny, bundle from resolveBundleRoot, global from
 // ~/.punt-labs/ethos.
 func pipelineStore() *mission.PipelineStore {
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: pipeline: cannot determine home directory: %v\n", err)
 		exitProcess(1, err)
 	}
-	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	repoRoot := ethosRootForStores()
 	bundleRoot := resolveBundleRoot()
 	return mission.NewPipelineStoreWithBundle(repoRoot, bundleRoot, globalRoot)
@@ -192,11 +191,10 @@ func runPipelineInstantiate(name string) error {
 		return fmt.Errorf("pipeline instantiate: %w", err)
 	}
 
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		return fmt.Errorf("pipeline instantiate: cannot determine home directory: %w", err)
 	}
-	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
 	repoRoot := ethosRootForStores()
 	as := mission.NewArchetypeStore(repoRoot, globalRoot)
