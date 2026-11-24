@@ -16,9 +16,11 @@ func TestDevelopmentPreCommit(t *testing.T) {
 	for _, tc := range []struct {
 		name, gate, want string
 		fail             bool
+		sealed           bool
 	}{
 		{name: "failed gate", gate: "false", want: "test-changed", fail: true},
 		{name: "successful gate", gate: "true", want: "existing hook"},
+		{name: "installed seal keeps existing checks", gate: "true", want: "existing hook", sealed: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -37,6 +39,9 @@ func TestDevelopmentPreCommit(t *testing.T) {
 			require.NoError(t, os.Mkdir(filepath.Join(dir, ".git", "hooks"), 0o700))
 			hook, err := os.ReadFile("../.githooks/pre-commit")
 			require.NoError(t, err)
+			if tc.sealed {
+				hook = append(hook, []byte("\n# --- BEGIN ETHOS DES-058 SEAL ---\necho development seal\n# --- END ETHOS DES-058 SEAL ---\n")...)
+			}
 			require.NoError(t, os.WriteFile(filepath.Join(dir, ".githooks", "pre-commit"), hook, 0o700))
 			require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-commit"), []byte("#!/bin/sh\necho existing hook\n"), 0o700))
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-changed:\n\t"+tc.gate+"\n"), 0o600))
@@ -50,6 +55,9 @@ func TestDevelopmentPreCommit(t *testing.T) {
 				require.NoError(t, err, "%s", out)
 			}
 			require.Contains(t, string(out), tc.want)
+			if tc.sealed {
+				require.Contains(t, string(out), "development seal")
+			}
 		})
 	}
 }
@@ -143,4 +151,18 @@ fi
 	script, err := filepath.Abs("../scripts/test-changed.sh")
 	require.NoError(t, err)
 	require.Equal(t, "go test -race -count=1 ./changed\n", string(run("bash", script)))
+
+	run("git", "rm", "--cached", "changed/example.go")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "changed", "testdata", "nested"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "changed", "testdata", "nested", "sample.json"), []byte("{}\n"), 0o600))
+	run("git", "add", "changed/testdata/nested/sample.json")
+	require.Equal(t, "go test -race -count=1 ./changed\n", string(run("bash", script)))
+}
+
+func TestDevelopmentLiveRequiresKey(t *testing.T) {
+	cmd := exec.CommandContext(t.Context(), "env", "-u", "ANTHROPIC_API_KEY", "make", "test-live")
+	cmd.Dir = ".."
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "%s", out)
+	require.Contains(t, string(out), "ANTHROPIC_API_KEY is required")
 }

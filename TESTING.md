@@ -30,8 +30,8 @@ The installed PR/main and Nightly rows describe the target state after
 `make hooks` sets the repository's `core.hooksPath` to `.githooks`; it refuses
 to replace a different configured path. If you manage a custom hooks path,
 chain these hooks yourself. The tracked hooks chain executable hooks in Git's
-common directory; the pre-commit hook does not run an audit seal twice if
-Ethos installs its seal directly into the tracked hook. The pre-push hook
+common directory, including when Ethos adds an audit seal to the tracked
+pre-commit hook. The pre-push hook
 passes Git's original remote arguments and input to the existing hook and
 skips the test suite for deletion-only pushes.
 

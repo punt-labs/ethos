@@ -9,6 +9,12 @@ git diff --cached --name-only --no-renames -z > "$staged"
 requested=()
 while IFS= read -r -d '' path; do
   case "$path" in
+    testdata/*)
+      requested+=(.)
+      ;;
+    */testdata/*)
+      requested+=("${path%%/testdata/*}")
+      ;;
     *.go)
       dir=.
       if [[ "$path" == */* ]]; then
@@ -16,7 +22,7 @@ while IFS= read -r -d '' path; do
       fi
       requested+=("$dir")
       ;;
-    go.mod|go.sum|Makefile|.githooks/*|scripts/test-changed.sh|scripts/test-timed.sh)
+    go.mod|go.sum|Makefile|.githooks/*|scripts/test-changed.sh|scripts/test-timed.sh|scripts/test-quarantine.py|tests/quarantine.tsv)
       requested+=(test)
       ;;
   esac

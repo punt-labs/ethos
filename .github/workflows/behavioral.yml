@@ -12,6 +12,8 @@ permissions:
 jobs:
   behavioral:
     runs-on: ubuntu-latest
+    env:
+      GOFLAGS: -race -count=1
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
@@ -37,4 +39,4 @@ jobs:
       - name: Run behavioral tests
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: go test -race -count=1 -tags behavioral -timeout 20m -v ./tests/behavioral/
+        run: go test -tags behavioral -timeout 20m -v ./tests/behavioral/

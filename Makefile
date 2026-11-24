@@ -162,6 +162,8 @@ test-quarantine: ## List quarantined Go tests and validate ownership and expiry
 test-quarantine-run: ## Run only the Go tests in the quarantine inventory
 	python3 scripts/test-quarantine.py run tests/quarantine.tsv
 
+check: test-quarantine
+
 .PHONY: coverage-check coverage-baseline coverage-baseline-from-ci
 
 coverage-check: ## Compare per-package coverage in coverage.out (from make test) with coverage-baseline.txt
@@ -263,7 +265,9 @@ fuzz-check: ## Type-check Z specification .tex files with fuzz (ethos-cy70)
 sync-embed: ## Copy docs/ETHOS-SETUP.md to its DES-071 tier-C embed source
 	cp docs/ETHOS-SETUP.md internal/enable/setup/ETHOS-SETUP.md
 
-test-behavioral: build ## Run L4 behavioral tests (requires ANTHROPIC_API_KEY and claude CLI)
+test-behavioral: ## Run L4 behavioral tests (requires ANTHROPIC_API_KEY and claude CLI)
+	@test -n "$$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY is required" >&2; exit 1; }
+	@command -v claude >/dev/null || { echo "claude CLI is required" >&2; exit 1; }
 	go test -race -count=1 -tags behavioral -timeout 10m -v ./tests/behavioral/
 
 e2e-bin: ## Build the ethos binary a non-hermetic E2E scenario's hooks run
@@ -315,7 +319,7 @@ check-storage: ## Exercise offline storage boundaries through the real CLI, wrap
 check-plugin-cache: ## Test Claude plugin cache switching
 	python3 -B scripts/plugin_cache_test.py
 
-check: lint docs test coverage-check validate-content fuzz-check check-opencode check-storage check-plugin-cache test-quarantine ## Run all quality gates
+check: lint docs test coverage-check validate-content fuzz-check check-opencode check-storage check-plugin-cache ## Run all quality gates
 
 # The legacy corpus (internal/autorepair/testdata) is real on-disk state written
 # by nine released binaries. Regenerating it builds each from its git tag, so it
