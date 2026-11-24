@@ -117,25 +117,23 @@ running quarantined tests.
 
 ## Residual deviations
 
-These are expected after the four PRs. Owner roles and expiry dates are
-proposed until the maintainers file and assign the Linear issues.
+This table records the remaining deviations and the Nightly verification
+completed after the four PRs.
 
 | Clause | Scope and reason for deferral | Owner | Proposed expiry | Linear |
 | --- | --- | --- | --- | --- |
-| TST-1 / GO-TST-1 | Heavy affected packages may miss 30 s locally; measure representative changes and select smaller safe subsets without weakening the other gates. | Ethos maintainers | 2026-12-08 | TODO |
-| TST-1 / GO-TST-1 | Full pre-push exceeds 3 min; optimizing and sharding the suite are outside the hook changes. | Ethos maintainers | 2026-12-08 | TODO |
-| TST-1 / GO-TST-1 | PR/main exceed 10 min and wire/tool jobs are not required; tuning and branch ruleset changes need separate work. | Ethos maintainers | 2026-12-08 | TODO |
-| TST-1 / TST-4 | No pinned pre-commit/required PR secret scanner is configured; needs a scanner policy, config and ruleset rollout. | Ethos maintainers | 2026-12-08 | TODO |
-| TST-2 / GO-TST-1 | Unit-only and subprocess-only selectors cover representative packages, not all tests of each kind; exhaustive separation needs classification of mixed packages. | Ethos maintainers | 2026-12-22 | TODO |
-| TST-2 / GO-TST-1 | `test-legacy-corpus` and live OpenCode smoke are still manual; move them to suitable CI tiers after provisioning fixtures and the trusted runner. | Ethos maintainers | 2026-12-22 | TODO |
-| TST-3 / GO-TST-1 | The audit latency budget deliberately omits the race flag to measure uninstrumented performance; keep the race companion and track the exception. | Ethos maintainers | 2026-12-22 | TODO |
-| TST-3 / GO-TST-1 | Local hooks execute working-tree sources, not an isolated staged or pushed snapshot; snapshot testing needs an independent budget and worktree strategy. | Ethos maintainers | 2026-12-22 | TODO |
-| TST-3 / GO-TST-1 | Pre-commit selects direct changed packages and fixtures, not reverse dependents; module metadata changes select the tooling package. The full dependency matrix remains at pre-push and CI until a bounded impact selector is available. | Ethos maintainers | 2026-12-22 | TODO |
-| TST-5 / GO-TST-3 | Coverage ratchet compares with a committed reference, not an equivalently measured exact merge base; replacing the gate needs matched base/head profiles. | Ethos maintainers | 2026-12-22 | TODO |
-| TST-5 / GO-TST-3 | Extra subprocess, wire and release processes remain outside the installed-storage coverage report; instrumentation for those paths is independent work. | Ethos maintainers | 2026-12-22 | TODO |
-| TST-6 / GO-TST-4 | Green Nightly on main and its failure/cancellation alerts still need hosted evidence after [#671] merges. | Ethos maintainers | 2026-12-08 | TODO |
-| TST-6 / GO-TST-4 | Git-visible assertions miss ignored agent writes; distinguishing them from legitimate Ethos runtime files requires a separate write-set design. | Ethos maintainers | 2026-12-22 | TODO |
-| TST-6 / GO-TST-4 | Overlapping Biff alerts are last-writer-wins; ordering pending alerts needs a separate policy. | Ethos maintainers | 2026-12-22 | TODO |
-| TST-7 / GO-TST-4 | Candidate gate proves CLI identity only; installed plugin, release-critical MCP/hook paths and applicable live agent cases need candidate-aware harnesses. | Release maintainers | 2026-12-22 | TODO |
-| TST-8 / GO-TST-4 | Published CLI smoke does not exercise the installed marketplace plugin or verify a release-owner alert for post-publication failure; those need separate coverage and alert proof. | Release maintainers | 2026-12-22 | TODO |
-| TST-10 / GO-TST-5 | Linear issue links and named assignments await the maintainer's issue filing. | Ethos maintainers | 2026-12-08 | TODO |
+| TST-1 / GO-TST-1 | Heavy affected packages may miss 30 s locally; measure representative changes and select smaller safe subsets without weakening the other gates. | Jim Freeman | 2026-12-08 | [PL-1585](https://linear.app/punt-labs/issue/PL-1585) |
+| TST-1 / GO-TST-1 | Full pre-push took 654 s against a 180 s budget; optimizing and sharding the suite are outside the hook changes. | Jim Freeman | 2026-12-08 | [PL-1581](https://linear.app/punt-labs/issue/PL-1581) |
+| TST-1 / GO-TST-1 | PR/main exceed 10 min and wire/tool jobs are not required; tuning and branch ruleset changes need separate work. | Jim Freeman | 2026-12-08 | [PL-1591](https://linear.app/punt-labs/issue/PL-1591) |
+| TST-1 / TST-4 | No pinned pre-commit/required PR secret scanner is configured; needs a scanner policy, config and ruleset rollout. | Jim Freeman | 2026-12-08 | [PL-1586](https://linear.app/punt-labs/issue/PL-1586) |
+| TST-2 / GO-TST-1 | Unit-only and subprocess-only selectors cover representative packages, not all tests of each kind; exhaustive separation needs classification of mixed packages. | Jim Freeman | 2026-12-22 | [PL-1589](https://linear.app/punt-labs/issue/PL-1589) |
+| TST-2 / GO-TST-1 | `test-legacy-corpus` and live OpenCode smoke are still manual; move them to suitable CI tiers after provisioning fixtures and the trusted runner. | Jim Freeman | 2026-12-22 | [PL-1584](https://linear.app/punt-labs/issue/PL-1584) |
+| TST-3 / GO-TST-1 | The audit latency budget deliberately omits the race flag to measure uninstrumented performance; keep the race companion and track the exception. | Jim Freeman | 2026-12-22 | [PL-1590](https://linear.app/punt-labs/issue/PL-1590) |
+| TST-3 / GO-TST-1 | Local hooks test working-tree sources, not isolated staged or pushed snapshots. Pre-commit selects direct changed packages and fixtures, not reverse dependents; module metadata changes select the tooling package. Snapshot testing needs a worktree strategy, and the full dependency matrix remains at pre-push and CI until a bounded impact selector is available. | Jim Freeman | 2026-12-22 | [PL-1587](https://linear.app/punt-labs/issue/PL-1587) |
+| TST-5 / GO-TST-3 | Coverage ratchet compares with a committed reference, not an equivalently measured exact merge base; replacing the gate needs matched base/head profiles. | Jim Freeman | 2026-12-22 | [PL-1583](https://linear.app/punt-labs/issue/PL-1583) |
+| TST-5 / GO-TST-3 | Extra subprocess, wire and release processes remain outside the installed-storage coverage report; instrumentation for those paths is independent work. | Jim Freeman | 2026-12-22 | [PL-1588](https://linear.app/punt-labs/issue/PL-1588) |
+| TST-6 / GO-TST-4 | Green Nightly on main and alert delivery: proved post-merge of [#671]. | Jim Freeman | — | — |
+| TST-6 / GO-TST-4 | Git-visible assertions miss ignored agent writes; distinguishing them from legitimate Ethos runtime files requires a separate write-set design. | Jim Freeman | 2026-12-22 | [PL-1579](https://linear.app/punt-labs/issue/PL-1579) |
+| TST-6 / GO-TST-4 | Overlapping Biff alerts are last-writer-wins; ordering pending alerts needs a separate policy. | Jim Freeman | 2026-12-22 | [PL-1580](https://linear.app/punt-labs/issue/PL-1580) |
+| TST-7 / GO-TST-4 | Candidate gate proves CLI identity only; installed plugin, release-critical MCP/hook paths and applicable live agent cases need candidate-aware harnesses. | Jim Freeman | 2026-12-22 | [PL-1582](https://linear.app/punt-labs/issue/PL-1582) |
+| TST-8 / GO-TST-4 | Published CLI smoke does not exercise the installed marketplace plugin or verify a release-owner alert for post-publication failure; those need separate coverage and alert proof. | Jim Freeman | 2026-12-22 | [PL-1592](https://linear.app/punt-labs/issue/PL-1592) |
