@@ -140,7 +140,7 @@ func TestChangedPackages(t *testing.T) {
 	run("git", "add", "changed/example.go")
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "go"), []byte(`#!/bin/sh
 if [ "$1" = list ]; then
-    printf '%s\n' "$(pwd -P)/changed" "$(pwd -P)/untouched" "$(pwd -P)/internal/seed"
+    printf '%s\n' "$(pwd -P)/changed" "$(pwd -P)/untouched" "$(pwd -P)/internal/seed" "$(pwd -P)/test"
 else
     if [ "${GIT_INDEX_FILE+x}" = x ]; then
         echo "go test inherited the parent Git index"
@@ -165,6 +165,13 @@ fi
 	require.NoError(t, os.WriteFile(filepath.Join(dir, template), []byte("# Example\n"), 0o600))
 	run("git", "add", template)
 	require.Equal(t, "go test -race -count=1 ./internal/seed\n", string(run("bash", script)))
+
+	run("git", "rm", "--cached", template)
+	helper := "scripts/legacy-seal.go"
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, filepath.Dir(helper)), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, helper), []byte("package main\n"), 0o600))
+	run("git", "add", helper)
+	require.Equal(t, "go test -race -count=1 ./test\n", string(run("bash", script)))
 }
 
 func TestDevelopmentLiveRequiresKey(t *testing.T) {

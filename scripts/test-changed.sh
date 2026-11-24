@@ -18,6 +18,9 @@ while IFS= read -r -d '' path; do
     internal/seed/sidecar/agents/*.md)
       requested+=(internal/seed)
       ;;
+    scripts/legacy-seal.go)
+      requested+=(test)
+      ;;
     *.go)
       dir=.
       if [[ "$path" == */* ]]; then

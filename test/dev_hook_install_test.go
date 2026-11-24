@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -21,6 +22,11 @@ func developmentHookFixture(t *testing.T) (dir string, run func(string, string, 
 	env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "HOME=" + home,
 		"GIT_CONFIG_NOSYSTEM=1", "GIT_AUTHOR_NAME=Fixture", "GIT_AUTHOR_EMAIL=fixture@example.test",
 		"GIT_COMMITTER_NAME=Fixture", "GIT_COMMITTER_EMAIL=fixture@example.test", "PUNT_TELEMETRY=off"}
+	goEnv, err := exec.CommandContext(t.Context(), "go", "env", "GOCACHE", "GOMODCACHE").Output()
+	require.NoError(t, err)
+	cache, modules, ok := strings.Cut(strings.TrimSuffix(string(goEnv), "\n"), "\n")
+	require.True(t, ok)
+	env = append(env, "GOCACHE="+cache, "GOMODCACHE="+modules)
 	run = func(at, name string, args ...string) ([]byte, error) {
 		cmd := exec.CommandContext(t.Context(), name, args...)
 		cmd.Dir, cmd.Env = at, env
@@ -123,4 +129,28 @@ func TestDevelopmentHooksRequireLegacySealUpgrade(t *testing.T) {
 	require.Contains(t, string(got), "BEGIN Ethos development gate")
 	require.Contains(t, string(got), "BEGIN ETHOS DES-058 SEAL")
 	require.NotContains(t, string(got), "exit 71")
+}
+
+func TestDevelopmentHooksAcceptFencedSealWithLegacyHeader(t *testing.T) {
+	dir, run := developmentHookFixture(t)
+	buildFixtureEthos(t, dir)
+	out, err := run(dir, "ethos", "enable")
+	require.NoError(t, err, "%s", out)
+	hook := filepath.Join(dir, ".git", "hooks", "pre-commit")
+	fenced, err := os.ReadFile(hook)
+	require.NoError(t, err)
+	_, rest, ok := strings.Cut(string(fenced), "\n")
+	require.True(t, ok)
+	const host = "# hooks/pre-commit.sh — Seal pending live audit lines\necho 'custom hook ran'\n"
+	require.NoError(t, os.WriteFile(hook, []byte("#!/bin/sh\n"+host+rest), 0o700))
+	out, err = run(dir, "ethos", "enable")
+	require.NoError(t, err, "%s", out)
+	refreshed, err := os.ReadFile(hook)
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(string(refreshed), "#!/bin/sh\n"+host))
+	installDevelopmentHooks(t, dir, run)
+	got, err := os.ReadFile(hook)
+	require.NoError(t, err)
+	require.Contains(t, string(got), "BEGIN Ethos development gate")
+	require.Contains(t, string(got), host+rest)
 }

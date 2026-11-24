@@ -27,7 +27,7 @@ The installed PR/main and Nightly rows describe the target state after
 [Behavioral]: .github/workflows/behavioral.yml
 [Release]: .github/workflows/release.yml
 
-`make hooks` (Python 3) adds the development gates before any existing
+`make hooks` (Python 3 and Go) adds the development gates before any existing
 pre-commit and pre-push code in Git's repository-local hooks. It leaves
 `core.hooksPath` and commit-msg untouched, so the Ethos audit seal and
 provenance trailer remain in the hooks Git runs and `ethos doctor` checks.

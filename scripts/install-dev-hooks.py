@@ -11,7 +11,6 @@ from tempfile import NamedTemporaryFile
 MARKER = "ethos-dev-hooks"
 BEGIN = b"# BEGIN Ethos development gate\n"
 END = b"# END Ethos development gate\n"
-LEGACY_SEAL_IDENT = "hooks/pre-commit.sh — Seal pending live audit lines".encode()
 SHELL = re.compile(rb"#!\s*(?:\S*/)?(?:env\s+(?:-S\s+)?)?(?:ba|da|k|z|mk|a)?sh(?:[ \t].*)?")
 PUSH_GATE = """    _ethos_dev_refs=$(mktemp) || exit 1
     if ! cat > "$_ethos_dev_refs" ||
@@ -42,6 +41,16 @@ def prefix(name):
     ).encode() + END
 
 
+def is_legacy_seal(body):
+    root = Path(__file__).resolve().parent.parent
+    result = subprocess.check_output(
+        ["go", "run", "./scripts/legacy-seal.go"], cwd=root, input=body
+    )
+    if result not in (b"true\n", b"false\n"):
+        raise ValueError("could not classify the existing pre-commit hook")
+    return result == b"true\n"
+
+
 def edit(path, gate):
     try:
         mode = path.lstat().st_mode
@@ -49,10 +58,11 @@ def edit(path, gate):
         return b"#!/bin/sh\n" + gate, 0o755
     if not stat.S_ISREG(mode) or not os.access(path, os.X_OK):
         raise ValueError(f"{path}: expected an executable regular hook; chain the gate manually")
-    first, _, rest = path.read_bytes().partition(b"\n")
+    body = path.read_bytes()
+    first, _, rest = body.partition(b"\n")
     if not SHELL.fullmatch(first):
         raise ValueError(f"{path}: expected a shell hook; chain the gate manually")
-    if path.name == "pre-commit" and LEGACY_SEAL_IDENT in rest.partition(b"\n")[0]:
+    if path.name == "pre-commit" and is_legacy_seal(body):
         raise ValueError(f"{path}: legacy standalone audit seal; run ethos enable before opting in")
     if rest.startswith(gate):
         return None
