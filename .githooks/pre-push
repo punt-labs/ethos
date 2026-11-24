@@ -2,8 +2,16 @@
 set -euo pipefail
 
 head=
-while read -r local_ref local_oid _remote_ref _remote_oid; do
+tag_notice=
+while read -r local_ref local_oid remote_ref _remote_oid; do
   [[ "$local_ref" == '(delete)' || "$local_oid" =~ ^0+$ ]] && continue
+  if [[ "$remote_ref" == refs/tags/* ]]; then
+    if [[ -z "$tag_notice" ]]; then
+      printf '%s\n' "Tags are gated by the release workflow's candidate smoke."
+      tag_notice=1
+    fi
+    continue
+  fi
   head=${head:-$(git rev-parse HEAD)}
   if ! commit=$(git rev-parse --verify --end-of-options "${local_oid}^{commit}" 2>/dev/null) ||
     [[ "$commit" != "$head" ]]; then

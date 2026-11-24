@@ -58,6 +58,7 @@ func TestDevelopmentPreCommit(t *testing.T) {
 }
 
 func TestDevelopmentPrePush(t *testing.T) {
+	const tagNotice = "Tags are gated by the release workflow's candidate smoke."
 	for _, tc := range []struct {
 		name, gate, oid, want string
 		fail                  bool
@@ -66,6 +67,8 @@ func TestDevelopmentPrePush(t *testing.T) {
 		{name: "passes refs to existing hook", gate: "true", oid: "head", want: "refs/heads/topic"},
 		{name: "delete bypasses gate but not existing hook", gate: "false", oid: "zero", want: "refs/heads/topic"},
 		{name: "refuses untested commit", gate: "true", oid: "other", want: "check it out", fail: true},
+		{name: "release tags bypass the gate", gate: "false", oid: "release", want: tagNotice},
+		{name: "branch still tested alongside release tag", gate: "false", oid: "mixed", want: "test-push", fail: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -93,9 +96,6 @@ func TestDevelopmentPrePush(t *testing.T) {
 			for _, path := range []string{"scripts", "go.mod", "docs", ".githooks"} {
 				require.NoError(t, os.Symlink(filepath.Join(root, path), filepath.Join(dir, path)))
 			}
-			installDevelopmentHooks(t, dir, func(_ string, name string, args ...string) ([]byte, error) {
-				return run("", name, args...)
-			})
 			oid := head
 			ref := "refs/heads/topic"
 			switch tc.oid {
@@ -106,6 +106,28 @@ func TestDevelopmentPrePush(t *testing.T) {
 				oid = strings.Repeat("1", len(head))
 			}
 			input := ref + " " + oid + " refs/heads/topic " + strings.Repeat("0", len(head)) + "\n"
+			if tc.oid == "release" || tc.oid == "mixed" {
+				for _, tag := range []string{"v99.99.99", "v99.99.98"} {
+					out, err = run("", "git", "tag", tag, head)
+					require.NoError(t, err, "%s", out)
+				}
+				out, err = run("", "git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+					"commit", "--allow-empty", "-m", "pin README")
+				require.NoError(t, err, "%s", out)
+				tagUpdate := func(tag string) string {
+					ref := "refs/tags/" + tag
+					return ref + " " + head + " " + ref + " " + strings.Repeat("0", len(head)) + "\n"
+				}
+				input = tagUpdate("v99.99.99") + tagUpdate("v99.99.98")
+				if tc.oid == "mixed" {
+					out, err = run("", "git", "rev-parse", "HEAD")
+					require.NoError(t, err, "%s", out)
+					input += ref + " " + strings.TrimSpace(string(out)) + " " + ref + " " + strings.Repeat("0", len(head)) + "\n"
+				}
+			}
+			installDevelopmentHooks(t, dir, func(_ string, name string, args ...string) ([]byte, error) {
+				return run("", name, args...)
+			})
 			out, err = run(input, filepath.Join(dir, ".git", "hooks", "pre-push"), "origin", "file:///fixture")
 			if tc.fail {
 				require.Error(t, err, "%s", out)
@@ -114,6 +136,9 @@ func TestDevelopmentPrePush(t *testing.T) {
 				require.Contains(t, string(out), input)
 			}
 			require.Contains(t, string(out), tc.want)
+			if tc.oid == "release" || tc.oid == "mixed" {
+				require.Equal(t, 1, strings.Count(string(out), tagNotice))
+			}
 		})
 	}
 }
