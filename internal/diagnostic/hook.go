@@ -74,6 +74,9 @@ func SetHookIdentity(ctx context.Context, sessionID, agentID, agent string) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		if hookID.MatchString(sessionID) {
+			if h.sessionID != "" && h.sessionID != sessionID {
+				h.agentID, h.agent = "", ""
+			}
 			h.sessionID = sessionID
 		}
 		if hookID.MatchString(agentID) {

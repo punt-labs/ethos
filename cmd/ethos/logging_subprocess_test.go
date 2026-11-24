@@ -151,6 +151,35 @@ func TestSharedLoggingHookToolContext(t *testing.T) {
 	}
 }
 
+func TestSharedLoggingHookSessionSwitch(t *testing.T) {
+	for _, tc := range []struct {
+		name, inheritedSession string
+		keepAgent              bool
+	}{
+		{"nested session", "outer-session", false},
+		{"same session", "payload-session", true},
+		{"no inherited session", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, cwd := t.TempDir(), testhelpers.OutsideRepo(t)
+			cmd := loggingProcess(t, home, cwd, "hook", "format-output")
+			cmd.Env = append(cmd.Env, "ETHOS_SESSION="+tc.inheritedSession, "ETHOS_AGENT_ID=worker", "CLAUDE_AGENT_TYPE=implementer")
+			cmd.Stdin = strings.NewReader(`{"session_id":"payload-session","tool_name":"Bash"}`)
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "%s", out)
+			log := diagnosticLog(t, home)
+			require.Regexp(t, "Invocation finished .*session_id=payload-session", log)
+			for _, field := range []string{"agent_id=worker", "agent=implementer"} {
+				if tc.keepAgent {
+					require.Contains(t, log, field)
+				} else {
+					require.NotContains(t, log, field)
+				}
+			}
+		})
+	}
+}
+
 func TestSharedLoggingHookUnsafeIdentity(t *testing.T) {
 	for _, agent := range []string{"../not-a-persona", "C:private-agent"} {
 		home, cwd := t.TempDir(), testhelpers.OutsideRepo(t)
