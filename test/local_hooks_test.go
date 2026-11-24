@@ -58,7 +58,7 @@ func TestDevelopmentPreCommit(t *testing.T) {
 }
 
 func TestDevelopmentPrePush(t *testing.T) {
-	const tagNotice = "Tags are gated by the release workflow's candidate smoke."
+	const tagNotice = "Version tags are gated by the release workflow's candidate smoke."
 	for _, tc := range []struct {
 		name, gate, oid, want string
 		fail                  bool
@@ -68,6 +68,7 @@ func TestDevelopmentPrePush(t *testing.T) {
 		{name: "delete bypasses gate but not existing hook", gate: "false", oid: "zero", want: "refs/heads/topic"},
 		{name: "refuses untested commit", gate: "true", oid: "other", want: "check it out", fail: true},
 		{name: "release tags bypass the gate", gate: "false", oid: "release", want: tagNotice},
+		{name: "non-version tag is gated", gate: "false", oid: "qa", want: "test-push", fail: true},
 		{name: "branch still tested alongside release tag", gate: "false", oid: "mixed", want: "test-push", fail: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -98,14 +99,20 @@ func TestDevelopmentPrePush(t *testing.T) {
 			}
 			oid := head
 			ref := "refs/heads/topic"
+			remoteRef := ref
 			switch tc.oid {
 			case "zero":
 				oid = strings.Repeat("0", len(head))
 				ref = "(delete)"
 			case "other":
 				oid = strings.Repeat("1", len(head))
+			case "qa":
+				out, err = run("", "git", "tag", "qa-baseline", head)
+				require.NoError(t, err, "%s", out)
+				ref = "refs/tags/qa-baseline"
+				remoteRef = ref
 			}
-			input := ref + " " + oid + " refs/heads/topic " + strings.Repeat("0", len(head)) + "\n"
+			input := ref + " " + oid + " " + remoteRef + " " + strings.Repeat("0", len(head)) + "\n"
 			if tc.oid == "release" || tc.oid == "mixed" {
 				for _, tag := range []string{"v99.99.99", "v99.99.98"} {
 					out, err = run("", "git", "tag", tag, head)
@@ -138,6 +145,8 @@ func TestDevelopmentPrePush(t *testing.T) {
 			require.Contains(t, string(out), tc.want)
 			if tc.oid == "release" || tc.oid == "mixed" {
 				require.Equal(t, 1, strings.Count(string(out), tagNotice))
+			} else {
+				require.NotContains(t, string(out), tagNotice)
 			}
 		})
 	}

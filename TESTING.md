@@ -15,7 +15,7 @@ The installed PR/main and Nightly rows describe the target state after
 | Tier | Runner, selection and prerequisites | Time budget | Gate behavior |
 | --- | --- | --- | --- |
 | Pre-commit | Local, `make hooks` once, then `git commit`; also `make test-changed` directly. Go with race support, Git and Bash. Checks staged whitespace and tests working-tree packages selected by staged paths. | <30 s on a provisioned checkout for a typical small change | A test failure stops the commit; the existing Git hook still runs on a pass. |
-| Pre-push | Local, `make test-push` (invoked by the hook). Full credential-free package suite plus `make test-subprocess-fast`. Requires the Go toolchain, full Git history, Bash and Python. | <3 min | A failure stops the push; branch updates must be pushed from the corresponding checkout. Tag updates skip the local gate; the [Release] candidate smoke gates publication for version tags. |
+| Pre-push | Local, `make test-push` (invoked by the hook). Full credential-free package suite plus `make test-subprocess-fast`. Requires the Go toolchain, full Git history, Bash and Python. | <3 min | A failure stops the push; branch and non-version tag updates must be pushed from the corresponding checkout. Version tags (`refs/tags/v*`) skip the local gate; the [Release] candidate smoke gates publication. |
 | PR | [Test] and [Docs], hosted runners. Full `make test`, storage and plugin-cache checks, Linux/macOS installed verification [#670], offline OpenCode checks, Z specs, wire smoke against a local stub, and docs. | <10 min | Required `test` and `docs` block merge. Wire smoke and tool-install verification also report independently. |
 | Merge to main | Repeat PR jobs on the main commit. Coverage uploads are tied to that run and commit. | <10 min | A red main requires triage; do not update coverage from an unsuccessful run. |
 | Nightly | [Behavioral] (Nightly [#671]), daily 06:07 UTC or manual dispatch, hosted Linux on upstream main. `make test-nightly` is the authorized local equivalent: review the quarantine inventory, then run the `behavioral` selection. Requires Claude CLI, an Anthropic test key and the configured judge model after [#671]. | ≤1 h (30-minute hosted live job) | Live failures are red and Biff alerts on failed or canceled runs after [#671]. Not a PR check. |
@@ -31,9 +31,10 @@ The installed PR/main and Nightly rows describe the target state after
 pre-commit and pre-push code in Git's repository-local hooks. It leaves
 `core.hooksPath` and commit-msg untouched, so the Ethos audit seal and
 provenance trailer remain in the hooks Git runs and `ethos doctor` checks.
-Pre-push preserves Git's original remote arguments and input. Tag updates
-and deletions skip the local test suite, but branch updates in the same push
-still run it. `punt release` can push a version tag that differs from
+Pre-push preserves Git's original remote arguments and input. Updates to
+`refs/tags/v*` and deletions skip the local test suite, but branch and
+non-version tag updates in the same push still run it.
+`punt release` can push a version tag that differs from
 checkout HEAD; the [Release] workflow tests that tagged candidate before
 publication. The opt-in is per checkout: other
 linked worktrees and branches without `.githooks` still run their existing
