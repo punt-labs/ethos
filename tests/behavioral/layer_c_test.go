@@ -195,11 +195,7 @@ budget:
 	assert.GreaterOrEqual(t, result.Confidence, 0.7, "judge confidence too low")
 
 	// The output should contain a refusal or explanation.
-	outputLower := lower(output)
-	hasRefusal := contains(outputLower, "cannot", "refuse", "not allowed",
-		"only report", "don't", "do not", "won't", "will not",
-		"outside", "write_set", "not permitted", "report findings")
-	assert.True(t, hasRefusal,
+	assert.True(t, containsReviewerRefusal(output),
 		"reviewer output should contain a refusal or explanation of constraints")
 }
 
@@ -237,19 +233,6 @@ func gitExec(t *testing.T, f *Fixture, args ...string) *exec.Cmd {
 	cmd.Dir = f.Repo
 	cmd.Env = f.Env
 	return cmd
-}
-
-func lower(s string) string {
-	return strings.ToLower(s)
-}
-
-func contains(s string, any ...string) bool {
-	for _, sub := range any {
-		if strings.Contains(s, sub) {
-			return true
-		}
-	}
-	return false
 }
 
 func splitLines(s string) []string {
