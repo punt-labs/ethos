@@ -11,6 +11,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
@@ -29,19 +30,14 @@ func TestHandleSessionStart_CreatesRoster(t *testing.T) {
 	s, ss := testStores(t)
 
 	// Isolate git config so resolve chain uses USER env.
-	tmp := t.TempDir()
-	t.Setenv("GIT_CONFIG_GLOBAL", tmp+"/empty.gitconfig")
-	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("USER", "alice")
-	_ = os.WriteFile(tmp+"/empty.gitconfig", []byte(""), 0o644)
+	isolateGitConfig(t, "alice")
 
 	require.NoError(t, s.Save(&identity.Identity{
 		Name: "Alice", Handle: "alice", Kind: "human",
 	}))
 
 	input := bytes.NewReader([]byte(`{"session_id": "test-session-1"}`))
-	err := HandleSessionStart(input, SessionStartDeps{Store: s, Sessions: ss})
+	err := HandleSessionStart(input, SessionStartDeps{Store: s, Sessions: ss, Located: &resolve.Located{}})
 	require.NoError(t, err)
 
 	// Verify roster was created.
@@ -56,7 +52,7 @@ func TestHandleSessionStart_NoSessionID(t *testing.T) {
 
 	// No session_id → no roster, no error.
 	input := bytes.NewReader([]byte(`{}`))
-	err := HandleSessionStart(input, SessionStartDeps{Store: s, Sessions: ss})
+	err := HandleSessionStart(input, SessionStartDeps{Store: s, Sessions: ss, Located: &resolve.Located{}})
 	require.NoError(t, err)
 
 	sessions, err := ss.List()

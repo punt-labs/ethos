@@ -84,6 +84,17 @@ func OutsideRepo(t testing.TB) string {
 	return dir
 }
 
+// IsolateGitHome gives the fixture a private home and writable global Git config.
+func IsolateGitHome(t testing.TB) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, ".gitconfig"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+}
+
 // IsolateGit clears ambient Git variables, disables global and system Git
 // config, and stops discovery at the temporary root. Tests that need Git
 // config can supply their own. Call it from TestMain before m.Run.
