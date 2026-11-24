@@ -269,15 +269,26 @@ checks:
 `), 0o600))
 	runGit(t, repo, "add", "--", "sample.txt")
 	for _, tc := range []struct {
-		hook, stage, input, outcome string
+		hook, stage, input, outcome, agent string
 	}{
-		{"post-edit", "edit", `{"session_id":"fixture","tool_name":"Edit","tool_input":{"file_path":"sample.txt"}}`, "completed"},
-		{"pre-commit", "commit", "", "completed"},
-		{"subagent-stop", "handoff", `{"session_id":"fixture","agent_id":"worker","agent_type":"implementer"}`, "failed"},
+		{"post-edit", "edit", `{"session_id":"fixture","tool_name":"Edit","tool_input":{"file_path":"sample.txt"}}`, "completed", ""},
+		{"post-edit", "edit", `{"session_id":"fixture","agent_id":"worker","agent_type":"payload-agent","tool_name":"Edit","tool_input":{"file_path":"sample.txt"}}`, "completed", "check-agent"},
+		{"pre-commit", "commit", "", "completed", ""},
+		{"subagent-stop", "handoff", `{"session_id":"fixture","agent_id":"worker","agent_type":"implementer"}`, "failed", ""},
 	} {
-		t.Run(tc.stage, func(t *testing.T) {
+		name := tc.stage
+		if tc.agent != "" {
+			name += "-explicit-agent"
+		}
+		t.Run(name, func(t *testing.T) {
 			home := t.TempDir()
-			cmd := loggingProcess(t, home, repo, "hook", tc.hook)
+			args := []string{"hook", tc.hook}
+			wantAgent := "implementer"
+			if tc.agent != "" {
+				args = append(args, "--agent", tc.agent)
+				wantAgent = tc.agent
+			}
+			cmd := loggingProcess(t, home, repo, args...)
 			cmd.Env = append(cmd.Env, "ETHOS_SESSION=fixture", "ETHOS_AGENT_ID=worker", "CLAUDE_AGENT_TYPE=implementer")
 			cmd.Stdin = strings.NewReader(tc.input)
 			out, err := cmd.CombinedOutput()
@@ -287,7 +298,7 @@ checks:
 			require.Regexp(t, "Check finished .*stage="+tc.stage+" check="+tc.stage+"-probe outcome="+tc.outcome+" duration_ms=[1-9][0-9]+", log)
 			require.Equal(t, 1, strings.Count(log, "Check finished"), log)
 			for _, message := range []string{"Invocation finished ", "Check finished "} {
-				require.Regexp(t, message+".*session_id=fixture.*agent_id=worker.*agent=implementer", log)
+				require.Regexp(t, message+".*session_id=fixture.*agent_id=worker.*agent="+wantAgent, log)
 			}
 			require.NotContains(t, log, "sleep 0.05")
 		})

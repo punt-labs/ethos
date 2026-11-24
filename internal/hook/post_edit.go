@@ -38,10 +38,12 @@ func PostEdit(ctx context.Context, input io.Reader, output io.Writer, agent ...s
 		postEditAdvice(output, "post-edit input: "+err.Error())
 		return
 	}
-	if len(agent) > 0 {
-		diagnostic.SetHookIdentity(ctx, "", "", agent[0])
-	}
 	diagnostic.SetHookInput(ctx, payload)
+	handle := ""
+	if len(agent) > 0 {
+		handle = agent[0]
+		diagnostic.SetHookIdentity(ctx, "", "", handle)
+	}
 	tool, _ := payload["tool_input"].(map[string]any)
 	file, _ := tool["file_path"].(string)
 	if file == "" {
@@ -62,10 +64,6 @@ func PostEdit(ctx context.Context, input io.Reader, output io.Writer, agent ...s
 		return
 	}
 	checks := defaultEditChecks(root, file)
-	handle := ""
-	if len(agent) > 0 {
-		handle = agent[0]
-	}
 	configured, selected, err := configuredEditChecks(checkout, root, file, handle)
 	if err != nil {
 		postEditAdvice(output, "post-edit policy: "+err.Error())
