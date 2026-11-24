@@ -185,11 +185,10 @@ func runSetup(cmd *cobra.Command) error {
 		return fmt.Errorf("setup: %w", err)
 	}
 
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		return fmt.Errorf("setup: %w", err)
 	}
-	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	store := identity.NewStore(globalRoot)
 
 	// The bundle must exist before anything is written: finding out afterwards
@@ -687,12 +686,11 @@ func setupInteractive(cmd *cobra.Command) (setupConfig, error) {
 // errw. A user who sees no styles must be able to tell an empty store
 // from one that failed to read. Returns nil when the menu is unavailable.
 func writingStyleMenu(errw io.Writer) []*attribute.Attribute {
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		fmt.Fprintf(errw, "ethos: setup: cannot locate home directory, skipping style prompt: %v\n", err)
 		return nil
 	}
-	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	result, err := attribute.NewStore(globalRoot, attribute.WritingStyles).List()
 	if err != nil {
 		fmt.Fprintf(errw, "ethos: setup: cannot list writing styles, skipping style prompt: %v\n", err)

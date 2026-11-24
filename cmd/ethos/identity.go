@@ -6,6 +6,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/bundle"
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/punt-labs/ethos/v4/internal/vendor"
@@ -168,12 +169,12 @@ func unusableRepoOnly(err error) bool {
 // sessionStore returns the default session store rooted at the same
 // location as the identity store.
 func sessionStore() *session.Store {
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: cannot determine home directory: %v\n", err)
 		exitProcess(1, err)
 	}
-	ss := session.NewStore(home + "/.punt-labs/ethos")
+	ss := session.NewStore(globalRoot)
 	ss.SetLogger(processLogger.With("component", "ethos.session"))
 	return ss
 }

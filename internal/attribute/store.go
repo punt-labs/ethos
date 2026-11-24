@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 // Store provides CRUD for one category of attribute .md files.
@@ -33,11 +35,11 @@ func NewStore(root string, kind Kind) *Store {
 
 // DefaultStore returns a Store using the default global directory.
 func DefaultStore(kind Kind) (*Store, error) {
-	home, err := os.UserHomeDir()
+	root, err := layout.MachineRoot()
 	if err != nil {
 		return nil, fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	return &Store{root: filepath.Join(home, ".punt-labs", "ethos"), kind: kind}, nil
+	return &Store{root: root, kind: kind}, nil
 }
 
 // Dir returns the directory for this attribute kind.
