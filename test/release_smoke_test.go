@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"testing"
 	"time"
@@ -20,16 +21,18 @@ import (
 func TestReleaseCandidateSmoke(t *testing.T) {
 	const goodIdentity = `{"handle":"release-smoke","name":"Release Smoke","kind":"human"}`
 	for _, tc := range []struct {
-		name      string
-		version   string
-		createRC  int
-		identity  string
-		badDigest bool
-		wantError string
+		name           string
+		version        string
+		installVersion string
+		createRC       int
+		identity       string
+		badDigest      bool
+		wantError      string
 	}{
 		{name: "successful round trip", version: "1.2.3", identity: goodIdentity},
 		{name: "wrong candidate", version: "1.2.3", identity: goodIdentity, badDigest: true, wantError: "candidate SHA-256 mismatch"},
 		{name: "wrong version", version: "1.2.4", identity: goodIdentity, wantError: "expected ethos version 1.2.3"},
+		{name: "stale installer", version: "1.2.3", installVersion: "1.2.2", identity: goodIdentity, wantError: "installer must target ethos version 1.2.3"},
 		{name: "operation failed", version: "1.2.3", createRC: 1, identity: goodIdentity, wantError: "identity create failed"},
 		{name: "incorrect round trip", version: "1.2.3", identity: "{}", wantError: "identity round trip returned unexpected data"},
 	} {
@@ -52,7 +55,12 @@ esac
 			manifest := fmt.Sprintf("%x  %s\n", digest, asset)
 			require.NoError(t, os.WriteFile(filepath.Join(dist, "checksums.txt"), []byte(manifest), 0o600))
 
-			output, err := runReleaseSmoke(t, "candidate", "../install.sh", dist)
+			version := tc.installVersion
+			if version == "" {
+				version = "1.2.3"
+			}
+			installer := releaseSmokeInstaller(t, dist, version)
+			output, err := runReleaseSmoke(t, "candidate", installer, dist)
 			if tc.wantError == "" {
 				require.NoError(t, err, "%s", output)
 				assert.Contains(t, output, "PASS: identity round trip")
@@ -64,14 +72,26 @@ esac
 	}
 }
 
+func releaseSmokeInstaller(t *testing.T, dir, version string) string {
+	t.Helper()
+	source, err := os.ReadFile("../install.sh")
+	require.NoError(t, err)
+	pin := regexp.MustCompile(`(?m)^VERSION="[^"]+"$`)
+	require.Len(t, pin.FindAll(source, -1), 1)
+	installer := filepath.Join(dir, "install.sh")
+	require.NoError(t, os.WriteFile(installer, pin.ReplaceAll(source, []byte(`VERSION="`+version+`"`)), 0o600))
+	return installer
+}
+
 func TestPublishedReleaseSmokeRejectsUnprovenInstall(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		fallback  bool
-		wantError string
+		name            string
+		fallbackWarning string
+		wantError       string
 	}{
 		{name: "published bytes differ", wantError: "installed SHA-256 differs from the candidate"},
-		{name: "fallback with matching bytes", fallback: true, wantError: "the installer did not use the GitHub Release binary"},
+		{name: "failed download triggers fallback", fallbackWarning: "Download failed, falling back to source build", wantError: "the installer did not use the GitHub Release binary"},
+		{name: "source build with matching bytes", fallbackWarning: "Pre-built binary not available, building from source...", wantError: "the installer did not use the GitHub Release binary"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dist := t.TempDir()
@@ -80,8 +100,8 @@ func TestPublishedReleaseSmokeRejectsUnprovenInstall(t *testing.T) {
 			binary := "#!/bin/sh\nexit 0\n"
 			candidate := binary
 			warning := ""
-			if tc.fallback {
-				warning = "echo 'Download failed, falling back to source build' >&2\n"
+			if tc.fallbackWarning != "" {
+				warning = "echo '" + tc.fallbackWarning + "' >&2\n"
 			} else {
 				candidate += "# Different bytes\n"
 			}
@@ -91,6 +111,7 @@ func TestPublishedReleaseSmokeRejectsUnprovenInstall(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(dist, "checksums.txt"), []byte(manifest), 0o600))
 			fakeInstall := `#!/bin/sh
 set -eu
+VERSION="1.2.3"
 test "$*" = "--no-plugin"
 test -z "${ETHOS_LOCAL_BINARY:-}"
 mkdir -p "$HOME/.local/bin"

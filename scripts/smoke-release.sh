@@ -24,6 +24,9 @@ case "$asset" in
     *) fail "unsupported release platform" ;;
 esac
 
+installer_version=$(sed -n 's/^VERSION="\([^"]*\)"$/\1/p' "$installer")
+[ "$installer_version" = "$version" ] || fail "installer must target ethos version $version (found: ${installer_version:-none})"
+
 expected=$(awk -v asset="$asset" '$2 == asset { print $1 }' "$dist/checksums.txt")
 case "$expected" in
     ''|*[!0123456789abcdef]*) fail "invalid or duplicate checksum for $asset" ;;
@@ -60,7 +63,7 @@ if ! clean "$@" > "$sandbox/install.log" 2>&1; then
     cat "$sandbox/install.log" >&2
     fail "installer failed"
 fi
-if [ "$mode" = published ] && grep -qF 'falling back to source build' "$sandbox/install.log"; then
+if [ "$mode" = published ] && grep -qE 'falling back to source build|building from source' "$sandbox/install.log"; then
     cat "$sandbox/install.log" >&2
     fail "the installer did not use the GitHub Release binary"
 fi
