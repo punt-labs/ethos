@@ -12,9 +12,12 @@ while IFS= read -r -d '' path; do
     testdata/*)
       requested+=(.)
       ;;
-    */testdata/*)
-      requested+=("${path%%/testdata/*}")
-      ;;
+      */testdata/*)
+        requested+=("${path%%/testdata/*}")
+        ;;
+      internal/seed/sidecar/agents/*.md)
+        requested+=(internal/seed)
+        ;;
     *.go)
       dir=.
       if [[ "$path" == */* ]]; then
