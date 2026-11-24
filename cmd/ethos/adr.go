@@ -2,11 +2,11 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/punt-labs/ethos/v4/internal/adr"
 	"github.com/punt-labs/ethos/v4/internal/hook"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 
 	"github.com/spf13/cobra"
@@ -20,11 +20,11 @@ func adrStore() (*adr.Store, error) {
 	if err := r.Located.Err(); err != nil {
 		return nil, fmt.Errorf("locating ADR repository: %w", err)
 	}
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		return nil, fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	legacy := filepath.Join(home, ".punt-labs", "ethos", "adrs")
+	legacy := filepath.Join(globalRoot, "adrs")
 	if r.Store == "" {
 		return adr.NewStore(legacy), nil
 	}

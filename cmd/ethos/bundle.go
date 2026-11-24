@@ -62,11 +62,8 @@ func activeBundle() *bundle.Bundle {
 // Returns "" if the home directory cannot be determined; callers treat
 // that the same as "no global bundle scope."
 func defaultGlobalRoot() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".punt-labs", "ethos")
+	root, _ := layout.MachineRoot()
+	return root
 }
 
 // setConfigKey reads .punt-labs/ethos.yaml under repoRoot, sets key to
