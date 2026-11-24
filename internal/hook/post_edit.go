@@ -161,16 +161,32 @@ func postEditCheckout(ctx context.Context) (string, error) {
 	return hookCheckout(ctx)
 }
 
+func hookStartDir(cwd string) string {
+	start := os.Getenv("CLAUDE_PROJECT_DIR")
+	if start == "" {
+		start = cwd
+	}
+	return start
+}
+
+// RecordDisabledHookProject labels a killed hook without starting Git or loading policy.
+func RecordDisabledHookProject(ctx context.Context) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	checkout, store, err := resolve.CheckoutAndStoreWithoutGit(hookStartDir(cwd))
+	if err == nil {
+		diagnostic.SetHookProject(ctx, store, checkout)
+	}
+}
+
 func hookCheckout(ctx context.Context) (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
-	start := os.Getenv("CLAUDE_PROJECT_DIR")
-	if start == "" {
-		start = cwd
-	}
-	checkout, store, err := resolve.CheckoutAndStoreOf(start)
+	checkout, store, err := resolve.CheckoutAndStoreOf(hookStartDir(cwd))
 	if err != nil {
 		return "", err
 	}

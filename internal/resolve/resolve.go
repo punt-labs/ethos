@@ -1689,7 +1689,16 @@ func CheckoutOf(dir string) (string, error) {
 // CheckoutAndStoreOf returns physical checkout and store roots from one lookup.
 // A store error does not fail checkout discovery.
 func CheckoutAndStoreOf(dir string) (checkout, store string, err error) {
-	r := locate(dir)
+	return physicalCheckoutAndStore(locate(dir))
+}
+
+// CheckoutAndStoreWithoutGit gives disabled hooks a best-effort log label
+// without launching Git. It is not used to select storage or check policy.
+func CheckoutAndStoreWithoutGit(dir string) (checkout, store string, err error) {
+	return physicalCheckoutAndStore(handLocate(dir))
+}
+
+func physicalCheckoutAndStore(r located) (checkout, store string, err error) {
 	if errors.Is(r.err, ErrNotInRepo) {
 		return "", "", nil
 	}

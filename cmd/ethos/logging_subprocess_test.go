@@ -196,8 +196,8 @@ func TestSharedLoggingKilledHooks(t *testing.T) {
 	runGit(t, repo, "init", "-q")
 	for _, tc := range []struct{ hook, project string }{
 		{"pre-commit", "logging-project"},
-		{"subagent-stop", "unknown"},
-		{"post-edit", "unknown"},
+		{"subagent-stop", "logging-project"},
+		{"post-edit", "logging-project"},
 	} {
 		t.Run(tc.hook, func(t *testing.T) {
 			home := t.TempDir()

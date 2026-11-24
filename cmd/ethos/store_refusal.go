@@ -170,11 +170,20 @@ func usesGlobalOnly(cmd *cobra.Command) bool {
 // wrong tree and exit 0. Every other class runs on the global stores when a
 // lookup failed: that is the class's explicit choice (repoRoots.Global).
 func establishRoots(cmd *cobra.Command, _ []string) error {
-	if (cmd.CommandPath() == "ethos hook pre-commit" || cmd.CommandPath() == "ethos hook subagent-stop") && hook.Killed() {
-		return nil
+	path := cmd.CommandPath()
+	switch path {
+	case "ethos hook pre-commit":
+		if hook.Killed() {
+			return nil
+		}
+	case "ethos hook subagent-stop", "ethos hook post-edit":
+		if hook.Killed() {
+			hook.RecordDisabledHookProject(cmd.Context())
+			return nil
+		}
 	}
 	// These hooks read no Ethos storage.
-	if cmd.CommandPath() == "ethos hook post-edit" || cmd.CommandPath() == "ethos hook stdin-watchdog" {
+	if path == "ethos hook post-edit" || path == "ethos hook stdin-watchdog" {
 		return nil
 	}
 	global := exemptFromStoreRefusal(cmd)
