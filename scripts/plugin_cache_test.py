@@ -84,6 +84,43 @@ class PluginCacheTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertTrue((cache / expected / "5.2.1").is_symlink())
 
+    def test_undev_restores_links_after_cache_selection_changes(self):
+        for link_both in (False, True):
+            with self.subTest(link_both=link_both), tempfile.TemporaryDirectory() as home:
+                cache = Path(home) / ".claude/plugins/cache/punt-labs"
+                prod = cache / "ethos/5.2.1"
+                prod.mkdir(parents=True)
+                (prod / "original").touch()
+                result = run_make(home, "dev")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue(prod.is_symlink())
+
+                (cache / "ethos/5.2.2").mkdir()
+                dev = cache / "ethos-dev/5.2.1"
+                dev.mkdir(parents=True)
+                (dev / "original").touch()
+                registry = cache.parents[1] / "installed_plugins.json"
+                registry.write_text(
+                    json.dumps({"plugins": {"ethos-dev@punt-labs": [{"scope": "user"}]}}),
+                    encoding="utf-8",
+                )
+                if link_both:
+                    result = run_make(home, "dev")
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertTrue(dev.is_symlink())
+                    registry.write_text("{", encoding="utf-8")
+
+                foreign_link = cache / "ethos/5.2.3"
+                foreign_link.symlink_to(Path(home) / "another-checkout/plugin")
+                (cache / "ethos/5.2.3.bak").mkdir()
+                result = run_make(home, "undev")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse(prod.is_symlink(), result.stdout)
+                self.assertFalse(dev.is_symlink(), result.stdout)
+                self.assertTrue((prod / "original").is_file())
+                self.assertTrue((dev / "original").is_file())
+                self.assertTrue(foreign_link.is_symlink())
+
     def test_dev_and_undev_restore_either_cache_layout(self):
         for name, other in (
             ("ethos", "backup"),

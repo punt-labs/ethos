@@ -34,21 +34,28 @@ def cache_versions(cache):
     ]
 
 
-def select_version(state, checkout, override):
-    root = state / "cache/punt-labs"
+def plugin_caches(state, override):
     if override:
-        caches = [Path(override)]
-    else:
-        caches = [root / "ethos"]
-        if dev_is_registered(state / "installed_plugins.json", checkout):
-            caches.insert(0, root / "ethos-dev")
+        return [Path(override)]
+    root = state / "cache/punt-labs"
+    return [root / "ethos-dev", root / "ethos"]
+
+
+def missing_cache(caches):
+    return ValueError(f"no plugin cache found at {', '.join(str(cache) for cache in caches)}")
+
+
+def select_version(state, checkout, override):
+    caches = plugin_caches(state, override)
+    if not override and not dev_is_registered(state / "installed_plugins.json", checkout):
+        caches = caches[1:]
     for cache in caches:
         versions = cache_versions(cache)
         if versions:
             names = "\n".join(entry.name for entry in versions)
             latest = subprocess.check_output(["sort", "-V"], input=names, text=True).splitlines()[-1]
             return cache / latest
-    raise ValueError(f"no plugin cache found at {', '.join(str(cache) for cache in caches)}")
+    raise missing_cache(caches)
 
 
 def backup_path(link):
@@ -74,9 +81,6 @@ def link_cache(link, target):
 
 
 def restore_cache(link):
-    if not link.is_symlink():
-        print("not in dev mode")
-        return
     backup = backup_path(link)
     if not backup.is_dir():
         raise ValueError(
@@ -88,14 +92,33 @@ def restore_cache(link):
     print(f"restored {link}")
 
 
+def restore_caches(caches, checkout):
+    versions = [entry for cache in caches for entry in cache_versions(cache)]
+    if not versions:
+        raise missing_cache(caches)
+    targets = {checkout, checkout / "plugin"}
+    linked = [entry for entry in versions if entry.is_symlink() and entry.readlink() in targets]
+    if not linked:
+        print("not in dev mode")
+        return
+    errors = []
+    for link in linked:
+        try:
+            restore_cache(link)
+        except (OSError, ValueError) as exc:
+            errors.append(str(exc))
+    if errors:
+        raise ValueError("\n".join(errors))
+
+
 def main(action, home, checkout, override):
     try:
         repo = Path(checkout).resolve()
-        link = select_version(Path(home) / ".claude/plugins", repo, override)
+        state = Path(home) / ".claude/plugins"
         if action == "dev":
-            link_cache(link, repo / "plugin")
+            link_cache(select_version(state, repo, override), repo / "plugin")
         else:
-            restore_cache(link)
+            restore_caches(plugin_caches(state, override), repo)
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
