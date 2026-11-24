@@ -5,7 +5,7 @@ head=
 tag_notice=
 while read -r local_ref local_oid remote_ref _remote_oid; do
   [[ "$local_ref" == '(delete)' || "$local_oid" =~ ^0+$ ]] && continue
-  if [[ "$remote_ref" == refs/tags/v* ]]; then
+  if [[ "$remote_ref" == refs/tags/v* && "${remote_ref#refs/tags/}" != */* ]]; then
     if [[ -z "$tag_notice" ]]; then
       printf '%s\n' "Version tags are gated by the release workflow's candidate smoke."
       tag_notice=1

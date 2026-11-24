@@ -68,7 +68,8 @@ func TestDevelopmentPrePush(t *testing.T) {
 		{name: "delete bypasses gate but not existing hook", gate: "false", oid: "zero", want: "refs/heads/topic"},
 		{name: "refuses untested commit", gate: "true", oid: "other", want: "check it out", fail: true},
 		{name: "release tags bypass the gate", gate: "false", oid: "release", want: tagNotice},
-		{name: "non-version tag is gated", gate: "false", oid: "qa", want: "test-push", fail: true},
+		{name: "non-version tag is gated", gate: "false", oid: "qa-baseline", want: "test-push", fail: true},
+		{name: "namespaced v-prefix tag is gated", gate: "false", oid: "validation/checkpoint", want: "test-push", fail: true},
 		{name: "branch still tested alongside release tag", gate: "false", oid: "mixed", want: "test-push", fail: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -106,10 +107,10 @@ func TestDevelopmentPrePush(t *testing.T) {
 				ref = "(delete)"
 			case "other":
 				oid = strings.Repeat("1", len(head))
-			case "qa":
-				out, err = run("", "git", "tag", "qa-baseline", head)
+			case "qa-baseline", "validation/checkpoint":
+				out, err = run("", "git", "tag", tc.oid, head)
 				require.NoError(t, err, "%s", out)
-				ref = "refs/tags/qa-baseline"
+				ref = "refs/tags/" + tc.oid
 				remoteRef = ref
 			}
 			input := ref + " " + oid + " " + remoteRef + " " + strings.Repeat("0", len(head)) + "\n"
