@@ -117,6 +117,16 @@ TEST_PARALLEL ?= 2
 test: ## Run tests with race detection and write coverage to coverage.out
 	go test -race -count=1 -timeout 30m -p $(TEST_PARALLEL) -coverprofile=coverage.out ./...
 
+.PHONY: hooks test-changed
+hooks: ## Opt in to the repository's development Git hooks
+	@if path=$$(git config --get core.hooksPath) && [ "$$path" != .githooks ]; then \
+		echo "core.hooksPath is already $$path; chain .githooks manually" >&2; exit 1; \
+	fi
+	git config --local core.hooksPath .githooks
+
+test-changed: ## Run default Go tests in packages affected by staged paths
+	bash scripts/test-changed.sh
+
 .PHONY: coverage-check coverage-baseline coverage-baseline-from-ci
 
 coverage-check: ## Compare per-package coverage in coverage.out (from make test) with coverage-baseline.txt
