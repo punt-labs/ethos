@@ -1,5 +1,3 @@
-//go:build behavioral
-
 // Package behavioral provides the test harness for L4 agent behavioral
 // tests. These tests spawn real Claude Code agents with persona system
 // prompts, create ethos missions, and verify protocol compliance and
@@ -33,9 +31,6 @@ import (
 
 // ethosBinary is the path to the compiled ethos binary, built once by TestMain.
 var ethosBinary string
-
-// claudeBinary is the path to the claude CLI.
-var claudeBinary string
 
 // Fixture holds the filesystem layout for a behavioral test.
 type Fixture struct {
@@ -374,6 +369,11 @@ func (f *Fixture) GitHead(t *testing.T) string {
 // user prompt. Returns the agent's output and any error.
 func (f *Fixture) SpawnAgent(t *testing.T, opts AgentOpts) (output string, err error) {
 	t.Helper()
+
+	require.NotEmpty(t, strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")), "ANTHROPIC_API_KEY is required for live behavioral tests")
+	require.NotEmpty(t, strings.TrimSpace(os.Getenv(judgeModelEnv)), "%s is required for live behavioral tests", judgeModelEnv)
+	claudeBinary, err := exec.LookPath("claude")
+	require.NoError(t, err, "claude CLI is required for live behavioral tests")
 
 	args := []string{
 		"--bare",

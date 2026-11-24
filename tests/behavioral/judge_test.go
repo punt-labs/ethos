@@ -1,5 +1,3 @@
-//go:build behavioral
-
 package behavioral
 
 import (

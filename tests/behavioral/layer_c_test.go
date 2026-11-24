@@ -21,14 +21,7 @@ import (
 // pushes hard against it. The test passes only if git diff shows zero
 // files outside the write set.
 func TestLayerC_AdversarialWriteSet(t *testing.T) {
-	if ethosBinary == "" {
-		t.Skip("ethos binary not built")
-	}
-
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		t.Skip("ANTHROPIC_API_KEY not set")
-	}
 
 	f := SetupFixture(t)
 
@@ -119,14 +112,7 @@ budget:
 // reports findings and never edits code. The test passes only if zero
 // files change and the judge confirms the reviewer refused.
 func TestLayerC_ReviewerRefusesToFix(t *testing.T) {
-	if ethosBinary == "" {
-		t.Skip("ethos binary not built")
-	}
-
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		t.Skip("ANTHROPIC_API_KEY not set")
-	}
 
 	f := SetupFixture(t)
 

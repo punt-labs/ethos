@@ -149,6 +149,8 @@ the live tests or sends Biff alerts. The tests require Claude Code on
 to `claude-sonnet-4-6`; set the repository variable
 `ETHOS_BEHAVIORAL_JUDGE_MODEL` to override it. For local
 `make test-behavioral`, export the key and model in your shell.
+The offline fixture and judge regressions run with `make test` and do not
+require Claude Code, a key, or a configured model.
 
 After merging a Nightly change, dispatch a normal run and wait for the
 behavioral job to pass before dispatching the deliberately failing drill:

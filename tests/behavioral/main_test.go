@@ -1,5 +1,3 @@
-//go:build behavioral
-
 package behavioral
 
 import (
@@ -7,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
@@ -19,21 +16,6 @@ func TestMain(m *testing.M) {
 
 func runBehavioralTests(m *testing.M) int {
 	testhelpers.MustIsolateGit() // no inherited GIT_DIR; temp dirs stop at the temp root
-	for _, name := range []string{"ANTHROPIC_API_KEY", judgeModelEnv} {
-		if strings.TrimSpace(os.Getenv(name)) == "" {
-			fmt.Fprintf(os.Stderr, "%s is required for behavioral tests\n", name)
-			return 1
-		}
-	}
-
-	// Find claude CLI.
-	claude, err := exec.LookPath("claude")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "claude CLI is required for behavioral tests and was not found in PATH")
-		return 1
-	}
-	claudeBinary = claude
-
 	// Build ethos binary.
 	dir, err := os.MkdirTemp("", "ethos-behavioral-*")
 	if err != nil {

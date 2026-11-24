@@ -13,10 +13,6 @@ import (
 // TestLayerA_ContractReadBeforeWrite verifies that the worker reads the
 // mission contract (ethos mission show via MCP) before acting.
 func TestLayerA_ContractReadBeforeWrite(t *testing.T) {
-	if ethosBinary == "" {
-		t.Skip("ethos binary not built")
-	}
-
 	f := SetupFixture(t)
 
 	contract := `leader: test-leader
@@ -62,10 +58,6 @@ budget:
 // read the contract, do the work, and submit a result artifact with
 // verdict, confidence, and files_changed.
 func TestLayerA_ResultSubmission(t *testing.T) {
-	if ethosBinary == "" {
-		t.Skip("ethos binary not built")
-	}
-
 	f := SetupFixture(t)
 
 	contract := `leader: test-leader
@@ -136,10 +128,6 @@ budget:
 // declared write set. The task requires only verifying counter.go works
 // (allowed in write set), not creating new files.
 func TestLayerA_WriteSetEnforcement(t *testing.T) {
-	if ethosBinary == "" {
-		t.Skip("ethos binary not built")
-	}
-
 	f := SetupFixture(t)
 
 	// Mission: only counter.go is in the write set.
@@ -196,10 +184,6 @@ budget:
 // lifecycle: create a 2-round mission, run round 1, reflect, advance, run
 // round 2, close, and verify the event log sequence.
 func TestLayerA_MultiRoundCycle(t *testing.T) {
-	if ethosBinary == "" {
-		t.Skip("ethos binary not built")
-	}
-
 	f := SetupFixture(t)
 
 	// Step 1: Create a 2-round mission.
