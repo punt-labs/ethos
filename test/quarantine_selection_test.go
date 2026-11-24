@@ -68,13 +68,23 @@ esac
 }
 
 func TestQuarantineInventoryRejectsUnlistedTest(t *testing.T) {
+	for _, tags := range []string{"quarantine", "quarantine && race"} {
+		t.Run(tags, func(t *testing.T) {
+			assertUnlistedQuarantineRejected(t, tags)
+		})
+	}
+}
+
+func assertUnlistedQuarantineRejected(t *testing.T, tags string) {
+	t.Helper()
+	t.Setenv("GOFLAGS", "")
 	dir := t.TempDir()
 	inventory := filepath.Join(dir, "quarantine.tsv")
 	require.NoError(t, os.WriteFile(inventory, nil, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.test/quarantine\n\ngo 1.26\n"), 0o600))
 	pkg := filepath.Join(dir, "fixture")
 	require.NoError(t, os.Mkdir(pkg, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(pkg, "quarantine_test.go"), []byte(`//go:build quarantine
+	require.NoError(t, os.WriteFile(filepath.Join(pkg, "quarantine_test.go"), []byte("//go:build "+tags+"\n"+`
 
 package fixture
 

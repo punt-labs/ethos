@@ -44,7 +44,7 @@ def selected_test_files(*flags):
         '{{range .TestGoFiles}}{{printf "%s\\t%s\\n" $.Dir .}}{{end}}'
         '{{range .XTestGoFiles}}{{printf "%s\\t%s\\n" $.Dir .}}{{end}}'
     )
-    output = subprocess.check_output(["go", "list", *flags, "-f", template, "./..."], text=True)
+    output = subprocess.check_output(["go", "list", "-race", *flags, "-f", template, "./..."], text=True)
     return {tuple(line.split("\t", 1)) for line in output.splitlines() if line}
 
 
@@ -78,7 +78,7 @@ def main():
             command = ["go", "test", "-race", "-count=1"]
             pattern = f"^{test}$"
             has_default_tests = subprocess.check_output(
-                ["go", "list", "-e", "-f", "{{if or .TestGoFiles .XTestGoFiles}}yes{{end}}", package],
+                ["go", "list", "-race", "-e", "-f", "{{if or .TestGoFiles .XTestGoFiles}}yes{{end}}", package],
                 text=True,
             ).strip()
             if has_default_tests:
