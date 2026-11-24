@@ -14504,7 +14504,11 @@ of record for public keys and delegations.
   encryption, separate waves.
 - Amends the PR/FAQ "Won't Do: authentication or authorization" if
   ratified: ethos stores and verifies trust records; enforcement stays
-  in the consuming tools.
+  in the consuming tools. Also amends biff requirement R-CC.2: on Claude
+  Code with channels, `ask` and `instruct` bodies travel in the channel
+  event.
+- A compromise record distrusts everything the compromised key ever
+  signed. Human biff tool attestations expire on the delegation bound.
 
 ### Alternatives rejected
 

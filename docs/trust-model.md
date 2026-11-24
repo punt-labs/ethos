@@ -78,7 +78,8 @@ These come from the operator and are not reopened here.
   delivery table (R-P.1 to R-P.7).
 
 Section 5.4 states where the relationship ruling refines R-P.1. Section
-12 states where this design amends ethos's PR/FAQ.
+6.1 states where this design amends R-CC.2. Section 12 states where it
+amends ethos's PR/FAQ.
 
 ## 3. Terms
 
@@ -237,6 +238,13 @@ reason; it keeps NIP-OA's display rule (section 4.1).
 
 - Default expiry 24 hours on a developer machine; at most 7 days for an
   agent image.
+- The same lifetime and renewal rule applies to a human's biff tool
+  attestation ("biff key B_jim is mine"). A same-user agent can read
+  that key (section 4.6), so its attestation must lapse on the same
+  bound as a delegation; otherwise a withheld revocation would leave a
+  stolen human biff key trusted forever. The GPG link (section 8)
+  expires with the GPG key's own expiry, at most one year, because
+  beadle verifies mail through GnuPG's own expiry and revocation status.
 - Renewal happens at session start and needs user presence: a keychain
   prompt, a hardware-key touch or a passphrase. Nothing keeps the
   identity key unlocked between renewals.
@@ -252,7 +260,7 @@ reason; it keeps NIP-OA's display rule (section 4.1).
 | Record | Signed by | Effect |
 |--------|-----------|--------|
 | `ethos.revoke` | owner identity key, or org key for a person attestation | Named key or delegation is distrusted from the moment the verifier learns of it. The owner's identity key is untouched (R-A.6). |
-| `ethos.compromise` | the compromised identity key itself, or the org key | Irrevocable. Every trust record signed by that key that the verifier first saw after the stated compromise time is distrusted, along with everything below it. A thief can backdate `issued`, so verifiers record a first-seen time for every trust record and use it, not `issued`. |
+| `ethos.compromise` | the compromised identity key itself, or the org key | Irrevocable. Every trust record that key ever signed is distrusted, whenever it was issued or first seen, along with everything below it: tool attestations, delegations, the address book. A thief can backdate `issued` and can distribute records before the compromise is reported, so no time cut-off is safe. The owner re-establishes with a new key through an org re-attestation or contacts' manual re-pin, then re-issues delegations and re-signs the address book. |
 | `ethos.successor` | old identity key | Planned rotation only: "my new identity key is K2". Refused when a compromise record exists for the old key. After a compromise only an org re-attestation or a contact's manual re-pin can name a new key. |
 | org self-revocation | org key | Org key is retired; members must re-pin a new org key by out-of-band fingerprint check. |
 
@@ -480,11 +488,25 @@ then messaged a sibling, the stranger's words would arrive as
 - Every message the session sends carries a signed tag
   `["floor", <grade>]`. The recipient takes the minimum of the floor and
   everything else in section 5.3.
+- biffd sets the floor tag itself when it signs. No biff tool, CLI flag
+  or hook input accepts a floor value, so a model that passes on a
+  stranger's request through biff's own tools cannot raise it.
 - The floor resets only when the session ends or the user runs
   `/biff:floor reset` (a human-typed command, not a model tool).
 
 Own agents that have only worked inside the user's repositories keep
 `instruct`. The subagent ruling stays intact.
+
+**What the floor does not stop.** The floor is signed with the agent's
+own biff key, and a same-user agent can read that key (section 4.6). An
+injected agent with shell access can sign an event by hand with any
+floor it likes. The floor therefore defends the path an agent normally
+takes — biff's tools — not an agent that has already been turned
+against its owner. That case is "anything your own agent does once
+injected" (section 9). Narrowing it needs the agent key out of the
+model's reach: biffd as the only process able to open it (a separate OS
+user, or the keychain with access limited to the biffd binary), which
+is open question 7.
 
 ## 6. Decision 3: behavior per trust grade
 
@@ -539,6 +561,18 @@ DES-087 forbids bodies in channel events until PL-228 is fixed. Signing
 fixes the forgery half of PL-228. It does not fix eavesdropping or inbox
 draining (section 9). This design lifts the DES-087 limit for `ask` and
 `instruct` only.
+
+This also amends requirement R-CC.2 in
+`biff/docs/requirements-biffd-multihost.md`, which says `trusted`
+content on Claude Code arrives as a wake line followed by a
+`read_messages` pull. R-CC.2 was written before Claude Code had
+channels. DES-087 since made channels the Claude Code plugin's delivery
+path, and the 2026-11-22 scope change on Linear PL-225 moved Claude Code
+real-time delivery into that work. Under this design an `ask` or
+`instruct` body travels in the channel event; every other grade keeps
+R-CC.2's wake-line-then-pull behavior. A Claude Code session with
+channels off keeps R-CC.2 unchanged. The amendment needs the
+operator's ruling (open question 8).
 
 ### 6.2 beadle
 
@@ -604,9 +638,15 @@ Biff keys are never exported in Nostr `nsec` form.
 - Stored kinds (write, wall, forward, plan): `created_at` ≤ now + 300 s
   and `exp` not passed. Senders set `exp` ≤ `created_at` + 30 days;
   larger is rejected. Mail held for hours is accepted.
-- The replay cache is mandatory, on disk, one per machine, keyed by
-  event id, entries kept until their `exp`. If the cache is lost, events
-  created before the process started are rejected.
+- The replay cache is mandatory, on disk (written with `fsync` before
+  delivery), one per machine, keyed by event id, entries kept until
+  their `exp`.
+- If the cache is lost, biffd cannot tell an unseen stored message from
+  a replay. Talk events created before the process started are rejected
+  (they are stale anyway). Stored events created before the process
+  started are still delivered, so queued mail is not lost, but at most
+  at `notify`, labeled "delivered after replay-cache loss". A replay can
+  then show a summary twice but cannot act as `ask` or `instruct` twice.
 
 ### 7.3 Verification order
 
@@ -697,7 +737,9 @@ to one identity.
 | Prompt-injected own agent with shell access | Identity key out of reach (keychain, hardware key, user presence); signed address book; floor; delegation scope; agent-image containment; deny rules as backstop. | It can read and use its own biff key, within its delegation. Without the identity-key measures it could read every private key and rewrite grants. |
 | Own agent passes on a stranger's request | Floor (5.6). | Outside content a host cannot report; the floor then defaults to `ask`. |
 | Leaked agent key | Scope ceiling, floor, 24 h expiry, revocation. | Use before expiry or revocation reaches the verifier. |
-| Leaked human identity key | Compromise record, org revocation; key normally in a keychain or hardware key with per-use presence. | Records the thief issues before the compromise record is seen. |
+| Leaked human identity key | Compromise record distrusts everything the key ever signed; org revocation; key normally in a keychain or hardware key with per-use presence. | Use of the thief's records before the compromise record reaches the verifier. |
+| Leaked human biff key | Its tool attestation expires on the delegation bound (24 h, 7 days in images); revocation. | Use before expiry or revocation reaches the verifier. |
+| Injected agent forges its own floor | biffd alone sets the floor on messages sent through biff's tools. | An agent that reads its key and signs by hand (open question 7). |
 | Org key theft | Offline or hardware org key; org self-revocation record; re-pin only after out-of-band fingerprint check. | Attestations issued before the revocation is seen. |
 | Trust-on-first-use at org join | Out-of-band fingerprint confirmation. | A user who confirms without checking. |
 | Compromised teammate | `team` defaults to `ask`: state changes and data disclosure need the user's confirmation. | Whatever the user approves. |
@@ -796,3 +838,13 @@ stands.
 6. **Floor sources on hosts without tool hooks.** Recommendation: unknown
    floor counts as `ask`, so own agents on those hosts get `ask`, not
    `instruct`, until the host reports its inputs.
+7. **Keep agent biff keys out of the model's reach.** Today a same-user
+   agent can read its own key and sign a false floor by hand.
+   Recommendation: accept this for waves (a)–(c), where agent-image
+   containment applies; schedule biffd-only key access (keychain access
+   limited to the biffd binary on macOS, a separate OS user on Linux) as
+   a follow-up before `instruct` is offered outside agent images.
+8. **Amend R-CC.2 for Claude Code with channels.** Recommendation:
+   amend, as section 6.1 states: `ask` and `instruct` bodies travel in
+   the channel event; every other grade, and any session with channels
+   off, keeps the wake-line-then-pull behavior.
