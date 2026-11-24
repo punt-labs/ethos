@@ -85,6 +85,29 @@ class PluginCacheTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertTrue((cache / expected / "5.2.1").is_symlink())
 
+    def test_dev_uses_registered_install_path_before_latest_cache_version(self):
+        for has_path in (True, False):
+            with self.subTest(has_path=has_path), tempfile.TemporaryDirectory() as home:
+                cache = Path(home) / ".claude/plugins/cache/punt-labs/ethos-dev"
+                older = cache / "5.2.0"
+                newer = cache / "5.2.1"
+                older.mkdir(parents=True)
+                newer.mkdir()
+                record = {"scope": "user"}
+                if has_path:
+                    record["installPath"] = str(older)
+                (cache.parents[2] / "installed_plugins.json").write_text(
+                    json.dumps({"plugins": {"ethos-dev@punt-labs": [record]}}),
+                    encoding="utf-8",
+                )
+
+                expected, untouched = (older, newer) if has_path else (newer, older)
+                result = run_make(home, "dev")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue(expected.is_symlink(), result.stdout)
+                self.assertEqual(expected.resolve(), ROOT / "plugin")
+                self.assertFalse(untouched.is_symlink())
+
     def test_undev_restores_links_after_cache_selection_changes(self):
         for link_both in (False, True):
             with self.subTest(link_both=link_both), tempfile.TemporaryDirectory() as home:

@@ -4,25 +4,25 @@ import subprocess
 import sys
 
 
-def dev_is_registered(registry, checkout):
+def dev_registration(registry, checkout):
     try:
         state = json.loads(registry.read_text(encoding="utf-8"))
         records = state["plugins"].get("ethos-dev@punt-labs", [])
         if not isinstance(records, list) or not all(isinstance(row, dict) for row in records):
             raise ValueError("expected a list of install records")
     except FileNotFoundError:
-        return True
+        return {}
     except (AttributeError, KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"invalid Claude plugin registry {registry}: {exc}") from exc
     for record in records:
         scope = record.get("scope")
         if scope == "user":
-            return True
+            return record
         if scope in ("project", "local"):
             project = record.get("projectPath")
             if isinstance(project, str) and Path(project).is_absolute() and Path(project).resolve() == checkout:
-                return True
-    return False
+                return record
+    return None
 
 
 def cache_versions(cache):
@@ -47,8 +47,16 @@ def missing_cache(caches):
 
 def select_version(state, checkout, override):
     caches = plugin_caches(state, override)
-    if not override and not dev_is_registered(state / "installed_plugins.json", checkout):
-        caches = caches[1:]
+    if not override:
+        registration = dev_registration(state / "installed_plugins.json", checkout)
+        if registration is None:
+            caches = caches[1:]
+        else:
+            install_path = registration.get("installPath")
+            if install_path not in (None, ""):
+                if not isinstance(install_path, str) or Path(install_path) not in cache_versions(caches[0]):
+                    raise ValueError(f"registered ethos-dev installPath is not a cached version: {install_path!r}")
+                return Path(install_path)
     for cache in caches:
         versions = cache_versions(cache)
         if versions:
