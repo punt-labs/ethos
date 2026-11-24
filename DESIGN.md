@@ -1117,12 +1117,18 @@ quarry, lux, and z-spec all have the same two-speed problem.
 
 For `ethos-dev`, `make dev` checks applicable Claude Code registrations
 in registry order: user-scope records and project- or local-scope records
-for this checkout. It symlinks the first registered `installPath` that
-points to an existing dev cache directory. If applicable records specify
-paths but none are usable, it reports an error rather than linking another
-version. When no applicable record specifies a path, it uses the newest
-version in the selected cache, ordered by `sort -V`. No synthetic dev
-version is used.
+for this checkout. An isolated Claude Code 2.1.323 probe with distinct
+cached versions loaded the first applicable entry in both record orders
+for user/project and user/local pairs, with no scope override.
+
+`make dev` symlinks the first registered `installPath` that points to an
+existing dev cache directory. If none exists, it can retarget a dangling
+development link with an intact backup, as when a checkout moves. If
+applicable records specify paths but none are usable, it reports an error
+rather than linking another version. When no applicable record specifies
+a path, it uses the newest version, ordered by `sort -V`, in the dev
+cache if eligible and nonempty, or in the production cache otherwise.
+No synthetic dev version is used.
 
 ### Rejected alternatives
 
