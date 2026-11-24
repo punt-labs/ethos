@@ -39,6 +39,31 @@ def read_inventory(path):
         yield fields
 
 
+def selected_test_files(*flags):
+    template = (
+        '{{range .TestGoFiles}}{{printf "%s\\t%s\\n" $.Dir .}}{{end}}'
+        '{{range .XTestGoFiles}}{{printf "%s\\t%s\\n" $.Dir .}}{{end}}'
+    )
+    output = subprocess.check_output(["go", "list", *flags, "-f", template, "./..."], text=True)
+    return {tuple(line.split("\t", 1)) for line in output.splitlines() if line}
+
+
+def check_unlisted_tests(records):
+    quarantine_files = selected_test_files("-tags", "quarantine") - selected_test_files()
+    packages = {directory for directory, _ in quarantine_files}
+    tracked = {(package, test) for package, test, *_ in records}
+    for directory in sorted(packages):
+        relative = Path(directory).relative_to(Path.cwd())
+        package = "." if relative == Path(".") else f"./{relative.as_posix()}"
+        listed = subprocess.check_output(
+            ["go", "test", "-race", "-count=1", "-tags", "quarantine", "-list", "^TestQuarantined_", package],
+            text=True,
+        )
+        for test in listed.splitlines():
+            if test.startswith("TestQuarantined_") and (package, test) not in tracked:
+                raise ValueError(f"{package} {test} is missing from the quarantine inventory")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("list", "run"))
@@ -46,6 +71,7 @@ def main():
     args = parser.parse_args()
     try:
         records = list(read_inventory(args.inventory))
+        check_unlisted_tests(records)
         if not records:
             print("No quarantined tests.")
         for package, test, issue, owner, expires, reason in records:

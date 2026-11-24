@@ -42,6 +42,7 @@ func TestQuarantineSelection(t *testing.T) {
 			require.NoError(t, os.WriteFile(inventory, []byte(tc.inventory), 0o600))
 			fakeGo := `#!/bin/sh
 case " $* " in
+ *' list '*" ./... "*) ;;
  *' list '*) [ -z "$TEST_DEFAULT_LIST" ] || echo yes;;
  *' -tags quarantine -list '*) printf '%s\n' "$TEST_QUARANTINE_LIST";;
  *' -list '*) printf '%s\n' "$TEST_DEFAULT_LIST";;
@@ -64,4 +65,30 @@ esac
 			}
 		})
 	}
+}
+
+func TestQuarantineInventoryRejectsUnlistedTest(t *testing.T) {
+	dir := t.TempDir()
+	inventory := filepath.Join(dir, "quarantine.tsv")
+	require.NoError(t, os.WriteFile(inventory, nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.test/quarantine\n\ngo 1.26\n"), 0o600))
+	pkg := filepath.Join(dir, "fixture")
+	require.NoError(t, os.Mkdir(pkg, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(pkg, "quarantine_test.go"), []byte(`//go:build quarantine
+
+package fixture
+
+import "testing"
+
+func TestQuarantined_Unlisted(t *testing.T) {
+	t.Fatal("listing must not run the test")
+}
+`), 0o600))
+	script, err := filepath.Abs("../scripts/test-quarantine.py")
+	require.NoError(t, err)
+	cmd := exec.CommandContext(t.Context(), "python3", script, "list", inventory)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "%s", out)
+	require.Contains(t, string(out), "./fixture TestQuarantined_Unlisted is missing from the quarantine inventory")
 }

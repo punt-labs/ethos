@@ -94,7 +94,9 @@ issue, named owner, UTC expiry (within 14 days), and reason to the inventory.
 Keep the first failure evidence and diagnose before rerunning. Review the
 inventory daily; fix or remove the test by expiry. Restore the ordinary
 name and selection and remove the inventory row when the test is fixed.
-An empty inventory is valid. Validation rejects a listed test that is still
+An empty inventory is valid if no quarantined tests are selected. Validation
+rejects unlisted quarantined tests in packages that gain test files under
+the tag on the current platform. It also rejects a listed test that is still
 selected by default; a listed test that does not collect is an error when
 running quarantined tests.
 
