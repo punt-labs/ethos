@@ -17,6 +17,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/doctor"
 	"github.com/punt-labs/ethos/v4/internal/enable"
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/schema"
@@ -123,13 +124,11 @@ type report struct {
 }
 
 func main() {
-	home, err := os.UserHomeDir()
+	defaultGlobalRoot, err := layout.MachineRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "validate-content: cannot determine home directory: %v\n", err)
 		os.Exit(1)
 	}
-
-	defaultGlobalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
 	var ethosRoot, globalRoot string
 	flag.StringVar(&ethosRoot, "ethos-root", "", "path to .punt-labs/ethos/ (default: located repository store)")

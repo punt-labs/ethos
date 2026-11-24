@@ -84,20 +84,12 @@ func runAllFor(loc resolve.Located, s identity.IdentityStore, ss *session.Store,
 	// A bundle or policy that cannot be honoured is its own failing row, and
 	// every row that read a store read layers the configuration governs.
 	var issue error
+	global, _ := layout.MachineRoot()
 	if storeErr == nil {
-		home, herr := os.UserHomeDir()
-		global := ""
-		if herr == nil {
-			global = filepath.Join(home, ".punt-labs", "ethos")
-		}
 		issue = bundle.ConfigIssueFromConfig(loc.Store, loc.Ethos, global, loc.Config)
 	}
 	results := runAll(s, ss, loc.Checkout, loc.CheckoutErr, storeRoot, storeErr, issue, loc.Config, loc.ConfigErr, teams, human)
-	if home, herr := os.UserHomeDir(); herr == nil {
-		results = append(results, CheckStorage(loc, filepath.Join(home, ".punt-labs", "ethos")))
-	} else {
-		results = append(results, CheckStorage(loc, ""))
-	}
+	results = append(results, CheckStorage(loc, global))
 	if issue != nil {
 		what, _, _ := resolve.Describe(issue)
 		results = append([]Result{{Name: "Repository configuration", Status: "FAIL", Detail: what + ": " + issue.Error()}}, results...)

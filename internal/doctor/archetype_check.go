@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/seed"
 	"gopkg.in/yaml.v3"
@@ -97,11 +98,10 @@ func CheckDelegatedWorkerArchetypes(storeRoot string) Result {
 	// global archetypes this check never actually inspected. Same shape as
 	// C1 above and archetypeAttemptedPath below: "could not determine"
 	// silently collapsing into a specific, healthy-looking answer.
-	home, err := os.UserHomeDir()
+	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not determine the global archetype root: %v", err)}
 	}
-	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	store := mission.NewArchetypeStore(filepath.Join(storeRoot, ".punt-labs", "ethos"), globalRoot)
 
 	repoArchRoot := filepath.Join(storeRoot, ".punt-labs", "ethos")
