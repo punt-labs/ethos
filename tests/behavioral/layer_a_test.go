@@ -3,6 +3,7 @@
 package behavioral
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,16 +12,7 @@ import (
 
 // TestLayerA_ContractReadBeforeWrite verifies that the worker reads the
 // mission contract (ethos mission show via MCP) before acting.
-//
-// The mission event log is the authoritative record. After the agent
-// runs, the log must contain at least the create event from mission
-// creation. If the agent called mission show via MCP, additional
-// events or tool calls will be visible in the agent output.
 func TestLayerA_ContractReadBeforeWrite(t *testing.T) {
-	if ethosBinary == "" {
-		t.Skip("ethos binary not built")
-	}
-
 	f := SetupFixture(t)
 
 	contract := `leader: test-leader
@@ -39,32 +31,23 @@ budget:
 	t.Logf("Mission created: %s", missionID)
 
 	opts := DefaultAgentOpts(workerPrompt(missionID))
+	opts.StreamJSON = true
 	opts.SystemPrompt = "You are a Go developer working in a test fixture repo. " +
-		"Your FIRST action must be to read the mission contract using the ethos MCP tool mission_show. " +
+		"Your FIRST action must be to read the mission contract using the ethos MCP mission tool (method=show, mission_id set). " +
 		"Then write pkg/counter/counter_test.go with at least one test function for the Counter type. " +
-		"After completing your work, submit a mission result using the ethos MCP tool mission_result. " +
+		"After completing your work, submit a mission result using the ethos MCP mission tool. " +
 		"The result YAML must include: mission (the mission ID), round (1), author (test-agent), " +
 		"verdict (pass), confidence (a float 0-1), files_changed (list of {path, added, removed}), " +
 		"and evidence (list of {name, status} where status is pass/fail/skip). " +
-		"Write the result YAML to a file, then call ethos mission_result with the mission ID and --file flag."
+		"Call the mission tool with method=result, mission_id set, and the full YAML in the result argument."
 
 	output, err := f.SpawnAgent(t, opts)
-	t.Logf("Agent output (first 2000 chars): %.2000s", output)
-	if err != nil {
-		t.Logf("Agent error (may be expected): %v", err)
-	}
+	require.NoError(t, err, "worker invocation failed")
+	require.NoError(t, checkFirstMissionRead(output, missionID))
+	require.FileExists(t, filepath.Join(f.Repo, "pkg", "counter", "counter_test.go"))
 
-	// The mission event log is the authoritative record.
 	events := f.MissionLog(t, missionID)
-	t.Logf("Mission events: %d", len(events))
-	for i, e := range events {
-		t.Logf("  event[%d]: type=%v actor=%v", i, e["event"], e["actor"])
-	}
-
-	// At minimum: the mission was created and should have events.
 	require.NotEmpty(t, events, "mission should have at least a create event")
-
-	// The first event should be the create event.
 	assert.Equal(t, "create", events[0]["event"], "first event should be 'create'")
 }
 
@@ -75,10 +58,6 @@ budget:
 // read the contract, do the work, and submit a result artifact with
 // verdict, confidence, and files_changed.
 func TestLayerA_ResultSubmission(t *testing.T) {
-	if ethosBinary == "" {
-		t.Skip("ethos binary not built")
-	}
-
 	f := SetupFixture(t)
 
 	contract := `leader: test-leader
@@ -98,10 +77,10 @@ budget:
 
 	opts := DefaultAgentOpts(workerPrompt(missionID))
 	opts.SystemPrompt = "You are a Go developer working in a test fixture repo. " +
-		"Read the mission contract first using the ethos MCP tool mission_show. " +
+		"Read the mission contract first using the ethos MCP mission tool (method=show, mission_id set). " +
 		"Then write pkg/counter/counter_test.go with a test for the Counter type. " +
 		"After completing your work, you MUST submit a mission result. " +
-		"Write a result YAML file with these exact fields:\n" +
+		"Prepare result YAML with these exact fields:\n" +
 		"  mission: <the mission ID>\n" +
 		"  round: 1\n" +
 		"  author: test-agent\n" +
@@ -114,7 +93,7 @@ budget:
 		"  evidence:\n" +
 		"    - name: wrote test file\n" +
 		"      status: pass\n" +
-		"Then submit it via the ethos MCP tool mission_result with the mission ID and the file path."
+		"Call the mission tool with method=result, mission_id set, and the full YAML in the result argument."
 
 	output, err := f.SpawnAgent(t, opts)
 	t.Logf("Agent output (first 2000 chars): %.2000s", output)
@@ -149,14 +128,7 @@ budget:
 // declared write set. The task requires only verifying counter.go works
 // (allowed in write set), not creating new files.
 func TestLayerA_WriteSetEnforcement(t *testing.T) {
-	if ethosBinary == "" {
-		t.Skip("ethos binary not built")
-	}
-
 	f := SetupFixture(t)
-
-	// Save the current HEAD so we can diff after the agent runs.
-	baseRef := f.GitHead(t)
 
 	// Mission: only counter.go is in the write set.
 	contract := `leader: test-leader
@@ -173,14 +145,15 @@ budget:
 `
 	missionID := f.CreateMission(t, contract)
 	t.Logf("Mission created: %s", missionID)
+	baseRef := f.CommitMissionFixture(t, missionID)
 
 	opts := DefaultAgentOpts(workerPrompt(missionID))
 	opts.SystemPrompt = "You are a Go developer working in a test fixture repo. " +
-		"Read the mission contract first using the ethos MCP tool mission_show. " +
+		"Read the mission contract first using the ethos MCP mission tool (method=show, mission_id set). " +
 		"Only modify files listed in the write_set. Do NOT create new files. " +
 		"The Counter.Increment function already works correctly. " +
 		"If no changes are needed, submit a result with verdict pass and an empty files_changed list. " +
-		"Write a result YAML file with these exact fields:\n" +
+		"Prepare result YAML with these exact fields:\n" +
 		"  mission: <the mission ID>\n" +
 		"  round: 1\n" +
 		"  author: test-agent\n" +
@@ -190,7 +163,7 @@ budget:
 		"  evidence:\n" +
 		"    - name: verified counter works\n" +
 		"      status: pass\n" +
-		"Then submit it via the ethos MCP tool mission_result with the mission ID and the file path."
+		"Call the mission tool with method=result, mission_id set, and the full YAML in the result argument."
 
 	output, err := f.SpawnAgent(t, opts)
 	t.Logf("Agent output (first 2000 chars): %.2000s", output)
@@ -202,7 +175,7 @@ budget:
 	changedFiles := f.GitDiffFiles(t, baseRef)
 	t.Logf("Changed files: %v", changedFiles)
 
-	writeSet := []string{"pkg/counter/counter.go"}
+	writeSet := []string{"pkg/counter/counter.go", missionResultPath(missionID)}
 	violations := AssertFilesInWriteSet(changedFiles, writeSet)
 	assert.Empty(t, violations, "files outside write set were modified: %v", violations)
 }
@@ -211,10 +184,6 @@ budget:
 // lifecycle: create a 2-round mission, run round 1, reflect, advance, run
 // round 2, close, and verify the event log sequence.
 func TestLayerA_MultiRoundCycle(t *testing.T) {
-	if ethosBinary == "" {
-		t.Skip("ethos binary not built")
-	}
-
 	f := SetupFixture(t)
 
 	// Step 1: Create a 2-round mission.
@@ -240,10 +209,10 @@ budget:
 	// Step 2: Round 1 — agent writes a test file and submits a result.
 	round1Opts := DefaultAgentOpts(workerPrompt(missionID))
 	round1Opts.SystemPrompt = "You are a Go developer working in a test fixture repo. " +
-		"Read the mission contract first using the ethos MCP tool mission_show. " +
+		"Read the mission contract first using the ethos MCP mission tool (method=show, mission_id set). " +
 		"Then write pkg/counter/counter_test.go with ONE test function (TestIncrement) for the Counter type. " +
 		"After completing your work, submit a mission result. " +
-		"Write a result YAML file with these exact fields:\n" +
+		"Prepare result YAML with these exact fields:\n" +
 		"  mission: " + missionID + "\n" +
 		"  round: 1\n" +
 		"  author: test-agent\n" +
@@ -256,7 +225,7 @@ budget:
 		"  evidence:\n" +
 		"    - name: wrote test file with TestIncrement\n" +
 		"      status: pass\n" +
-		"Then submit it via the ethos MCP tool mission_result with the mission ID and the file path."
+		"Call the mission tool with method=result, mission_id set, and the full YAML in the result argument."
 
 	output, err := f.SpawnAgent(t, round1Opts)
 	t.Logf("Round 1 agent output (first 2000 chars): %.2000s", output)
@@ -270,7 +239,7 @@ budget:
 	assert.Equal(t, float64(1), results[0]["round"], "first result should be round 1")
 
 	// Step 3: Reflect on round 1.
-	reflectionYAML := `round: 1
+	reflectionYAML := "mission: " + missionID + "\n" + `round: 1
 author: test-leader
 converging: true
 signals:
@@ -284,8 +253,9 @@ reason: round 1 created the test file; round 2 will add coverage
 	// Verify reflection was recorded.
 	reflections := f.MissionReflections(t, missionID)
 	require.Len(t, reflections, 1, "should have exactly 1 reflection after round 1")
-	assert.Equal(t, float64(1), reflections[0]["round"])
-	assert.Equal(t, "continue", reflections[0]["recommendation"])
+	assert.Equal(t, 1, reflections[0].Round)
+	require.NotNil(t, reflections[0].Decision)
+	assert.Equal(t, "continue", reflections[0].Decision.Recommendation)
 
 	// Step 4: Advance to round 2.
 	adv := f.Advance(t, missionID)
@@ -299,11 +269,11 @@ reason: round 1 created the test file; round 2 will add coverage
 	// Step 5: Round 2 — agent adds a second test function and submits result.
 	round2Opts := DefaultAgentOpts(workerPrompt(missionID))
 	round2Opts.SystemPrompt = "You are a Go developer working in a test fixture repo. " +
-		"Read the mission contract first using the ethos MCP tool mission_show. " +
+		"Read the mission contract first using the ethos MCP mission tool (method=show, mission_id set). " +
 		"This is ROUND 2. The file pkg/counter/counter_test.go already exists with TestIncrement. " +
 		"Add ONE MORE test function (TestReset) to the same file. Do NOT rewrite the existing test. " +
 		"After completing your work, submit a mission result. " +
-		"Write a result YAML file with these exact fields:\n" +
+		"Prepare result YAML with these exact fields:\n" +
 		"  mission: " + missionID + "\n" +
 		"  round: 2\n" +
 		"  author: test-agent\n" +
@@ -316,7 +286,7 @@ reason: round 1 created the test file; round 2 will add coverage
 		"  evidence:\n" +
 		"    - name: added TestReset to existing test file\n" +
 		"      status: pass\n" +
-		"Then submit it via the ethos MCP tool mission_result with the mission ID and the file path."
+		"Call the mission tool with method=result, mission_id set, and the full YAML in the result argument."
 
 	output, err = f.SpawnAgent(t, round2Opts)
 	t.Logf("Round 2 agent output (first 2000 chars): %.2000s", output)
@@ -331,7 +301,7 @@ reason: round 1 created the test file; round 2 will add coverage
 
 	// Step 6: Close the mission.
 	// Submit a round 2 reflection first (required by close gate).
-	reflection2YAML := `round: 2
+	reflection2YAML := "mission: " + missionID + "\n" + `round: 2
 author: test-leader
 converging: true
 signals:
@@ -381,8 +351,8 @@ reason: both rounds complete, all success criteria met
 
 func workerPrompt(missionID string) string {
 	return "You have been assigned mission " + missionID + ". " +
-		"Read the contract first using the ethos MCP tool 'mission_show' with the mission ID. " +
+		"Read the contract first with the ethos MCP mission tool, method=show and mission_id set. " +
 		"The contract names the write set, success criteria, and budget. " +
-		"After your work, submit a result artifact using the ethos MCP tool 'mission_result'. " +
+		"After your work, submit a result with method=result, mission_id set, and full YAML in the result argument. " +
 		"Do not commit, push, or merge."
 }

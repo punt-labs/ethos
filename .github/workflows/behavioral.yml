@@ -1,24 +1,37 @@
-name: Behavioral
+name: Nightly
 
 on:
   schedule:
     # Daily at 06:07 UTC (off-minute to avoid fleet collisions)
     - cron: '7 6 * * *'
-  workflow_dispatch: # Manual trigger
+  workflow_dispatch:
+    inputs:
+      force-failure:
+        description: Deliberately fail Nightly to test Biff alert delivery
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   behavioral:
+    if: github.repository == 'punt-labs/ethos' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Fail deliberately for the Biff alert drill
+        if: github.event_name == 'workflow_dispatch' && inputs.force-failure
+        run: |
+          echo "::error::Deliberate Nightly failure for the Biff alert drill"
+          exit 1
+
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           # plugin/hooks builds old binaries (93c9f82, v4.8.0) with git archive
           # to prove the shims block an old ethos. A depth-1 clone has neither.
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
         with:
@@ -34,4 +47,48 @@ jobs:
       - name: Run behavioral tests
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: go test -tags behavioral -timeout 20m -v ./tests/behavioral/
+          ETHOS_BEHAVIORAL_JUDGE_MODEL: ${{ vars.ETHOS_BEHAVIORAL_JUDGE_MODEL || 'claude-sonnet-4-6' }}
+        run: go test -race -count=1 -tags behavioral -timeout 20m -v ./tests/behavioral/
+
+  notify:
+    needs: behavioral
+    if: >-
+      ${{ always() && github.repository == 'punt-labs/ethos' &&
+          github.ref == 'refs/heads/main' &&
+          needs.behavioral.result == 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .punt-labs/biff
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - name: Notify the Ethos team
+        env:
+          BIFF_RELAY_URL: ${{ vars.BIFF_RELAY_URL }}
+          BIFF_RELAY_TOKEN: ${{ secrets.BIFF_RELAY_TOKEN }}
+          BIFF_RELAY_TLS_HANDSHAKE_FIRST: ${{ vars.BIFF_RELAY_TLS_HANDSHAKE_FIRST }}
+          ALERT_DRILL: ${{ github.event_name == 'workflow_dispatch' && inputs.force-failure }}
+          BEHAVIORAL_RESULT: ${{ needs.behavioral.result }}
+        run: |
+          : "${BIFF_RELAY_TOKEN:?BIFF_RELAY_TOKEN is required to deliver Nightly alerts}"
+          biff=(uvx --from punt-biff==1.24.2 biff --user github-actions --json)
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}"
+          message="Nightly QA ${BEHAVIORAL_RESULT} on Ethos — ${run_url}"
+          if [[ "$ALERT_DRILL" == true ]]; then
+            printf 'peers:\n  orgs: []\n  repos: []\n' > .punt-labs/biff/config.local.yaml
+            current=$("${biff[@]}" wall)
+            if ! jq -e '(.status == "inactive" and has("wall") and .wall == null)
+                        or (.text | strings | startswith("DRILL: Nightly QA "))' <<< "$current" >/dev/null; then
+              echo "::error::Nightly drill cannot replace an active non-drill wall or verify that the wall is safe to replace"
+              exit 1
+            fi
+            message="DRILL: ${message}"
+          fi
+          "${biff[@]}" wall "$message" --duration 24h
+          current=$("${biff[@]}" wall)
+          if ! jq -e --arg message "$message" '.text == $message' <<< "$current" >/dev/null; then
+            echo "::error::Biff wall readback did not match the Nightly notification"
+            exit 1
+          fi

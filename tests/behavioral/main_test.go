@@ -1,5 +1,3 @@
-//go:build behavioral
-
 package behavioral
 
 import (
@@ -13,26 +11,16 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	os.Exit(runBehavioralTests(m))
+}
+
+func runBehavioralTests(m *testing.M) int {
 	testhelpers.MustIsolateGit() // no inherited GIT_DIR; temp dirs stop at the temp root
-	// Verify ANTHROPIC_API_KEY is set.
-	if os.Getenv("ANTHROPIC_API_KEY") == "" {
-		fmt.Fprintln(os.Stderr, "ANTHROPIC_API_KEY not set; skipping behavioral tests")
-		os.Exit(0)
-	}
-
-	// Find claude CLI.
-	claude, err := exec.LookPath("claude")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "claude CLI not found in PATH; skipping behavioral tests")
-		os.Exit(0)
-	}
-	claudeBinary = claude
-
 	// Build ethos binary.
 	dir, err := os.MkdirTemp("", "ethos-behavioral-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "creating temp dir: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 	defer os.RemoveAll(dir)
 
@@ -40,7 +28,7 @@ func TestMain(m *testing.M) {
 	wd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "getting working directory: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 	root := filepath.Join(wd, "..", "..")
 
@@ -49,9 +37,9 @@ func TestMain(m *testing.M) {
 	out, buildErr := cmd.CombinedOutput()
 	if buildErr != nil {
 		fmt.Fprintf(os.Stderr, "go build failed: %v\n%s\n", buildErr, out)
-		os.Exit(1)
+		return 1
 	}
 	ethosBinary = bin
 
-	os.Exit(m.Run())
+	return m.Run()
 }

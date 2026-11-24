@@ -1,5 +1,3 @@
-//go:build behavioral
-
 // Package behavioral provides the test harness for L4 agent behavioral
 // tests. These tests spawn real Claude Code agents with persona system
 // prompts, create ethos missions, and verify protocol compliance and
@@ -9,6 +7,7 @@
 //
 // Requires:
 //   - ANTHROPIC_API_KEY in environment
+//   - ETHOS_BEHAVIORAL_JUDGE_MODEL in environment
 //   - claude CLI in PATH
 //   - ethos CLI in PATH (or built via TestMain)
 package behavioral
@@ -25,15 +24,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/require"
 )
 
 // ethosBinary is the path to the compiled ethos binary, built once by TestMain.
 var ethosBinary string
-
-// claudeBinary is the path to the claude CLI.
-var claudeBinary string
 
 // Fixture holds the filesystem layout for a behavioral test.
 type Fixture struct {
@@ -172,6 +169,9 @@ members:
 
 	writeFile(t, filepath.Join(repo, ".punt-labs", "ethos.yaml"),
 		"agent: test-agent\n")
+	writeFile(t, filepath.Join(ethosGlobal, "archetypes", "implement.yaml"),
+		"name: implement\ndescription: Behavioral fixture mission\n")
+	writeFile(t, filepath.Join(repo, ".gitignore"), ".punt-labs/local/\n")
 
 	// --- Fixture Go code: a simple counter package ---
 
@@ -270,17 +270,34 @@ func (f *Fixture) MissionLog(t *testing.T, missionID string) []map[string]interf
 }
 
 // MissionResults returns the parsed results for a mission.
-// The JSON shape is a bare array: [...].
+// The JSON shape is {"results": [...], "corrections": [...]}.
 func (f *Fixture) MissionResults(t *testing.T, missionID string) []map[string]interface{} {
 	t.Helper()
 
 	stdout, _, err := f.runEthos(t, "mission", "results", missionID, "--json")
 	require.NoError(t, err, "mission results failed")
 
-	var results []map[string]interface{}
-	require.NoError(t, json.Unmarshal([]byte(stdout), &results),
-		"mission results output is not JSON array: %s", stdout)
-	return results
+	var payload struct {
+		Results []map[string]interface{} `json:"results"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &payload),
+		"mission results output is not the expected shape: %s", stdout)
+	return payload.Results
+}
+
+func missionRecordPath(missionID string) string {
+	return filepath.Join(".punt-labs", "ethos", "missions", missionID)
+}
+
+func missionResultPath(missionID string) string {
+	return filepath.Join(missionRecordPath(missionID), "results.yaml")
+}
+
+func (f *Fixture) CommitMissionFixture(t *testing.T, missionID string) string {
+	t.Helper()
+	gitCmd(t, f.Repo, f.Env, "add", "--", missionRecordPath(missionID))
+	gitCmd(t, f.Repo, f.Env, "commit", "-m", "seed mission "+missionID)
+	return f.GitHead(t)
 }
 
 // GitDiffFiles returns every file changed since base, including committed,
@@ -353,13 +370,22 @@ func (f *Fixture) GitHead(t *testing.T) string {
 func (f *Fixture) SpawnAgent(t *testing.T, opts AgentOpts) (output string, err error) {
 	t.Helper()
 
+	require.NotEmpty(t, strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")), "ANTHROPIC_API_KEY is required for live behavioral tests")
+	require.NotEmpty(t, strings.TrimSpace(os.Getenv(judgeModelEnv)), "%s is required for live behavioral tests", judgeModelEnv)
+	claudeBinary, err := exec.LookPath("claude")
+	require.NoError(t, err, "claude CLI is required for live behavioral tests")
+
 	args := []string{
 		"--bare",
 		"--print",
-		"--output-format", "text",
 		"--no-session-persistence",
 		"--dangerously-skip-permissions",
 		"--max-budget-usd", fmt.Sprintf("%.2f", opts.BudgetUSD),
+	}
+	if opts.StreamJSON {
+		args = append(args, "--output-format", "stream-json", "--verbose")
+	} else {
+		args = append(args, "--output-format", "text")
 	}
 
 	if opts.SystemPrompt != "" {
@@ -399,6 +425,8 @@ func (f *Fixture) SpawnAgent(t *testing.T, opts AgentOpts) (output string, err e
 
 // AgentOpts configures an agent invocation.
 type AgentOpts struct {
+	StreamJSON bool
+
 	// SystemPrompt is an inline system prompt.
 	SystemPrompt string
 	// Prompt is the user-facing task prompt.
@@ -459,14 +487,13 @@ func (f *Fixture) MissionShow(t *testing.T, missionID string) map[string]interfa
 }
 
 // MissionReflections returns the parsed reflections for a mission.
-// The JSON shape is a bare array: [...].
-func (f *Fixture) MissionReflections(t *testing.T, missionID string) []map[string]interface{} {
+func (f *Fixture) MissionReflections(t *testing.T, missionID string) []mission.ReflectionRead {
 	t.Helper()
 
 	stdout, _, err := f.runEthos(t, "mission", "reflections", missionID, "--json")
 	require.NoError(t, err, "mission reflections failed")
 
-	var reflections []map[string]interface{}
+	var reflections []mission.ReflectionRead
 	require.NoError(t, json.Unmarshal([]byte(stdout), &reflections),
 		"mission reflections output is not JSON array: %s", stdout)
 	return reflections

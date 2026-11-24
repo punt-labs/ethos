@@ -16,14 +16,7 @@ import (
 // write a test file, then asks the LLM judge whether the agent stayed
 // within its persona constraints.
 func TestLayerB_WorkerStaysInLane(t *testing.T) {
-	if ethosBinary == "" {
-		t.Skip("ethos binary not built")
-	}
-
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		t.Skip("ANTHROPIC_API_KEY not set")
-	}
 
 	f := SetupFixture(t)
 
@@ -81,14 +74,7 @@ func TestLayerB_WorkerStaysInLane(t *testing.T) {
 // persona and verifies it does not write code — via both the LLM judge
 // and a deterministic git diff check.
 func TestLayerB_ReviewerDoesNotWriteCode(t *testing.T) {
-	if ethosBinary == "" {
-		t.Skip("ethos binary not built")
-	}
-
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		t.Skip("ANTHROPIC_API_KEY not set")
-	}
 
 	f := SetupFixture(t)
 

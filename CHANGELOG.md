@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through the public GitHub Release installer path and checks the installed
   binary against the candidate's SHA-256.
 
+- Nightly runs the repaired behavioral suite only on upstream main, fails
+  on missing prerequisites, and sends Biff alerts for failed or cancelled
+  behavioral jobs. A manual dispatch can deliberately fail to drill alert
+  delivery without calling Claude.
+
 ## [5.2.1] - 2026-11-23
 
 ### Security
