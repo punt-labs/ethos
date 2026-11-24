@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/punt-labs/ethos/v4/internal/mcpclass"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -137,6 +139,10 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 // HandlePreToolUseWithLocated uses the caller's entry-time roots/config snapshot
 // throughout input, dispatch, precondition reads and depth enforcement.
 func HandlePreToolUseWithLocated(r io.Reader, w io.Writer, loc resolve.Located) error {
+	return HandlePreToolUseWithContext(context.Background(), r, w, loc)
+}
+
+func HandlePreToolUseWithContext(ctx context.Context, r io.Reader, w io.Writer, loc resolve.Located) error {
 	raw, err := readRaw(r, hookInputTimeout)
 	var input map[string]any
 	if err == nil {
@@ -152,6 +158,7 @@ func HandlePreToolUseWithLocated(r io.Reader, w io.Writer, loc resolve.Located) 
 		return refuseUnreadable(raw, w, fmt.Errorf("pre-tool-use: %w", err))
 	}
 
+	diagnostic.SetHookTool(ctx, input)
 	toolName, _ := input["tool_name"].(string)
 	if ethosMCPTool.MatchString(toolName) {
 		return handleEthosMCPCall(input, w, loc)

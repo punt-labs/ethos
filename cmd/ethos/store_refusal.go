@@ -2,13 +2,14 @@ package main
 
 import (
 	"fmt"
-	"github.com/punt-labs/ethos/v4/internal/hook"
-	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"os"
 	"slices"
 	"strings"
 	"sync"
 
+	"github.com/punt-labs/ethos/v4/internal/diagnostic"
+	"github.com/punt-labs/ethos/v4/internal/hook"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/spf13/cobra"
 )
 
@@ -182,6 +183,9 @@ func establishRoots(cmd *cobra.Command, _ []string) error {
 	// Repair before anything reads storage, so a refusal below is judged on the
 	// converted layout (DES-084 Wiring).
 	r = ensureForCommand(cmd, r)
+	if ctx := cmd.Context(); ctx != nil {
+		diagnostic.SetHookProject(ctx, r.Store, r.Checkout)
+	}
 	if !r.Global {
 		if err := r.Err(); err != nil {
 			name := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")

@@ -73,7 +73,7 @@ func TestHookAuditSnapshot_ConfigReplacement(t *testing.T) {
 			originalStdin := os.Stdin
 			os.Stdin = stdin
 			t.Cleanup(func() { os.Stdin = originalStdin })
-			err = writeAuditLog(filepath.Join(env.globalRoot, "sessions"))
+			err = writeAuditLog(context.Background(), filepath.Join(env.globalRoot, "sessions"))
 			live := filepath.Join(env.repo, ".punt-labs", "local", "ethos", "sessions", "snapshot-audit.audit.jsonl")
 			if repaired {
 				require.ErrorIs(t, err, hook.ErrAuditDropped)

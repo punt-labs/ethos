@@ -2,6 +2,7 @@ package hook
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 )
 
@@ -27,10 +29,15 @@ type formatResult struct {
 // emits two-channel display output to w: a compact summary in
 // updatedMCPToolOutput and full data in additionalContext.
 func HandleFormatOutput(r io.Reader, w io.Writer) error {
+	return HandleFormatOutputWithContext(context.Background(), r, w)
+}
+
+func HandleFormatOutputWithContext(ctx context.Context, r io.Reader, w io.Writer) error {
 	input, err := ReadInput(r, hookInputTimeout)
 	if err != nil {
 		return fmt.Errorf("format-output: %w", err)
 	}
+	diagnostic.SetHookTool(ctx, input)
 
 	// Extract tool name — strip the MCP namespace prefix.
 	toolFull, _ := input["tool_name"].(string)

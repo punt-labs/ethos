@@ -1682,14 +1682,24 @@ func validHead(s string) bool {
 // caller that has the process's checkout takes it from Located.Checkout; this is
 // for one that is given a directory to verify (githook's hooks lookup).
 func CheckoutOf(dir string) (string, error) {
+	checkout, _, err := CheckoutAndStoreOf(dir)
+	return checkout, err
+}
+
+// CheckoutAndStoreOf also returns the canonical store, if it can be found
+// without making a second checkout lookup. A store error does not fail checkout discovery.
+func CheckoutAndStoreOf(dir string) (checkout, store string, err error) {
 	r := locate(dir)
 	if errors.Is(r.err, ErrNotInRepo) {
-		return "", nil
+		return "", "", nil
 	}
 	if r.err != nil {
-		return "", r.err
+		return "", "", r.err
 	}
-	return r.loc.root, nil
+	if r.loc.storeErr != nil {
+		return r.loc.root, "", nil
+	}
+	return r.loc.root, r.loc.store, nil
 }
 
 // StoreOf locates the canonical store for a supplied checkout using the same

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/checkset"
+	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/redact"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -37,13 +38,14 @@ func PostEdit(ctx context.Context, input io.Reader, output io.Writer, agent ...s
 		postEditAdvice(output, "post-edit input: "+err.Error())
 		return
 	}
+	diagnostic.SetHookTool(ctx, payload)
 	tool, _ := payload["tool_input"].(map[string]any)
 	file, _ := tool["file_path"].(string)
 	if file == "" {
 		postEditAdvice(output, "post-edit input: tool_input.file_path is required")
 		return
 	}
-	checkout, err := postEditCheckout()
+	checkout, err := postEditCheckout(ctx)
 	if err != nil {
 		postEditAdvice(output, "post-edit scope: "+err.Error())
 		return
@@ -77,7 +79,7 @@ func PostEdit(ctx context.Context, input io.Reader, output io.Writer, agent ...s
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results[i] = runEditCheck(stage, root, check)
+			results[i] = runLoggedCheck(stage, root, "edit", check)
 		}()
 	}
 	wg.Wait()
@@ -149,14 +151,14 @@ func postEditFeedback(out io.Writer, advisory, blocking string) {
 	_ = json.NewEncoder(out).Encode(response)
 }
 
-func postEditCheckout() (string, error) {
+func postEditCheckout(ctx context.Context) (string, error) {
 	if _, err := gitenv.Output("", "git", "--version"); err != nil {
 		return "", fmt.Errorf("git: %w", err)
 	}
-	return hookCheckout()
+	return hookCheckout(ctx)
 }
 
-func hookCheckout() (string, error) {
+func hookCheckout(ctx context.Context) (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", err
@@ -165,10 +167,11 @@ func hookCheckout() (string, error) {
 	if start == "" {
 		start = cwd
 	}
-	checkout, err := resolve.CheckoutOf(start)
+	checkout, store, err := resolve.CheckoutAndStoreOf(start)
 	if err != nil {
 		return "", err
 	}
+	diagnostic.SetHookProject(ctx, store, checkout)
 	if checkout == "" {
 		checkout = cwd
 	}
@@ -314,6 +317,17 @@ func (b *editTail) Write(p []byte) (int, error) {
 		b.data = append(b.data, p...)
 	}
 	return n, nil
+}
+
+func runLoggedCheck(ctx context.Context, root, stage string, check editCheck) string {
+	started := time.Now()
+	failure := runEditCheck(ctx, root, check)
+	outcome := "completed"
+	if failure != "" {
+		outcome = "failed"
+	}
+	diagnostic.LogHookCheck(ctx, root, stage, check.name, outcome, time.Since(started))
+	return failure
 }
 
 func runEditCheck(stage context.Context, root string, check editCheck) string {

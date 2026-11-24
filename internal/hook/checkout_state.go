@@ -37,7 +37,7 @@ func stopAgent(input map[string]any) string {
 // for a starting subagent whose policy has handoff checks. Any failure
 // returns "", which makes the matching stop run its handoff checks.
 func subagentStartState(input map[string]any) string {
-	checkout, err := hookCheckout()
+	checkout, err := hookCheckout(context.Background())
 	if err != nil {
 		return ""
 	}

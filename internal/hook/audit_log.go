@@ -25,6 +25,7 @@
 package hook
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +35,7 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/redact"
@@ -106,31 +108,40 @@ func dropped(cause error, e auditEntry, sessionID string) error {
 // sessions are not visible to it. See resolveAuditWritePath and
 // resolveRepoSessionDir in audit_paths.go.
 func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
+	return HandleAuditLogWithContext(context.Background(), r, repoRoot, globalSessionsDir)
+}
+
+func HandleAuditLogWithContext(ctx context.Context, r io.Reader, repoRoot, globalSessionsDir string) error {
 	if repoRoot != "" {
 		p, err := auditPolicy(repoRoot)
 		if err != nil {
 			return fmt.Errorf("%w: %w", ErrAuditDropped, err)
 		}
-		return HandleAuditLogWithPolicy(r, p, globalSessionsDir)
+		return HandleAuditLogWithPolicyContext(ctx, r, p, globalSessionsDir)
 	}
-	return handleAuditLog(r, repoRoot, globalSessionsDir, nil)
+	return handleAuditLog(ctx, r, repoRoot, globalSessionsDir, nil)
 }
 
 // HandleAuditLogWithPolicy captures eligibility after redaction and timestamp
 // allocation, in the same append as the payload. It takes the shared stream
 // lock itself; callers must not already hold that lock.
 func HandleAuditLogWithPolicy(r io.Reader, p layout.Policy, globalSessionsDir string) error {
-	checkout := filepath.Dir(filepath.Dir(p.CheckoutRecordRoot()))
-	return handleAuditLog(r, checkout, globalSessionsDir, &p)
+	return HandleAuditLogWithPolicyContext(context.Background(), r, p, globalSessionsDir)
 }
 
-func handleAuditLog(r io.Reader, repoRoot, globalSessionsDir string, policy *layout.Policy) error {
+func HandleAuditLogWithPolicyContext(ctx context.Context, r io.Reader, p layout.Policy, globalSessionsDir string) error {
+	checkout := filepath.Dir(filepath.Dir(p.CheckoutRecordRoot()))
+	return handleAuditLog(ctx, r, checkout, globalSessionsDir, &p)
+}
+
+func handleAuditLog(ctx context.Context, r io.Reader, repoRoot, globalSessionsDir string, policy *layout.Policy) error {
 	input, err := ReadInput(r, hookInputTimeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: audit-log: reading input: %v\n", err)
 		return fmt.Errorf("%w: reading input: %v", ErrAuditDropped, err)
 	}
 
+	diagnostic.SetHookTool(ctx, input)
 	sessionID, _ := input["session_id"].(string)
 	if sessionID == "" {
 		tool, _ := input["tool_name"].(string)

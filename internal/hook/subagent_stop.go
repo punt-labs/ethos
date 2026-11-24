@@ -44,7 +44,7 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 		fmt.Fprintf(errOut, "ethos: failed to leave session %s: %v\n", sessionID, leaveErr)
 	}
 	active, _ := input["stop_hook_active"].(bool)
-	checkout, err := hookCheckout()
+	checkout, err := hookCheckout(ctx)
 	if err != nil {
 		stopFeedback(out, errOut, StageFeedback{Blocking: "handoff scope: " + err.Error()}, active)
 		return nil

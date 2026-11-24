@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/require"
 )
 
@@ -92,8 +93,9 @@ func TestSharedLoggingCLI(t *testing.T) {
 }
 
 func TestSharedLoggingHook(t *testing.T) {
-	home, cwd := t.TempDir(), t.TempDir()
+	home, cwd := t.TempDir(), testhelpers.OutsideRepo(t)
 	cmd := loggingProcess(t, home, cwd, "hook", "format-output")
+	cmd.Env = append(cmd.Env, "GIT_CEILING_DIRECTORIES="+os.Getenv("GIT_CEILING_DIRECTORIES"))
 	cmd.Stdin = strings.NewReader(`{"tool_name":"unrelated","tool_response":{}}`)
 	out, err := cmd.Output()
 	require.NoError(t, err)
@@ -101,6 +103,112 @@ func TestSharedLoggingHook(t *testing.T) {
 	log := diagnosticLog(t, home)
 	require.Contains(t, log, "[INFO] ethos.hook: Invocation finished command=hook format-output outcome=completed")
 	require.Equal(t, 1, strings.Count(log, "Invocation finished"))
+	require.Contains(t, log, "project=none")
+	require.Contains(t, log, "tool=unrelated")
+}
+
+func TestSharedLoggingHookToolContext(t *testing.T) {
+	for _, tc := range []struct {
+		name, hook, project string
+		invalidStore        bool
+	}{
+		{"audit", "audit-log", "logging-project", false},
+		{"pre-tool", "pre-tool-use", "logging-project", false},
+		{"unresolved-store", "format-output", "unknown", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			repo := filepath.Join(t.TempDir(), "logging-project")
+			require.NoError(t, os.Mkdir(repo, 0o700))
+			runGit(t, repo, "init", "-q")
+			runGit(t, repo, "commit", "--allow-empty", "-qm", "init")
+			checkout := filepath.Join(t.TempDir(), "logging-worktree")
+			runGit(t, repo, "worktree", "add", "--detach", checkout)
+			subdir := filepath.Join(checkout, "nested")
+			require.NoError(t, os.Mkdir(subdir, 0o700))
+			cmd := loggingProcess(t, home, subdir, "hook", tc.hook)
+			if tc.invalidStore {
+				cmd.Env = append(cmd.Env, "ETHOS_REPO_ROOT="+checkout)
+			}
+			cmd.Stdin = strings.NewReader(`{"session_id":"fixture","tool_name":"Bash","tool_input":{"command":"do-not-log-payload-arguments"}}`)
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "%s", out)
+			log := diagnosticLog(t, home)
+			require.Regexp(t, "Invocation finished command=hook "+tc.hook+" .*project="+tc.project+".*checkout=logging-worktree.*tool=Bash", log)
+			require.NotContains(t, log, repo)
+			require.NotContains(t, log, checkout)
+			require.NotContains(t, log, "do-not-log-payload-arguments")
+		})
+	}
+}
+
+func TestSharedLoggingKilledHooks(t *testing.T) {
+	repo := filepath.Join(t.TempDir(), "logging-project")
+	require.NoError(t, os.Mkdir(repo, 0o700))
+	runGit(t, repo, "init", "-q")
+	for _, tc := range []struct{ hook, project string }{
+		{"pre-commit", "logging-project"},
+		{"subagent-stop", "unknown"},
+		{"post-edit", "unknown"},
+	} {
+		t.Run(tc.hook, func(t *testing.T) {
+			home := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(home, ".punt-hooks-kill"), nil, 0o600))
+			cmd := loggingProcess(t, home, repo, "hook", tc.hook)
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "%s", out)
+			require.Empty(t, out)
+			log := diagnosticLog(t, home)
+			require.Regexp(t, "Invocation finished command=hook "+tc.hook+" .*project="+tc.project, log)
+			require.NotContains(t, log, "Check finished")
+		})
+	}
+}
+
+func TestSharedLoggingHookChecks(t *testing.T) {
+	repo := filepath.Join(t.TempDir(), "logging-project")
+	dir := filepath.Join(repo, ".punt-labs", "ethos", "checks")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	runGit(t, repo, "init", "-q")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos.yaml"), []byte("checks: timing\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "sample.txt"), nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "timing.yaml"), []byte(`name: timing
+checks:
+  - name: edit-probe
+    stage: edit
+    files: ['*.txt']
+    run: [sh, -c, 'sleep 0.05']
+  - name: commit-probe
+    stage: commit
+    files: all
+    run: [sh, -c, 'sleep 0.05']
+  - name: handoff-probe
+    stage: handoff
+    files: all
+    run: [sh, -c, 'sleep 0.05; exit 1']
+    on_fail: advisory
+`), 0o600))
+	runGit(t, repo, "add", "--", "sample.txt")
+	for _, tc := range []struct {
+		hook, stage, input, outcome string
+	}{
+		{"post-edit", "edit", `{"tool_name":"Edit","tool_input":{"file_path":"sample.txt"}}`, "completed"},
+		{"pre-commit", "commit", "", "completed"},
+		{"subagent-stop", "handoff", `{"session_id":"fixture","agent_id":"worker"}`, "failed"},
+	} {
+		t.Run(tc.stage, func(t *testing.T) {
+			home := t.TempDir()
+			cmd := loggingProcess(t, home, repo, "hook", tc.hook)
+			cmd.Stdin = strings.NewReader(tc.input)
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "%s", out)
+			log := diagnosticLog(t, home)
+			require.Regexp(t, "Invocation finished command=hook "+tc.hook+" .*project=logging-project", log)
+			require.Regexp(t, "Check finished .*stage="+tc.stage+" check="+tc.stage+"-probe outcome="+tc.outcome+" duration_ms=[1-9][0-9]+", log)
+			require.Equal(t, 1, strings.Count(log, "Check finished"), log)
+			require.NotContains(t, log, "sleep 0.05")
+		})
+	}
 }
 
 func TestSharedLoggingMCP(t *testing.T) {

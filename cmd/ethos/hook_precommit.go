@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/punt-labs/ethos/v4/internal/autorepair"
+	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/layout"
@@ -157,10 +158,11 @@ func privateIndexPaths(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	checkout, err := resolve.CheckoutOf(cwd)
+	checkout, store, err := resolve.CheckoutAndStoreOf(cwd)
 	if err != nil {
 		return nil, err
 	}
+	diagnostic.SetHookProject(ctx, store, checkout)
 	if checkout == "" {
 		return nil, resolve.ErrNotInRepo
 	}
