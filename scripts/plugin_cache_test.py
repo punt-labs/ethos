@@ -61,6 +61,29 @@ class PluginCacheTests(unittest.TestCase):
             self.assertTrue(version.is_symlink())
             self.assertEqual(list(outer_cache.iterdir()), [])
 
+    def test_dev_registration_must_apply_to_the_checkout(self):
+        for scope, correct_project, expected in (
+            ("project", False, "ethos"),
+            ("local", True, "ethos"),
+            ("project", True, "ethos-dev"),
+            ("user", False, "ethos-dev"),
+        ):
+            with self.subTest(scope=scope, correct_project=correct_project), tempfile.TemporaryDirectory() as home:
+                cache = Path(home) / ".claude/plugins/cache/punt-labs"
+                (cache / "ethos/5.2.1").mkdir(parents=True)
+                dev = cache / "ethos-dev/5.2.1"
+                dev.mkdir(parents=True)
+                record = {"scope": scope, "installPath": str(dev)}
+                if scope != "user":
+                    record["projectPath"] = str(ROOT if correct_project else Path(home) / "other-project")
+                (cache.parents[1] / "installed_plugins.json").write_text(
+                    json.dumps({"version": 2, "plugins": {"ethos-dev@punt-labs": [record]}}),
+                    encoding="utf-8",
+                )
+                result = run_make(home, "dev")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue((cache / expected / "5.2.1").is_symlink())
+
     def test_dev_and_undev_restore_either_cache_layout(self):
         for name, other in (
             ("ethos", "backup"),
@@ -79,7 +102,7 @@ class PluginCacheTests(unittest.TestCase):
                 if other in ("installed", "uninstalled"):
                     other_path.mkdir(parents=True)
                     registered = [installed, other_path] if other == "installed" else [installed]
-                    registry = {f"{path.parent.name}@punt-labs": [{"installPath": str(path)}]
+                    registry = {f"{path.parent.name}@punt-labs": [{"scope": "user", "installPath": str(path)}]
                                 for path in registered}
                     (cache.parents[1] / "installed_plugins.json").write_text(
                         json.dumps({"version": 2, "plugins": registry}), encoding="utf-8"

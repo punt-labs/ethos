@@ -4,7 +4,7 @@ import subprocess
 import sys
 
 
-def dev_is_registered(registry):
+def dev_is_registered(registry, checkout):
     try:
         state = json.loads(registry.read_text(encoding="utf-8"))
         records = state["plugins"].get("ethos-dev@punt-labs", [])
@@ -14,7 +14,15 @@ def dev_is_registered(registry):
         return True
     except (AttributeError, KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"invalid Claude plugin registry {registry}: {exc}") from exc
-    return bool(records)
+    for record in records:
+        scope = record.get("scope")
+        if scope == "user":
+            return True
+        if scope == "project":
+            project = record.get("projectPath")
+            if isinstance(project, str) and Path(project).is_absolute() and Path(project).resolve() == checkout:
+                return True
+    return False
 
 
 def cache_versions(cache):
@@ -26,13 +34,13 @@ def cache_versions(cache):
     ]
 
 
-def select_version(state, override):
+def select_version(state, checkout, override):
     root = state / "cache/punt-labs"
     if override:
         caches = [Path(override)]
     else:
         caches = [root / "ethos"]
-        if dev_is_registered(state / "installed_plugins.json"):
+        if dev_is_registered(state / "installed_plugins.json", checkout):
             caches.insert(0, root / "ethos-dev")
     for cache in caches:
         versions = cache_versions(cache)
@@ -82,9 +90,10 @@ def restore_cache(link):
 
 def main(action, home, checkout, override):
     try:
-        link = select_version(Path(home) / ".claude/plugins", override)
+        repo = Path(checkout).resolve()
+        link = select_version(Path(home) / ".claude/plugins", repo, override)
         if action == "dev":
-            link_cache(link, Path(checkout) / "plugin")
+            link_cache(link, repo / "plugin")
         else:
             restore_cache(link)
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
