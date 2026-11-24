@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -217,27 +218,37 @@ exit 1
 // ready to make, and a PATH that holds git and no ethos.
 func realRepoWithHooks(t *testing.T) (repo string, run func(args ...string) (string, error)) {
 	t.Helper()
-	repo, _, run = newHookRepo(t)
-	return repo, run
+	repo, _, git := newHookRepo(t)
+	return repo, git.combined
+}
+
+type hookRepoGit func(args ...string) *exec.Cmd
+
+func (git hookRepoGit) combined(args ...string) (string, error) {
+	out, err := git(args...).CombinedOutput()
+	return string(out), err
 }
 
 // newHookRepo is realRepoWithHooks that also returns the HOME the hooks run
 // under and takes extra environment for git (and so for the hooks).
-func newHookRepo(t *testing.T, extraEnv ...string) (repo, home string, run func(args ...string) (string, error)) {
+func newHookRepo(t *testing.T, extraEnv ...string) (repo, home string, git hookRepoGit) {
 	t.Helper()
 	repo = t.TempDir()
 	home = t.TempDir()
-	env := append(testhelpers.GitEnv(),
+	env := slices.DeleteFunc(testhelpers.GitEnv(), func(kv string) bool {
+		return strings.HasPrefix(kv, "GIT_TRACE")
+	})
+	env = append(env,
 		"HOME="+home, "PATH=/usr/bin:/bin", "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@x",
+		"GIT_CONFIG_GLOBAL="+filepath.Join(home, ".gitconfig"),
 		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@x")
 	env = append(env, extraEnv...)
-	run = func(args ...string) (string, error) {
+	git = func(args ...string) *exec.Cmd {
 		c := exec.Command("git", append([]string{"-c", "commit.gpgsign=false", "-C", repo}, args...)...)
 		c.Env = env
-		out, err := c.CombinedOutput()
-		return string(out), err
+		return c
 	}
-	if out, err := run("init", "-q", "-b", "main"); err != nil {
+	if out, err := git.combined("init", "-q", "-b", "main"); err != nil {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
 	for _, h := range []string{"pre-commit", "commit-msg"} {
@@ -245,7 +256,7 @@ func newHookRepo(t *testing.T, extraEnv ...string) (repo, home string, run func(
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(filepath.Join(repo, ".git", "hooks", h), body, 0o755))
 	}
-	return repo, home, run
+	return repo, home, git
 }
 
 // A .punt-labs or .punt-labs/ethos that git cannot follow is not "ethos is
@@ -354,17 +365,22 @@ func TestHooksBlockWhenEnabledAndEthosMissing(t *testing.T) {
 // the hooks rewrite: the seal runs, and the trailer lands intact.
 func TestHooksIgnoreATraceOnStdout(t *testing.T) {
 	for name, setup := range map[string]struct {
-		env []string
-		cfg string
+		env   []string
+		cfg   string
+		trace string
 	}{
-		"trace2 from config": {nil, "[trace2]\n\tnormalTarget = /dev/stdout\n\teventTarget = /dev/stdout\n"},
-		"GIT_TRACE":          {[]string{"GIT_TRACE=/dev/stdout", "GIT_TRACE2_PERF=/dev/stdout"}, ""},
+		"trace2 from config": {nil, "[trace2]\n\tnormalTarget = /dev/stdout\n\teventTarget = /dev/stdout\n", `"event":"cmd_name"`},
+		"GIT_TRACE":          {[]string{"GIT_TRACE=/dev/stdout", "GIT_TRACE2_PERF=/dev/stdout"}, "", "built-in: git rev-parse"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			repo, home, run := newHookRepo(t, setup.env...)
+			repo, home, git := newHookRepo(t, setup.env...)
 			if setup.cfg != "" {
 				require.NoError(t, os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(setup.cfg), 0o644))
 			}
+			stdout, err := git("rev-parse", "--show-toplevel").Output()
+			require.NoError(t, err)
+			require.Contains(t, string(stdout), setup.trace, "fixture Git must emit trace on stdout")
+			run := git.combined
 			marker := filepath.Join(t.TempDir(), "sealed")
 			// Stub the pre-commit policy, but let the real commit-msg subcommand
 			// render and install trailers under the caller's trace configuration:
@@ -382,7 +398,7 @@ exit 0
 			require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs", "ethos"), 0o755))
 			require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos", "enabled"), nil, 0o644))
 			require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("x"), 0o644))
-			_, err := run("add", "a.txt")
+			_, err = run("add", "a.txt")
 			require.NoError(t, err)
 			out, err := run("commit", "-q", "-m", "subject")
 			require.NoError(t, err, out)

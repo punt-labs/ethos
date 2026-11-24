@@ -1,7 +1,9 @@
 """Tests of the independent acceptance oracle, not product acceptance substitutes."""
 
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -17,6 +19,40 @@ class BoundaryTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(dir=scratch)
         self.addCleanup(self.temp.cleanup)
         self.repo = Path(self.temp.name)
+
+    def test_installed_gate_rejects_failed_seeding_before_storage_acceptance(self):
+        checkout = self.repo / "checkout"
+        for name in ("Makefile", "go.mod", "install.sh"):
+            gate.write(checkout / name, (gate.ROOT / name).read_bytes())
+        bin_dir = self.repo / "bin"
+        go = gate.write(bin_dir / "go", """#!/bin/sh
+if [ "$1" = build ]; then
+    while [ "$1" != -o ]; do shift; done
+    cp "$FAKE_ETHOS" "$2"
+fi
+""")
+        go.chmod(0o755)
+        fake = gate.write(bin_dir / "ethos", """#!/bin/sh
+case "$1" in
+    seed)
+        mkdir -p "$HOME/.punt-labs/ethos"
+        printf '{}\\n' > "$HOME/.punt-labs/ethos/.seed-manifest.json"
+        exit 1
+        ;;
+esac
+""")
+        fake.chmod(0o755)
+        python = gate.write(bin_dir / "python3", "#!/bin/sh\necho 'unexpected storage acceptance'\nexit 1\n")
+        python.chmod(0o755)
+        result = subprocess.run(
+            ["make", "check-installed"], cwd=checkout,
+            env=os.environ | {"PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
+                              "RUNNER_TEMP": str(self.repo), "FAKE_ETHOS": str(fake)},
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertNotIn("unexpected storage acceptance", result.stdout)
+        self.assertIn("installed ethos did not seed starter content", result.stderr)
 
     def test_allowlist_does_not_legalize_runtime_under_record_tree(self):
         mid = "m-2026-11-04-001"
@@ -150,8 +186,16 @@ class BoundaryTests(unittest.TestCase):
         self.assertNotIn("MISSION_ID", env)
         self.assertNotIn("GIT_INDEX_FILE", env)
         self.assertNotIn("ETHOS_REPO_ROOT", env)
+        self.assertNotIn("GOCOVERDIR", env)
         self.assertEqual(env["GIT_CONFIG_GLOBAL"], gate.os.devnull)
 
+    def test_explicit_coverage_directory_reaches_subprocess(self):
+        coverage = self.repo / "coverage"
+        runner = gate.Runner(self.repo / "commands", coverdir=coverage)
+        env = gate.clean_env(self.repo, self.repo, "/usr/bin:/bin")
+        result = runner.run([sys.executable, "-c", "import os; print(os.environ['GOCOVERDIR'])"], self.repo, env)
+        self.assertEqual(result.stdout.decode().strip(), str(coverage))
+        self.assertNotIn("GOCOVERDIR", env)
 
     def restored_snapshot(self, tag="v4.22.1"):
         snapshot = gate.CORPUS / tag

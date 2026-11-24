@@ -65,12 +65,8 @@ func setupIdentityWithAttributes(t *testing.T, id *identity.Identity, personalit
 // isolateGitConfig prevents git config from interfering with resolve.
 func isolateGitConfig(t *testing.T, user string) {
 	t.Helper()
-	tmp := t.TempDir()
-	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(tmp, "empty.gitconfig"))
-	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	testhelpers.IsolateGitHome(t)
 	t.Setenv("USER", user)
-	require.NoError(t, os.WriteFile(filepath.Join(tmp, "empty.gitconfig"), []byte(""), 0o644))
 }
 
 // setupRepoWithAgent creates a fake repo root with .git/ and a
@@ -178,8 +174,13 @@ func TestHandleSessionStart_NoPersonality_FallsBack(t *testing.T) {
 
 	s, ss := setupIdentityWithAttributes(t, id, "", "")
 	isolateGitConfig(t, "bob")
+	ambientRepo := setupRepoWithAgent(t, "claude")
+	source := filepath.Join(ambientRepo, ".punt-labs", "ethos", "agents")
+	require.NoError(t, os.MkdirAll(source, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(source, "ambient.md"), []byte("# Ambient agent\n"), 0o600))
 
-	out := captureSessionStartOutput(t, `{"session_id": "s2"}`, SessionStartDeps{Store: s, Sessions: ss})
+	out := captureSessionStartOutput(t, `{"session_id": "s2"}`, SessionStartDeps{Store: s, Sessions: ss, Located: &resolve.Located{}})
+	assert.NoDirExists(t, filepath.Join(ambientRepo, ".claude", "agents"))
 
 	var result SessionStartResult
 	require.NoError(t, json.Unmarshal([]byte(out), &result))
@@ -214,7 +215,7 @@ func TestHandleSessionStart_ResolvesIdentityWithoutRetryLatency(t *testing.T) {
 	t.Cleanup(resolve.SetPointerRetryDelayForTest(delay))
 
 	start := time.Now()
-	out := captureSessionStartOutput(t, `{"session_id": "s-r2-timing"}`, SessionStartDeps{Store: s, Sessions: ss})
+	out := captureSessionStartOutput(t, `{"session_id": "s-r2-timing"}`, SessionStartDeps{Store: s, Sessions: ss, Located: &resolve.Located{}})
 	elapsed := time.Since(start)
 
 	assert.Less(t, elapsed, delay/2,
@@ -254,7 +255,7 @@ func TestHandleSessionStart_WriteKeyAgreesWithLaterReadKey(t *testing.T) {
 	t.Cleanup(func() { resolve.UnderClaudeCode = old })
 
 	sessionID := "s-key-agreement"
-	out := captureSessionStartOutput(t, `{"session_id": "`+sessionID+`"}`, SessionStartDeps{Store: s, Sessions: ss})
+	out := captureSessionStartOutput(t, `{"session_id": "`+sessionID+`"}`, SessionStartDeps{Store: s, Sessions: ss, Located: &resolve.Located{}})
 	require.NotEmpty(t, out)
 
 	// A later, independent call -- standing in for a subsequent tool call
@@ -1116,7 +1117,7 @@ func TestHandleSessionStart_RepairNeverReachesStderr(t *testing.T) {
 			s, ss := setupIdentityWithAttributes(t, &identity.Identity{Name: "A", Handle: "a", Kind: "human"}, "", "")
 			var stdout string
 			stderr := captureStderr(t, func() {
-				stdout = captureSessionStartOutput(t, `{"session_id":"s-stderr"}`, SessionStartDeps{Store: s, Sessions: ss, Repair: repair})
+				stdout = captureSessionStartOutput(t, `{"session_id":"s-stderr"}`, SessionStartDeps{Store: s, Sessions: ss, Repair: repair, Located: &resolve.Located{}})
 			})
 			assert.NotContains(t, stderr, "upgraded storage")
 			assert.NotContains(t, stderr, "session repair")
@@ -1156,7 +1157,7 @@ func TestHandleSessionStart_RepairNote(t *testing.T) {
 			s, ss := setupIdentityWithAttributes(t, &identity.Identity{Name: "A", Handle: "a", Kind: "human"}, "", "")
 			var calls int
 			repair := func(ctx context.Context) (int, error) { calls++; return tt.repair(ctx) }
-			out := captureSessionStartOutput(t, `{"session_id":"s-repair"}`, SessionStartDeps{Store: s, Sessions: ss, Repair: repair})
+			out := captureSessionStartOutput(t, `{"session_id":"s-repair"}`, SessionStartDeps{Store: s, Sessions: ss, Repair: repair, Located: &resolve.Located{}})
 			assert.Equal(t, 1, calls)
 			if tt.wantNone {
 				assert.NotContains(t, out, "upgraded storage")

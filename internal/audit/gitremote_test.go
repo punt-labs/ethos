@@ -106,6 +106,7 @@ func gitInit(t *testing.T, dir string, args ...string) {
 }
 
 func TestRepoIdentity(t *testing.T) {
+	testhelpers.IsolateGitHome(t)
 	t.Run("origin resolves to org/name", func(t *testing.T) {
 		dir := t.TempDir()
 		gitInit(t, dir, "init")
