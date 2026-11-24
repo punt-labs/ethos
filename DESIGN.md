@@ -1115,11 +1115,23 @@ quarry, lux, and z-spec all have the same two-speed problem.
 
 ### Version resolution
 
-The symlink uses the latest version directory found in the cache
-(`ls -1 | sort -V | tail -1`). This matches the version Claude Code
-resolved from the marketplace registry. No synthetic "dev" version is
-used — Claude Code would not look for a version the registry doesn't
-advertise.
+For `ethos-dev`, `make dev` checks applicable Claude Code registrations
+in registry order: user-scope records and project- or local-scope records
+for this checkout. An isolated Claude Code 2.1.323 probe with distinct
+cached versions loaded the first applicable entry in both record orders
+for user/project and user/local pairs, with no scope override.
+With a dangling user entry first and a live project or local entry
+second, Claude skipped the dangling link and loaded the second entry's
+`hooks/hooks.json` in both cases.
+
+`make dev` symlinks the first registered `installPath` that points to an
+existing dev cache directory. If none exists, it can retarget a dangling
+development link with an intact backup, as when a checkout moves. If
+applicable records specify paths but none are usable, it reports an error
+rather than linking another version. When no applicable record specifies
+a path, it uses the newest version, ordered by `sort -V`, in the dev
+cache if eligible and nonempty, or in the production cache otherwise.
+No synthetic dev version is used.
 
 ### Rejected alternatives
 

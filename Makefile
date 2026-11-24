@@ -1,9 +1,6 @@
 VERSION := $(or $(shell git describe --tags --always 2>/dev/null | sed 's/^v//'),dev)
 LDFLAGS := -X main.version=$(VERSION)
 
-PLUGIN_CACHE := $(HOME)/.claude/plugins/cache/punt-labs/ethos
-PLUGIN_VERSION := $(shell ls -1 $(PLUGIN_CACHE) 2>/dev/null | grep -v '\.bak$$' | sort -V | tail -1)
-
 # golangci-lint is the Go lint gate (Go Report Card successor). Pinned so
 # local and CI run the same analyzer versions; keep in sync with
 # .github/workflows/test.yml. Config lives in .golangci.yml.
@@ -264,13 +261,16 @@ smoke-opencode-health: ## Smoke root Code Mode health calls only (uses model cre
 smoke-opencode-formatter: ## Smoke formatter byte preservation only (uses model credits)
 	python3 -B scripts/opencode.py smoke --stage formatter
 
-.PHONY: check-storage
+.PHONY: check-storage check-plugin-cache
 
 check-storage: ## Exercise offline storage boundaries through the real CLI, wrappers and Git hooks
 	python3 -B -m unittest discover -s scripts -p 'storage_acceptance_test.py'
 	python3 -B scripts/storage_acceptance.py
 
-check: lint docs test coverage-check validate-content fuzz-check check-opencode check-storage ## Run all quality gates
+check-plugin-cache: ## Test Claude plugin cache switching
+	python3 -B scripts/plugin_cache_test.py
+
+check: lint docs test coverage-check validate-content fuzz-check check-opencode check-storage check-plugin-cache ## Run all quality gates
 
 # The legacy corpus (internal/autorepair/testdata) is real on-disk state written
 # by nine released binaries. Regenerating it builds each from its git tag, so it
@@ -300,55 +300,11 @@ install: build ## Build and install to ~/.local/bin
 # it at the repo root would resolve ${CLAUDE_PLUGIN_ROOT}/hooks/*.sh to a
 # path that no longer exists.
 #
-# Both recipes are ONE shell each. There is no .ONESHELL here, so a guard on
-# its own line ends only that line's shell and make runs the next line
-# regardless — the previous `@if ...; exit 0; fi` guards printed their message
-# and then fell straight through to the work they were meant to skip. A second
-# `make dev` moved the symlink *into* the existing .bak directory (leaving a
-# stray .bak/$(PLUGIN_VERSION) link behind; the real backup survived) and
-# `make undev` outside dev mode ran `rm` against the real cache directory,
-# failing the target instead of no-opping.
-#
-# dev handles three states, because after the move a stale link is actively
-# broken rather than merely redundant: a link left over from before DES-072
-# points at the repo root, where there is no hooks/, so every
-# ${CLAUDE_PLUGIN_ROOT}/hooks/*.sh silently fails. Only a genuine directory
-# is ever backed up; retargeting a link leaves the existing .bak alone.
 dev: install ## Install and symlink plugin cache for development
-	@set -e; \
-	if [ -z "$(PLUGIN_VERSION)" ]; then \
-	  echo "error: no plugin cache found at $(PLUGIN_CACHE)" >&2; exit 1; \
-	fi; \
-	link="$(PLUGIN_CACHE)/$(PLUGIN_VERSION)"; want="$(CURDIR)/plugin"; \
-	if [ -L "$$link" ]; then \
-	  have=$$(readlink "$$link"); \
-	  if [ "$$have" = "$$want" ]; then \
-	    echo "plugin cache already symlinked → $$want"; exit 0; \
-	  fi; \
-	  echo "retargeting stale symlink ($$have → $$want)"; \
-	  rm "$$link"; \
-	else \
-	  [ -e "$$link.bak" ] && { echo "error: $$link.bak already exists; refusing to overwrite" >&2; exit 1; }; \
-	  mv "$$link" "$$link.bak"; \
-	  echo "original cached at $$link.bak"; \
-	fi; \
-	ln -s "$$want" "$$link"; \
-	echo "symlinked $$link → $$want"
+	@python3 -B scripts/plugin_cache.py dev "$(HOME)" "$(CURDIR)" "$(PLUGIN_CACHE)"
 
 undev: ## Restore plugin cache from backup
-	@set -e; \
-	if [ -z "$(PLUGIN_VERSION)" ]; then \
-	  echo "error: no plugin cache found at $(PLUGIN_CACHE)" >&2; exit 1; \
-	fi; \
-	link="$(PLUGIN_CACHE)/$(PLUGIN_VERSION)"; \
-	if [ ! -L "$$link" ]; then echo "not in dev mode"; exit 0; fi; \
-	if [ ! -d "$$link.bak" ]; then \
-	  echo "error: no backup at $$link.bak; leaving the symlink in place — reinstall with 'claude plugin install ethos@punt-labs' to repopulate the cache" >&2; \
-	  exit 1; \
-	fi; \
-	rm "$$link"; \
-	mv "$$link.bak" "$$link"; \
-	echo "restored $$link"
+	@python3 -B scripts/plugin_cache.py undev "$(HOME)" "$(CURDIR)" "$(PLUGIN_CACHE)"
 
 clean: clean-latex ## Remove build artifacts
 	rm -f ethos coverage.out
