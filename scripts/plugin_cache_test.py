@@ -155,6 +155,28 @@ class PluginCacheTests(unittest.TestCase):
                 self.assertEqual(expected.resolve(), ROOT / "plugin")
                 self.assertFalse(untouched.is_symlink())
 
+    def test_dev_preserves_claude_registry_order_across_scopes(self):
+        for checkout_scope in ("project", "local"):
+            for user_first in (True, False):
+                with self.subTest(checkout_scope=checkout_scope, user_first=user_first), tempfile.TemporaryDirectory() as home:
+                    cache = Path(home) / ".claude/plugins/cache/punt-labs/ethos-dev"
+                    user_version = cache / "5.2.1"
+                    checkout_version = cache / "5.2.2"
+                    user_version.mkdir(parents=True)
+                    checkout_version.mkdir()
+                    user = {"scope": "user", "installPath": str(user_version)}
+                    checkout = {"scope": checkout_scope, "projectPath": str(ROOT), "installPath": str(checkout_version)}
+                    records = [user, checkout] if user_first else [checkout, user]
+                    (cache.parents[2] / "installed_plugins.json").write_text(
+                        json.dumps({"plugins": {"ethos-dev@punt-labs": records}}), encoding="utf-8",
+                    )
+
+                    result = run_make(home, "dev")
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    expected, untouched = (user_version, checkout_version) if user_first else (checkout_version, user_version)
+                    self.assertEqual(expected.readlink(), ROOT / "plugin")
+                    self.assertFalse(untouched.is_symlink())
+
     def test_dev_retargets_registered_link_after_checkout_moves(self):
         with tempfile.TemporaryDirectory() as home:
             cache = Path(home) / ".claude/plugins/cache/punt-labs/ethos-dev"
