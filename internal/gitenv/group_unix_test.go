@@ -154,6 +154,28 @@ func TestNetworkGitDoesNotReadTheUserConfig(t *testing.T) {
 	assert.Empty(t, fields[4], "GIT_SSH_COMMAND is not set")
 }
 
+func TestReadRefusesUnsetWhenDefaultGitConfigsCannotBeExamined(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("GIT_CONFIG_GLOBAL", "")
+	require.NoError(t, os.Unsetenv("GIT_CONFIG_GLOBAL"))
+	xdg := filepath.Join(home, ".config", "git", "config")
+	global := filepath.Join(home, ".gitconfig")
+	require.NoError(t, os.MkdirAll(filepath.Dir(xdg), 0o700))
+	for _, path := range []string{xdg, global} {
+		require.NoError(t, os.Symlink(path, path))
+	}
+
+	bad := UnreadableConfigs()
+	require.Len(t, bad, 2)
+	assert.Equal(t, xdg, bad[0].Path)
+	assert.Equal(t, global, bad[1].Path)
+	_, absent, err := Read(Spec{Git: fakeGitScript(t, "exit 1\n")}, AbsentUnset)
+	require.ErrorContains(t, err, xdg)
+	assert.False(t, absent)
+}
+
 // At the deadline a Network git's descendants (the ssh it started) are dead
 // too, whether or not they ignore SIGTERM.
 func TestNetworkGitTimeoutKillsItsDescendants(t *testing.T) {
