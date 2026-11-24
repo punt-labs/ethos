@@ -454,7 +454,30 @@ self-grant gap: no agent holds the identity key.
 Contacts are keyed by ethos handle plus pinned identity key, not email.
 Each lists its addresses, so beadle's glob patterns keep working; glob
 entries stay limited to `r--` (`beadle/internal/contacts/contacts.go:13-22`),
-and an exact `---` still overrides a permissive glob.
+and an exact `---` still overrides a permissive glob. A contact may also
+be email-only (`identity_key` empty): an entry imported from beadle
+whose key is not yet proven (section 10). Email-only entries hold only
+beadle grants, never biff grants, and never `x`.
+
+Beadle grants stay per receiving mailbox, as today's
+`Permissions map[identity_email]rwx` is
+(`beadle/internal/contacts/contacts.go:23-30`). One user may run several
+mailboxes (their own and their agents'), and one contact may be allowed
+in one and denied in another. The `beadle` grant is a map from mailbox
+address to `rwx`; a mailbox with no entry gets `---`.
+
+Beadle looks up the contact for inbound mail in this order:
+
+1. The signature verifies to an attested fingerprint (section 6.2):
+   the contact whose `identity_key` owns that fingerprint.
+2. Otherwise, an exact match of the `From` address against any
+   contact's `emails`, keyed or email-only.
+3. Otherwise, the longest matching glob.
+
+An exact match always outranks a glob, so an exact `---` still blocks a
+permissive glob. A message matched only by step 2 or 3 is never more
+than `unverified`, so it can be shown (`r`) and answered (`w`) but never
+trigger a recipe (`x`).
 
 ```json
 {
@@ -464,9 +487,10 @@ and an exact `---` still overrides a permissive glob.
   "issued": 1795651200,
   "contacts": [
     { "handle": "kai", "identity_key": "5d1e…90", "emails": ["kai@acme.dev"],
-      "grants": { "biff": ["instruct", "talk"], "beadle": "rw-" } },
+      "grants": { "biff": ["instruct", "talk"],
+                  "beadle": { "jim@example.com": "rw-", "claude@example.com": "---" } } },
     { "handle": "*@mail.anthropic.com", "emails": ["*@mail.anthropic.com"],
-      "grants": { "beadle": "r--" } }
+      "grants": { "beadle": { "jim@example.com": "r--" } } }
   ],
   "id": "…",
   "sig": "…"
@@ -818,7 +842,14 @@ Import maps each beadle entry this way:
   on proving who the sender is. Its `x` grant is held, not applied,
   because `x` acts on inbound mail whose sender an email-only entry
   cannot prove. The import report lists each held `x`; it takes effect
-  once the user pins that contact's identity key.
+  once the user pins that contact's identity key. Lookup for these
+  entries is step 2 of section 5.5.
+- The same contact found in several mailboxes' files becomes one
+  contact whose `beadle` grant map holds each mailbox's `rwx` exactly
+  as it was, so a deny in one mailbox and a grant in another both
+  survive. Two entries for the same contact that disagree inside the
+  same mailbox are not merged; import stops and lists them for the user
+  to choose.
 
 | Wave | Repos | Ships | User-visible change | Test |
 |------|-------|-------|---------------------|------|
