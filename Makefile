@@ -162,7 +162,7 @@ test-live: test-behavioral ## Run live provider and judge tests
 test-agent: test-behavioral ## Run real-agent behavioral tests
 
 test-nightly: ## Review quarantines and run the live suite under the Nightly budget
-	bash scripts/test-timed.sh nightly 3600 $(MAKE) test-quarantine test-behavioral
+	bash scripts/test-timed.sh nightly 3600 bash -c '"$$@" test-quarantine && "$$@" test-behavioral' bash $(MAKE)
 
 test-release-candidate: ## Verify the native candidate in checksummed dist/
 	@version=$$(sed -n 's/^VERSION="\([^"]*\)"$$/\1/p' install.sh); \
