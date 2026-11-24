@@ -14453,3 +14453,49 @@ a failing advisory test command does not block.
 back into generated files. Blocking defaults break deliberately red edit
 states. Trusting the edited worktree's config lets an edit change which
 commands the session executes.
+
+## DES-086: One identity and trust model for ethos, biff and beadle (PROPOSED)
+
+**Status**: Proposed 2026-11-23. Design only, awaiting operator
+ratification. Full design: [`docs/trust-model.md`](docs/trust-model.md).
+
+### Context
+
+Biff cannot prove who wrote a message, so it labels every body untrusted
+and sends only summaries to the model, which stops a user's own agents
+from handing each other work. Beadle has a working trust model for email
+(four levels from GPG checks, per-contact `rwx`), but it is keyed on
+email addresses in a beadle-only file. The operator ruled (2026-11-23)
+that trust is graded by relationship: a user's own agents and proven
+contacts are acted on as instructions, strangers get summaries, a bad
+signature is an alarm. biff's requirements (R-A.7) name ethos the system
+of record for public keys and delegations.
+
+### Decision
+
+- Each identity YAML gains a `keys` field with public material only: a
+  human's secp256k1 Schnorr identity key, and tool keys (biff Schnorr
+  `pubkey`, beadle GPG `fingerprint`) attested by it. Signed
+  attestations, delegations and revocations live in
+  `.punt-labs/ethos/trust/`.
+- An agent instance key is linked to its owner by a delegation signed
+  with the owner's identity key, with a scope ceiling and a 7-day
+  default expiry. Org keys attest members for Team and Enterprise.
+- Private keys live in `~/.punt-labs/local/ethos/keys/` (0600) or an
+  agent-image secret mount; never in tracked data or ext overlays.
+- One per-user address book (`~/.punt-labs/ethos/contacts.yaml`), keyed
+  by ethos handle and identity key, holds per-tool verbs: biff
+  `notify < read < ask < instruct` plus `talk`; beadle `rwx`. Defaults by
+  relationship: self `instruct`, team `ask`, known `notify`, stranger and
+  unsigned summary only, bad signature alarm.
+- Biff messages are NIP-01 events with recipient, nonce, expiry and
+  delegation id signed; literal Nostr events recommended, pending spike
+  SP-3.
+
+### Alternatives rejected
+
+Keys in per-tool ext namespaces; a relay-held key directory as
+authority; agent keys listed in the shared agent identity file; an
+`owner` field as the human–agent link; one flat trusted list; tracked
+per-repo grants; ethos as a signing daemon before `ethosd` exists. Each
+is explained in the design document.
