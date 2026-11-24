@@ -306,8 +306,7 @@ check-storage: ## Exercise offline storage boundaries through the real CLI, wrap
 check-plugin-cache: ## Test Claude plugin cache switching
 	python3 -B scripts/plugin_cache_test.py
 
-check: lint docs test coverage-check validate-content fuzz-check check-opencode check-storage check-plugin-cache ## Run all quality gates
-check: test-quarantine
+check: lint docs test coverage-check validate-content fuzz-check check-opencode check-storage check-plugin-cache test-quarantine ## Run all quality gates
 
 # The legacy corpus (internal/autorepair/testdata) is real on-disk state written
 # by nine released binaries. Regenerating it builds each from its git tag, so it
