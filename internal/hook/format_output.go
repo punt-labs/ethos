@@ -12,7 +12,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 )
 
@@ -33,11 +32,10 @@ func HandleFormatOutput(r io.Reader, w io.Writer) error {
 }
 
 func HandleFormatOutputWithContext(ctx context.Context, r io.Reader, w io.Writer) error {
-	input, err := ReadInput(r, hookInputTimeout)
+	input, err := readHookInput(ctx, r)
 	if err != nil {
 		return fmt.Errorf("format-output: %w", err)
 	}
-	diagnostic.SetHookTool(ctx, input)
 
 	// Extract tool name — strip the MCP namespace prefix.
 	toolFull, _ := input["tool_name"].(string)

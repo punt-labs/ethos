@@ -105,6 +105,9 @@ func TestSharedLoggingHook(t *testing.T) {
 	require.Equal(t, 1, strings.Count(log, "Invocation finished"))
 	require.Contains(t, log, "project=none")
 	require.Contains(t, log, "tool=unrelated")
+	require.NotContains(t, log, "session_id=")
+	require.NotContains(t, log, "agent_id=")
+	require.NotContains(t, log, "agent=")
 }
 
 func TestSharedLoggingHookToolContext(t *testing.T) {
@@ -130,7 +133,8 @@ func TestSharedLoggingHookToolContext(t *testing.T) {
 			if tc.invalidStore {
 				cmd.Env = append(cmd.Env, "ETHOS_REPO_ROOT="+checkout)
 			}
-			cmd.Stdin = strings.NewReader(`{"session_id":"fixture","tool_name":"Bash","tool_input":{"command":"do-not-log-payload-arguments"}}`)
+			cmd.Env = append(cmd.Env, "ETHOS_SESSION=outer-session", "ETHOS_AGENT_ID=outer-agent")
+			cmd.Stdin = strings.NewReader(`{"session_id":"fixture","agent_id":"worker-01","agent_type":"implementer","tool_name":"Bash","tool_input":{"command":"do-not-log-payload-arguments"}}`)
 			out, err := cmd.CombinedOutput()
 			require.NoError(t, err, "%s", out)
 			log := diagnosticLog(t, home)
@@ -138,6 +142,37 @@ func TestSharedLoggingHookToolContext(t *testing.T) {
 			require.NotContains(t, log, repo)
 			require.NotContains(t, log, checkout)
 			require.NotContains(t, log, "do-not-log-payload-arguments")
+			require.Contains(t, log, "session_id=fixture")
+			require.Contains(t, log, "agent_id=worker-01")
+			require.Contains(t, log, "agent=implementer")
+			require.NotContains(t, log, "outer-session")
+			require.NotContains(t, log, "outer-agent")
+		})
+	}
+}
+
+func TestSharedLoggingHookUnsafeIdentity(t *testing.T) {
+	home, cwd := t.TempDir(), t.TempDir()
+	cmd := loggingProcess(t, home, cwd, "hook", "format-output")
+	cmd.Env = append(cmd.Env, "ETHOS_SESSION=env/session", "ETHOS_AGENT_ID=env\\agent", "CLAUDE_AGENT_TYPE=agent\nforge")
+	cmd.Stdin = strings.NewReader(`{"session_id":"https://fixture.invalid/path","agent_id":"/private/worker","agent_type":"../not-a-persona"}`)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	log := diagnosticLog(t, home)
+	for _, field := range []string{"session_id=", "agent_id=", "agent=", "fixture.invalid", "private/worker", "not-a-persona"} {
+		require.NotContains(t, log, field)
+	}
+}
+
+func TestSharedLoggingLifecycleHookIdentity(t *testing.T) {
+	for _, hook := range []string{"session-end", "pre-compact", "subagent-start"} {
+		t.Run(hook, func(t *testing.T) {
+			home, cwd := t.TempDir(), testhelpers.OutsideRepo(t)
+			cmd := loggingProcess(t, home, cwd, "hook", hook)
+			cmd.Stdin = strings.NewReader(`{"session_id":"lifecycle-fixture","agent_type":"implementer"}`)
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "%s", out)
+			require.Regexp(t, "Invocation finished .*session_id=lifecycle-fixture agent=implementer", diagnosticLog(t, home))
 		})
 	}
 }
@@ -192,13 +227,14 @@ checks:
 	for _, tc := range []struct {
 		hook, stage, input, outcome string
 	}{
-		{"post-edit", "edit", `{"tool_name":"Edit","tool_input":{"file_path":"sample.txt"}}`, "completed"},
+		{"post-edit", "edit", `{"session_id":"fixture","tool_name":"Edit","tool_input":{"file_path":"sample.txt"}}`, "completed"},
 		{"pre-commit", "commit", "", "completed"},
-		{"subagent-stop", "handoff", `{"session_id":"fixture","agent_id":"worker"}`, "failed"},
+		{"subagent-stop", "handoff", `{"session_id":"fixture","agent_id":"worker","agent_type":"implementer"}`, "failed"},
 	} {
 		t.Run(tc.stage, func(t *testing.T) {
 			home := t.TempDir()
 			cmd := loggingProcess(t, home, repo, "hook", tc.hook)
+			cmd.Env = append(cmd.Env, "ETHOS_SESSION=fixture", "ETHOS_AGENT_ID=worker", "CLAUDE_AGENT_TYPE=implementer")
 			cmd.Stdin = strings.NewReader(tc.input)
 			out, err := cmd.CombinedOutput()
 			require.NoError(t, err, "%s", out)
@@ -206,6 +242,9 @@ checks:
 			require.Regexp(t, "Invocation finished command=hook "+tc.hook+" .*project=logging-project", log)
 			require.Regexp(t, "Check finished .*stage="+tc.stage+" check="+tc.stage+"-probe outcome="+tc.outcome+" duration_ms=[1-9][0-9]+", log)
 			require.Equal(t, 1, strings.Count(log, "Check finished"), log)
+			for _, message := range []string{"Invocation finished ", "Check finished "} {
+				require.Regexp(t, message+".*session_id=fixture.*agent_id=worker.*agent=implementer", log)
+			}
 			require.NotContains(t, log, "sleep 0.05")
 		})
 	}

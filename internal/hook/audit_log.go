@@ -35,7 +35,6 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
-	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/redact"
@@ -135,13 +134,12 @@ func HandleAuditLogWithPolicyContext(ctx context.Context, r io.Reader, p layout.
 }
 
 func handleAuditLog(ctx context.Context, r io.Reader, repoRoot, globalSessionsDir string, policy *layout.Policy) error {
-	input, err := ReadInput(r, hookInputTimeout)
+	input, err := readHookInput(ctx, r)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: audit-log: reading input: %v\n", err)
 		return fmt.Errorf("%w: reading input: %v", ErrAuditDropped, err)
 	}
 
-	diagnostic.SetHookTool(ctx, input)
 	sessionID, _ := input["session_id"].(string)
 	if sessionID == "" {
 		tool, _ := input["tool_name"].(string)

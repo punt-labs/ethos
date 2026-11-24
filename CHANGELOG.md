@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Hook diagnostic logs identify the project, hook, tool, session, and agent
+  when available, and record each edit, commit, and handoff check's duration
+  and outcome.
+
 ## [5.2.1] - 2026-11-23
 
 ### Security

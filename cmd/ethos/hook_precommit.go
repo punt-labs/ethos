@@ -123,7 +123,7 @@ func runHookPreCommit(ctx context.Context, out, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
-	feedback := hook.RunStageChecks(ctx, checkout, committingAgent(), "commit")
+	feedback := hook.RunStageChecks(ctx, checkout, committingAgent(ctx), "commit")
 	if feedback.Advisory != "" {
 		fmt.Fprintln(errOut, feedback.Advisory)
 	}
@@ -190,12 +190,13 @@ func privateIndexPaths(ctx context.Context) ([]string, error) {
 	return paths, nil
 }
 
-func committingAgent() string {
+func committingAgent(ctx context.Context) string {
 	ss := sessionStore()
 	id, _, err := resolve.SessionID(ss)
 	if err != nil {
 		return ""
 	}
+	diagnostic.SetHookIdentity(ctx, id, "", "")
 	roster, err := ss.Load(id)
 	if err != nil {
 		return ""
@@ -205,6 +206,7 @@ func committingAgent() string {
 		agent = process.FindClaudePID()
 	}
 	if participant := roster.FindParticipant(agent); participant != nil {
+		diagnostic.SetHookIdentity(ctx, "", participant.AgentID, participant.Persona)
 		return participant.Persona
 	}
 	return ""

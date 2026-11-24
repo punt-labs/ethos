@@ -38,7 +38,10 @@ func PostEdit(ctx context.Context, input io.Reader, output io.Writer, agent ...s
 		postEditAdvice(output, "post-edit input: "+err.Error())
 		return
 	}
-	diagnostic.SetHookTool(ctx, payload)
+	if len(agent) > 0 {
+		diagnostic.SetHookIdentity(ctx, "", "", agent[0])
+	}
+	diagnostic.SetHookInput(ctx, payload)
 	tool, _ := payload["tool_input"].(map[string]any)
 	file, _ := tool["file_path"].(string)
 	if file == "" {

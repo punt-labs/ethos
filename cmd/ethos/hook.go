@@ -48,7 +48,7 @@ var hookSessionStartCmd = &cobra.Command{
 	Short: "SessionStart hook handler",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runHookSessionStart()
+		return runHookSessionStart(cmd.Context())
 	},
 }
 
@@ -57,7 +57,7 @@ var hookSessionEndCmd = &cobra.Command{
 	Short: "SessionEnd hook handler",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runHookSessionEnd()
+		return runHookSessionEnd(cmd.Context())
 	},
 }
 
@@ -66,7 +66,7 @@ var hookSubagentStartCmd = &cobra.Command{
 	Short: "SubagentStart hook handler",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runHookSubagentStart()
+		return runHookSubagentStart(cmd.Context())
 	},
 }
 
@@ -87,7 +87,7 @@ var hookPreCompactCmd = &cobra.Command{
 	Short: "PreCompact hook handler",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runHookPreCompact()
+		return runHookPreCompact(cmd.Context())
 	},
 }
 
@@ -204,7 +204,7 @@ func repairSessions(loc resolve.Located) func(ctx context.Context) (int, error) 
 	}
 }
 
-func runHookSessionStart() error {
+func runHookSessionStart(ctx context.Context) error {
 	loc := currentRoots().Located
 	is := identityStore()
 	notice, items := takeRepairNotice()
@@ -220,21 +220,21 @@ func runHookSessionStart() error {
 		NoticeItems:  items,
 		Repair:       repairSessions(loc),
 	}
-	if err := hook.HandleSessionStart(os.Stdin, deps); err != nil {
+	if err := hook.HandleSessionStartContext(ctx, os.Stdin, deps); err != nil {
 		return fmt.Errorf("hook session-start: %w", err)
 	}
 	return nil
 }
 
-func runHookSessionEnd() error {
+func runHookSessionEnd(ctx context.Context) error {
 	ss := sessionStore()
-	if err := hook.HandleSessionEnd(os.Stdin, ss); err != nil {
+	if err := hook.HandleSessionEndContext(ctx, os.Stdin, ss); err != nil {
 		return fmt.Errorf("hook session-end: %w", err)
 	}
 	return nil
 }
 
-func runHookSubagentStart() error {
+func runHookSubagentStart(ctx context.Context) error {
 	s := identityStore()
 	deps := hook.SubagentStartDeps{
 		Identities: s,
@@ -263,7 +263,7 @@ func runHookSubagentStart() error {
 		deps.RepoRoot = repoRoot
 		deps.StoreRoot = storeRoot
 	}
-	if err := hook.HandleSubagentStartWithDeps(os.Stdin, deps); err != nil {
+	if err := hook.HandleSubagentStartWithDepsContext(ctx, os.Stdin, deps); err != nil {
 		return fmt.Errorf("hook subagent-start: %w", err)
 	}
 	return nil
@@ -279,7 +279,7 @@ func locateHookRoots() (repoRoot, storeRoot string, err error) {
 	return r.Checkout, r.Store, nil
 }
 
-func runHookPreCompact() error {
+func runHookPreCompact(ctx context.Context) error {
 	loc := currentRoots().Located
 	is := identityStore()
 	deps := hook.PreCompactDeps{
@@ -290,7 +290,7 @@ func runHookPreCompact() error {
 		Roles:      layeredRoleStore(is),
 		Issue:      currentRoots().hookIssue(),
 	}
-	if err := hook.HandlePreCompact(os.Stdin, deps); err != nil {
+	if err := hook.HandlePreCompactContext(ctx, os.Stdin, deps); err != nil {
 		return fmt.Errorf("hook pre-compact: %w", err)
 	}
 	return nil

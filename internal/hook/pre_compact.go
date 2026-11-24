@@ -1,11 +1,13 @@
 package hook
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/role"
@@ -33,6 +35,10 @@ type PreCompactDeps struct {
 // the full persona block plus team context as plain text so
 // behavioral instructions survive context compaction.
 func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
+	return HandlePreCompactContext(context.Background(), r, deps)
+}
+
+func HandlePreCompactContext(ctx context.Context, r io.Reader, deps PreCompactDeps) error {
 	if deps.Identities == nil || deps.Sessions == nil {
 		return fmt.Errorf("pre-compact: Identities and Sessions stores are required")
 	}
@@ -47,7 +53,7 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 	if deps.Issue == nil {
 		deps.Issue = loc.StoreFailure()
 	}
-	input, err := ReadInput(r, hookInputTimeout)
+	input, err := readHookInput(ctx, r)
 	if err != nil {
 		return fmt.Errorf("pre-compact: %w", err)
 	}
@@ -81,6 +87,7 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 		for _, p := range roster.Participants[1:] {
 			if p.Parent == humanID && p.Persona != "" {
 				agentPersona = p.Persona
+				diagnostic.SetHookIdentity(ctx, "", p.AgentID, p.Persona)
 				break
 			}
 		}

@@ -158,7 +158,7 @@ func HandlePreToolUseWithContext(ctx context.Context, r io.Reader, w io.Writer, 
 		return refuseUnreadable(raw, w, fmt.Errorf("pre-tool-use: %w", err))
 	}
 
-	diagnostic.SetHookTool(ctx, input)
+	diagnostic.SetHookInput(ctx, input)
 	toolName, _ := input["tool_name"].(string)
 	if ethosMCPTool.MatchString(toolName) {
 		return handleEthosMCPCall(input, w, loc)

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/session"
@@ -26,7 +27,7 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 	if Killed() {
 		return nil
 	}
-	input, err := ReadInput(r, hookInputTimeout)
+	input, err := readHookInput(ctx, r)
 	if err != nil {
 		stopFeedback(out, errOut, StageFeedback{Blocking: "subagent-stop: " + err.Error()}, false)
 		return nil
@@ -40,6 +41,10 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 	}
 
 	start := startedParticipant(ss, sessionID, agentID)
+	agent := stopAgent(input)
+	if agent == "" {
+		diagnostic.SetHookIdentity(ctx, "", "", start.Persona)
+	}
 	if leaveErr := ss.Leave(sessionID, agentID); leaveErr != nil {
 		fmt.Fprintf(errOut, "ethos: failed to leave session %s: %v\n", sessionID, leaveErr)
 	}
@@ -49,7 +54,6 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 		stopFeedback(out, errOut, StageFeedback{Blocking: "handoff scope: " + err.Error()}, active)
 		return nil
 	}
-	agent := stopAgent(input)
 	if readOnlyStop(ctx, checkout, agent, sessionID, start) {
 		return nil
 	}
