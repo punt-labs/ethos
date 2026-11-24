@@ -152,15 +152,17 @@ func TestSharedLoggingHookToolContext(t *testing.T) {
 }
 
 func TestSharedLoggingHookUnsafeIdentity(t *testing.T) {
-	home, cwd := t.TempDir(), t.TempDir()
-	cmd := loggingProcess(t, home, cwd, "hook", "format-output")
-	cmd.Env = append(cmd.Env, "ETHOS_SESSION=env/session", "ETHOS_AGENT_ID=env\\agent", "CLAUDE_AGENT_TYPE=agent\nforge")
-	cmd.Stdin = strings.NewReader(`{"session_id":"https://fixture.invalid/path","agent_id":"/private/worker","agent_type":"../not-a-persona"}`)
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "%s", out)
-	log := diagnosticLog(t, home)
-	for _, field := range []string{"session_id=", "agent_id=", "agent=", "fixture.invalid", "private/worker", "not-a-persona"} {
-		require.NotContains(t, log, field)
+	for _, agent := range []string{"../not-a-persona", "C:private-agent"} {
+		home, cwd := t.TempDir(), testhelpers.OutsideRepo(t)
+		cmd := loggingProcess(t, home, cwd, "hook", "format-output")
+		cmd.Env = append(cmd.Env, "ETHOS_SESSION=env/session", "ETHOS_AGENT_ID=env\\agent", "CLAUDE_AGENT_TYPE=agent\nforge")
+		cmd.Stdin = strings.NewReader(`{"session_id":"https://fixture.invalid/path","agent_id":"/private/worker","agent_type":"` + agent + `"}`)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		log := diagnosticLog(t, home)
+		for _, field := range []string{"session_id=", "agent_id=", "agent=", "fixture.invalid", "private/worker", agent} {
+			require.NotContains(t, log, field)
+		}
 	}
 }
 

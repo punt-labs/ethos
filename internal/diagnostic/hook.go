@@ -44,14 +44,18 @@ func SetHookProject(ctx context.Context, project, checkout string) {
 
 var hookToolName = regexp.MustCompile(`^[a-zA-Z0-9_.:-]{1,128}$`)
 var hookID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
-var hookAgent = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}(:[a-zA-Z0-9_-]{1,128})?$`)
+var hookAgent = regexp.MustCompile(`^([a-zA-Z0-9_-]{2,127}:)?[a-zA-Z0-9_-]{1,128}$`)
+
+func safeHookAgent(agent string) bool {
+	return len(agent) <= 128 && hookAgent.MatchString(agent)
+}
 
 // SetHookInput records allowlisted identifiers, never tool inputs or output.
 func SetHookInput(ctx context.Context, input map[string]any) {
 	sessionID, _ := input["session_id"].(string)
 	agentID, _ := input["agent_id"].(string)
 	agentType, _ := input["agent_type"].(string)
-	if handle, _ := input["agent_handle"].(string); hookAgent.MatchString(handle) {
+	if handle, _ := input["agent_handle"].(string); safeHookAgent(handle) {
 		agentType = handle
 	}
 	SetHookIdentity(ctx, sessionID, agentID, agentType)
@@ -78,7 +82,7 @@ func SetHookIdentity(ctx context.Context, sessionID, agentID, agent string) {
 			}
 			h.agentID = agentID
 		}
-		if len(agent) <= 128 && hookAgent.MatchString(agent) {
+		if safeHookAgent(agent) {
 			h.agent = agent
 		}
 	}
