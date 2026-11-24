@@ -4,12 +4,41 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def run_make(home, target):
+    env = os.environ.copy()
+    for name in ("MAKEFLAGS", "MAKEOVERRIDES", "MFLAGS", "GNUMAKEFLAGS", "PLUGIN_CACHE"):
+        env.pop(name, None)
+    return subprocess.run(
+        ["make", "--no-print-directory", "-o", "install", f"HOME={home}", target],
+        cwd=ROOT,
+        env={**env, "HOME": str(home)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 class PluginCacheTests(unittest.TestCase):
+    def test_inherited_make_overrides_cannot_redirect_cache_access(self):
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as outer:
+            version = Path(home) / ".claude/plugins/cache/punt-labs/ethos/5.2.1"
+            version.mkdir(parents=True)
+            outer_cache = Path(outer) / ".claude/plugins/cache/punt-labs/ethos"
+            outer_cache.mkdir(parents=True)
+            with patch.dict(os.environ, {
+                "MAKEFLAGS": f" -- HOME={outer} PLUGIN_CACHE={outer_cache}",
+            }):
+                result = run_make(home, "dev")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue(version.is_symlink())
+            self.assertEqual(list(outer_cache.iterdir()), [])
+
     def test_dev_and_undev_restore_either_cache_layout(self):
         for name, other in (
             ("ethos", "backup"),
@@ -38,14 +67,7 @@ class PluginCacheTests(unittest.TestCase):
                 backup = installed.with_name(installed.name + ".bak")
 
                 def run(target):
-                    result = subprocess.run(
-                        ["make", "--no-print-directory", "-o", "install", target],
-                        cwd=ROOT,
-                        env={**os.environ, "HOME": home},
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
+                    result = run_make(home, target)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
                 run("dev")
