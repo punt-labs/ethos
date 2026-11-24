@@ -53,8 +53,17 @@ def missing_cache(caches):
     return ValueError(f"no plugin cache found at {', '.join(str(cache) for cache in caches)}")
 
 
+def is_retargetable(link):
+    if not link.is_symlink() or link.exists():
+        return False
+    target = link.readlink()
+    backup = backup_path(link)
+    return target.is_absolute() and target.name == "plugin" and not backup.is_symlink() and backup.is_dir()
+
+
 def registered_version(cache, install_paths):
-    versions = {entry.name: entry for entry in cache_versions(cache) if entry.is_dir()}
+    versions = {entry.name: entry for entry in cache_versions(cache)}
+    recoverable = None
     if versions:
         root = cache.resolve()
         for install_path in install_paths:
@@ -62,7 +71,13 @@ def registered_version(cache, install_paths):
                 continue
             path = Path(install_path)
             if path.is_absolute() and path.name in versions and resolves_to(path.parent, root):
-                return versions[path.name]
+                entry = versions[path.name]
+                if entry.is_dir():
+                    return entry
+                if recoverable is None and is_retargetable(entry):
+                    recoverable = entry
+    if recoverable is not None:
+        return recoverable
     raise ValueError(f"no registered ethos-dev installPath points to a cached version under {cache}")
 
 

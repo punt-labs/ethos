@@ -155,6 +155,36 @@ class PluginCacheTests(unittest.TestCase):
                 self.assertEqual(expected.resolve(), ROOT / "plugin")
                 self.assertFalse(untouched.is_symlink())
 
+    def test_dev_retargets_registered_link_after_checkout_moves(self):
+        with tempfile.TemporaryDirectory() as home:
+            cache = Path(home) / ".claude/plugins/cache/punt-labs/ethos-dev"
+            version = cache / "5.2.1"
+            version.mkdir(parents=True)
+            (version / "original").touch()
+            registry = cache.parents[2] / "installed_plugins.json"
+            registry.write_text(
+                json.dumps({"plugins": {"ethos-dev@punt-labs": [{"scope": "user", "installPath": str(version)}]}}),
+                encoding="utf-8",
+            )
+            old_checkout = Path(home) / "old-checkout"
+            (old_checkout / "plugin").mkdir(parents=True)
+            result = subprocess.run(
+                ["python3", "-B", str(ROOT / "scripts/plugin_cache.py"), "dev", home, str(old_checkout), ""],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(version.readlink(), old_checkout / "plugin")
+            old_checkout.rename(Path(home) / "moved-checkout")
+            self.assertFalse(version.exists())
+
+            result = run_make(home, "dev")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(version.readlink(), ROOT / "plugin")
+            result = run_make(home, "undev")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse(version.is_symlink())
+            self.assertTrue((version / "original").is_file())
+
     def test_undev_restores_links_after_cache_selection_changes(self):
         for link_both in (False, True):
             with self.subTest(link_both=link_both), tempfile.TemporaryDirectory() as home:
