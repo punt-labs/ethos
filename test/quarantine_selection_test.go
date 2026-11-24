@@ -20,8 +20,8 @@ func TestQuarantineSelection(t *testing.T) {
 			issue, owner, today.AddDate(0, 0, days).Format(time.DateOnly), reason)
 	}
 	for _, tc := range []struct {
-		name, inventory, mode, goOutput, want string
-		fail                                  bool
+		name, inventory, mode, goOutput, defaultOutput, want string
+		fail                                                 bool
 	}{
 		{name: "empty", mode: "list", want: "No quarantined tests."},
 		{name: "valid", inventory: record("PL-1", "owner", "race reproducer", 7), mode: "list", want: "PL-1"},
@@ -33,16 +33,25 @@ func TestQuarantineSelection(t *testing.T) {
 			want: "go test -race -count=1 -tags quarantine -run ^TestQuarantined_Example$ -v ./internal/example"},
 		{name: "absent", inventory: record("PL-1", "owner", "reason", 7), mode: "run", goOutput: "no tests to run",
 			want: "did not select TestQuarantined_Example", fail: true},
+		{name: "ordinary selection", inventory: record("PL-1", "owner", "reason", 7), mode: "list",
+			defaultOutput: "TestQuarantined_Example", want: "also selected without -tags quarantine", fail: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			inventory := filepath.Join(dir, "quarantine.tsv")
 			require.NoError(t, os.WriteFile(inventory, []byte(tc.inventory), 0o600))
-			fakeGo := "#!/bin/sh\ncase \" $* \" in\n *' -list '*) printf '%s\\n' \"$TEST_QUARANTINE_LIST\";;\n *) printf 'go %s\\n' \"$*\";;\nesac\n"
+			fakeGo := `#!/bin/sh
+case " $* " in
+ *' list '*) [ -z "$TEST_DEFAULT_LIST" ] || echo yes;;
+ *' -tags quarantine -list '*) printf '%s\n' "$TEST_QUARANTINE_LIST";;
+ *' -list '*) printf '%s\n' "$TEST_DEFAULT_LIST";;
+ *) printf 'go %s\n' "$*";;
+esac
+`
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "go"), []byte(fakeGo), 0o700))
 			cmd := exec.CommandContext(t.Context(), "python3", "../scripts/test-quarantine.py", tc.mode, inventory)
 			cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
-				"TEST_QUARANTINE_LIST="+tc.goOutput)
+				"TEST_QUARANTINE_LIST="+tc.goOutput, "TEST_DEFAULT_LIST="+tc.defaultOutput)
 			out, err := cmd.CombinedOutput()
 			if tc.fail {
 				require.Error(t, err, "%s", out)

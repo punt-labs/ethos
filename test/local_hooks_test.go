@@ -198,4 +198,25 @@ func TestDevelopmentHooksRefuseUnchainedHook(t *testing.T) {
 	require.Contains(t, string(out), "post-commit")
 	out, err = run("git", "config", "--get", "core.hooksPath")
 	require.Error(t, err, "%s", out)
+
+	require.NoError(t, os.Remove(filepath.Join(dir, ".git", "hooks", "post-commit")))
+	out, err = run("git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+		"commit", "--allow-empty", "-m", "fixture")
+	require.NoError(t, err, "%s", out)
+	linked := t.TempDir()
+	out, err = run("git", "worktree", "add", "--detach", linked, "HEAD")
+	require.NoError(t, err, "%s", out)
+	out, err = run("make", "-f", makefile, "hooks")
+	require.Error(t, err, "%s", out)
+	require.Contains(t, string(out), "extensions.worktreeConfig")
+
+	out, err = run("git", "config", "--local", "extensions.worktreeConfig", "true")
+	require.NoError(t, err, "%s", out)
+	out, err = run("make", "-f", makefile, "hooks")
+	require.NoError(t, err, "%s", out)
+	out, err = run("git", "config", "--get", "core.hooksPath")
+	require.NoError(t, err, "%s", out)
+	require.Equal(t, ".githooks", strings.TrimSpace(string(out)))
+	out, err = run("git", "-C", linked, "config", "--get", "core.hooksPath")
+	require.Error(t, err, "%s", out)
 }

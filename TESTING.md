@@ -27,15 +27,19 @@ The installed PR/main and Nightly rows describe the target state after
 [Behavioral]: .github/workflows/behavioral.yml
 [Release]: .github/workflows/release.yml
 
-`make hooks` sets the repository's `core.hooksPath` to `.githooks`; it refuses
+`make hooks` sets `core.hooksPath` to `.githooks`; it refuses
 to replace a different configured path or to disable an executable hook
 without a tracked counterpart. The tracked hooks chain the common
 directory's pre-commit, commit-msg and pre-push hooks. In particular, opt-in
 keeps Ethos's audit seal and provenance trailers working. Pre-push passes
 Git's original remote arguments and input and skips the test suite for
-deletion-only pushes. When switching to a branch without these tracked hooks,
-unset the opt-in with `git config --local --unset core.hooksPath` to restore
-the default hooks.
+deletion-only pushes. Repositories with multiple linked worktrees must enable
+[worktree-specific Git configuration] first so opting in does not change
+other checkouts. When switching to a branch without these tracked hooks,
+unset the opt-in with `git config --worktree --unset core.hooksPath`
+(use `--local` if worktree configuration is not enabled).
+
+[worktree-specific Git configuration]: https://git-scm.com/docs/git-worktree#_configuration_file
 
 For a local release check, use the shipped `install.sh` for the intended
 version and place the version-matched staged artifact in `dist/`. Candidate
@@ -90,8 +94,9 @@ issue, named owner, UTC expiry (within 14 days), and reason to the inventory.
 Keep the first failure evidence and diagnose before rerunning. Review the
 inventory daily; fix or remove the test by expiry. Restore the ordinary
 name and selection and remove the inventory row when the test is fixed.
-An empty inventory is valid; a listed test that does not collect is an error
-when running quarantined tests.
+An empty inventory is valid. Validation rejects a listed test that is still
+selected by default; a listed test that does not collect is an error when
+running quarantined tests.
 
 [inventory]: tests/quarantine.tsv
 
@@ -125,6 +130,7 @@ proposed until the maintainers file and assign the Linear issues.
 | TST-2 / GO-TST-1 | `test-legacy-corpus` and live OpenCode smoke are still manual; move them to suitable CI tiers after provisioning fixtures and the trusted runner. | Ethos maintainers | 2026-12-22 | TODO |
 | TST-3 / GO-TST-1 | The audit latency budget deliberately omits the race flag to measure uninstrumented performance; keep the race companion and track the exception. | Ethos maintainers | 2026-12-22 | TODO |
 | TST-3 / GO-TST-1 | Local hooks execute working-tree sources, not an isolated staged or pushed snapshot; snapshot testing needs an independent budget and worktree strategy. | Ethos maintainers | 2026-12-22 | TODO |
+| TST-3 / GO-TST-1 | Pre-commit selects direct changed packages and fixtures, not reverse dependents; module metadata changes select the tooling package. The full dependency matrix remains at pre-push and CI until a bounded impact selector is available. | Ethos maintainers | 2026-12-22 | TODO |
 | TST-5 / GO-TST-3 | Coverage ratchet compares with a committed reference, not an equivalently measured exact merge base; replacing the gate needs matched base/head profiles. | Ethos maintainers | 2026-12-22 | TODO |
 | TST-5 / GO-TST-3 | Extra subprocess, wire and release processes remain outside the installed-storage coverage report; instrumentation for those paths is independent work. | Ethos maintainers | 2026-12-22 | TODO |
 | TST-6 / GO-TST-4 | Green Nightly on main and its failure/cancellation alerts still need hosted evidence after [#671] merges. | Ethos maintainers | 2026-12-08 | TODO |

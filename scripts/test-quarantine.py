@@ -49,10 +49,19 @@ def main():
         if not records:
             print("No quarantined tests.")
         for package, test, issue, owner, expires, reason in records:
+            command = ["go", "test", "-race", "-count=1"]
+            pattern = f"^{test}$"
+            has_default_tests = subprocess.check_output(
+                ["go", "list", "-e", "-f", "{{if or .TestGoFiles .XTestGoFiles}}yes{{end}}", package],
+                text=True,
+            ).strip()
+            if has_default_tests:
+                listed = subprocess.check_output([*command, "-list", pattern, package], text=True)
+                if test in listed.splitlines():
+                    raise ValueError(f"{package} {test} is also selected without -tags quarantine")
             print(f"{package} {test}: {issue}, {owner}, expires {expires}: {reason}", flush=True)
             if args.mode == "run":
-                command = ["go", "test", "-race", "-count=1", "-tags", "quarantine"]
-                pattern = f"^{test}$"
+                command += ["-tags", "quarantine"]
                 listed = subprocess.check_output([*command, "-list", pattern, package], text=True)
                 if test not in listed.splitlines():
                     raise ValueError(f"{package} did not select {test} with -tags quarantine")

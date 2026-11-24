@@ -120,6 +120,12 @@ test: ## Run tests with race detection and write coverage to coverage.out
 .PHONY: hooks test-changed test-push test-subprocess-fast
 hooks: ## Opt in to the repository's development Git hooks
 	@set -eu; \
+	scope=--local; \
+	if [ "$$(git config --type=bool --get extensions.worktreeConfig)" = true ]; then \
+		scope=--worktree; \
+	elif [ "$$(git worktree list --porcelain | grep -c '^worktree ')" -gt 1 ]; then \
+		echo 'Multiple worktrees share the hook configuration; enable extensions.worktreeConfig before opting in' >&2; exit 1; \
+	fi; \
 	if path=$$(git config --get core.hooksPath) && [ "$$path" != .githooks ]; then \
 		echo "core.hooksPath is already $$path; chain .githooks manually" >&2; exit 1; \
 	fi; \
@@ -129,8 +135,8 @@ hooks: ## Opt in to the repository's development Git hooks
 		if [ -f "$$hook" ] && [ -x "$$hook" ] && [ ! -x ".githooks/$${hook##*/}" ]; then \
 			echo "Existing hook $$hook would be disabled; chain .githooks manually" >&2; exit 1; \
 		fi; \
-	done
-	git config --local core.hooksPath .githooks
+	done; \
+	git config "$$scope" core.hooksPath .githooks
 
 test-changed: ## Run default Go tests in packages affected by staged paths
 	bash scripts/test-timed.sh pre-commit 30 bash scripts/test-changed.sh
