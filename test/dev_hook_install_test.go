@@ -60,13 +60,18 @@ func TestDevelopmentHooksFutureWorktreeKeepsExistingHooks(t *testing.T) {
 	require.Contains(t, string(out), "existing commit-msg ran")
 }
 
-func TestDevelopmentHooksDoctorPassesAfterOptIn(t *testing.T) {
-	dir, run := developmentHookFixture(t)
+func buildFixtureEthos(t *testing.T, dir string) {
+	t.Helper()
 	build := exec.CommandContext(t.Context(), "go", "build", "-o", filepath.Join(dir, ".test-bin", "ethos"), "./cmd/ethos")
 	build.Dir = ".."
 	out, err := build.CombinedOutput()
 	require.NoError(t, err, "%s", out)
-	out, err = run(dir, "ethos", "enable")
+}
+
+func TestDevelopmentHooksDoctorPassesAfterOptIn(t *testing.T) {
+	dir, run := developmentHookFixture(t)
+	buildFixtureEthos(t, dir)
+	out, err := run(dir, "ethos", "enable")
 	require.NoError(t, err, "%s", out)
 	installDevelopmentHooks(t, dir, run)
 	out, err = run(dir, "ethos", "doctor")
@@ -74,4 +79,31 @@ func TestDevelopmentHooksDoctorPassesAfterOptIn(t *testing.T) {
 	for _, label := range []string{"Audit seal hook", "Audit trailer hook", "Seal hook currency", "Trailer hook currency"} {
 		require.Regexp(t, label+`[ ]+PASS`, string(out))
 	}
+}
+
+func TestDevelopmentHooksRequireLegacySealUpgrade(t *testing.T) {
+	dir, run := developmentHookFixture(t)
+	hooks := filepath.Join(dir, ".git", "hooks")
+	require.NoError(t, os.Mkdir(hooks, 0o700))
+	hook := filepath.Join(hooks, "pre-commit")
+	legacy := []byte("#!/bin/sh\n# hooks/pre-commit.sh — Seal pending live audit lines\nexit 71\n")
+	require.NoError(t, os.WriteFile(hook, legacy, 0o700))
+	makefile, err := filepath.Abs("../Makefile")
+	require.NoError(t, err)
+	out, err := run(dir, "make", "-f", makefile, "hooks")
+	require.Error(t, err, "%s", out)
+	require.Contains(t, string(out), "run ethos enable before opting in")
+	got, err := os.ReadFile(hook)
+	require.NoError(t, err)
+	require.Equal(t, legacy, got)
+	require.NoFileExists(t, filepath.Join(dir, ".git", "ethos-dev-hooks"))
+	buildFixtureEthos(t, dir)
+	out, err = run(dir, "ethos", "enable")
+	require.NoError(t, err, "%s", out)
+	installDevelopmentHooks(t, dir, run)
+	got, err = os.ReadFile(hook)
+	require.NoError(t, err)
+	require.Contains(t, string(got), "BEGIN Ethos development gate")
+	require.Contains(t, string(got), "BEGIN ETHOS DES-058 SEAL")
+	require.NotContains(t, string(got), "exit 71")
 }

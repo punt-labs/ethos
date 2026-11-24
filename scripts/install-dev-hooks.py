@@ -11,6 +11,7 @@ from tempfile import NamedTemporaryFile
 MARKER = "ethos-dev-hooks"
 BEGIN = b"# BEGIN Ethos development gate\n"
 END = b"# END Ethos development gate\n"
+LEGACY_SEAL_IDENT = "hooks/pre-commit.sh — Seal pending live audit lines".encode()
 SHELL = re.compile(rb"#!\s*(?:\S*/)?(?:env\s+(?:-S\s+)?)?(?:ba|da|k|z|mk|a)?sh(?:[ \t].*)?")
 PUSH_GATE = """    _ethos_dev_refs=$(mktemp) || exit 1
     if ! cat > "$_ethos_dev_refs" ||
@@ -51,6 +52,8 @@ def edit(path, gate):
     first, _, rest = path.read_bytes().partition(b"\n")
     if not SHELL.fullmatch(first):
         raise ValueError(f"{path}: expected a shell hook; chain the gate manually")
+    if path.name == "pre-commit" and LEGACY_SEAL_IDENT in rest.partition(b"\n")[0]:
+        raise ValueError(f"{path}: legacy standalone audit seal; run ethos enable before opting in")
     if rest.startswith(gate):
         return None
     if BEGIN in rest or END in rest:

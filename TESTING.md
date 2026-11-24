@@ -38,6 +38,8 @@ hooks but not the development gates. Remove
 `"$(git rev-parse --absolute-git-dir)/ethos-dev-hooks"` to opt out.
 If Git uses a different hooks directory or the existing gate hook cannot
 be safely edited, installation refuses and leaves the chain to the operator.
+If it finds a legacy standalone Ethos audit seal, run `ethos enable` to
+upgrade that seal before retrying `make hooks`.
 
 For a local release check, use the shipped `install.sh` for the intended
 version and place the version-matched staged artifact in `dist/`. Candidate
