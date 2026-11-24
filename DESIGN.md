@@ -14475,22 +14475,36 @@ of record for public keys and delegations.
 
 - Each identity YAML gains a `keys` field with public material only: a
   human's secp256k1 Schnorr identity key, and tool keys (biff Schnorr
-  `pubkey`, beadle GPG `fingerprint`) attested by it. Signed
-  attestations, delegations and revocations live in
-  `.punt-labs/ethos/trust/`.
+  `pubkey`, beadle GPG `fingerprint`) attested by it. Signed trust
+  records (attestations, delegations, revocations, compromise records)
+  use RFC 8785 canonical JSON with a domain-separated id and live in
+  `.punt-labs/ethos/trust/records/`. Git never confers trust by itself.
 - An agent instance key is linked to its owner by a delegation signed
-  with the owner's identity key, with a scope ceiling and a 7-day
-  default expiry. Org keys attest members for Team and Enterprise.
-- Private keys live in `~/.punt-labs/local/ethos/keys/` (0600) or an
+  with the owner's identity key, with a scope ceiling and a 24-hour
+  default expiry, renewed with user presence (agent images: at most
+  7 days). Authorship stays with the agent key. Org keys attest members
+  for Team and Enterprise; only org attestation makes someone `team`.
+- The identity key lives in the OS keychain or a hardware key and is
+  used only by ethos with user presence. Tool keys live in
+  `~/.punt-labs/local/ethos/keys/` (0400/0600, strict open rules) or an
   agent-image secret mount; never in tracked data or ext overlays.
-- One per-user address book (`~/.punt-labs/ethos/contacts.yaml`), keyed
-  by ethos handle and identity key, holds per-tool verbs: biff
-  `notify < read < ask < instruct` plus `talk`; beadle `rwx`. Defaults by
-  relationship: self `instruct`, team `ask`, known `notify`, stranger and
-  unsigned summary only, bad signature alarm.
-- Biff messages are NIP-01 events with recipient, nonce, expiry and
-  delegation id signed; literal Nostr events recommended, pending spike
-  SP-3.
+- One per-user address book, a trust record signed by the user's
+  identity key, keyed by ethos handle and identity key, holds per-tool
+  verbs: biff `notify < read < ask < instruct` plus `talk`; beadle `rwx`.
+  An unsigned or edited copy is ignored. Defaults by relationship: self
+  `instruct`, team `ask`, known `notify`, stranger and unsigned summary
+  only, bad signature or revoked key alarm.
+- A signed `floor` tag carries the lowest grade an agent session has
+  taken in, so an own agent cannot pass on a stranger's request at
+  `instruct`. Code, not prompt text, decides what reaches the model.
+- Biff messages are NIP-01 events with recipient, agent instance, nonce,
+  expiry, delegation id and floor signed; literal Nostr events
+  recommended, pending spike SP-3. Forgery is fixed by signing;
+  eavesdropping needs per-principal relay credentials and end-to-end
+  encryption, separate waves.
+- Amends the PR/FAQ "Won't Do: authentication or authorization" if
+  ratified: ethos stores and verifies trust records; enforcement stays
+  in the consuming tools.
 
 ### Alternatives rejected
 
