@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-refs=$(mktemp)
-trap 'rm -f "$refs"' EXIT
-cat > "$refs"
-
 head=
 while read -r local_ref local_oid _remote_ref _remote_oid; do
   [[ "$local_ref" == '(delete)' || "$local_oid" =~ ^0+$ ]] && continue
@@ -14,12 +10,7 @@ while read -r local_ref local_oid _remote_ref _remote_oid; do
     printf 'Cannot test pushed ref %s: check it out and push it separately.\n' "$local_ref" >&2
     exit 1
   fi
-done < "$refs"
+done
 if [[ -n "$head" ]]; then
   make test-push </dev/null
-fi
-
-existing="$(git rev-parse --git-common-dir)/hooks/pre-push"
-if [[ -x "$existing" && ! "$existing" -ef "${BASH_SOURCE[0]}" ]]; then
-  "$existing" "$@" < "$refs"
 fi

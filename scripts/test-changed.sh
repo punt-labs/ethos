@@ -12,12 +12,12 @@ while IFS= read -r -d '' path; do
     testdata/*)
       requested+=(.)
       ;;
-      */testdata/*)
-        requested+=("${path%%/testdata/*}")
-        ;;
-      internal/seed/sidecar/agents/*.md)
-        requested+=(internal/seed)
-        ;;
+    */testdata/*)
+      requested+=("${path%%/testdata/*}")
+      ;;
+    internal/seed/sidecar/agents/*.md)
+      requested+=(internal/seed)
+      ;;
     *.go)
       dir=.
       if [[ "$path" == */* ]]; then
@@ -25,7 +25,7 @@ while IFS= read -r -d '' path; do
       fi
       requested+=("$dir")
       ;;
-    go.mod|go.sum|Makefile|.githooks/*|scripts/test-changed.sh|scripts/test-timed.sh|scripts/test-quarantine.py|tests/quarantine.tsv)
+    go.mod|go.sum|Makefile|.githooks/*|scripts/install-dev-hooks.py|scripts/test-changed.sh|scripts/test-timed.sh|scripts/test-quarantine.py|tests/quarantine.tsv)
       requested+=(test)
       ;;
   esac

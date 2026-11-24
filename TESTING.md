@@ -27,19 +27,17 @@ The installed PR/main and Nightly rows describe the target state after
 [Behavioral]: .github/workflows/behavioral.yml
 [Release]: .github/workflows/release.yml
 
-`make hooks` sets `core.hooksPath` to `.githooks`; it refuses
-to replace a different configured path or to disable an executable hook
-without a tracked counterpart. The tracked hooks chain the common
-directory's pre-commit, commit-msg and pre-push hooks. In particular, opt-in
-keeps Ethos's audit seal and provenance trailers working. Pre-push passes
-Git's original remote arguments and input and skips the test suite for
-deletion-only pushes. Repositories with multiple linked worktrees must enable
-[worktree-specific Git configuration] first so opting in does not change
-other checkouts. When switching to a branch without these tracked hooks,
-unset the opt-in with `git config --worktree --unset core.hooksPath`
-(use `--local` if worktree configuration is not enabled).
-
-[worktree-specific Git configuration]: https://git-scm.com/docs/git-worktree#_configuration_file
+`make hooks` (Python 3) adds the development gates before any existing
+pre-commit and pre-push code in Git's repository-local hooks. It leaves
+`core.hooksPath` and commit-msg untouched, so the Ethos audit seal and
+provenance trailer remain in the hooks Git runs and `ethos doctor` checks.
+Pre-push preserves Git's original remote arguments and input and skips the
+test suite for deletion-only pushes. The opt-in is per checkout: other
+linked worktrees and branches without `.githooks` still run their existing
+hooks but not the development gates. Remove
+`"$(git rev-parse --absolute-git-dir)/ethos-dev-hooks"` to opt out.
+If Git uses a different hooks directory or the existing gate hook cannot
+be safely edited, installation refuses and leaves the chain to the operator.
 
 For a local release check, use the shipped `install.sh` for the intended
 version and place the version-matched staged artifact in `dist/`. Candidate

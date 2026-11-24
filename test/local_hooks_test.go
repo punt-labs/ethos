@@ -23,35 +23,22 @@ func TestDevelopmentPreCommit(t *testing.T) {
 		{name: "installed seal keeps existing checks", gate: "true", want: "existing hook", sealed: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			home := t.TempDir()
+			dir, run := developmentHookFixture(t)
 			git := func(args ...string) ([]byte, error) {
-				cmd := exec.CommandContext(t.Context(), "git", args...)
-				cmd.Dir = dir
-				cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "GIT_CONFIG_NOSYSTEM=1"}
-				return cmd.CombinedOutput()
+				return run(dir, "git", args...)
 			}
-			out, err := git("init", "-q", "--template=")
-			require.NoError(t, err, "%s", out)
-			out, err = git("config", "core.hooksPath", ".githooks")
-			require.NoError(t, err, "%s", out)
-			require.NoError(t, os.Mkdir(filepath.Join(dir, ".githooks"), 0o700))
 			require.NoError(t, os.Mkdir(filepath.Join(dir, ".git", "hooks"), 0o700))
-			hook, err := os.ReadFile("../.githooks/pre-commit")
-			require.NoError(t, err)
+			hook := "#!/bin/sh\necho existing hook\n"
 			if tc.sealed {
-				hook = append(hook, []byte("\n# --- BEGIN ETHOS DES-058 SEAL ---\necho development seal\n# --- END ETHOS DES-058 SEAL ---\n")...)
+				hook += "\n# --- BEGIN ETHOS DES-058 SEAL ---\necho development seal\n# --- END ETHOS DES-058 SEAL ---\n"
 			}
-			require.NoError(t, os.WriteFile(filepath.Join(dir, ".githooks", "pre-commit"), hook, 0o700))
-			require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-commit"), []byte("#!/bin/sh\necho existing hook\n"), 0o700))
-			commitMsg, err := os.ReadFile("../.githooks/commit-msg")
-			require.NoError(t, err)
-			require.NoError(t, os.WriteFile(filepath.Join(dir, ".githooks", "commit-msg"), commitMsg, 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-commit"), []byte(hook), 0o700))
 			require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "hooks", "commit-msg"),
 				[]byte("#!/bin/sh\nprintf '\\nHost trailer: preserved\\n' >> \"$1\"\n"), 0o700))
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-changed:\n\t"+tc.gate+"\n"), 0o600))
+			installDevelopmentHooks(t, dir, run)
 
-			out, err = git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+			out, err := git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
 				"commit", "--allow-empty", "-m", "fixture")
 			if tc.fail {
 				require.Error(t, err, "%s", out)
@@ -101,8 +88,14 @@ func TestDevelopmentPrePush(t *testing.T) {
 			require.NoError(t, os.Mkdir(filepath.Join(dir, ".git", "hooks"), 0o700))
 			require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-push"), []byte("#!/bin/sh\ncat\n"), 0o700))
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-push:\n\t"+tc.gate+"\n"), 0o600))
-			hook, err := filepath.Abs("../.githooks/pre-push")
+			root, err := filepath.Abs("..")
 			require.NoError(t, err)
+			for _, path := range []string{"scripts", "go.mod", "docs", ".githooks"} {
+				require.NoError(t, os.Symlink(filepath.Join(root, path), filepath.Join(dir, path)))
+			}
+			installDevelopmentHooks(t, dir, func(_ string, name string, args ...string) ([]byte, error) {
+				return run("", name, args...)
+			})
 			oid := head
 			ref := "refs/heads/topic"
 			switch tc.oid {
@@ -113,7 +106,7 @@ func TestDevelopmentPrePush(t *testing.T) {
 				oid = strings.Repeat("1", len(head))
 			}
 			input := ref + " " + oid + " refs/heads/topic " + strings.Repeat("0", len(head)) + "\n"
-			out, err = run(input, hook, "origin", "file:///fixture")
+			out, err = run(input, filepath.Join(dir, ".git", "hooks", "pre-push"), "origin", "file:///fixture")
 			if tc.fail {
 				require.Error(t, err, "%s", out)
 			} else {
@@ -182,48 +175,21 @@ func TestDevelopmentLiveRequiresKey(t *testing.T) {
 	require.Contains(t, string(out), "ANTHROPIC_API_KEY is required")
 }
 
-func TestDevelopmentHooksRefuseUnchainedHook(t *testing.T) {
-	dir := t.TempDir()
-	home := t.TempDir()
-	run := func(name string, args ...string) ([]byte, error) {
-		cmd := exec.CommandContext(t.Context(), name, args...)
-		cmd.Dir = dir
-		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "GIT_CONFIG_NOSYSTEM=1"}
-		return cmd.CombinedOutput()
-	}
-	out, err := run("git", "init", "-q")
-	require.NoError(t, err, "%s", out)
+func TestDevelopmentHooksRefuseNonShellHook(t *testing.T) {
+	dir, run := developmentHookFixture(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "hooks", "post-commit"), []byte("#!/bin/sh\nexit 0\n"), 0o700))
-	mod, err := os.ReadFile("../go.mod")
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), mod, 0o600))
+	hook := filepath.Join(dir, ".git", "hooks", "pre-push")
+	source := []byte("#!/usr/bin/env python3\nprint('existing hook')\n")
+	require.NoError(t, os.WriteFile(hook, source, 0o700))
 	makefile, err := filepath.Abs("../Makefile")
 	require.NoError(t, err)
-	out, err = run("make", "-f", makefile, "hooks")
+	out, err := run(dir, "make", "-f", makefile, "hooks")
 	require.Error(t, err, "%s", out)
-	require.Contains(t, string(out), "post-commit")
-	out, err = run("git", "config", "--get", "core.hooksPath")
-	require.Error(t, err, "%s", out)
-
-	require.NoError(t, os.Remove(filepath.Join(dir, ".git", "hooks", "post-commit")))
-	out, err = run("git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
-		"commit", "--allow-empty", "-m", "fixture")
-	require.NoError(t, err, "%s", out)
-	linked := t.TempDir()
-	out, err = run("git", "worktree", "add", "--detach", linked, "HEAD")
-	require.NoError(t, err, "%s", out)
-	out, err = run("make", "-f", makefile, "hooks")
-	require.Error(t, err, "%s", out)
-	require.Contains(t, string(out), "extensions.worktreeConfig")
-
-	out, err = run("git", "config", "--local", "extensions.worktreeConfig", "true")
-	require.NoError(t, err, "%s", out)
-	out, err = run("make", "-f", makefile, "hooks")
-	require.NoError(t, err, "%s", out)
-	out, err = run("git", "config", "--get", "core.hooksPath")
-	require.NoError(t, err, "%s", out)
-	require.Equal(t, ".githooks", strings.TrimSpace(string(out)))
-	out, err = run("git", "-C", linked, "config", "--get", "core.hooksPath")
+	require.Contains(t, string(out), "pre-push: expected a shell hook")
+	got, err := os.ReadFile(hook)
+	require.NoError(t, err)
+	require.Equal(t, source, got)
+	require.NoFileExists(t, filepath.Join(dir, ".git", "hooks", "pre-commit"))
+	out, err = run(dir, "git", "config", "--get", "core.hooksPath")
 	require.Error(t, err, "%s", out)
 }
