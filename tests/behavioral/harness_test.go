@@ -20,7 +20,8 @@ write_set:
 success_criteria:
   - verify the counter
 budget:
-  rounds: 1
+  rounds: 2
+  reflection_after_each: true
 `)
 	require.Equal(t, "implement", f.MissionShow(t, id)["type"])
 	require.Empty(t, f.MissionResults(t, id))
@@ -42,6 +43,19 @@ evidence:
 	require.Len(t, results, 1)
 	require.Equal(t, "pass", results[0]["verdict"])
 	require.Equal(t, []string{missionResultPath(id)}, f.GitDiffFiles(t, base))
+
+	f.Reflect(t, id, "mission: "+id+"\n"+`round: 1
+author: test-leader
+converging: true
+signals:
+  - verified the counter
+recommendation: continue
+`)
+	reflections := f.MissionReflections(t, id)
+	require.Len(t, reflections, 1)
+	require.NotNil(t, reflections[0].Decision)
+	require.Equal(t, "continue", reflections[0].Decision.Recommendation)
+	require.Equal(t, float64(2), f.Advance(t, id)["current_round"])
 }
 
 func TestFixtureMCPStartupKeepsWorktreeClean(t *testing.T) {

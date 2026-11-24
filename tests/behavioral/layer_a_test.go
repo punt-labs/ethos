@@ -282,8 +282,9 @@ reason: round 1 created the test file; round 2 will add coverage
 	// Verify reflection was recorded.
 	reflections := f.MissionReflections(t, missionID)
 	require.Len(t, reflections, 1, "should have exactly 1 reflection after round 1")
-	assert.Equal(t, float64(1), reflections[0]["round"])
-	assert.Equal(t, "continue", reflections[0]["recommendation"])
+	assert.Equal(t, 1, reflections[0].Round)
+	require.NotNil(t, reflections[0].Decision)
+	assert.Equal(t, "continue", reflections[0].Decision.Recommendation)
 
 	// Step 4: Advance to round 2.
 	adv := f.Advance(t, missionID)

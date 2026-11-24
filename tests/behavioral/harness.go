@@ -9,6 +9,7 @@
 //
 // Requires:
 //   - ANTHROPIC_API_KEY in environment
+//   - ETHOS_BEHAVIORAL_JUDGE_MODEL in environment
 //   - claude CLI in PATH
 //   - ethos CLI in PATH (or built via TestMain)
 package behavioral
@@ -25,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/require"
 )
@@ -479,14 +481,13 @@ func (f *Fixture) MissionShow(t *testing.T, missionID string) map[string]interfa
 }
 
 // MissionReflections returns the parsed reflections for a mission.
-// The JSON shape is a bare array: [...].
-func (f *Fixture) MissionReflections(t *testing.T, missionID string) []map[string]interface{} {
+func (f *Fixture) MissionReflections(t *testing.T, missionID string) []mission.ReflectionRead {
 	t.Helper()
 
 	stdout, _, err := f.runEthos(t, "mission", "reflections", missionID, "--json")
 	require.NoError(t, err, "mission reflections failed")
 
-	var reflections []map[string]interface{}
+	var reflections []mission.ReflectionRead
 	require.NoError(t, json.Unmarshal([]byte(stdout), &reflections),
 		"mission reflections output is not JSON array: %s", stdout)
 	return reflections
