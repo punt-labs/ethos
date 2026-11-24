@@ -162,7 +162,8 @@ gh run list --workflow behavioral.yml --repo punt-labs/ethos --branch main
 ```
 
 The drill should fail before calling Claude, run the notification job,
-and leave a Biff wall message marked `DRILL:` linking to the failed run.
+and leave a Biff wall message marked `DRILL:` on the Ethos repository's wall
+only, linking to the failed run attempt.
 If a non-drill wall is active, the notify job fails without posting; wait
 for that wall to expire before trying the drill again. The notify job
 requires `BIFF_RELAY_TOKEN` and uses the configured Biff relay. A dispatch
