@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -31,7 +33,7 @@ Exit codes:
   2  usage error`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runHookCommitMsg(cmd.ErrOrStderr(), args[0])
+			return runHookCommitMsg(cmd.Context(), cmd.ErrOrStderr(), args[0])
 		},
 	})
 }
@@ -39,11 +41,11 @@ Exit codes:
 // runHookCommitMsg adds the trailers for the committing session to the message
 // file. A session that cannot be resolved or read adds no trailer and does not
 // block the commit; a trailer that cannot be installed does.
-func runHookCommitMsg(errOut io.Writer, msgFile string) error {
+func runHookCommitMsg(ctx context.Context, errOut io.Writer, msgFile string) error {
 	missionID, delegationID := os.Getenv("MISSION_ID"), os.Getenv("DELEGATION_ID")
 	if missionID == "" && delegationID == "" {
 		var err error
-		missionID, delegationID, err = sessionTrailerIDs()
+		missionID, delegationID, err = sessionTrailerIDs(ctx)
 		if err != nil {
 			if errors.Is(err, resolve.ErrNoSession) {
 				fmt.Fprintln(errOut, "ethos: commit-msg: no trailer added: no Claude Code session is bound to this process")
@@ -69,7 +71,7 @@ func runHookCommitMsg(errOut io.Writer, msgFile string) error {
 // sessionTrailerIDs returns the mission and delegation IDs bound to the
 // committing session. Outside Claude Code no session is expected, so it
 // returns none and no error.
-func sessionTrailerIDs() (missionID, delegationID string, err error) {
+func sessionTrailerIDs(ctx context.Context) (missionID, delegationID string, err error) {
 	sessionID, _, err := resolve.SessionID(sessionStore())
 	if err != nil {
 		if errors.Is(err, resolve.ErrNotUnderClaudeCode) {
@@ -77,6 +79,7 @@ func sessionTrailerIDs() (missionID, delegationID string, err error) {
 		}
 		return "", "", err
 	}
+	diagnostic.SetHookIdentity(ctx, sessionID, "", "")
 	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		return "", "", err

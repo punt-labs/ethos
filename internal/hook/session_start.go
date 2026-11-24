@@ -13,6 +13,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/autorepair"
 	"github.com/punt-labs/ethos/v4/internal/bundle"
+	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/process"
@@ -95,6 +96,10 @@ type HookProblem struct {
 // HandleSessionStart reads the SessionStart hook payload from stdin,
 // resolves identity, creates a session roster, and emits context.
 func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
+	return HandleSessionStartContext(context.Background(), r, deps)
+}
+
+func HandleSessionStartContext(ctx context.Context, r io.Reader, deps SessionStartDeps) error {
 	if deps.Store == nil || deps.Sessions == nil {
 		return fmt.Errorf("session-start: Store and Sessions stores are required")
 	}
@@ -108,7 +113,7 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 		loc = *deps.Located
 	}
 	deps.Located = &loc
-	input, err := ReadInput(r, hookInputTimeout)
+	input, err := readHookInput(ctx, r)
 	if err != nil {
 		return fmt.Errorf("session-start: %w", err)
 	}
@@ -191,6 +196,7 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	if storeFailure == nil && loc.Config != nil {
 		agentPersona = loc.Config.Agent
 	}
+	diagnostic.SetHookIdentity(ctx, "", "", agentPersona)
 
 	if rosterNotice := createSessionRoster(ss, sessionID, resolvedID, humanErr, agentPersona, loc); rosterNotice != "" {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: %s\n", rosterNotice)

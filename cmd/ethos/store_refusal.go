@@ -2,13 +2,14 @@ package main
 
 import (
 	"fmt"
-	"github.com/punt-labs/ethos/v4/internal/hook"
-	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"os"
 	"slices"
 	"strings"
 	"sync"
 
+	"github.com/punt-labs/ethos/v4/internal/diagnostic"
+	"github.com/punt-labs/ethos/v4/internal/hook"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/spf13/cobra"
 )
 
@@ -169,11 +170,20 @@ func usesGlobalOnly(cmd *cobra.Command) bool {
 // wrong tree and exit 0. Every other class runs on the global stores when a
 // lookup failed: that is the class's explicit choice (repoRoots.Global).
 func establishRoots(cmd *cobra.Command, _ []string) error {
-	if (cmd.CommandPath() == "ethos hook pre-commit" || cmd.CommandPath() == "ethos hook subagent-stop") && hook.Killed() {
-		return nil
+	path := cmd.CommandPath()
+	switch path {
+	case "ethos hook pre-commit":
+		if hook.Killed() {
+			return nil
+		}
+	case "ethos hook subagent-stop", "ethos hook post-edit":
+		if hook.Killed() {
+			hook.RecordDisabledHookProject(cmd.Context())
+			return nil
+		}
 	}
 	// These hooks read no Ethos storage.
-	if cmd.CommandPath() == "ethos hook post-edit" || cmd.CommandPath() == "ethos hook stdin-watchdog" {
+	if path == "ethos hook post-edit" || path == "ethos hook stdin-watchdog" {
 		return nil
 	}
 	global := exemptFromStoreRefusal(cmd)
@@ -182,6 +192,9 @@ func establishRoots(cmd *cobra.Command, _ []string) error {
 	// Repair before anything reads storage, so a refusal below is judged on the
 	// converted layout (DES-084 Wiring).
 	r = ensureForCommand(cmd, r)
+	if ctx := cmd.Context(); ctx != nil && (r.Store != "" || r.Checkout != "" || r.err() == nil) {
+		diagnostic.SetHookProject(ctx, r.Store, r.Checkout)
+	}
 	if !r.Global {
 		if err := r.Err(); err != nil {
 			name := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")

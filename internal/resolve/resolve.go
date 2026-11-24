@@ -1682,14 +1682,44 @@ func validHead(s string) bool {
 // caller that has the process's checkout takes it from Located.Checkout; this is
 // for one that is given a directory to verify (githook's hooks lookup).
 func CheckoutOf(dir string) (string, error) {
-	r := locate(dir)
+	checkout, _, err := CheckoutAndStoreOf(dir)
+	return checkout, err
+}
+
+// CheckoutAndStoreOf returns physical checkout and store roots from one lookup.
+// A store error does not fail checkout discovery.
+func CheckoutAndStoreOf(dir string) (checkout, store string, err error) {
+	return physicalCheckoutAndStore(locate(dir))
+}
+
+// CheckoutAndStoreWithoutGit gives disabled hooks a best-effort log label
+// without launching Git. It is not used to select storage or check policy.
+func CheckoutAndStoreWithoutGit(dir string) (checkout, store string, err error) {
+	return physicalCheckoutAndStore(handLocate(dir))
+}
+
+func physicalCheckoutAndStore(r located) (checkout, store string, err error) {
 	if errors.Is(r.err, ErrNotInRepo) {
-		return "", nil
+		return "", "", nil
 	}
 	if r.err != nil {
-		return "", r.err
+		return "", "", r.err
 	}
-	return r.loc.root, nil
+	checkout, err = physicalRoot(r.loc.root, "checkout")
+	if err != nil {
+		return "", "", err
+	}
+	if r.loc.storeErr != nil {
+		return checkout, "", nil
+	}
+	if r.loc.root == r.loc.store {
+		return checkout, checkout, nil
+	}
+	store, err = physicalRoot(r.loc.store, "store")
+	if err != nil {
+		return checkout, "", nil
+	}
+	return checkout, store, nil
 }
 
 // StoreOf locates the canonical store for a supplied checkout using the same

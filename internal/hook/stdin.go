@@ -3,6 +3,7 @@ package hook
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 )
 
 // hookInputTimeout bounds how long a hook waits for Claude Code's payload.
@@ -60,6 +63,14 @@ func ReadInput(r io.Reader, timeout time.Duration) (map[string]any, error) {
 		return map[string]any{}, err
 	}
 	return parseJSON(data)
+}
+
+func readHookInput(ctx context.Context, r io.Reader) (map[string]any, error) {
+	input, err := ReadInput(r, hookInputTimeout)
+	if err == nil {
+		diagnostic.SetHookInput(ctx, input)
+	}
+	return input, err
 }
 
 // readRaw is ReadInput without the parse: the bytes read, and the read error

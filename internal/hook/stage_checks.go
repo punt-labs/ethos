@@ -112,7 +112,7 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 		for _, check := range rootChecks {
 			for _, invocation := range stageInvocations(root, filesByRoot[root], check) {
 				invocation.env = env
-				if failure := runEditCheck(ctx, root, invocation); failure != "" {
+				if failure := runLoggedCheck(ctx, root, stage, invocation); failure != "" {
 					if check.OnFail == "block" {
 						blocking = append(blocking, failure)
 					} else {

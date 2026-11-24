@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -43,7 +44,11 @@ import (
 // improve on that guarantee (the roster was already left in place by
 // ss.Delete) and would only make session end itself unreliable.
 func HandleSessionEnd(r io.Reader, ss *session.Store) error {
-	input, err := ReadInput(r, hookInputTimeout)
+	return HandleSessionEndContext(context.Background(), r, ss)
+}
+
+func HandleSessionEndContext(ctx context.Context, r io.Reader, ss *session.Store) error {
+	input, err := readHookInput(ctx, r)
 	if err != nil {
 		return fmt.Errorf("session-end: %w", err)
 	}

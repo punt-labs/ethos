@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -135,7 +136,11 @@ func HandleSubagentStart(r io.Reader, store identity.IdentityStore, ss *session.
 // still emits one when there is a diagnostic to carry, even though it
 // has nothing else to say.
 func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
-	input, err := ReadInput(r, hookInputTimeout)
+	return HandleSubagentStartWithDepsContext(context.Background(), r, deps)
+}
+
+func HandleSubagentStartWithDepsContext(ctx context.Context, r io.Reader, deps SubagentStartDeps) error {
+	input, err := readHookInput(ctx, r)
 	if err != nil {
 		return fmt.Errorf("subagent-start: %w", err)
 	}

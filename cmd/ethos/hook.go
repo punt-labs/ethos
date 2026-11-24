@@ -48,7 +48,7 @@ var hookSessionStartCmd = &cobra.Command{
 	Short: "SessionStart hook handler",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runHookSessionStart()
+		return runHookSessionStart(cmd.Context())
 	},
 }
 
@@ -57,7 +57,7 @@ var hookSessionEndCmd = &cobra.Command{
 	Short: "SessionEnd hook handler",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runHookSessionEnd()
+		return runHookSessionEnd(cmd.Context())
 	},
 }
 
@@ -66,7 +66,7 @@ var hookSubagentStartCmd = &cobra.Command{
 	Short: "SubagentStart hook handler",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runHookSubagentStart()
+		return runHookSubagentStart(cmd.Context())
 	},
 }
 
@@ -87,7 +87,7 @@ var hookPreCompactCmd = &cobra.Command{
 	Short: "PreCompact hook handler",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runHookPreCompact()
+		return runHookPreCompact(cmd.Context())
 	},
 }
 
@@ -96,7 +96,7 @@ var hookFormatOutputCmd = &cobra.Command{
 	Short: "PostToolUse output formatter",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runHookFormatOutput()
+		return runHookFormatOutput(cmd.Context())
 	},
 }
 
@@ -105,7 +105,7 @@ var hookPreToolUseCmd = &cobra.Command{
 	Short: "PreToolUse hook handler (verifier file allowlist)",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runHookPreToolUse()
+		return runHookPreToolUse(cmd.Context())
 	},
 }
 
@@ -114,7 +114,7 @@ var hookAuditLogCmd = &cobra.Command{
 	Short: "PostToolUse audit logger",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runHookAuditLog()
+		return runHookAuditLog(cmd.Context())
 	},
 }
 
@@ -204,7 +204,7 @@ func repairSessions(loc resolve.Located) func(ctx context.Context) (int, error) 
 	}
 }
 
-func runHookSessionStart() error {
+func runHookSessionStart(ctx context.Context) error {
 	loc := currentRoots().Located
 	is := identityStore()
 	notice, items := takeRepairNotice()
@@ -220,21 +220,21 @@ func runHookSessionStart() error {
 		NoticeItems:  items,
 		Repair:       repairSessions(loc),
 	}
-	if err := hook.HandleSessionStart(os.Stdin, deps); err != nil {
+	if err := hook.HandleSessionStartContext(ctx, os.Stdin, deps); err != nil {
 		return fmt.Errorf("hook session-start: %w", err)
 	}
 	return nil
 }
 
-func runHookSessionEnd() error {
+func runHookSessionEnd(ctx context.Context) error {
 	ss := sessionStore()
-	if err := hook.HandleSessionEnd(os.Stdin, ss); err != nil {
+	if err := hook.HandleSessionEndContext(ctx, os.Stdin, ss); err != nil {
 		return fmt.Errorf("hook session-end: %w", err)
 	}
 	return nil
 }
 
-func runHookSubagentStart() error {
+func runHookSubagentStart(ctx context.Context) error {
 	s := identityStore()
 	deps := hook.SubagentStartDeps{
 		Identities: s,
@@ -263,7 +263,7 @@ func runHookSubagentStart() error {
 		deps.RepoRoot = repoRoot
 		deps.StoreRoot = storeRoot
 	}
-	if err := hook.HandleSubagentStartWithDeps(os.Stdin, deps); err != nil {
+	if err := hook.HandleSubagentStartWithDepsContext(ctx, os.Stdin, deps); err != nil {
 		return fmt.Errorf("hook subagent-start: %w", err)
 	}
 	return nil
@@ -279,7 +279,7 @@ func locateHookRoots() (repoRoot, storeRoot string, err error) {
 	return r.Checkout, r.Store, nil
 }
 
-func runHookPreCompact() error {
+func runHookPreCompact(ctx context.Context) error {
 	loc := currentRoots().Located
 	is := identityStore()
 	deps := hook.PreCompactDeps{
@@ -290,15 +290,15 @@ func runHookPreCompact() error {
 		Roles:      layeredRoleStore(is),
 		Issue:      currentRoots().hookIssue(),
 	}
-	if err := hook.HandlePreCompact(os.Stdin, deps); err != nil {
+	if err := hook.HandlePreCompactContext(ctx, os.Stdin, deps); err != nil {
 		return fmt.Errorf("hook pre-compact: %w", err)
 	}
 	return nil
 }
 
-func runHookPreToolUse() error {
+func runHookPreToolUse(ctx context.Context) error {
 	loc := currentRoots().Located
-	if err := hook.HandlePreToolUseWithLocated(os.Stdin, os.Stdout, loc); err != nil {
+	if err := hook.HandlePreToolUseWithContext(ctx, os.Stdin, os.Stdout, loc); err != nil {
 		return fmt.Errorf("hook pre-tool-use: %w", err)
 	}
 	return nil
@@ -342,14 +342,14 @@ func runHookCommitTrailers(out io.Writer) error {
 	return nil
 }
 
-func runHookFormatOutput() error {
-	if err := hook.HandleFormatOutput(os.Stdin, os.Stdout); err != nil {
+func runHookFormatOutput(ctx context.Context) error {
+	if err := hook.HandleFormatOutputWithContext(ctx, os.Stdin, os.Stdout); err != nil {
 		return fmt.Errorf("hook format-output: %w", err)
 	}
 	return nil
 }
 
-func runHookAuditLog() error {
+func runHookAuditLog(ctx context.Context) error {
 	globalRoot, err := layout.MachineRoot()
 	if err != nil {
 		return fmt.Errorf("hook audit-log: %w", err)
@@ -357,7 +357,7 @@ func runHookAuditLog() error {
 	// A dropped or unlocked entry never blocks the tool call, but it is put
 	// in front of the session (systemMessage and additionalContext), not
 	// left on the hook's stderr, which goes to a log file nobody reads.
-	if notice := writeAuditLog(filepath.Join(globalRoot, "sessions")); notice != nil {
+	if notice := writeAuditLog(ctx, filepath.Join(globalRoot, "sessions")); notice != nil {
 		if err := hook.WriteAuditNotice(os.Stdout, notice); err != nil {
 			fmt.Fprintf(os.Stderr, "ethos: audit-log: %v\n", err)
 		}
@@ -383,7 +383,7 @@ func runHookAuditLog() error {
 // payload, empty input, parse error), fall through to the unlocked legacy
 // path so an unparseable input still surfaces through HandleAuditLog's
 // diagnostic rather than failing silently here.
-func writeAuditLog(sessionsDir string) error {
+func writeAuditLog(ctx context.Context, sessionsDir string) error {
 	// Capture before stdin can block. A linked checkout is the redaction base,
 	// not the owner of live files, archive records, or stream locks.
 	loc := currentRoots().Located
@@ -402,14 +402,14 @@ func writeAuditLog(sessionsDir string) error {
 		}
 		// The policy-aware handler owns the shared stream lock. An outer
 		// WithLiveAuditLock would both rediscover policy and take it twice.
-		return hook.HandleAuditLogWithPolicy(bytes.NewReader(data), policy, sessionsDir)
+		return hook.HandleAuditLogWithPolicyContext(ctx, bytes.NewReader(data), policy, sessionsDir)
 	}
 	data, err := drainAuditStdin()
 	if err != nil {
 		return auditInputDropped(err)
 	}
 	sessionID := peekSessionID(data)
-	record := func() error { return hook.HandleAuditLog(bytes.NewReader(data), "", sessionsDir) }
+	record := func() error { return hook.HandleAuditLogWithContext(ctx, bytes.NewReader(data), "", sessionsDir) }
 	if sessionID == "" {
 		return record()
 	}

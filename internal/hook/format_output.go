@@ -2,6 +2,7 @@ package hook
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,7 +28,11 @@ type formatResult struct {
 // emits two-channel display output to w: a compact summary in
 // updatedMCPToolOutput and full data in additionalContext.
 func HandleFormatOutput(r io.Reader, w io.Writer) error {
-	input, err := ReadInput(r, hookInputTimeout)
+	return HandleFormatOutputWithContext(context.Background(), r, w)
+}
+
+func HandleFormatOutputWithContext(ctx context.Context, r io.Reader, w io.Writer) error {
+	input, err := readHookInput(ctx, r)
 	if err != nil {
 		return fmt.Errorf("format-output: %w", err)
 	}

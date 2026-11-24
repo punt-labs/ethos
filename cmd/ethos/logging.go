@@ -59,7 +59,12 @@ func startLogging() {
 	}
 	collect(rootCmd)
 	processUsage = diagnostic.NewUsage(logger.With("component", "ethos.telemetry"), commands)
-	rootCmd.SetContext(diagnostic.WithLogger(context.Background(), logger))
+	ctx := diagnostic.WithLogger(context.Background(), logger)
+	var hookInvocation *diagnostic.HookInvocation
+	if role == "hook" {
+		ctx, hookInvocation = diagnostic.WithHookInvocation(ctx)
+	}
+	rootCmd.SetContext(ctx)
 	started := time.Now()
 	termination := newTerminationWatcher(role)
 	var once sync.Once
@@ -74,6 +79,9 @@ func startLogging() {
 				attrs := []any{"command", path, "outcome", outcome, "exit_code", code, "duration_ms", time.Since(started).Milliseconds()}
 				if err != nil {
 					attrs = append(attrs, "error_type", diagnostic.ErrorType(err))
+				}
+				if hookInvocation != nil {
+					attrs = append(attrs, hookInvocation.Attrs()...)
 				}
 				logger.Info("Invocation finished", attrs...)
 			}
