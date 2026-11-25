@@ -106,10 +106,12 @@ func TestReleaseCandidateSmoke(t *testing.T) {
 		installVersion string
 		createRC       int
 		identity       string
+		coverage       bool
 		badDigest      bool
 		wantError      string
 	}{
 		{name: "successful round trip", version: "1.2.3", identity: goodIdentity},
+		{name: "forwards coverage through clean environment", version: "1.2.3", identity: goodIdentity, coverage: true},
 		{name: "wrong candidate", version: "1.2.3", identity: goodIdentity, badDigest: true, wantError: "candidate SHA-256 mismatch"},
 		{name: "wrong version", version: "1.2.4", identity: goodIdentity, wantError: "expected ethos version 1.2.3"},
 		{name: "stale installer", version: "1.2.3", installVersion: "1.2.2", identity: goodIdentity, wantError: "installer must target ethos version 1.2.3"},
@@ -120,6 +122,9 @@ func TestReleaseCandidateSmoke(t *testing.T) {
 			dist := t.TempDir()
 			asset := "ethos-" + runtime.GOOS + "-" + runtime.GOARCH
 			binary := fakeEthosBinary(tc.version, tc.createRC, tc.identity, "", false, "")
+			if tc.coverage {
+				binary = strings.Replace(binary, "#!/bin/sh\n", "#!/bin/sh\ntest -d \"${GOCOVERDIR:?missing coverage directory}\" || exit 11\n", 1)
+			}
 			require.NoError(t, os.WriteFile(filepath.Join(dist, asset), []byte(binary), 0o700))
 			digest := sha256.Sum256([]byte(binary))
 			if tc.badDigest {
@@ -137,7 +142,11 @@ func TestReleaseCandidateSmoke(t *testing.T) {
 			if tc.wantError == "" {
 				pythonCalls = useReleaseSmokePython(t)
 			}
-			output, err := runReleaseSmoke(t, "candidate", installer, dist)
+			var smokeEnv []string
+			if tc.coverage {
+				smokeEnv = append(smokeEnv, "ETHOS_RELEASE_COVERDIR="+t.TempDir())
+			}
+			output, err := runReleaseSmokeWithEnv(t, "candidate", installer, dist, os.Getenv("PATH"), smokeEnv...)
 			if tc.wantError == "" {
 				require.NoError(t, err, "%s", output)
 				assert.Contains(t, output, "PASS:")

@@ -19,6 +19,20 @@ while read -r local_ref local_oid remote_ref _remote_oid; do
     exit 1
   fi
 done
+
+load_helper() {
+  local path=$1 entry
+  entry=$(git ls-tree "$head" -- "$path") || return
+  if [[ -n "$entry" ]]; then
+    git show "$head:$path"
+  else
+    cat "$path"
+  fi
+}
+
 if [[ -n "$head" ]]; then
-  make test-push </dev/null
+  timer=$(load_helper scripts/test-timed.sh)
+  snapshot=$(load_helper scripts/test-snapshot.sh)
+  bash -c "$timer" scripts/test-timed.sh pre-push 180 \
+    bash -c "$snapshot" scripts/test-snapshot.sh commit "$head" make test-push ETHOS_TEST_PUSH_SNAPSHOT=1 </dev/null
 fi

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,7 +30,7 @@ func developmentHookFixture(t *testing.T) (dir string, run func(string, string, 
 	env = append(env, "GOCACHE="+cache, "GOMODCACHE="+modules)
 	run = func(at, name string, args ...string) ([]byte, error) {
 		cmd := exec.CommandContext(t.Context(), name, args...)
-		cmd.Dir, cmd.Env = at, env
+		cmd.Dir, cmd.Env = at, testhelpers.CoverEnv(env)
 		return cmd.CombinedOutput()
 	}
 	out, err := run(dir, "git", "init", "-q", "--template=")
@@ -46,6 +47,66 @@ func installDevelopmentHooks(t *testing.T, dir string, run func(string, string, 
 	require.NoError(t, err)
 	out, err := run(dir, "make", "-f", makefile, "hooks")
 	require.NoError(t, err, "%s", out)
+}
+
+func writePushedHookScripts(t *testing.T, dir string) {
+	t.Helper()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "scripts"), 0o700))
+	for _, name := range []string{"install-dev-hooks.py", "test-timed.sh", "test-snapshot.sh"} {
+		path := filepath.Join("scripts", name)
+		data, err := os.ReadFile(filepath.Join("..", path))
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, path), data, 0o600))
+	}
+}
+
+func TestDevelopmentPrePushTimesSnapshotCleanup(t *testing.T) {
+	dir, run := developmentHookFixture(t)
+	require.NoError(t, os.Remove(filepath.Join(dir, "scripts")))
+	writePushedHookScripts(t, dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-push:\n\t@echo ran-tests\n"), 0o600))
+	out, err := run(dir, "git", "add", "Makefile", "scripts")
+	require.NoError(t, err, "%s", out)
+	out, err = run(dir, "git", "commit", "-qm", "fixture")
+	require.NoError(t, err, "%s", out)
+	require.NoError(t, os.Remove(filepath.Join(dir, "scripts", "test-timed.sh")))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "scripts", "test-snapshot.sh"), []byte("exit 99\n"), 0o600))
+	out, err = run(dir, "git", "rev-parse", "HEAD")
+	require.NoError(t, err, "%s", out)
+	head := strings.TrimSpace(string(out))
+
+	git, err := exec.LookPath("git")
+	require.NoError(t, err)
+	bin := filepath.Join(dir, ".test-bin")
+	require.NoError(t, os.Mkdir(filepath.Join(bin, "real"), 0o700))
+	require.NoError(t, os.Symlink(git, filepath.Join(bin, "real", "git")))
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(`#!/bin/sh
+set -e
+"${0%/*}/real/git" "$@"
+if [ "$3" = worktree ] && [ "$4" = remove ]; then
+    echo removed-snapshot
+fi
+`), 0o700))
+
+	ref := "HEAD " + head + " refs/heads/topic " + strings.Repeat("0", len(head))
+	out, err = run(dir, "bash", "-c", `printf '%s\n' "$1" | .githooks/pre-push`, "hook", ref)
+	require.NoError(t, err, "%s", out)
+	require.Contains(t, string(out), "ran-tests\nremoved-snapshot\npre-push:")
+}
+
+func TestDevelopmentTestPushTiming(t *testing.T) {
+	dir, run := developmentHookFixture(t)
+	makefile, err := filepath.Abs("../Makefile")
+	require.NoError(t, err)
+	args := []string{"-f", makefile, "test-push", "MAKE=echo"}
+	out, err := run(dir, "make", args...)
+	require.NoError(t, err, "%s", out)
+	require.Contains(t, string(out), "\npre-push:")
+
+	out, err = run(dir, "make", append(args, "ETHOS_TEST_PUSH_SNAPSHOT=1")...)
+	require.NoError(t, err, "%s", out)
+	require.Contains(t, string(out), "\ntest-push-suite test-subprocess-fast\n")
+	require.NotContains(t, string(out), "\npre-push:")
 }
 
 func TestDevelopmentHooksFutureWorktreeKeepsExistingHooks(t *testing.T) {
@@ -65,7 +126,7 @@ func TestDevelopmentHooksFutureWorktreeKeepsExistingHooks(t *testing.T) {
 	require.Contains(t, string(out), "existing pre-commit ran")
 	require.Contains(t, string(out), "existing commit-msg ran")
 
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-changed:\n\t@echo 'development gate ran'\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-changed:\n\t@echo 'development gate ran'\nsecret-scan-staged:\n\t@true\n"), 0o600))
 	out, err = run(dir, "git", "add", ".githooks", "Makefile")
 	require.NoError(t, err, "%s", out)
 	out, err = run(dir, "git", "commit", "-m", "checkout with development gates")
@@ -86,7 +147,7 @@ func TestDevelopmentHooksFutureWorktreeKeepsExistingHooks(t *testing.T) {
 func buildFixtureEthos(t *testing.T, dir string) string {
 	t.Helper()
 	binary := filepath.Join(dir, ".test-bin", "ethos")
-	build := exec.CommandContext(t.Context(), "go", "build", "-o", binary, "./cmd/ethos")
+	build := exec.CommandContext(t.Context(), "go", testhelpers.CoverBuild("-o", binary, "./cmd/ethos")...)
 	build.Dir = ".."
 	out, err := build.CombinedOutput()
 	require.NoError(t, err, "%s", out)

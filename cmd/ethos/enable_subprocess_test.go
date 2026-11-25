@@ -44,7 +44,7 @@ func enableSubprocessRepo(t *testing.T) *cliSubprocessEnv {
 	gitRunEnv(t, repo, env, "init", "-q")
 	gitRunEnv(t, repo, env, "config", "user.email", "test@example.com")
 	gitRunEnv(t, repo, env, "config", "user.name", "test")
-	return &cliSubprocessEnv{home: home, repo: repo, env: env}
+	return &cliSubprocessEnv{home: home, repo: repo, env: testhelpers.CoverEnv(env)}
 }
 
 func gitRunEnv(t *testing.T, dir string, env []string, args ...string) {

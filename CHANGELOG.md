@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`ethos@punt-labs`) alongside CLI, MCP, and hooks, and delivers a verified Biff
   wall alert on failure with a `force-published-failure` drill input (PL-1592).
 
+### Changed
+
+- Development Git hooks test the staged index or pushed commit in isolated
+  worktrees. Pre-commit includes reverse dependents of affected packages.
+- The Go unit and subprocess selectors split mixed packages, and CI runs an
+  audit redaction race check separately from its latency measurement.
+
 ### Fixed
 
 - Nightly write-set checks detect changed ignored files outside Ethos runtime

@@ -31,7 +31,7 @@ full design.
 # One-time: LiteLLM (pinned; see "Known issue" below).
 uv sync --project tests/e2e
 
-# Fast subset — one smoke scenario, runs on every push.
+# Fast subset — bare and Ethos-loaded smoke scenarios, runs on every push.
 make test-e2e-smoke
 
 # Full sweep — every scenario, plus the Go attribution report.
@@ -40,9 +40,10 @@ make test-e2e
 
 Both assume `claude` is on `PATH`. Both also build `.tmp/e2e-bin/ethos`
 from this checkout first (the `e2e-bin` Make target) and put it ahead
-of everything else on the caged subprocess's `PATH` — a non-hermetic
-scenario's `SessionStart` hook then runs the code under test, not
-whatever `ethos` version happens to be installed globally. Outputs
+of everything else on the caged subprocess's `PATH`. Non-hermetic
+scenarios load the checkout's plugin with an isolated home so its
+`SessionStart` hook runs the code under test without a global install.
+Statement profiles go to `.tmp/statement-coverage/`. Other outputs
 land under `.tmp/e2e/` (proxy config/log) and `.tmp/e2e-captures/`
 (captured request bodies), both gitignored.
 

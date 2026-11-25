@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,7 +21,7 @@ import (
 func spawnCLI(se *cliSubprocessEnv, args ...string) (stdout, stderr string, code int, err error) {
 	cmd := exec.Command(ethosBinary, args...)
 	cmd.Dir = se.repo
-	cmd.Env = se.env
+	cmd.Env = testhelpers.CoverEnv(se.env)
 	var o, e bytes.Buffer
 	cmd.Stdout = &o
 	cmd.Stderr = &e
