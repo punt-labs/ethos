@@ -305,7 +305,10 @@ func TestChangedPackagesDirectDoesNotScanSecrets(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(filepath.Join(dir, path), data, 0o700))
 	}
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.test/changed\n\ngo 1.26\n"), 0o600))
+	version, err := run(dir, "go", "env", "GOVERSION")
+	require.NoError(t, err, "%s", version)
+	const module = "module example.test/changed\n\ngo 1.26\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(module+"\ntoolchain "+strings.TrimSpace(string(version))+"\n"), 0o600))
 	for _, args := range [][]string{{"init", "-q", "--template="}, {"add", "."}, {"commit", "-qm", "fixture"}} {
 		out, err := run(dir, "git", args...)
 		require.NoError(t, err, "%s", out)
@@ -313,11 +316,12 @@ func TestChangedPackagesDirectDoesNotScanSecrets(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "changed.go"), []byte("package changed\n"), 0o600))
 	out, err := run(dir, "git", "add", "changed.go")
 	require.NoError(t, err, "%s", out)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(module+"\ntoolchain go1.0.1\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "changed.go"), []byte("not staged\n"), 0o600))
 
 	out, err = run(dir, "make", "secret-scan-staged", "GITLEAKS=false")
 	require.Error(t, err, "%s", out)
-	out, err = run(dir, "make", "test-changed", "GITLEAKS=false")
+	out, err = run(dir, "make", "test-changed", "GITLEAKS=false", "GOPROXY=off")
 	require.NoError(t, err, "%s", out)
 	require.Contains(t, string(out), "example.test/changed")
 	require.NotContains(t, string(out), "secret-scan-staged")

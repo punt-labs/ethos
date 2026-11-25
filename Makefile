@@ -135,7 +135,7 @@ test-changed: ## Run default Go tests in packages affected by staged paths
 	@if [ -n "$$ETHOS_STAGED_PATHS" ]; then \
 		bash scripts/test-changed.sh; \
 	else \
-		bash scripts/test-snapshot.sh staged bash scripts/test-changed.sh; \
+		env -u GOTOOLCHAIN bash scripts/test-snapshot.sh staged $(MAKE) test-changed; \
 	fi
 
 test-push: ## Run the full default suite and a fast boundary check before pushing
