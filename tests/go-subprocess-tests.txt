@@ -1665,6 +1665,7 @@ test TestDevelopmentLiveRequiresKey
 test TestDevelopmentPreCommit
 test TestDevelopmentPrePush
 test TestDevelopmentPrePushTimesSnapshotCleanup
+test TestDevelopmentTestPushTiming
 test TestFilesystemReflectionShapes
 test TestNightlyStopsBeforeLiveOnQuarantineFailure
 test TestPluginScriptsFailLoudly

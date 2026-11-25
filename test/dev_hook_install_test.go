@@ -93,6 +93,21 @@ fi
 	require.Contains(t, string(out), "ran-tests\nremoved-snapshot\npre-push:")
 }
 
+func TestDevelopmentTestPushTiming(t *testing.T) {
+	dir, run := developmentHookFixture(t)
+	makefile, err := filepath.Abs("../Makefile")
+	require.NoError(t, err)
+	args := []string{"-f", makefile, "test-push", "MAKE=echo"}
+	out, err := run(dir, "make", args...)
+	require.NoError(t, err, "%s", out)
+	require.Contains(t, string(out), "\npre-push:")
+
+	out, err = run(dir, "make", append(args, "ETHOS_TEST_PUSH_SNAPSHOT=1")...)
+	require.NoError(t, err, "%s", out)
+	require.Contains(t, string(out), "\ntest test-subprocess-fast\n")
+	require.NotContains(t, string(out), "\npre-push:")
+}
+
 func TestDevelopmentHooksFutureWorktreeKeepsExistingHooks(t *testing.T) {
 	dir, run := developmentHookFixture(t)
 	out, err := run(dir, "git", "commit", "--allow-empty", "-m", "initial")

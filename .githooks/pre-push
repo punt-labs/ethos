@@ -23,5 +23,5 @@ if [[ -n "$head" ]]; then
   timer=$(git show "$head:scripts/test-timed.sh")
   snapshot=$(git show "$head:scripts/test-snapshot.sh")
   bash -c "$timer" scripts/test-timed.sh pre-push 180 \
-    bash -c "$snapshot" scripts/test-snapshot.sh commit "$head" make test-push </dev/null
+    bash -c "$snapshot" scripts/test-snapshot.sh commit "$head" make test-push ETHOS_TEST_PUSH_SNAPSHOT=1 </dev/null
 fi
