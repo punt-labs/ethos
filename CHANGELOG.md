@@ -4379,6 +4379,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ShellCheck added to CI and `make lint`
 
 [Unreleased]: https://github.com/punt-labs/ethos/compare/v4.22.1...HEAD
+[5.2.3]: https://github.com/punt-labs/ethos/compare/v5.2.2...v5.2.3
 [4.22.1]: https://github.com/punt-labs/ethos/compare/v4.22.0...v4.22.1
 [4.22.0]: https://github.com/punt-labs/ethos/compare/v4.21.0...v4.22.0
 [4.21.0]: https://github.com/punt-labs/ethos/compare/v4.20.4...v4.21.0
