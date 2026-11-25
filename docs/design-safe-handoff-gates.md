@@ -80,6 +80,16 @@ signal, not a parallelism limit. A cached result can be used at high load
 because it does not start a command. If the deadline, load probe or
 coordinator prevents admission, report **deferred**, never **passed**.
 
+Today check sets have no resource classification. Add a handoff check
+classification with `heavy` as the default, including for existing check
+sets, arbitrary argv, shell scripts, and wrappers such as `make check`.
+Do not infer cost from the adapter or executable name. A project may
+explicitly declare a check `light`, but that declaration is not a resource
+guarantee. Light checks still use bounded admission and execution; only
+binary-approved, resource-bounded light operations may use a lighter profile.
+An arbitrary command without such a profile uses the heavy limits even if
+declared light.
+
 For automatic heavy gates, default to the one slot and a process-tree CPU
 budget equivalent to **two cores**. The binary must enforce the budget,
 not merely offer a Make variable. In the initial Linux implementation,

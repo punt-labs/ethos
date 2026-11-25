@@ -14464,7 +14464,7 @@ defines check policy, but does not bound automatic machine load.
 Classify positively attributed non-workers at dispatch, key terminal results
 by the actual checkout inputs and resolved execution plan, and make concurrent
 requests reuse the owner's result. Require binary-owned host admission and
-resource limits for automatic heavy checks. Report deferral separately from
+resource limits; unclassified commands use the heavy profile. Report deferral separately from
 pass or failure. Preserve old hook transport, kill-switch and re-entry
 behavior. No implementation is approved by this entry.
 
