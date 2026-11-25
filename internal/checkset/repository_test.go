@@ -44,7 +44,7 @@ func TestRepositoryGoDefault(t *testing.T) {
 		require.Equal(t, "root", check.Cwd)
 		if want.pattern == "" {
 			require.True(t, check.Files.All)
-			require.Equal(t, 30*time.Minute, check.Duration())
+			require.Equal(t, 29*time.Minute, check.Duration())
 		} else {
 			require.Equal(t, []string{want.pattern}, check.Files.Globs)
 		}

@@ -96,8 +96,10 @@ Blocking handoff
 feedback is exit-zero decision JSON; `stop_hook_active` sends failures to stderr
 instead. Advisory failures use stderr at both stages. Neither stage has marker
 defaults, and `files: all` runs even when no paths match. Commit and handoff
-defaults are 120s and 10m per check, capped at 15m and 30m per stage. The plugin
-sets its handoff hook timeout to 1800 seconds, matching the 30-minute cap.
+defaults are 120s and 10m per check, capped at 15m and 29m per stage. For
+compatibility, configured handoff timeouts up to 30m still load but are
+capped at 29m. The plugin's 30-minute handoff hook timeout leaves one minute
+for wrapper overhead and feedback.
 `ethos mission result` integration remains a future slice.
 
 ### Build-system adapters

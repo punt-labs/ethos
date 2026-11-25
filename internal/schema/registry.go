@@ -109,7 +109,7 @@ var CheckSet = Entity{
 			"script":         {Type: "string", Description: "Required npm script present in package.json."},
 			"on_fail":        {Type: "enum", Enum: []string{"advisory", "block"}, Description: "Failure feedback mode; defaults to advisory at edit, block otherwise."},
 			"fail_on_output": {Type: "boolean", Description: "Treat non-empty stdout as failure even with exit zero."},
-			"timeout":        {Type: "duration", Pattern: durationPattern, Description: "Positive Go duration; defaults to 10s/120s/10m. Runtime limits: edit 60s, commit 15m, handoff 30m; must resolve to at least 1ns."},
+			"timeout":        {Type: "duration", Pattern: durationPattern, Description: "Positive Go duration; defaults to 10s/120s/10m. Runtime limits: edit 60s, commit 15m, handoff 29m (settings up to 30m are accepted and capped at 29m); must resolve to at least 1ns."},
 			"cwd":            {Type: "enum", Enum: []string{"root", "package_dir", "file_dir"}, Description: "Working directory; defaults to root."},
 			"snapshot": {Type: "object", Description: "Opt in to verified snapshot execution for a handoff check.", Fields: map[string]Overlay{
 				"profile": {Type: "enum", Enum: []string{"linux-shell-v1"}, Description: "Linux namespace isolation profile for /bin/sh."},

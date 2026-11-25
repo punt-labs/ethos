@@ -636,7 +636,7 @@ func TestHandoffStageLeavesWrapperFeedbackHeadroom(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(data, &config))
 	wrapper := config.Hooks["SubagentStop"][0].Hooks[0].Timeout
-	require.GreaterOrEqual(t, time.Duration(wrapper)*time.Second-handoffStageBudget, time.Minute)
+	require.GreaterOrEqual(t, time.Duration(wrapper)*time.Second-checkset.HandoffStageBudget, time.Minute)
 }
 
 func TestStageFailureTailAndDeadline(t *testing.T) {

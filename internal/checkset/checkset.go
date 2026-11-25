@@ -15,6 +15,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// HandoffStageBudget leaves time for hook feedback before the wrapper expires.
+const HandoffStageBudget = 29 * time.Minute
+
 type Set struct {
 	Name        string  `yaml:"name" json:"name"`
 	Description string  `yaml:"description,omitempty" json:"description,omitempty"`
@@ -320,6 +323,9 @@ func (c *Check) validate() error {
 	cap := map[string]time.Duration{"edit": time.Minute, "commit": 15 * time.Minute, "handoff": 30 * time.Minute}[c.Stage]
 	if err != nil || duration <= 0 || duration > cap {
 		return fmt.Errorf("timeout %q must be a positive duration within the %s %s stage cap", c.Timeout, c.Stage, cap)
+	}
+	if c.Stage == "handoff" && duration > HandoffStageBudget {
+		c.Timeout = HandoffStageBudget.String()
 	}
 	c.Exclude = append(c.Exclude, ".tmp/**", ".punt-labs/local/**")
 	return nil
