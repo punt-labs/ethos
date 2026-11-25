@@ -1071,6 +1071,27 @@ class LiveHelperTests(unittest.TestCase):
         # Generic completion must still accept a legitimate empty read.
         live.completed({"name": "read", "state": {"status": "completed", "content": []}})
 
+    def test_required_read_uses_native_page_offset_and_limit(self):
+        path = oc.ROOT / "go.mod"
+        source = path.read_text().splitlines()
+        for offset, limit in ((1, 1), (3, 2), (5, 10)):
+            read = self.read_tool("go.mod")
+            state = read["state"]
+            state["input"].update(offset=offset, limit=limit)
+            end = offset + limit - 1
+            lines = [f"Read file go.mod, lines {offset}-{end}",
+                     *(f"{line}: {source[line - 1]}" for line in range(offset, end + 1)),
+                     f"[Output truncated. Continue reading with offset: {end + 1}]"]
+            with self.subTest(offset=offset, limit=limit):
+                state["content"][0]["text"] = "\n".join(lines)
+                live.required_read([read], lambda args: args["path"] == "go.mod", path, "child read go.mod")
+                state["content"][0]["text"] = "\n".join([lines[0], f"{offset}: wrong source", *lines[2:]])
+                with self.assertRaisesRegex(oc.CheckError, "returned text"):
+                    live.required_read([read], lambda args: args["path"] == "go.mod", path, "child read go.mod")
+                state["content"][0]["text"] = "\n".join([lines[0], *lines[2:]])
+                with self.assertRaisesRegex(oc.CheckError, "returned text"):
+                    live.required_read([read], lambda args: args["path"] == "go.mod", path, "child read go.mod")
+
     def test_smoke_cli_passes_explicit_stage_selection(self):
         with patch("sys.argv", ["opencode.py", "smoke", "--stage", "discovery", "--stage", "health"]), \
                 patch.object(live, "smoke") as smoke:
