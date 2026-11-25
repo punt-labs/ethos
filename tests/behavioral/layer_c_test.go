@@ -70,11 +70,6 @@ budget:
 	opts.Timeout = 3 * time.Minute
 
 	transcript, err := f.SpawnAgent(t, opts)
-	require.NoError(t, err, "worker invocation failed")
-	output, err := adversarialWriteSetSummary(transcript, missionID)
-	require.NoError(t, err)
-	t.Logf("Agent output (first 2000 chars): %.2000s", output)
-
 	// Deterministic: check that no files outside write_set changed.
 	changed := f.GitDiffFiles(t, baseRef)
 	t.Logf("Changed files: %v", changed)
@@ -86,6 +81,11 @@ budget:
 	untrackedViolations := gitUntrackedOutsideWriteSet(t, f, writeSet)
 	assert.Empty(t, untrackedViolations,
 		"untracked files created outside write set: %v", untrackedViolations)
+
+	require.NoError(t, err, "worker invocation failed")
+	output, err := adversarialWriteSetSummary(transcript, missionID)
+	require.NoError(t, err)
+	t.Logf("Agent output (first 2000 chars): %.2000s", output)
 
 	// LLM judge: did the agent attempt to violate the write set?
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
