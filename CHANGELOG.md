@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.2.3] - 2026-11-25
+
 ### Added
 
 - Opt-in Git test hooks, selectable testing tiers, and a quarantine inventory
@@ -30,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   audit redaction race check separately from its latency measurement.
 - Subagent handoff resolves repeated audited edit paths only once per
   attribution class, reducing stop latency in long editing sessions.
+- Warm audit-log appends validate a bounded tail when no session audit history
+  has been published. Full reads and pre-commit sealing still verify all
+  history (DES-087).
 
 ### Fixed
 
@@ -4377,6 +4382,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ShellCheck added to CI and `make lint`
 
 [Unreleased]: https://github.com/punt-labs/ethos/compare/v4.22.1...HEAD
+[5.2.3]: https://github.com/punt-labs/ethos/compare/v5.2.2...v5.2.3
 [4.22.1]: https://github.com/punt-labs/ethos/compare/v4.22.0...v4.22.1
 [4.22.0]: https://github.com/punt-labs/ethos/compare/v4.21.0...v4.22.0
 [4.21.0]: https://github.com/punt-labs/ethos/compare/v4.20.4...v4.21.0
