@@ -409,6 +409,32 @@ func TestRepositoryUnionMatchesLivePayloadsBeforeSorting(t *testing.T) {
 	}
 }
 
+func TestRepositoryReadStreamAvoidsRepeatedCanonicalization(t *testing.T) {
+	p := repositoryPolicy(t, layout.RecordBlame)
+	s := Stream{Namespace: SessionNS, Session: "s"}
+	rows := make([][]byte, 3)
+	for i := range rows {
+		rows[i] = fmt.Appendf(nil, `{"ts":%q,"tool":"Bash","tool_input":{"command":"git status","description":"Inspect checkout"},"record":"blame"}`, FormatLineTS(int64(i+1)))
+	}
+	if err := WriteLocalAtomic(p, s.LivePath(p), append(bytes.Join(rows, []byte{'\n'}), '\n')); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := make(map[string]int, len(rows))
+	data, err := readStreamCanonical(p, s, func(raw []byte) ([]byte, error) {
+		calls[string(raw)]++
+		return CanonicalPayload(raw)
+	})
+	if err != nil || len(data.Lines) != len(rows) {
+		t.Fatalf("read %d live rows, want %d: %v", len(data.Lines), len(rows), err)
+	}
+	for i, row := range rows {
+		if got := calls[string(row)]; got != 1 {
+			t.Errorf("canonicalized live row %d %d times, want 1", i+1, got)
+		}
+	}
+}
+
 func TestRepositoryLocalStagingRefusesCrossDeviceAndCleans(t *testing.T) {
 	p := repositoryPolicy(t, layout.RecordFull)
 	old := installLocalFile

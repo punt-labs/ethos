@@ -29,6 +29,10 @@ type StreamData struct {
 // live file. In particular, overlapping live bytes are checked for conflicts
 // before a watermark can hide them. It does not consult Git or recording mode.
 func ReadStream(p layout.Policy, s Stream) (StreamData, error) {
+	return readStreamCanonical(p, s, CanonicalPayload)
+}
+
+func readStreamCanonical(p layout.Policy, s Stream, canonicalize func([]byte) ([]byte, error)) (StreamData, error) {
 	path := s.LivePath(p)
 	var livePayloads [][]byte
 	loadLive := func(_ layout.Policy, _ Stream) ([]Line, error) {
@@ -36,7 +40,7 @@ func ReadStream(p layout.Policy, s Stream) (StreamData, error) {
 			return nil, err
 		}
 		return readCompleteLiveWith(path, s.Session, func(raw []byte) (int64, error) {
-			payload, err := CanonicalPayload(raw)
+			payload, err := canonicalize(raw)
 			if err != nil {
 				return 0, err
 			}
@@ -47,7 +51,7 @@ func ReadStream(p layout.Policy, s Stream) (StreamData, error) {
 	merge := func(lines []Line) ([]Line, error) {
 		return mergeLines(lines, func(l Line) ([]byte, error) {
 			if l.Source != path {
-				return CanonicalPayload(l.Raw)
+				return canonicalize(l.Raw)
 			}
 			// The union visits live rows in read order, before dedup or sort.
 			payload := livePayloads[0]
