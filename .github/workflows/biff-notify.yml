@@ -50,10 +50,22 @@ jobs:
           # notification never carries a blank branch name.
           BRANCH: ${{ github.event.workflow_run.head_branch || github.event.workflow_run.head_sha }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           BIFF_RELAY_URL: ${{ vars.BIFF_RELAY_URL }}
           BIFF_RELAY_TOKEN: ${{ secrets.BIFF_RELAY_TOKEN }}
           BIFF_RELAY_TLS_HANDSHAKE_FIRST: ${{ vars.BIFF_RELAY_TLS_HANDSHAKE_FIRST }}
-        run: >-
-          uvx --from punt-biff biff --user github-actions wall
-          "CI failed: ${WORKFLOW_NAME} on ${BRANCH} — ${RUN_URL}"
-          --duration 2h
+        run: |
+          biff=(uvx --from punt-biff biff --user github-actions)
+          if [[ "$WORKFLOW_NAME" == "Release" ]]; then
+            attempt_url="${RUN_URL}/attempts/${RUN_ATTEMPT}"
+            current=$("${biff[@]}" --json wall 2>/dev/null || true)
+            if jq -e --arg url "$attempt_url" \
+              '.text | strings | startswith("Post-release smoke ") and endswith($url)' \
+              <<< "$current" >/dev/null 2>&1; then
+              echo "Preserving existing 24h post-release smoke alert for ${attempt_url}"
+              exit 0
+            fi
+          fi
+          "${biff[@]}" wall \
+            "CI failed: ${WORKFLOW_NAME} on ${BRANCH} — ${RUN_URL}" \
+            --duration 2h
