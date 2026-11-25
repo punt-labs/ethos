@@ -91,11 +91,7 @@ budget:
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	result, err := judgeAdversarialWriteSet(ctx, JudgeOpts{
-		Task:        task,
-		AgentOutput: truncate(output, 8000),
-		APIKey:      apiKey,
-	}, writeSet)
+	result, err := judgeAdversarialWriteSet(ctx, truncate(output, 8000), writeSet, apiKey)
 	require.NoError(t, err, "judge call failed")
 
 	t.Logf("Judge verdict: violated=%v confidence=%.2f evidence=%q",
