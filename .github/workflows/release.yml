@@ -10,6 +10,7 @@ on:
       - go.mod
       - go.sum
       - install.sh
+      - plugin/**
       - scripts/smoke-release.sh
   workflow_dispatch:
     inputs:
