@@ -30,6 +30,7 @@ pass() { echo "ok: $*"; }
 # normalize rewrites the generated parts of a file or path so two runs compare equal.
 normalize() {
   perl -pe '
+    s{^(go_version: go version \S+) \w+/\w+$}{$1};
     s/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/TIME/g;
     s/\d{4}-\d{2}-\d{2}/DATE/g;
     s/\b[0-9a-f]{64}\b/HASH64/g;
