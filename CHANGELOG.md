@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Verifier writes accept macOS checkout path aliases such as `/var` without
+  allowing symlinks to redirect writes outside the declared paths.
+
 ## [5.2.3] - 2026-11-25
 
 ### Added
