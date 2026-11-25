@@ -15,6 +15,7 @@ import (
 // they reach the file. The redaction passes upstream are best effort; this
 // is the check that holds whatever they missed.
 var guardedSinks = map[string]string{
+	"internal/hook.writeGateResult":                            "LeakRule",
 	"internal/mission.writeContractFile":                       "guardWrite",
 	"internal/mission.writeAtomicFileWithWarning":              "guardWrite",
 	"internal/mission.writeSyncedFile":                         "guardWrite",

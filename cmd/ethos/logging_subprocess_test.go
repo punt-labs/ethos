@@ -274,7 +274,7 @@ checks:
 		{"post-edit", "edit", `{"session_id":"fixture","tool_name":"Edit","tool_input":{"file_path":"sample.txt"}}`, "completed", ""},
 		{"post-edit", "edit", `{"session_id":"fixture","agent_id":"worker","agent_type":"payload-agent","tool_name":"Edit","tool_input":{"file_path":"sample.txt"}}`, "completed", "check-agent"},
 		{"pre-commit", "commit", "", "completed", ""},
-		{"subagent-stop", "handoff", `{"session_id":"fixture","agent_id":"worker","agent_type":"implementer"}`, "failed", ""},
+		{"subagent-stop", "handoff", `{"session_id":"fixture","agent_id":"worker","agent_type":"implementer"}`, "deferred", ""},
 	} {
 		name := tc.stage
 		if tc.agent != "" {
@@ -295,7 +295,12 @@ checks:
 			require.NoError(t, err, "%s", out)
 			log := diagnosticLog(t, home)
 			require.Regexp(t, "Invocation finished command=hook "+tc.hook+" .*project=logging-project", log)
-			require.Regexp(t, "Check finished .*stage="+tc.stage+" check="+tc.stage+"-probe outcome="+tc.outcome+" duration_ms=[1-9][0-9]+", log)
+			duration := "[1-9][0-9]+"
+			if tc.outcome == "deferred" {
+				duration = "[0-9]+"
+				require.Contains(t, string(out), `"systemMessage":"handoff checks deferred (handoff-probe): no declared snapshot profile. Run the explicit project gate:`)
+			}
+			require.Regexp(t, "Check finished .*stage="+tc.stage+" check="+tc.stage+"-probe outcome="+tc.outcome+" duration_ms="+duration, log)
 			require.Equal(t, 1, strings.Count(log, "Check finished"), log)
 			for _, message := range []string{"Invocation finished ", "Check finished "} {
 				require.Regexp(t, message+".*session_id=fixture.*agent_id=worker.*agent="+wantAgent, log)

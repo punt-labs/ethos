@@ -30,7 +30,7 @@ type allowance struct {
 // outside the working tree, do not create files, or forward a checked pattern
 // through the explicitly enumerated atomic-writer chain below.
 var tempAllowed = map[string]allowance{
-	"internal/checkset/checkset.go:validate":                    {1, "adds a .tmp/** exclusion to edit policy; no file is created"},
+	"internal/checkset/checkset.go:validate":                    {2, "excludes .tmp from check matching and declared snapshot inputs; no file is created"},
 	"internal/session/store.go:WriteCurrentSession":             {1, "writes under $HOME/.punt-labs/ethos/sessions, outside any working tree"},
 	"internal/session/store.go:writeRoster":                     {1, "writes under $HOME/.punt-labs/ethos/sessions, outside any working tree"},
 	"internal/mission/active.go:writeSidecarFile":               {1, "writes under the global root, outside any working tree"},

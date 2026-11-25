@@ -80,6 +80,12 @@ func TestAdapterSchemaRuntimeParity(t *testing.T) {
 		require.Equal(t, valid, runtimeErr == nil, "runtime: %v, %s", runtimeErr, data)
 		require.Equal(t, valid, schema.Validate(value) == nil, "schema: %v, %s", schema.Validate(value), data)
 	}
+	snapshot := map[string]any{"profile": "linux-shell-v1", "inputs": []string{"gate.sh"}, "epoch": "v1"}
+	validate(t, map[string]any{"stage": "handoff", "run": []string{"/bin/sh", "gate.sh"}, "snapshot": snapshot}, true)
+	validate(t, map[string]any{"stage": "handoff", "run": []string{"sh", "gate.sh"}, "snapshot": snapshot}, false)
+	validate(t, map[string]any{"stage": "commit", "run": []string{"/bin/sh", "gate.sh"}, "snapshot": snapshot}, false)
+	validate(t, map[string]any{"stage": "handoff", "run": []string{"/bin/sh"}, "snapshot": map[string]any{"profile": "linux-shell-v1"}}, false)
+
 	fields := map[string]map[string]any{
 		"exec": {"run": []string{"lint", "{file}"}},
 		"make": {"target": "check-file", "vars": map[string]string{"FLAGS": "literal value"}},

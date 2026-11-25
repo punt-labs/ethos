@@ -134,12 +134,12 @@ func TestHandoffReadOnlyStop(t *testing.T) {
 			roster, err = ss.Load("ro")
 			require.NoError(t, err)
 			require.Nil(t, roster.FindParticipant("sub"))
+			require.NoFileExists(t, marker)
 			if tc.runs {
-				require.FileExists(t, marker)
 				require.Contains(t, out.String(), `"decision":"block"`)
+				require.Contains(t, out.String(), "handoff checks deferred")
 				return
 			}
-			require.NoFileExists(t, marker)
 			require.Empty(t, out.String())
 			require.Empty(t, stderr.String())
 		})

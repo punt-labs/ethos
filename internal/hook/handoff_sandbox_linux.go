@@ -1,0 +1,271 @@
+package hook
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"runtime/coverage"
+	"slices"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/punt-labs/ethos/v4/internal/diagnostic"
+	"golang.org/x/sys/unix"
+)
+
+const handoffSandboxArg = "--ethos-handoff-sandbox-v1"
+const handoffSandboxReady = "ready\n"
+
+var sandboxRuntime = []string{"/bin", "/lib", "/lib64", "/usr/bin", "/usr/lib", "/usr/lib64"}
+var sandboxEnvironment = []string{"PATH=/usr/bin:/bin", "LC_ALL=C", "TZ=UTC", "HOME=/nonexistent"}
+
+// RunHandoffSandbox dispatches the private namespace child before CLI setup.
+func RunHandoffSandbox() {
+	runHandoffSandbox(func(dir string) error {
+		if err := coverage.WriteMetaDir(dir); err != nil {
+			return err
+		}
+		return coverage.WriteCountersDir(dir)
+	})
+}
+
+func runHandoffSandbox(writeCoverage func(string) error) {
+	if len(os.Args) < 8 || os.Args[1] != handoffSandboxArg || os.Getpid() != 1 {
+		return
+	}
+	runtime.LockOSThread()
+	status := os.NewFile(3, "handoff sandbox status")
+	unix.CloseOnExec(3)
+	cwd := os.Args[4]
+	reportCoverage := func() error { return nil }
+	if dir := os.Getenv("GOCOVERDIR"); filepath.IsAbs(dir) {
+		coverDir, err := os.Open(dir)
+		if err != nil {
+			_, _ = fmt.Fprintln(status, err)
+			os.Exit(126)
+		}
+		reportCoverage = func() error { return writeSandboxCoverage(coverDir, cwd, writeCoverage) }
+	}
+	err := enterHandoffSandbox(os.Args[2], os.Args[3], cwd, os.Args[5], os.Args[6], os.Args[7:], status, reportCoverage)
+	_, _ = fmt.Fprintln(status, err)
+	os.Exit(126)
+}
+
+func writeSandboxCoverage(dir *os.File, cwd string, write func(string) error) error {
+	if err := unix.Fchdir(int(dir.Fd())); err != nil {
+		return errors.Join(err, dir.Close())
+	}
+	return errors.Join(dir.Close(), write("."), unix.Chdir(cwd))
+}
+
+func handoffSandboxSupported() bool { return true }
+
+func handoffSandboxIdentity(root string) (string, error) {
+	var physical unix.Stat_t
+	if err := unix.Stat(root, &physical); err != nil {
+		return "", err
+	}
+	boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s:%d:%d", strings.TrimSpace(string(boot)), physical.Dev, physical.Ino), nil
+}
+
+func openGateInput(root *os.Root, input string) (*os.File, error) {
+	dir, err := root.Open(".")
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.Split(input, "/")
+	for i, part := range parts {
+		flags := unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK
+		if i < len(parts)-1 {
+			flags |= unix.O_DIRECTORY
+		}
+		fd, err := unix.Openat(int(dir.Fd()), part, flags, 0)
+		_ = dir.Close()
+		if err != nil {
+			return nil, err
+		}
+		dir = os.NewFile(uintptr(fd), input)
+	}
+	return dir, nil
+}
+
+func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string, inputs []string, check editCheck) (string, error) {
+	for _, root := range sandboxRuntime {
+		physical, err := filepath.EvalSymlinks(root)
+		if err == nil && (insideGatePath(physical, checkout) || insideGatePath(checkout, physical)) {
+			return "", errors.New("checkout overlaps the sandbox system runtime")
+		}
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return "", errors.New("cannot locate the snapshot runner")
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		return "", errors.New("cannot create the snapshot runner status pipe")
+	}
+	defer r.Close()
+	defer w.Close()
+
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(ctx, check.timeout)
+	defer cancel()
+	manifest, err := json.Marshal(inputs)
+	if err != nil {
+		return "", errors.New("cannot encode the snapshot input manifest")
+	}
+	cmd := exec.CommandContext(ctx, self, append([]string{handoffSandboxArg, scratch, checkout, check.cwd, proof, string(manifest)}, check.argv...)...)
+	cmd.Env = slices.Clone(sandboxEnvironment)
+	if dir := os.Getenv("GOCOVERDIR"); filepath.IsAbs(dir) {
+		cmd.Env = append(cmd.Env, "GOCOVERDIR="+dir)
+	}
+	cmd.ExtraFiles = []*os.File{w}
+	cmd.WaitDelay = time.Second
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags:  unix.CLONE_NEWUSER | unix.CLONE_NEWNS | unix.CLONE_NEWPID | unix.CLONE_NEWNET | unix.CLONE_NEWIPC,
+		UidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Geteuid(), Size: 1}},
+		GidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getegid(), Size: 1}},
+		Pdeathsig:   unix.SIGKILL,
+	}
+	var stdout, stderr editTail
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Start(); err != nil {
+		return "", errors.New("snapshot isolation unavailable on this host")
+	}
+	_ = w.Close()
+	setup, setupErr := io.ReadAll(io.LimitReader(r, 4096))
+	ready := setupErr == nil && string(setup) == handoffSandboxReady
+	if ready {
+		diagnostic.LogHookCheck(ctx, checkout, checkout, "handoff", check.name, "launched", time.Since(start))
+	}
+	err = cmd.Wait()
+	if ctx.Err() != nil {
+		return "", errors.New("snapshot check timed out or was interrupted")
+	}
+	if !ready {
+		diagnostic.FromContext(ctx).Info("Handoff sandbox setup failed", "error_type", diagnostic.ErrorType(setupErr))
+		return "", errors.New("could not establish snapshot isolation or enter its working directory")
+	}
+	var exit *exec.ExitError
+	if err != nil && (!errors.As(err, &exit) || exit.ExitCode() < 0 || exit.ExitCode() >= 126) {
+		return "", errors.New("snapshot check did not complete")
+	}
+	if err == nil && (!check.failOnOutput || len(stdout.data) == 0) {
+		diagnostic.LogHookCheck(ctx, checkout, checkout, "handoff", check.name, "completed", time.Since(start))
+		return "", nil
+	}
+	detail := "non-empty formatting output"
+	if err != nil {
+		detail = err.Error()
+	}
+	diagnostic.LogHookCheck(ctx, checkout, checkout, "handoff", check.name, "failed", time.Since(start))
+	lines := strings.Split(strings.TrimRight(string(bytes.Join([][]byte{stdout.data, stderr.data}, []byte("\n"))), "\n"), "\n")
+	return fmt.Sprintf("%s: %s\ncommand: %s\n%s", check.name, detail, strings.Join(check.argv, " "), strings.Join(lines[max(0, len(lines)-40):], "\n")), nil
+}
+
+func insideGatePath(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && filepath.IsLocal(rel)
+}
+
+func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string, status io.Writer, reportCoverage func() error) error {
+	if argv[0] != "/bin/sh" || !insideGatePath(gateRoot, cwd) {
+		return errors.New("invalid sandbox plan")
+	}
+	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
+		return err
+	}
+	if err := unix.Mount(root, root, "", unix.MS_BIND, ""); err != nil {
+		return err
+	}
+	checkout := filepath.Join(root, gateRoot)
+	if err := os.MkdirAll(checkout, 0o700); err != nil {
+		return err
+	}
+	if err := unix.Mount("tmpfs", checkout, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0700,size=256m"); err != nil {
+		return err
+	}
+	var inputs []string
+	if err := json.Unmarshal([]byte(manifest), &inputs); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), gateInputTime)
+	digest, err := digestGateInputs(ctx, live, checkout, inputs)
+	cancel()
+	if err != nil || digest != proof || !gatePlanInputsPresent(checkout, cwd, argv) {
+		return errors.New("snapshot inputs did not match the key or invocation")
+	}
+	if err := unix.Mount("", checkout, "", unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV, ""); err != nil {
+		return err
+	}
+	for _, runtimeDir := range sandboxRuntime {
+		if _, err := os.Stat(runtimeDir); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		if err := mountGateReadOnly(runtimeDir, filepath.Join(root, runtimeDir)); err != nil {
+			return err
+		}
+	}
+	oldRoot := filepath.Join(root, ".old-root")
+	if err := os.Mkdir(oldRoot, 0o700); err != nil {
+		return err
+	}
+	if err := unix.PivotRoot(root, oldRoot); err != nil {
+		return err
+	}
+	if err := unix.Chdir(cwd); err != nil {
+		return err
+	}
+	if err := unix.Unmount("/.old-root", unix.MNT_DETACH); err != nil {
+		return err
+	}
+	if err := os.Remove("/.old-root"); err != nil {
+		return err
+	}
+	if err := unix.Mount("", "/", "", unix.MS_REMOUNT|unix.MS_BIND|unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV, ""); err != nil {
+		return err
+	}
+	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
+		return err
+	}
+	// Root must not regain capabilities on exec inside the user namespace.
+	const noRootAndLocked = 3
+	if err := unix.Prctl(unix.PR_SET_SECUREBITS, noRootAndLocked, 0, 0, 0); err != nil {
+		return err
+	}
+	caps := [2]unix.CapUserData{}
+	if err := unix.Capset(&unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}, &caps[0]); err != nil {
+		return err
+	}
+	if err := reportCoverage(); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(status, handoffSandboxReady); err != nil {
+		return err
+	}
+	return unix.Exec(argv[0], argv, sandboxEnvironment)
+}
+
+func mountGateReadOnly(source, target string) error {
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		return err
+	}
+	if err := unix.Mount(source, target, "", unix.MS_BIND, ""); err != nil {
+		return err
+	}
+	return unix.Mount("", target, "", unix.MS_REMOUNT|unix.MS_BIND|unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV, "")
+}

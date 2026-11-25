@@ -84,6 +84,9 @@ func reflectedWireNames(t reflect.Type) map[string]reflect.Type {
 		if elem.Kind() == reflect.Slice {
 			elem = elem.Elem()
 		}
+		if elem.Kind() == reflect.Pointer {
+			elem = elem.Elem()
+		}
 		if elem.Kind() == reflect.Struct {
 			out[wire] = elem
 		} else {

@@ -129,9 +129,10 @@ func TestHandoffChecks(t *testing.T) {
 				return
 			}
 			require.Nil(t, roster.FindParticipant("sub"))
+			require.Empty(t, stderr.String())
 			if tc.active || tc.mode != "" {
-				require.Empty(t, out.String())
-				require.NotEmpty(t, stderr.String())
+				require.Contains(t, out.String(), `"systemMessage"`)
+				require.NotContains(t, out.String(), `"decision"`)
 			} else {
 				require.Contains(t, out.String(), `"decision":"block"`)
 				require.True(t, strings.Contains(out.String(), "handoff-probe") || strings.Contains(out.String(), "absent"))
@@ -216,18 +217,31 @@ func TestHandoffFallbackIsolation(t *testing.T) {
 			var out, stderr bytes.Buffer
 			require.NoError(t, HandleSubagentStopWithIO(context.Background(), strings.NewReader(`{"session_id":"isolation","agent_id":"sub"}`), ss, &out, &stderr))
 			require.Empty(t, stderr.String())
-			data, err := os.ReadFile(log)
-			require.NoError(t, err)
-			want := "all|" + root + "\n"
+			require.NoFileExists(t, log)
+			require.Contains(t, out.String(), "handoff checks deferred (all)")
 			if tc.fallback {
-				want = "glob|" + filepath.Join(root, "broken.go") + "\n" + want
-				require.Contains(t, out.String(), `"decision":"block"`)
+				require.Contains(t, out.String(), "handoff checks deferred (glob)")
 			} else {
-				require.Empty(t, out.String())
+				require.NotContains(t, out.String(), "handoff checks deferred (glob)")
 			}
-			require.Equal(t, want, string(data))
+			require.Contains(t, out.String(), `"decision":"block"`)
 		})
 	}
+}
+
+func TestHandoffRootOperandIsNotLive(t *testing.T) {
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	checkPolicy(t, root, "project", "  - name: snapshot-probe\n    stage: handoff\n    files: all\n    run: [/bin/sh, -c, 'test \"$1\" = \"$PWD\" && printf \"%s\\n\" \"$1\"', probe, '{root}']\n    fail_on_output: true\n    snapshot: {profile: linux-shell-v1, inputs: [README], epoch: v1}\n")
+
+	feedback := RunStageChecks(context.Background(), root, "worker", "handoff")
+	if strings.Contains(feedback.Blocking, "isolation unavailable on this host") {
+		t.Skip(feedback.Blocking)
+	}
+	require.Contains(t, feedback.Blocking, "non-empty formatting output")
+	require.NotContains(t, feedback.Blocking, root, "the root operand and working directory must not be the live checkout")
+	require.Empty(t, feedback.Advisory)
 }
 
 func TestHandoffConcurrentAgents(t *testing.T) {
@@ -251,11 +265,12 @@ func TestHandoffConcurrentAgents(t *testing.T) {
 		var out, stderr bytes.Buffer
 		payload := fmt.Sprintf(`{"session_id":"concurrent","agent_id":%q}`, agent)
 		require.NoError(t, HandleSubagentStopWithIO(context.Background(), strings.NewReader(payload), ss, &out, &stderr))
-		require.Empty(t, out.String())
+		require.Contains(t, out.String(), "handoff checks deferred (glob)")
 		require.Empty(t, stderr.String())
-		data, err := os.ReadFile(log)
+		require.NoFileExists(t, log)
+		files, err := handoffFiles(root, "concurrent", agent)
 		require.NoError(t, err)
-		require.Equal(t, filepath.Join(root, agent+".go")+"\n", string(data))
+		require.Equal(t, []string{agent + ".go"}, files[root])
 	}
 }
 
@@ -313,22 +328,19 @@ func TestHandoffVanishedPaths(t *testing.T) {
 						require.NoError(t, os.Remove(filepath.Dir(removed)))
 					}
 					entries := []auditEntry{{Ts: "2026-11-22T10:00:00Z", Session: "vanished", AgentID: agent, Tool: "Write", ToolInput: map[string]any{"file_path": "<repo>/removed/gone.go"}, PathFormat: auditPathFormat}}
-					want := "all\n"
 					if ownFile {
 						writeFile(t, filepath.Join(root, "own.go"), "package own\n")
 						entries = append(entries, auditEntry{Ts: "2026-11-22T10:00:01Z", Session: "vanished", AgentID: "sub", Tool: "Edit", ToolInput: map[string]any{"file_path": "<repo>/own.go"}, PathFormat: auditPathFormat})
-						want = "glob|" + filepath.Join(root, "own.go") + "\n" + want
 					}
 					writeRepoTreeSession(t, root, "2026-11-22", "vanished", entries)
 					ss := session.NewStore(t.TempDir())
 					require.NoError(t, ss.Create("vanished", session.Participant{AgentID: "human"}, session.Participant{AgentID: "sub"}, "", ""))
 					var out, stderr bytes.Buffer
 					require.NoError(t, HandleSubagentStopWithIO(context.Background(), strings.NewReader(`{"session_id":"vanished","agent_id":"sub"}`), ss, &out, &stderr))
-					require.Empty(t, out.String())
+					require.Contains(t, out.String(), "handoff checks deferred (all)")
+					require.Equal(t, ownFile, strings.Contains(out.String(), "handoff checks deferred (glob)"))
 					require.Empty(t, stderr.String())
-					data, err := os.ReadFile(log)
-					require.NoError(t, err)
-					require.Equal(t, want, string(data))
+					require.NoFileExists(t, log)
 				})
 			}
 		}
@@ -387,15 +399,10 @@ func TestHandoffVanishedRootAttribution(t *testing.T) {
 			require.NoError(t, ss.Create("roots", session.Participant{AgentID: "human"}, session.Participant{AgentID: "sub"}, "", ""))
 			var out, stderr bytes.Buffer
 			require.NoError(t, HandleSubagentStopWithIO(context.Background(), strings.NewReader(`{"session_id":"roots","agent_id":"sub"}`), ss, &out, &stderr))
-			require.Empty(t, out.String())
+			require.Contains(t, out.String(), "handoff checks deferred (all)")
+			require.Equal(t, tc.glob, strings.Contains(out.String(), "handoff checks deferred (glob)"))
 			require.Empty(t, stderr.String())
-			data, err := os.ReadFile(log)
-			require.NoError(t, err)
-			want := "all|" + root + "\n"
-			if tc.glob {
-				want = "glob|" + filepath.Join(root, "dirty.go") + "\n" + want
-			}
-			require.Equal(t, want, string(data))
+			require.NoFileExists(t, log)
 		})
 	}
 }
@@ -633,11 +640,14 @@ func TestHandoffLinkedWorktree(t *testing.T) {
 			require.NoError(t, ss.Create("linked-stop", session.Participant{AgentID: "human"}, session.Participant{AgentID: "sub"}, "", ""))
 			var out, stderr bytes.Buffer
 			require.NoError(t, HandleSubagentStopWithIO(context.Background(), strings.NewReader(`{"session_id":"linked-stop","agent_id":"sub"}`), ss, &out, &stderr))
-			require.Empty(t, out.String())
+			require.Contains(t, out.String(), "handoff checks deferred (all)")
+			require.Contains(t, out.String(), "handoff checks deferred (glob)")
 			require.Empty(t, stderr.String())
-			data, err := os.ReadFile(log)
+			require.NoFileExists(t, log)
+			files, err := handoffFiles(root, "linked-stop", "sub")
 			require.NoError(t, err)
-			require.Equal(t, linked+"|"+linked+"|"+filepath.Join(linked, "written.go")+"|\n"+linked+"|"+linked+"|\n", string(data))
+			require.Len(t, files, 1)
+			require.Contains(t, files[linked], "written.go")
 		})
 	}
 }

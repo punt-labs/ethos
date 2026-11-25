@@ -111,6 +111,11 @@ var CheckSet = Entity{
 			"fail_on_output": {Type: "boolean", Description: "Treat non-empty stdout as failure even with exit zero."},
 			"timeout":        {Type: "duration", Pattern: durationPattern, Description: "Positive Go duration; defaults to 10s/120s/10m. Runtime limits: edit 60s, commit 15m, handoff 30m; must resolve to at least 1ns."},
 			"cwd":            {Type: "enum", Enum: []string{"root", "package_dir", "file_dir"}, Description: "Working directory; defaults to root."},
+			"snapshot": {Type: "object", Description: "Opt in to verified snapshot execution for a handoff check.", Fields: map[string]Overlay{
+				"profile": {Type: "enum", Enum: []string{"linux-shell-v1"}, Description: "Linux namespace isolation profile for /bin/sh."},
+				"inputs":  {Type: "list of string", Description: "Declared literal checkout-relative regular files."},
+				"epoch":   {Type: "string", Description: "Cache epoch; change when the declared runtime changes."},
+			}},
 		}},
 	},
 }

@@ -59,6 +59,33 @@ func TestDecode(t *testing.T) {
 	}
 }
 
+func TestDecodeHandoffSnapshot(t *testing.T) {
+	const check = "name: test\nchecks:\n  - name: test\n    stage: handoff\n    files: all\n    run: [/bin/sh, gate.sh]\n    snapshot: "
+	set, err := Decode([]byte(check + "{profile: linux-shell-v1, inputs: [gate.sh, pkg/input], epoch: v1}\n"))
+	require.NoError(t, err)
+	require.Equal(t, &Snapshot{Profile: "linux-shell-v1", Inputs: Strings{"gate.sh", "pkg/input"}, Epoch: "v1"}, set.Checks[0].Snapshot)
+	for _, invalid := range []string{
+		"true",
+		"{profile: 1, inputs: [gate.sh], epoch: v1}",
+		"{profile: linux-shell-v1, inputs: [gate.sh], epoch: 1}",
+		"{profile: nope, inputs: [gate.sh], epoch: v1}",
+		"{profile: linux-shell-v1, inputs: [gate.sh], cache_epoch: v1}",
+		"{profile: linux-shell-v1, inputs: [gate.sh]}",
+		"{profile: linux-shell-v1, inputs: [], epoch: v1}",
+		"{profile: linux-shell-v1, inputs: [../gate.sh], epoch: v1}",
+		"{profile: linux-shell-v1, inputs: [/gate.sh], epoch: v1}",
+		"{profile: linux-shell-v1, inputs: ['*.sh'], epoch: v1}",
+		"{profile: linux-shell-v1, inputs: [.git/config], epoch: v1}",
+		"{profile: linux-shell-v1, inputs: [.punt-labs/local/secret], epoch: v1}",
+	} {
+		_, err := Decode([]byte(check + invalid + "\n"))
+		require.Error(t, err, "%s", invalid)
+	}
+	_, err = Decode([]byte(strings.Replace(check, "stage: handoff", "stage: commit", 1) +
+		"{profile: linux-shell-v1, inputs: [gate.sh], epoch: v1}\n"))
+	require.ErrorContains(t, err, "at handoff")
+}
+
 func TestGlobs(t *testing.T) {
 	for _, tc := range []struct {
 		pattern, file string
