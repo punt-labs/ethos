@@ -109,7 +109,7 @@ func parseArchivalCalls(trace string) ([]archivalCall, error) {
 			}
 			delete(pending, tid)
 			c.endOrder = n
-			if err := finish(c, c.args+strings.TrimPrefix(text, marker)); err != nil {
+			if err := finish(c, c.name+"("+c.args+strings.TrimPrefix(text, marker)); err != nil {
 				return nil, err
 			}
 			continue
@@ -119,11 +119,11 @@ func parseArchivalCalls(trace string) ([]archivalCall, error) {
 			if _, exists := pending[tid]; exists {
 				return nil, fmt.Errorf("two unfinished calls for tid %d", tid)
 			}
-			name, _, ok := strings.Cut(start, "(")
+			name, args, ok := strings.Cut(start, "(")
 			if !ok {
 				return nil, fmt.Errorf("malformed unfinished call %q", text)
 			}
-			c.name, c.args, c.split = name, start, true
+			c.name, c.args, c.split = name, args, true
 			pending[tid] = c
 			continue
 		}
@@ -156,7 +156,7 @@ func parseArchivalCalls(trace string) ([]archivalCall, error) {
 		// A killed task may never resume. Still classify all printed destination
 		// operands; if any required operand is missing, the later parser refuses.
 		c.endOrder = len(lines)
-		if err := finish(c, strings.TrimSuffix(strings.TrimSpace(c.args), ")")+") = ?"); err != nil {
+		if err := finish(c, c.name+"("+strings.TrimSuffix(strings.TrimSpace(c.args), ")")+") = ?"); err != nil {
 			return nil, err
 		}
 	}
@@ -886,6 +886,20 @@ func TestArchivalTraceUndecodableRecord(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestArchivalTraceTeardownAllowsPendingRead(t *testing.T) {
+	const trace = `1 clone(child_stack=NULL, flags=CLONE_VM|CLONE_THREAD) = 2
+1 clone(child_stack=NULL, flags=CLONE_VM|CLONE_THREAD) = 3
+1 exit_group(0 <unfinished ...>
+2 ????() = ?
+3 openat(AT_FDCWD, "/proc/self/stat", O_RDONLY|O_CLOEXEC <unfinished ...>
+1 <... exit_group resumed>) = ?
+2 +++ exited with 0 +++
+3 +++ exited with 0 +++
+`
+	_, err := checkArchivalTrace(trace, linkedFullPolicy())
+	require.NoError(t, err)
 }
 
 func TestArchivalTraceTeardownSkipNeverHidesWrite(t *testing.T) {
