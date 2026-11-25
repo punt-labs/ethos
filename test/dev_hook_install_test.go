@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,7 +30,7 @@ func developmentHookFixture(t *testing.T) (dir string, run func(string, string, 
 	env = append(env, "GOCACHE="+cache, "GOMODCACHE="+modules)
 	run = func(at, name string, args ...string) ([]byte, error) {
 		cmd := exec.CommandContext(t.Context(), name, args...)
-		cmd.Dir, cmd.Env = at, env
+		cmd.Dir, cmd.Env = at, testhelpers.CoverEnv(env)
 		return cmd.CombinedOutput()
 	}
 	out, err := run(dir, "git", "init", "-q", "--template=")
@@ -146,7 +147,7 @@ func TestDevelopmentHooksFutureWorktreeKeepsExistingHooks(t *testing.T) {
 func buildFixtureEthos(t *testing.T, dir string) string {
 	t.Helper()
 	binary := filepath.Join(dir, ".test-bin", "ethos")
-	build := exec.CommandContext(t.Context(), "go", "build", "-o", binary, "./cmd/ethos")
+	build := exec.CommandContext(t.Context(), "go", testhelpers.CoverBuild("-o", binary, "./cmd/ethos")...)
 	build.Dir = ".."
 	out, err := build.CombinedOutput()
 	require.NoError(t, err, "%s", out)

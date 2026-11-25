@@ -134,6 +134,7 @@ func newShimRepo(t *testing.T, enable bool) *shimRepo {
 		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@x", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@x",
 		"PATH=/usr/bin:/bin")
+	r.env = testhelpers.CoverEnv(r.env)
 	runGit(t, r.dir, "init", "-q", "-b", "main")
 	if enable {
 		// enable, then one command that reads storage: the storage upgrade
