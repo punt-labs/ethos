@@ -48,13 +48,28 @@ func installDevelopmentHooks(t *testing.T, dir string, run func(string, string, 
 	require.NoError(t, err, "%s", out)
 }
 
+func writePushedHookScripts(t *testing.T, dir string) {
+	t.Helper()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "scripts"), 0o700))
+	for _, name := range []string{"install-dev-hooks.py", "test-timed.sh", "test-snapshot.sh"} {
+		path := filepath.Join("scripts", name)
+		data, err := os.ReadFile(filepath.Join("..", path))
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, path), data, 0o600))
+	}
+}
+
 func TestDevelopmentPrePushTimesSnapshotCleanup(t *testing.T) {
 	dir, run := developmentHookFixture(t)
+	require.NoError(t, os.Remove(filepath.Join(dir, "scripts")))
+	writePushedHookScripts(t, dir)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-push:\n\t@echo ran-tests\n"), 0o600))
-	out, err := run(dir, "git", "add", "Makefile")
+	out, err := run(dir, "git", "add", "Makefile", "scripts")
 	require.NoError(t, err, "%s", out)
 	out, err = run(dir, "git", "commit", "-qm", "fixture")
 	require.NoError(t, err, "%s", out)
+	require.NoError(t, os.Remove(filepath.Join(dir, "scripts", "test-timed.sh")))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "scripts", "test-snapshot.sh"), []byte("exit 99\n"), 0o600))
 	out, err = run(dir, "git", "rev-parse", "HEAD")
 	require.NoError(t, err, "%s", out)
 	head := strings.TrimSpace(string(out))

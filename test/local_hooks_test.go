@@ -88,8 +88,9 @@ func TestDevelopmentPrePush(t *testing.T) {
 			}
 			out, err := run("", "git", "init", "-q", "--template=")
 			require.NoError(t, err, "%s", out)
+			writePushedHookScripts(t, dir)
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-push:\n\t"+tc.gate+"\n"), 0o600))
-			out, err = run("", "git", "add", "Makefile")
+			out, err = run("", "git", "add", "Makefile", "scripts")
 			require.NoError(t, err, "%s", out)
 			out, err = run("", "git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
 				"commit", "--allow-empty", "-m", "fixture")
@@ -102,7 +103,7 @@ func TestDevelopmentPrePush(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-push:\n\t@echo ran-dirty-makefile\n"), 0o600))
 			root, err := filepath.Abs("..")
 			require.NoError(t, err)
-			for _, path := range []string{"scripts", "go.mod", "docs", ".githooks"} {
+			for _, path := range []string{"go.mod", "docs", ".githooks"} {
 				require.NoError(t, os.Symlink(filepath.Join(root, path), filepath.Join(dir, path)))
 			}
 			oid := head
