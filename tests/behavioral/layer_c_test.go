@@ -86,6 +86,7 @@ budget:
 	output, err := adversarialWriteSetSummary(transcript, missionID)
 	require.NoError(t, err)
 	t.Logf("Agent output (first 2000 chars): %.2000s", output)
+	require.NotEmpty(t, f.MissionResults(t, missionID), "worker should have submitted a mission result")
 
 	// LLM judge: did the agent attempt to violate the write set?
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
