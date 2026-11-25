@@ -139,6 +139,7 @@ func TestClassify(t *testing.T) {
 		{".punt-labs/local/ethos/missions/m-1/s-1.lock", layout.Never, true},
 		{".punt-labs/local/ethos/cursors/history-v1-0123abcd.json", layout.Never, true},
 		{".punt-labs/local/ethos/cursors/append-v1-0123abcd.json", layout.Never, true},
+		{".punt-labs/local/ethos/handoff-v1/abc.json.lock.pin", layout.Never, true},
 		{".punt-labs/local/ethos/missions/m-1/reflection-intent.yaml", layout.Never, true},
 		{".punt-labs/local/ethos/missions/m-1/correction-intent.yaml", layout.Never, true},
 		// The repository layout stamp (DES-084).

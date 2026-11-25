@@ -120,6 +120,7 @@ var Table = []Entry{
 	// The repository layout stamp autorepair writes (DES-084).
 	{Pattern: ".punt-labs/local/ethos/layout.yaml", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/handoff-v1/*/*.json", Class: Never},
+	{Pattern: ".punt-labs/local/ethos/handoff-v1/*.json.lock.pin", Class: Never},
 	// The storage upgrade's progress through a live file it redacts in
 	// chunks; runtime state of the local zone, never published.
 	{Pattern: ".punt-labs/local/ethos/cursors/live-*.json", Class: Never},
