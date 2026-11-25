@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Opt-in Git test hooks, selectable testing tiers, and a quarantine inventory
   with owner and expiry checks. See [TESTING.md](TESTING.md).
 
+### Fixed
+
+- Nightly write-set checks detect changed ignored files outside Ethos runtime
+  paths. Nightly failure and cancellation notifications do not replace a
+  newer Nightly alert already on the Biff wall.
+
 ## [5.2.2] - 2026-11-24
 
 ### Changed
