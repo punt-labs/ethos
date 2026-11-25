@@ -105,7 +105,7 @@ func TestDevelopmentTestPushTiming(t *testing.T) {
 
 	out, err = run(dir, "make", append(args, "ETHOS_TEST_PUSH_SNAPSHOT=1")...)
 	require.NoError(t, err, "%s", out)
-	require.Contains(t, string(out), "\ntest test-subprocess-fast\n")
+	require.Contains(t, string(out), "\ntest-push-suite test-subprocess-fast\n")
 	require.NotContains(t, string(out), "\npre-push:")
 }
 

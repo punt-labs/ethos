@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -182,6 +184,63 @@ func TestDevelopmentPrePush(t *testing.T) {
 	}
 }
 
+func TestPushRunsComplementaryPartitionsAndRemainingPackages(t *testing.T) {
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "go"), []byte(`#!/bin/sh
+if [ "$1" = list ]; then
+    module=github.com/punt-labs/ethos/v4
+    printf '%s\n' "$module/internal/mission $module" "$module/plugin/hooks $module" "$module/cmd/ethos $module" "$module/internal/hook $module" "$module/internal/resolve $module"
+elif [ "$1" = test ]; then
+    printf '%s\n' "$*"
+fi
+`), 0o700))
+	cmd := exec.CommandContext(t.Context(), "make", "test-push", "TEST_PUSH_PARALLEL=4")
+	cmd.Dir = ".."
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	var calls []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "test ") {
+			calls = append(calls, line)
+		}
+	}
+	require.ElementsMatch(t, []string{
+		"test -race -count=1 -timeout 30m -p 1 -run ^Test(CLI|Mission) ./cmd/ethos",
+		"test -race -count=1 -timeout 30m -p 1 -skip ^Test(CLI|Mission) ./cmd/ethos",
+		"test -race -count=1 -timeout 30m -p 1 -run ^TestGeneratedPostEditShell ./internal/hook",
+		"test -race -count=1 -timeout 30m -p 1 -skip ^TestGeneratedPostEditShell ./internal/hook",
+		"test -race -count=1 -timeout 30m -p 4 github.com/punt-labs/ethos/v4/internal/mission github.com/punt-labs/ethos/v4/plugin/hooks github.com/punt-labs/ethos/v4/internal/resolve",
+		"test -race -count=1 -run ^TestHooks(DormantRepositoryRunsNoProbe|FailLoudWhenRevParseFails)$ ./plugin/hooks",
+	}, calls)
+}
+
+func TestPushSignalsWorkersOnInterrupt(t *testing.T) {
+	bin := t.TempDir()
+	worker := filepath.Join(bin, "worker")
+	stopped := filepath.Join(bin, "stopped")
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "go"), []byte(`#!/bin/sh
+if [ "$1" = list ]; then
+    printf '%s\n' 'example.org/rest example.org'
+elif [ "$8" = -run ] && [ "${10}" = ./cmd/ethos ]; then
+    trap 'touch "$STOPPED"; exit' TERM
+    touch "$WORKER"
+    sleep 5
+fi
+`), 0o700))
+	cmd := exec.CommandContext(t.Context(), "bash", "scripts/test-push.sh", "1")
+	cmd.Dir = ".."
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "WORKER="+worker, "STOPPED="+stopped)
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	require.Eventually(t, func() bool { _, err := os.Stat(worker); return err == nil }, 3*time.Second, 10*time.Millisecond)
+	require.NoError(t, cmd.Process.Signal(syscall.SIGINT))
+	var exit *exec.ExitError
+	require.ErrorAs(t, cmd.Wait(), &exit)
+	require.Equal(t, 130, exit.ExitCode())
+	require.FileExists(t, stopped)
+}
+
 func TestChangedPackages(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()
@@ -189,12 +248,15 @@ func TestChangedPackages(t *testing.T) {
 	index := filepath.Join(t.TempDir(), "index")
 	env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"HOME=" + home, "GIT_CONFIG_NOSYSTEM=1", "GIT_INDEX_FILE=" + index}
-	run := func(name string, args ...string) []byte {
-		t.Helper()
+	invoke := func(name string, args ...string) ([]byte, error) {
 		cmd := exec.CommandContext(t.Context(), name, args...)
 		cmd.Dir = dir
 		cmd.Env = env
-		out, err := cmd.CombinedOutput()
+		return cmd.CombinedOutput()
+	}
+	run := func(name string, args ...string) []byte {
+		t.Helper()
+		out, err := invoke(name, args...)
 		require.NoError(t, err, "%s", out)
 		return out
 	}
@@ -210,6 +272,9 @@ if [ "$1" = list ]; then
     printf '%s\n' "fixture/changed|$root/changed|" "fixture/untouched|$root/untouched|" \
         "fixture/internal/seed|$root/internal/seed|" "fixture/test|$root/test|" \
         "fixture/direct|$root/direct|fixture/changed" "fixture/transitive|$root/transitive|fixture/direct"
+    if [ -e cmd/ethos/main.go ]; then
+        printf '%s\n' "fixture/cmd/ethos|$root/cmd/ethos|"
+    fi
 else
     if [ "${GIT_INDEX_FILE+x}" = x ]; then
         echo "go test inherited the parent Git index"
@@ -220,6 +285,10 @@ else
         [ "$(cat changed/example.go)" = "package changed" ] || exit 3
     fi
     printf 'go %s\n' "$*"
+    case "$*" in
+        *NoSuchTest*) printf 'testing: warning: no tests to run\nPASS\n' ;;
+        *-run*) printf '=== RUN   TestSlugify\n--- PASS: TestSlugify (0.00s)\nPASS\n' ;;
+    esac
 fi
 `), 0o700))
 	script, err := filepath.Abs("../scripts/test-changed.sh")
@@ -254,6 +323,34 @@ fi
 	require.Equal(t, "go test -race -count=1 ./test\n", selectPackages())
 
 	run("git", "rm", "--cached", helper)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "cmd/ethos"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cmd/ethos/main.go"), []byte("package main\n"), 0o600))
+	run("git", "add", "cmd/ethos/main.go", "changed/example.go")
+	got := selectPackages()
+	require.Contains(t, got, "go test -race -count=1 -v -run ^Test(Slugify|VersionCommand|VersionCommandJSON)$ ./cmd/ethos\n")
+	require.Contains(t, got, "go test -race -count=1 ./changed ./direct ./transitive\n")
+
+	smokeScript := filepath.Join(t.TempDir(), "test-changed.sh")
+	source, err := os.ReadFile(script)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(smokeScript, source, 0o600))
+	smokeFile := filepath.Join(filepath.Dir(smokeScript), "test-smoke.tsv")
+	t.Run("CRLF smoke row", func(t *testing.T) {
+		require.NoError(t, os.WriteFile(smokeFile, []byte("./cmd/ethos\tSlugify|VersionCommand\r\n"), 0o600))
+		require.Contains(t, string(run("bash", snapshot, "staged", "bash", smokeScript)), "-run ^Test(Slugify|VersionCommand)$ ./cmd/ethos\n")
+	})
+	t.Run("final smoke row without a newline", func(t *testing.T) {
+		require.NoError(t, os.WriteFile(smokeFile, []byte("./internal/hook\tBuildPersonaBlock_Full\n./cmd/ethos\tSlugify"), 0o600))
+		require.Contains(t, string(run("bash", snapshot, "staged", "bash", smokeScript)), "-run ^Test(Slugify)$ ./cmd/ethos\n")
+	})
+	t.Run("empty smoke run", func(t *testing.T) {
+		require.NoError(t, os.WriteFile(smokeFile, []byte("./cmd/ethos\tNoSuchTest\n"), 0o600))
+		out, err := invoke("bash", snapshot, "staged", "bash", smokeScript)
+		require.Error(t, err, "%s", out)
+		require.Contains(t, string(out), "No smoke tests matched for ./cmd/ethos")
+	})
+
+	run("git", "rm", "--cached", "cmd/ethos/main.go", "changed/example.go")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.test/fixture\n"), 0o600))
 	run("git", "add", "go.mod")
 	require.Equal(t, "go test -race -count=1 ./changed ./untouched ./internal/seed ./test ./direct ./transitive\n", selectPackages())
@@ -301,7 +398,7 @@ func TestChangedPackagesDirectDoesNotScanSecrets(t *testing.T) {
 	for _, subdir := range []string{"scripts", ".githooks", "docs"} {
 		require.NoError(t, os.Mkdir(filepath.Join(dir, subdir), 0o700))
 	}
-	for _, path := range []string{"scripts/test-snapshot.sh", "scripts/test-changed.sh", "scripts/test-timed.sh", ".githooks/pre-commit", "Makefile"} {
+	for _, path := range []string{"scripts/test-snapshot.sh", "scripts/test-changed.sh", "scripts/test-smoke.tsv", "scripts/test-timed.sh", ".githooks/pre-commit", "Makefile"} {
 		data, err := os.ReadFile(filepath.Join("..", path))
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(filepath.Join(dir, path), data, 0o700))

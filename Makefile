@@ -60,7 +60,7 @@ lint: ## Lint (golangci-lint + windows vet + shellcheck + ruff + mypy)
 	@test -x $(GOLANGCI_LINT) || { echo "golangci-lint not found at $(GOLANGCI_LINT) — run 'make tools' to install $(GOLANGCI_LINT_VERSION)"; exit 1; }
 	$(GOLANGCI_LINT) run ./...
 	GOOS=windows go vet ./... # the windows build, tests included: a unix-only helper or test file must carry its build tag
-	shellcheck plugin/hooks/*.sh install.sh .githooks/* scripts/test-changed.sh scripts/test-timed.sh scripts/test-snapshot.sh scripts/smoke-release.sh
+	shellcheck plugin/hooks/*.sh install.sh .githooks/* scripts/test-changed.sh scripts/test-push.sh scripts/test-shard.sh scripts/test-timed.sh scripts/test-snapshot.sh scripts/smoke-release.sh
 	cd tests/e2e && uv run ruff check .
 	cd tests/e2e && uv run ruff format --check .
 	cd tests/e2e && uv run mypy src/ tests/
@@ -110,16 +110,17 @@ clean-latex: ## Remove LaTeX build intermediates (keeps .pdf/.tex/.bib)
 # Several packages run real git and subprocesses against wall-clock deadlines.
 # Running every package at once (go test's default -p is GOMAXPROCS) on a
 # developer machine starves those deadlines and times out the long packages
-# under -race; cmd/ethos alone takes minutes. CI's job budget is 30 minutes, and
-# the default per-package timeout is 10. Raise TEST_PARALLEL on a quiet host.
+# under -race. Raise TEST_PARALLEL on a quiet host.
 TEST_PARALLEL ?= 2
+TEST_PUSH_PARALLEL ?= 4
+TEST_PACKAGES ?= ./...
 GO_COVERAGE_TEST = go test -race -count=1 -timeout 30m -p $(TEST_PARALLEL)
 package_coverage = $(GO_COVERAGE_TEST) -coverprofile="$(1)" ./...
 
 test: ## Run tests with race detection and write coverage to coverage.out
-	$(call package_coverage,coverage.out)
+	$(GO_COVERAGE_TEST) -coverprofile=coverage.out $(TEST_PACKAGES)
 
-.PHONY: hooks test-changed test-push test-subprocess-fast
+.PHONY: hooks test-changed test-push test-push-suite test-subprocess-fast
 hooks: ## Opt in to the repository's development Git hooks
 	python3 scripts/install-dev-hooks.py
 
@@ -133,15 +134,18 @@ secret-scan-staged: ## Scan staged Git changes for secrets
 secret-scan-history: ## Scan Git history for secrets (defaults to all commits reachable from HEAD)
 	$(GITLEAKS) git --log-opts="--diff-merges=first-parent $(GITLEAKS_LOG_OPTS)" --redact=100 --no-banner .
 
-test-changed: ## Run default Go tests in packages affected by staged paths
+test-changed: ## Run Go checks in packages affected by staged paths
 	@if [ -n "$$ETHOS_STAGED_PATHS" ]; then \
 		bash scripts/test-changed.sh; \
 	else \
-		env -u GOTOOLCHAIN bash scripts/test-snapshot.sh staged $(MAKE) test-changed; \
+		bash scripts/test-timed.sh pre-commit 30 env -u GOTOOLCHAIN bash scripts/test-snapshot.sh staged $(MAKE) test-changed; \
 	fi
 
 test-push: ## Run the full default suite and a fast boundary check before pushing
-	$(if $(ETHOS_TEST_PUSH_SNAPSHOT),,bash scripts/test-timed.sh pre-push 180) $(MAKE) test test-subprocess-fast
+	GORACE="$$GORACE atexit_sleep_ms=0" $(if $(ETHOS_TEST_PUSH_SNAPSHOT),,bash scripts/test-timed.sh pre-push 180) $(MAKE) test-push-suite test-subprocess-fast
+
+test-push-suite:
+	bash scripts/test-push.sh $(TEST_PUSH_PARALLEL)
 
 test-subprocess-fast: ## Exercise dormant and unresolvable Git hook entry points
 	go test -race -count=1 -run '^TestHooks(DormantRepositoryRunsNoProbe|FailLoudWhenRevParseFails)$$' ./plugin/hooks
