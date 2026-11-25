@@ -57,26 +57,35 @@ elif ! "$SCRIPT_DIR/legacy-corpus.sh" --versions "$TAG" --out "$WORKDIR/out" --w
 else
   want=$TESTDATA/corpus/$TAG
   got=$WORKDIR/out/corpus/$TAG
-  ( cd "$want" && find . -type f | LC_ALL=C sort | normalize ) >"$WORKDIR/want.list"
-  ( cd "$got" && find . -type f | LC_ALL=C sort | normalize ) >"$WORKDIR/got.list"
+  for side in want got; do
+    ( cd "${!side}" && find . -type f ) >"$WORKDIR/$side.paths"
+    paste <(normalize <"$WORKDIR/$side.paths") "$WORKDIR/$side.paths" |
+      LC_ALL=C sort -t $'\t' -k1,1 >"$WORKDIR/$side.map"
+    cut -f1 "$WORKDIR/$side.map" >"$WORKDIR/$side.list"
+  done
   if diff -u "$WORKDIR/want.list" "$WORKDIR/got.list" >"$WORKDIR/list.diff"; then
     pass "$TAG: regenerated file list matches the committed corpus ($(wc -l <"$WORKDIR/want.list" | tr -d ' ') files)"
+    if [ -n "$(uniq -d "$WORKDIR/want.list")" ]; then
+      fail "$TAG: multiple paths share a normalized filename"
+    else
+      differing=""
+      while IFS=$'\t' read -r name want_path got_path; do
+        # The bundle and index carry object ids and stat data; compare the
+        # tracked path set beside them instead.
+        case $name in ./git/repo.bundle|./git/index|./git/HEAD) continue ;; esac
+        if ! cmp -s <(normalize <"$want/$want_path") <(normalize <"$got/$got_path"); then
+          differing="$differing $name"
+        fi
+      done < <(paste "$WORKDIR/want.map" <(cut -f2- "$WORKDIR/got.map"))
+      if [ -z "$differing" ]; then
+        pass "$TAG: contents match after normalizing times, dates, hashes and ids"
+      else
+        fail "$TAG: contents differ beyond timestamps and ids:$differing"
+      fi
+    fi
   else
     cat "$WORKDIR/list.diff" >&2
     fail "$TAG: regenerated file list differs from the committed corpus"
-  fi
-  differing=""
-  while IFS= read -r f; do
-    [ -f "$got/$f" ] || continue
-    # The bundle and index are binary and carry object ids and stat data; the
-    # tracked path set beside them is what is compared.
-    case $f in ./git/repo.bundle|./git/index|./git/HEAD) continue ;; esac
-    if ! cmp -s <(normalize <"$want/$f") <(normalize <"$got/$f"); then differing="$differing $f"; fi
-  done < <(cd "$want" && find . -type f | LC_ALL=C sort)
-  if [ -z "$differing" ]; then
-    pass "$TAG: contents match after normalizing times, dates, hashes and ids"
-  else
-    fail "$TAG: contents differ beyond timestamps and ids:$differing"
   fi
 fi
 
