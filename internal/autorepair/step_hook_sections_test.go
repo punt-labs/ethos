@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -66,7 +67,7 @@ func TestHookSectionsRefreshed(t *testing.T) {
 func buildEthos(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	cmd := exec.Command("go", "build", "-o", filepath.Join(dir, "ethos"), "../../cmd/ethos")
+	cmd := exec.Command("go", testhelpers.CoverBuild("-o", filepath.Join(dir, "ethos"), "../../cmd/ethos")...)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "building ethos: %s", out)
 	return dir
@@ -93,6 +94,7 @@ func TestHookSectionsRefreshedSectionCommits(t *testing.T) {
 		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@x", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@x",
 		"MISSION_ID=m-2026-11-04-043", "DELEGATION_ID=d-2026-11-04-043")
+	gitEnv = testhelpers.CoverEnv(gitEnv)
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0o644))
 	for _, args := range [][]string{{"add", "f.txt"}, {"-c", "commit.gpgsign=false", "commit", "-q", "-m", "refreshed"}} {
 		cmd := exec.Command("git", args...)

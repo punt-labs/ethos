@@ -136,10 +136,19 @@ See [TESTING.md](../TESTING.md) for local hooks, tier selectors, budgets,
 quarantine, and the testing conformance record.
 
 ```bash
-make check                             # All gates: lint + docs + test + validate-content + fuzz-check
+make check                             # All gates, including the package coverage ratchet
 ```
 
-Expands to `make lint docs test validate-content fuzz-check check-opencode check-storage`: `go vet`, `staticcheck`, `shellcheck plugin/hooks/*.sh install.sh`, `markdownlint`, `go test -race -count=1 ./...`, `go run ./cmd/validate-content`, plus `fuzz` type-checking of every Z-specification `.tex` under `docs/` (content-detected; loud skip locally when `fuzz` is absent, hard failure in CI), offline native OpenCode configuration tests, and the real CLI/MCP/Git-hook storage acceptance gate. The storage gate requires every case to execute and records binary/source fingerprints; it is final-placement evidence, not proof of transient placement or crash durability. Live workstation checks are separate: `make doctor-opencode` and `make smoke-opencode`; product `make doctor` is unchanged.
+Runs lint, Markdown checks, matched race-enabled package tests and their
+statement coverage comparison, content validation, quarantine checks, and
+`fuzz` type-checking of Z specifications under `docs/` (loud skip locally
+when `fuzz` is absent, hard failure in CI). It also runs the offline native
+OpenCode configuration checks, Claude plugin-cache checks, and real
+CLI/MCP/Git-hook storage acceptance. The storage gate requires every case
+to execute and records binary/source fingerprints; it is final-placement
+evidence, not proof of transient placement or crash durability. Live
+workstation checks are separate: `make doctor-opencode` and
+`make smoke-opencode`; product `make doctor` is unchanged.
 
 `make check-installed` installs a native instrumented binary with
 `install.sh --no-plugin` outside the checkout and runs the storage suite against
@@ -188,22 +197,36 @@ Cancelling an upstream main run is separate from forcing a failure. The
 `Nightly Cancellation` workflow sends and verifies the cancellation alert
 after Nightly ends, outside the cancelled run.
 
-### Coverage baseline
+### Statement coverage
 
-`make coverage-check` compares per-package statement coverage in `coverage.out` (written by `make test`) with `coverage-baseline.txt`. A package may drop at most 0.1 point; `overall-target` is the overall floor.
+`make test` writes Go package statement coverage to `coverage.out`.
+`make coverage-check` measures the checkout and a detached worktree at the
+exact merge base with `COVERAGE_BASE` (default `origin/main`) using the same
+Go toolchain, race flags and package selection. PR CI uses the event's head
+and base SHAs; a push to main compares with `HEAD^`.
 
-The baseline records the GOOS it was generated on in one `# os:` line. Statement counts differ per OS, so the check fails outright when that line differs from the host's GOOS. CI runs linux, so the committed baseline must be a linux one. A package whose tests cannot run on the generating host is listed as `# unmeasured: <pkg> (reason)` and kept out of the gate.
+Package coverage may drop by at most 0.1 percentage point; overall coverage
+must not drop. The independent 81.0% `internal/autorepair` floor remains.
+Missing, empty, malformed, or incompatible profiles fail the gate. CI uploads
+the head package profile as `coverage-out` on success (seven-day retention).
 
-To regenerate the linux baseline from a CI run on the branch:
+Separately exercised binaries have their own reports, not inputs to the
+ratchet. The harness builds them with `go build -cover`, passes a dedicated
+`GOCOVERDIR`, and converts the counters with `go tool covdata textfmt`.
 
-```bash
-make coverage-baseline-from-ci           # latest successful test.yml run on the current branch
-make coverage-baseline-from-ci RUN=<id>  # a specific run
-```
+| Command | Statement coverage reported |
+| --- | --- |
+| `make coverage-subprocess` | CLI, content validation, Git hooks, and stdio MCP child processes from the selected Go suites, plus a combined report that counts each statement once across the selected packages and their children. Historical compatibility binaries and shell stand-ins are not instrumented. |
+| `make check-installed` | Installed Ethos during storage acceptance; separate installed-binary artifact. |
+| `make test-e2e-smoke`, `make test-e2e` | Ethos hooks in the wire scenarios that launch Ethos, not Claude Code or the provider proxy. |
+| `make coverage-release-companion` | A same-source, native instrumented build run through the installer and release smoke. The exact staged and published bytes are verified independently and are not instrumented. |
 
-The target downloads that run's `coverage-out` artifact, then runs `-write -os linux`. It refuses when the branch has no successful run and `RUN` is not given: the artifact upload runs even when the Test step fails, so an unqualified download could take a partial profile from any branch.
-
-The CI Test job uploads `coverage.out` as the `coverage-out` artifact (7-day retention). `-write` prints a `WARN` for any package that has profile data but a stale `# unmeasured:` comment; delete that comment and rerun to baseline the package.
+The regular package suite still runs the two installed-hook syscall observer
+tests without process instrumentation because those tests assert which files
+the binary may write. Except for installed storage acceptance, these process
+reports are written under `.tmp/statement-coverage/` and uploaded by their
+corresponding CI jobs.
+None of these reports measures branch coverage.
 
 ## Architecture
 

@@ -37,6 +37,7 @@ cmd/ethos TestCLIMissionMutationWarnings
 cmd/ethos TestCLIMissionMutationWarningsRefused
 cmd/ethos TestCLIMissionRecoveryWarnings
 cmd/ethos TestCLIMissionReflectionArchiveIdentity
+cmd/ethos TestCLIProcessStatementCoverage
 cmd/ethos TestCLI_ADROutsideRepositoryRemainsGlobal
 cmd/ethos TestCLI_ADRRejectsMalformedRepositoryMetadata
 cmd/ethos TestCLI_ADRRepositoryStorage
