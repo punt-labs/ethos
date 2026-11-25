@@ -28,6 +28,15 @@ func publicationFixture(t *testing.T) (layout.Policy, string, string) {
 	return p, path, filepath.Join(root, ".git", "index")
 }
 
+func stageFixturePublication(t *testing.T, p layout.Policy, path string) error {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return StagePublication(p, []PublicationCandidate{NewPublicationCandidate(path, body)})
+}
+
 func TestRepositoryPublicationFailurePreservesActualIndex(t *testing.T) {
 	p, path, index := publicationFixture(t)
 	before, err := os.ReadFile(index)
@@ -37,7 +46,7 @@ func TestRepositoryPublicationFailurePreservesActualIndex(t *testing.T) {
 	if err := os.WriteFile(index+".lock", []byte("foreign lock"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := StagePublication(p, []string{path}); err == nil {
+	if err := stageFixturePublication(t, p, path); err == nil {
 		t.Fatal("foreign index lock ignored")
 	}
 	after, err := os.ReadFile(index)
@@ -55,7 +64,7 @@ func TestRepositoryPublicationFailurePreservesActualIndex(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".punt-labs/ethos/sessions/\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := StagePublication(p, []string{path}); err == nil {
+	if err := stageFixturePublication(t, p, path); err == nil {
 		t.Fatal("ignored eligible publication silently skipped")
 	}
 	after, err = os.ReadFile(index)
@@ -82,7 +91,7 @@ func TestRepositoryPublicationHonorsAlternateCommittingIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("GIT_INDEX_FILE", alt)
-	if err := StagePublication(p, []string{path}); err != nil {
+	if err := stageFixturePublication(t, p, path); err != nil {
 		t.Fatal(err)
 	}
 	after, err := os.ReadFile(index)

@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/layout"
@@ -18,6 +17,8 @@ import (
 const (
 	appendAnchorBytes = 4 << 10
 	appendSuffixBytes = 64 << 10
+	appendFloorBytes  = 8 << 10
+	appendArchiveDirs = 8
 )
 
 var ErrAppendDurabilityUnconfirmed = errors.New("audit entry retained; directory durability unconfirmed")
@@ -29,6 +30,14 @@ type appendFloor struct {
 	End     int64
 	Floor   int64
 	Anchor  [sha256.Size]byte
+	Archive []appendDirStamp
+}
+
+type appendDirStamp struct {
+	Name string
+	Dev  uint64
+	Ino  uint64
+	Time int64
 }
 
 func appendFloorPath(p layout.Policy, s Stream) string {
@@ -47,11 +56,13 @@ func AppendSession(p layout.Policy, s Stream, now time.Time, line func(int64) ([
 	if err := layout.EnsureLocalDir(p, filepath.Dir(path)); err != nil {
 		return err
 	}
-	canCheckpoint := emptySessionDirs(p)
+	canCheckpoint := emptyPublishedSessionDirs(p)
 	if canCheckpoint {
 		if cp, ok := readAppendFloor(p, s); ok {
-			if used, err := appendFromFloor(p, s, cp, now, line); used {
-				return err
+			if sameArchiveDirs(p, cp.Archive) {
+				if used, err := appendFromFloor(p, s, cp, now, line); used {
+					return err
+				}
 			}
 		}
 	}
@@ -68,11 +79,30 @@ func AppendSession(p layout.Policy, s Stream, now time.Time, line func(int64) ([
 	if err != nil {
 		return err
 	}
-	return finishSessionAppend(p, s, f, ts, canCheckpoint)
+	var archive []appendDirStamp
+	if canCheckpoint {
+		archive = captureArchiveDirs(p, s)
+	}
+	return finishSessionAppend(p, s, f, ts, archive)
 }
 
-func emptySessionDirs(p layout.Policy) bool {
-	for _, root := range []string{p.RecordRoot(), p.CheckoutRecordRoot(), ArchiveRoot(p)} {
+// InvalidateAppendFloor must finish before a repository history mutation.
+// The caller holds the session stream lock shared by all linked checkouts.
+func InvalidateAppendFloor(p layout.Policy, s Stream) error {
+	if err := s.Validate(); err != nil {
+		return err
+	}
+	if s.Namespace != SessionNS {
+		return nil
+	}
+	return ReplaceLocalFile(p, appendFloorPath(p, s), []byte("invalid\n"))
+}
+
+func emptyPublishedSessionDirs(p layout.Policy) bool {
+	for i, root := range []string{p.RecordRoot(), p.CheckoutRecordRoot()} {
+		if i == 1 && root == p.RecordRoot() {
+			continue
+		}
 		dir := filepath.Join(root, "sessions")
 		present, err := auditReadDirPresent(dir)
 		if err != nil {
@@ -94,13 +124,73 @@ func emptySessionDirs(p layout.Policy) bool {
 	return true
 }
 
+// Directory stamps detect inventory changes, including additions by older
+// writers. They are not checks of historical chunk contents.
+func captureArchiveDirs(p layout.Policy, s Stream) []appendDirStamp {
+	base := filepath.Join(ArchiveRoot(p), "sessions")
+	stamp, ok := statAppendDir(base, "")
+	if !ok {
+		return nil
+	}
+	stamps := []appendDirStamp{stamp}
+	if stamp.Ino == 0 {
+		return stamps
+	}
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return nil
+	}
+	for _, entry := range entries {
+		if !SessionDirMatches(entry.Name(), s.Session) {
+			continue
+		}
+		if len(stamps) == appendArchiveDirs+1 {
+			return nil
+		}
+		stamp, ok := statAppendDir(base, entry.Name())
+		if !ok {
+			return nil
+		}
+		stamps = append(stamps, stamp)
+	}
+	return stamps
+}
+
+func sameArchiveDirs(p layout.Policy, stamps []appendDirStamp) bool {
+	base := filepath.Join(ArchiveRoot(p), "sessions")
+	for _, old := range stamps {
+		stamp, ok := statAppendDir(base, old.Name)
+		if !ok || stamp != old {
+			return false
+		}
+	}
+	return true
+}
+
+func statAppendDir(base, name string) (appendDirStamp, bool) {
+	path := filepath.Join(base, name)
+	present, err := auditReadDirPresent(path)
+	if err != nil || !present {
+		return appendDirStamp{Name: name}, err == nil
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return appendDirStamp{}, false
+	}
+	dev, ino, ok := appendFileIdentity(info)
+	if !ok || !info.IsDir() {
+		return appendDirStamp{}, false
+	}
+	return appendDirStamp{Name: name, Dev: dev, Ino: ino, Time: info.ModTime().UnixNano()}, true
+}
+
 func readAppendFloor(p layout.Policy, s Stream) (appendFloor, bool) {
 	path := appendFloorPath(p, s)
 	if present, err := auditReadDirPresent(filepath.Dir(path)); err != nil || !present {
 		return appendFloor{}, false
 	}
 	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > 1024 {
+	if err != nil || !info.Mode().IsRegular() || info.Size() > appendFloorBytes {
 		return appendFloor{}, false
 	}
 	f, err := os.Open(path)
@@ -108,15 +198,21 @@ func readAppendFloor(p layout.Policy, s Stream) (appendFloor, bool) {
 		return appendFloor{}, false
 	}
 	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, 1025))
-	if err != nil || len(raw) > 1024 {
+	raw, err := io.ReadAll(io.LimitReader(f, appendFloorBytes+1))
+	if err != nil || len(raw) > appendFloorBytes {
 		return appendFloor{}, false
 	}
 	sum, body, ok := bytes.Cut(raw, []byte("\n"))
 	var cp appendFloor
 	if !ok || string(sum) != digest(body) || json.Unmarshal(body, &cp) != nil ||
-		cp.Version != 1 || cp.End <= 0 || cp.Floor <= 0 {
+		cp.Version != 1 || cp.End <= 0 || cp.Floor <= 0 || len(cp.Archive) == 0 ||
+		len(cp.Archive) > appendArchiveDirs+1 || cp.Archive[0].Name != "" {
 		return appendFloor{}, false
+	}
+	for _, stamp := range cp.Archive[1:] {
+		if !SessionDirMatches(stamp.Name, s.Session) {
+			return appendFloor{}, false
+		}
 	}
 	return cp, true
 }
@@ -136,8 +232,8 @@ func appendFromFloor(p layout.Policy, s Stream, cp appendFloor, now time.Time, l
 	if err != nil {
 		return false, nil
 	}
-	id, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || uint64(id.Dev) != cp.Device || uint64(id.Ino) != cp.Inode {
+	dev, ino, ok := appendFileIdentity(info)
+	if !ok || dev != cp.Device || ino != cp.Inode {
 		return false, nil
 	}
 	end, floor, ok := checkAppendTail(f, info.Size(), cp)
@@ -153,7 +249,7 @@ func appendFromFloor(p layout.Policy, s Stream, cp appendFloor, now time.Time, l
 	if err != nil {
 		return true, err
 	}
-	return true, finishSessionAppend(p, s, f, ts, true)
+	return true, finishSessionAppend(p, s, f, ts, cp.Archive)
 }
 
 func checkAppendTail(f io.ReaderAt, size int64, cp appendFloor) (int64, int64, bool) {
@@ -188,17 +284,17 @@ func checkAppendTail(f io.ReaderAt, size int64, cp appendFloor) (int64, int64, b
 	}
 }
 
-func finishSessionAppend(p layout.Policy, s Stream, f *os.File, ts int64, checkpoint bool) error {
+func finishSessionAppend(p layout.Policy, s Stream, f *os.File, ts int64, archive []appendDirStamp) error {
 	if err := ConfirmStreamDurability(p, s); err != nil {
 		return fmt.Errorf("%w: %v", ErrAppendDurabilityUnconfirmed, err)
 	}
-	if checkpoint {
-		saveAppendFloor(p, s, f, ts)
+	if len(archive) != 0 {
+		saveAppendFloor(p, s, f, ts, archive)
 	}
 	return nil
 }
 
-func saveAppendFloor(p layout.Policy, s Stream, f *os.File, ts int64) {
+func saveAppendFloor(p layout.Policy, s Stream, f *os.File, ts int64, archive []appendDirStamp) {
 	size, err := f.Seek(0, io.SeekCurrent)
 	if err != nil || size <= 0 {
 		return
@@ -207,7 +303,7 @@ func saveAppendFloor(p layout.Policy, s Stream, f *os.File, ts int64) {
 	if err != nil || info.Size() != size {
 		return
 	}
-	id, ok := info.Sys().(*syscall.Stat_t)
+	dev, ino, ok := appendFileIdentity(info)
 	if !ok {
 		return
 	}
@@ -215,7 +311,7 @@ func saveAppendFloor(p layout.Policy, s Stream, f *os.File, ts int64) {
 	if _, err := f.ReadAt(anchor, size-int64(len(anchor))); err != nil || anchor[len(anchor)-1] != '\n' {
 		return
 	}
-	cp := appendFloor{Version: 1, Device: uint64(id.Dev), Inode: uint64(id.Ino), End: size, Floor: ts, Anchor: sha256.Sum256(anchor)}
+	cp := appendFloor{Version: 1, Device: dev, Inode: ino, End: size, Floor: ts, Anchor: sha256.Sum256(anchor), Archive: archive}
 	body, err := json.Marshal(cp)
 	if err == nil {
 		// The checkpoint is derived; a durable append does not fail if this write does.

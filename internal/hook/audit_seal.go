@@ -24,6 +24,8 @@ type SealOptions struct {
 	StartDate func(sessionID string) string
 
 	checkpointHistory bool
+	beforePublication func()
+	beforeStage       func()
 }
 
 // SealResult separates local archive completion from publication completion.

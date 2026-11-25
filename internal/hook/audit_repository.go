@@ -140,11 +140,14 @@ func sealPolicyStreamsContext(ctx context.Context, p layout.Policy, streams []au
 	if opts.DryRun || p.RecordMode() == layout.RecordBlame {
 		return res, nil
 	}
-	var publish []string
+	if opts.beforePublication != nil {
+		opts.beforePublication()
+	}
+	var publish []audit.PublicationCandidate
 	var publicationErrors []error
 	for _, entry := range archives {
 		err := withSealStreamLock(p, entry.stream, bounded, func() error {
-			paths, err := prepareStreamPublication(p, entry.stream, entry.dir)
+			paths, err := prepareStreamPublication(ctx, p, entry.stream, entry.dir)
 			publish = append(publish, paths...)
 			return err
 		})
@@ -154,6 +157,12 @@ func sealPolicyStreamsContext(ctx context.Context, p layout.Policy, streams []au
 	}
 	if len(publicationErrors) > 0 {
 		return res, fmt.Errorf("full audit publication incomplete; local archive retained: %w", errors.Join(publicationErrors...))
+	}
+	if opts.beforeStage != nil {
+		opts.beforeStage()
+	}
+	if err := ctx.Err(); err != nil {
+		return res, fmt.Errorf("full audit publication incomplete; local archive retained: %w", err)
 	}
 	if err := audit.StagePublication(p, publish); err != nil {
 		return res, fmt.Errorf("full audit publication incomplete; local archive retained: %w", err)
@@ -297,6 +306,9 @@ func sealPolicyStream(ctx context.Context, p layout.Policy, s audit.Stream, now 
 		if s.Namespace == audit.MissionNS {
 			name = "log.jsonl"
 		}
+		if err := audit.InvalidateAppendFloor(p, s); err != nil {
+			return len(pending), "", err
+		}
 		if err := audit.ReplaceLocalFile(p, filepath.Join(dir, name), auditLinesBytes(data.Legacy)); err != nil {
 			return len(pending), "", err
 		}
@@ -304,28 +316,21 @@ func sealPolicyStream(ctx context.Context, p layout.Policy, s audit.Stream, now 
 	return len(pending), dir, nil
 }
 
-func prepareStreamPublication(p layout.Policy, s audit.Stream, dir string) ([]string, error) {
-	// Publish from immutable archive chunks, never by copying the live file
-	// or the whole local directory. This also retries prior full publication.
-	session := ""
-	if s.Namespace == audit.MissionNS {
-		session = s.Session
-	}
+func prepareStreamPublication(ctx context.Context, p layout.Policy, s audit.Stream, dir string) ([]audit.PublicationCandidate, error) {
 	guard := LiveLineGuard(p, s.Namespace)
-	scan, err := audit.ScanSealedDir(dir, s.Namespace, session)
+	chunks, err := audit.ReadStreamForPublication(ctx, p, s, dir)
 	if err != nil {
 		return nil, err
 	}
-	var paths []string
-	for _, c := range audit.SortChunks(scan.Chunks) {
-		lines, err := audit.ReadChunkVerified(filepath.Join(dir, c.ChunkFile()), c.Last)
-		if err != nil {
-			return nil, err
-		}
+	var candidates []audit.PublicationCandidate
+	for _, lines := range chunks {
 		var eligible []audit.Line
 		for _, l := range lines {
 			if !audit.Eligible(s, l) {
 				continue
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
 			}
 			out, _, _ := guard(l.Raw)
 			// A changed payload cannot keep evidence for its old digest. Do
@@ -343,17 +348,23 @@ func prepareStreamPublication(p layout.Policy, s audit.Stream, dir string) ([]st
 		if len(eligible) == 0 {
 			continue
 		}
+		if len(candidates) == 0 {
+			if err := audit.InvalidateAppendFloor(p, s); err != nil {
+				return nil, err
+			}
+		}
 		rel, err := filepath.Rel(audit.ArchiveRoot(p), dir)
 		if err != nil {
 			return nil, err
 		}
 		path := filepath.Join(p.CheckoutRecordRoot(), rel, policyChunkName(s, eligible[0].TS, eligible[len(eligible)-1].TS))
-		if err := audit.WriteLocalAtomic(p, path, auditLinesBytes(eligible)); err != nil {
+		data := auditLinesBytes(eligible)
+		if err := audit.WriteLocalAtomic(p, path, data); err != nil {
 			return nil, err
 		}
-		paths = append(paths, path)
+		candidates = append(candidates, audit.NewPublicationCandidate(path, data))
 	}
-	return paths, nil
+	return candidates, nil
 }
 
 func writePendingPolicyChunk(p layout.Policy, s audit.Stream, dir string, pending []audit.Line, opts SealOptions) (string, error) {
@@ -362,6 +373,9 @@ func writePendingPolicyChunk(p layout.Policy, s audit.Stream, dir string, pendin
 	}
 	name := policyChunkName(s, pending[0].TS, pending[len(pending)-1].TS)
 	path := filepath.Join(dir, name)
+	if err := audit.InvalidateAppendFloor(p, s); err != nil {
+		return "", err
+	}
 	if err := audit.WriteLocalAtomic(p, path, auditLinesBytes(pending)); err != nil {
 		return "", err
 	}

@@ -368,6 +368,9 @@ func migrateAuditSession(ctx context.Context, p layout.Policy, checkout, id, fil
 			res.noop = true
 			return nil
 		}
+		if err := audit.InvalidateAppendFloor(p, s); err != nil {
+			return err
+		}
 		if err := audit.ReplaceLocalFile(p, path, body); err != nil {
 			return err
 		}

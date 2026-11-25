@@ -57,7 +57,7 @@ func TestPublicationIndexPathBytes(t *testing.T) {
 					require.NoError(t, err)
 					require.Equal(t, selected+"\n", string(out), "Git reports a raw path plus one LF, not a quoted/trimmed path")
 					t.Logf("selected=%q Git output=%q", selected, out)
-					err = StagePublication(p, []string{publication})
+					err = stageFixturePublication(t, p, publication)
 					if state != "valid" {
 						assert.ErrorContains(t, err, "is empty or corrupt")
 						if err != nil {

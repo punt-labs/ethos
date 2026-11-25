@@ -80,6 +80,9 @@ func salvageBytes(p layout.Policy, s Stream, in salvageInput, guard LineGuard) (
 		return res, err
 	}
 	res.Conflicts, res.Salvaged, res.Lost = r.conflicts, len(r.keep), r.lost
+	if err := InvalidateAppendFloor(p, s); err != nil {
+		return res, err
+	}
 
 	m := Marker{Chunk: cn.Stem(), Reason: "chunk bytes were damaged; surviving lines were recovered", VerifiedLast: r.verifiedLast}
 	// A retired file (<stem>.jsonl.corrupt) is covered by nothing once its
@@ -222,6 +225,9 @@ func recoverUnnamedHeld(p layout.Policy, s Stream, held string, data []byte) (Sa
 		session = s.Session
 	}
 	rec := filepath.Join(dir, HeldLossFile(s.Namespace, session, sum))
+	if err := InvalidateAppendFloor(p, s); err != nil {
+		return res, err
+	}
 	if err := WriteLocalAtomic(p, rec, append(body, '\n')); err != nil {
 		return res, fmt.Errorf("writing held-loss record for %s: %w", held, err)
 	}

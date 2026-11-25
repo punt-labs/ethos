@@ -138,6 +138,9 @@ func QuarantineLocal(p layout.Policy, s Stream, source, dir string, cn ChunkName
 	if !damaged && markerErr == nil && prior.RetiredSHA256 == rec.SHA256 {
 		return prior, syncAuditParents(p, markerPath)
 	}
+	if err := InvalidateAppendFloor(p, s); err != nil {
+		return Marker{}, err
+	}
 	key := fmt.Sprintf("%x", sha256.Sum256([]byte(s.Key())))
 	rawPath := filepath.Join(p.LocalRoot(), "quarantine", key, rec.SHA256+".corrupt")
 	if damaged {

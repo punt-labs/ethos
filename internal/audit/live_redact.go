@@ -278,6 +278,9 @@ func redactLive(ctx context.Context, p layout.Policy, s Stream, guard LineGuard,
 	}
 	out := b
 	if res.Changed() {
+		if err := InvalidateAppendFloor(p, s); err != nil {
+			return LiveRepair{}, err
+		}
 		out = rewriteLive(b, replace)
 		if err := ReplaceLocalFile(p, path, out); err != nil {
 			return LiveRepair{}, fmt.Errorf("replacing live audit %s with its redacted lines: %w", path, err)
