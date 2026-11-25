@@ -45,7 +45,15 @@ func TestVerifierEnvironmentComposition(t *testing.T) {
 	outside := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(outside, "existing.go"), nil, 0o600))
 	require.NoError(t, os.Mkdir(filepath.Join(repo, "write-dir"), 0o700))
+	require.NoError(t, os.Mkdir(filepath.Join(repo, "write-dir", "versioned"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "write-dir", "versioned", "existing.go"), nil, 0o600))
+	require.NoError(t, os.Symlink("versioned", filepath.Join(repo, "write-dir", "current")))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "src", "unlisted.go"), nil, 0o600))
+	require.NoError(t, os.Symlink(filepath.Join(repo, "src"), filepath.Join(repo, "write-dir", "other")))
 	require.NoError(t, os.Symlink(outside, filepath.Join(repo, "write-dir", "escape")))
+	require.NoError(t, os.Mkdir(filepath.Join(repo, "extract-one", "versioned"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "extract-one", "versioned", "existing.go"), nil, 0o600))
+	require.NoError(t, os.Symlink("versioned", filepath.Join(repo, "extract-one", "current")))
 	require.NoError(t, os.Symlink(outside, filepath.Join(repo, "extract-link")))
 	require.NoError(t, os.Symlink(filepath.Join(outside, "missing.go"), filepath.Join(repo, "extract-one", "dangling.go")))
 	require.NoError(t, os.Symlink(filepath.Join(repo, "src"), filepath.Join(repo, "undeclared")))
@@ -82,6 +90,11 @@ func TestVerifierEnvironmentComposition(t *testing.T) {
 		{"write through checkout alias", "Write", filepath.Join(alias, "src", "first.go"), ""},
 		{"create through checkout alias with missing parents", "Write", filepath.Join(alias, "extract-one", "nested", "new.go"), ""},
 		{"deny existing extract file through alias", "Write", filepath.Join(alias, "extract-one", "existing.go"), "deny"},
+		{"edit through in-scope symlink", "Edit", filepath.Join(repo, "write-dir", "current", "existing.go"), ""},
+		{"edit through in-scope symlink and checkout alias", "Edit", filepath.Join(alias, "write-dir", "current", "existing.go"), ""},
+		{"create through in-scope extract symlink", "Write", filepath.Join(alias, "extract-one", "current", "new.go"), ""},
+		{"deny existing file through in-scope extract symlink", "Write", filepath.Join(alias, "extract-one", "current", "existing.go"), "deny"},
+		{"deny write-set symlink to undeclared in-checkout path", "Edit", filepath.Join(repo, "write-dir", "other", "unlisted.go"), "deny"},
 		{"deny write-set symlink escape", "Edit", filepath.Join(repo, "write-dir", "escape", "existing.go"), "deny"},
 		{"deny extract directory symlink escape", "Write", filepath.Join(repo, "extract-link", "new.go"), "deny"},
 		{"deny dangling extract symlink", "Write", filepath.Join(repo, "extract-one", "dangling.go"), "deny"},

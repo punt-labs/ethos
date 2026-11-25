@@ -435,9 +435,11 @@ func verifierPathAllowed(target, physical string, entries []string, checkout str
 	if !filepath.IsAbs(target) || !filepath.IsAbs(physical) {
 		return false
 	}
-	if relative := verifierRelativePath(target, physical, checkout); relative != "" &&
-		pathAllowed(relative, entries, "") {
-		return true
+	if resolved := verifierPathUnderRoot(physical, checkout); resolved != "" &&
+		pathAllowed(resolved, entries, "") {
+		if spelled := verifierSpelledPath(target, checkout); spelled != "" && pathAllowed(spelled, entries, "") {
+			return true
+		}
 	}
 	for _, entry := range entries {
 		if !filepath.IsAbs(entry) {
@@ -456,20 +458,50 @@ func verifierPathAllowed(target, physical string, entries []string, checkout str
 	return false
 }
 
-// verifierRelativePath permits aliases to the root, not symlinks that change
-// which path is selected below it. Relative write-set patterns stay lexical.
-func verifierRelativePath(target, physical, root string) string {
+func verifierPathUnderRoot(target, root string) string {
 	if root == "" {
 		return ""
 	}
-	rel, err := filepath.Rel(root, physical)
+	rel, err := filepath.Rel(root, target)
 	sep := string(filepath.Separator)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+sep) {
+		return ""
+	}
+	return rel
+}
+
+// verifierSpelledPath removes an alias of the checkout root without following
+// links below it. Both this spelling and the resolved destination must match.
+func verifierSpelledPath(target, checkout string) string {
+	if checkout == "" {
+		return ""
+	}
+	target = filepath.Clean(target)
+	if rel := verifierPathUnderRoot(target, checkout); rel != "" {
+		return rel
+	}
+	spelled := ""
+	for prefix := target; ; prefix = filepath.Dir(prefix) {
+		if resolved, err := filepath.EvalSymlinks(prefix); err == nil && resolved == checkout {
+			spelled = verifierPathUnderRoot(target, prefix)
+		}
+		if filepath.Dir(prefix) == prefix {
+			return spelled
+		}
+	}
+}
+
+// The absolute contract entry permits aliases of its parent, not redirects
+// to a different contract path.
+func verifierRelativePath(target, physical, root string) string {
+	rel := verifierPathUnderRoot(physical, root)
+	if rel == "" {
 		return ""
 	}
 	if rel == "." {
 		return rel
 	}
+	sep := string(filepath.Separator)
 	prefix, ok := strings.CutSuffix(filepath.Clean(target), sep+rel)
 	if !ok {
 		return ""
