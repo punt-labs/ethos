@@ -261,6 +261,8 @@ func TestHandoffConcurrentAgents(t *testing.T) {
 
 func TestHandoffRepeatedAuditPaths(t *testing.T) {
 	root, bin := postEditFixture(t)
+	root, err := filepath.EvalSymlinks(root)
+	require.NoError(t, err)
 	git := filepath.Join(bin, "git")
 	require.NoError(t, os.Rename(git, filepath.Join(bin, "real-git")))
 	log := filepath.Join(t.TempDir(), "lookups")
