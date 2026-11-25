@@ -423,6 +423,34 @@ func TestHandoffReadOnlyStopTracksIgnoredSnapshotInputs(t *testing.T) {
 	require.NotEqual(t, start, after)
 }
 
+type handoffLogObserver func([]byte) (int, error)
+
+func (f handoffLogObserver) Write(b []byte) (int, error) { return f(b) }
+
+func TestHandoffDoesNotReturnStaleSnapshotVerdict(t *testing.T) {
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	checkPolicy(t, root, "project", "  - name: snapshot-check\n    stage: handoff\n    files: all\n    run: [/bin/sh, -c, 'read verdict < verdict; exit \"$verdict\"']\n    snapshot: {profile: linux-shell-v1, inputs: [verdict], epoch: v1}\n")
+	path := filepath.Join(root, "verdict")
+	writeFile(t, path, "0\n")
+	var mutationErr error
+	observer := handoffLogObserver(func(b []byte) (int, error) {
+		if bytes.Contains(b, []byte("outcome=launched")) {
+			mutationErr = os.WriteFile(path, []byte("1\n"), 0o600)
+		}
+		return len(b), nil
+	})
+	ctx := diagnostic.WithLogger(context.Background(), slog.New(slog.NewTextHandler(observer, nil)))
+	ctx, _ = diagnostic.WithHookInvocation(ctx)
+	got := RunStageChecks(ctx, root, "worker", "handoff")
+	if strings.Contains(got.Blocking, "isolation unavailable on this host") {
+		t.Skip(got.Blocking)
+	}
+	require.NoError(t, mutationErr)
+	require.Contains(t, got.Blocking, "checkout changed during the snapshot check")
+}
+
 func TestHandoffSnapshotRejectsChangedInputs(t *testing.T) {
 	root, _ := postEditFixture(t)
 	inputs := []string{"README"}

@@ -114,6 +114,19 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		}
 	}
 	key := hex.EncodeToString(h.Sum(nil))
+	verifyCurrent := func(when string) string {
+		verify, cancel := context.WithTimeout(ctx, gateInputTime)
+		defer cancel()
+		currentState, currentProof, err := handoffGateInputs(verify, root, check.Snapshot.Inputs)
+		if err != nil || currentState != state || currentProof != proof {
+			return "checkout changed " + when
+		}
+		currentPolicy, _, err := configuredStageChecks(root, agent, "handoff")
+		if err != nil || !reflect.DeepEqual(policy, currentPolicy) {
+			return "handoff policy changed " + when
+		}
+		return ""
+	}
 	lockPath, slot := handoffGatePaths(cache, key)
 	if err := layout.EnsureLocalDir(loc, filepath.Dir(slot)); err != nil {
 		return deferGate("cannot open the handoff result directory")
@@ -129,16 +142,8 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 			// Re-select the input identity after waiting; a stale stop must not
 			// report an owner's failure for a checkout that no longer matches.
 			if waited {
-				verify, cancel := context.WithTimeout(ctx, gateInputTime)
-				currentState, currentProof, err := handoffGateInputs(verify, root, check.Snapshot.Inputs)
-				cancel()
-				if err != nil || currentState != state || currentProof != proof {
-					result = deferGate("checkout changed while waiting")
-					return nil
-				}
-				currentPolicy, _, err := configuredStageChecks(root, agent, "handoff")
-				if err != nil || !reflect.DeepEqual(policy, currentPolicy) {
-					result = deferGate("handoff policy changed while waiting")
+				if reason := verifyCurrent("while waiting"); reason != "" {
+					result = deferGate(reason)
 					return nil
 				}
 			}
@@ -192,6 +197,10 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 			}
 			if ctx.Err() != nil {
 				result = deferGate("snapshot check was interrupted")
+				return nil
+			}
+			if reason := verifyCurrent("during the snapshot check"); reason != "" {
+				result = deferGate(reason)
 				return nil
 			}
 			failure := editRedact(strings.Join(failures, "\n\n"))
