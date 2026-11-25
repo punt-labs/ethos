@@ -27,7 +27,9 @@ greater_decimal() {
 }
 
 current_text=$(jq -r '.text // empty' <<< "$current")
-current_text=${current_text#DRILL: }
+if [[ ${ALERT_DRILL:-false} == true ]]; then
+  current_text=${current_text#DRILL: }
+fi
 current_path=
 for state in failure cancelled; do
   prefix="Nightly QA $state on Ethos — $run_prefix"

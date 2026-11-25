@@ -31,6 +31,8 @@ func TestNightlyBiffWallOrdering(t *testing.T) {
 		{"newer attempt", "behavioral", "10", "2", "false", failure + wallURL + "10/attempts/1", failure + wallURL + "10/attempts/2", true, false},
 		{"drill label", "behavioral", "10", "2", "true", "", "DRILL: " + failure + wallURL + "10/attempts/2", true, false},
 		{"older drill", "behavioral", "9", "1", "true", "DRILL: " + failure + wallURL + "10/attempts/1", "DRILL: " + failure + wallURL + "10/attempts/1", false, false},
+		{"real failure replaces newer drill", "behavioral", "9", "1", "false", "DRILL: " + failure + wallURL + "10/attempts/1", failure + wallURL + "9/attempts/1", true, false},
+		{"real cancellation replaces newer drill", "nightly-cancellation", "9", "1", "false", "DRILL: " + failure + wallURL + "10/attempts/1", cancelled + wallURL + "9/attempts/1", true, false},
 		{"drill protects live wall", "behavioral", "10", "2", "true", failure + wallURL + "9/attempts/1", failure + wallURL + "9/attempts/1", false, true},
 		{"other wall message", "behavioral", "10", "2", "false", "Test failed — " + wallURL + "99/attempts/1", failure + wallURL + "10/attempts/2", true, false},
 	} {
