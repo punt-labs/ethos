@@ -323,8 +323,8 @@ func retainHandoffResults(pin *os.File, slot string, waited bool, now time.Time)
 	return !busy || hasSlot || count < gateRecordsPerStripe, err
 }
 
-func gatePlanInputsPresent(snapshot, cwd string, argv []string) bool {
-	for _, arg := range append(slices.Clone(argv), cwd) {
+func gatePlanInputsPresent(snapshot string, argv []string) bool {
+	for _, arg := range argv {
 		if arg != gateRoot && !strings.HasPrefix(arg, gateRoot+"/") {
 			continue
 		}

@@ -220,8 +220,8 @@ func TestHandoffMaterializesDeclaredRegularFiles(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o500), info.Mode().Perm())
 	require.NoFileExists(t, filepath.Join(dest, "undeclared"))
-	require.True(t, gatePlanInputsPresent(dest, "/checkout/pkg", []string{"/bin/sh", "/checkout/pkg/gate"}))
-	require.False(t, gatePlanInputsPresent(dest, "/checkout/pkg", []string{"/bin/sh", "/checkout/undeclared"}))
+	require.True(t, gatePlanInputsPresent(dest, []string{"/bin/sh", "/checkout/pkg/gate"}))
+	require.False(t, gatePlanInputsPresent(dest, []string{"/bin/sh", "/checkout/undeclared"}))
 	_, err = digestGateInputs(ctx, root, "", []string{"linked/gate"})
 	require.Error(t, err)
 	_, err = digestGateInputs(ctx, root, "", []string{"pkg"})
@@ -331,6 +331,24 @@ func TestHandoffSandboxReportsSetupPhase(t *testing.T) {
 		t.Skip(err.Error())
 	}
 	require.ErrorContains(t, err, "validate sandbox plan")
+}
+
+func TestHandoffSandboxReportsMissingSnapshotCwd(t *testing.T) {
+	live, scratch := t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(live, "README"), "snapshot input\n")
+	require.NoError(t, os.Mkdir(filepath.Join(live, "not-declared"), 0o700))
+	inputs := []string{"README"}
+	proof, err := digestGateInputs(context.Background(), live, "", inputs)
+	require.NoError(t, err)
+	_, err = executeHandoffSnapshot(context.Background(), scratch, live, proof, inputs, editCheck{
+		argv: []string{"/bin/sh", "-c", "exit 0"}, cwd: gateRoot + "/not-declared", timeout: 5 * time.Second,
+	})
+	if err != nil && (strings.Contains(err.Error(), "isolation unavailable on this host") ||
+		strings.Contains(err.Error(), "make mount propagation private: permission denied") ||
+		strings.Contains(err.Error(), "make mount propagation private: operation not permitted")) {
+		t.Skip(err.Error())
+	}
+	require.ErrorContains(t, err, "check cwd missing from snapshot")
 }
 
 func TestHandoffSnapshotLeaseAndProof(t *testing.T) {

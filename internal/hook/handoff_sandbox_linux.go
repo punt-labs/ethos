@@ -212,7 +212,19 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 	ctx, cancel := context.WithTimeout(context.Background(), gateInputTime)
 	digest, err := digestGateInputs(ctx, live, checkout, inputs)
 	cancel()
-	if err != nil || digest != proof || !gatePlanInputsPresent(checkout, cwd, argv) {
+	if err != nil || digest != proof {
+		return errors.New("snapshot inputs did not match the key or invocation")
+	}
+	phase = "check cwd missing from snapshot or is not a directory"
+	info, err := os.Stat(filepath.Join(checkout, strings.TrimPrefix(cwd, gateRoot)))
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return unix.ENOTDIR
+	}
+	phase = "materialize snapshot inputs"
+	if !gatePlanInputsPresent(checkout, argv) {
 		return errors.New("snapshot inputs did not match the key or invocation")
 	}
 	if err := unix.Mount("", checkout, "", unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV, ""); err != nil {
@@ -237,6 +249,7 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 	if err := unix.PivotRoot(root, oldRoot); err != nil {
 		return err
 	}
+	phase = "enter check cwd in snapshot"
 	if err := unix.Chdir(cwd); err != nil {
 		return err
 	}
