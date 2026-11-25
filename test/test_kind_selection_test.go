@@ -29,13 +29,15 @@ exec "$TEST_KIND_REAL_GO" "$@"
 	t.Setenv("TEST_KIND_REAL_GO", goBin)
 	const unit = "TestGitEnvStripsLocations"
 	const subprocess = "TestIsolateGitIgnoresHomeConfig"
-	for _, tc := range []struct{ kind, selected, excluded string }{
-		{"unit", unit, subprocess},
-		{"subprocess", subprocess, unit},
+	for _, tc := range []struct{ name, kind, filter, selected, excluded string }{
+		{"unit", "unit", "", unit, subprocess},
+		{"subprocess", "subprocess", "", subprocess, unit},
+		{"unit with skip", "unit", "-skip=^" + unit + "$", "TestLostLeaf", unit},
+		{"subprocess with run", "subprocess", "-run=^" + subprocess + "$", subprocess, "TestIsolateGitHomeUsesFixtureConfig"},
 	} {
-		t.Run(tc.kind, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			cmd := exec.CommandContext(t.Context(), "make", "test-"+tc.kind,
-				"TEST_KIND_ARGS=-v ./internal/testhelpers")
+				"TEST_KIND_ARGS=-v ./internal/testhelpers "+tc.filter)
 			cmd.Dir = ".."
 			out, err := cmd.CombinedOutput()
 			require.NoError(t, err, "%s", out)
