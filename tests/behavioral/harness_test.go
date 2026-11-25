@@ -1,9 +1,12 @@
 package behavioral
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,4 +65,58 @@ func TestFixtureMCPStartupKeepsWorktreeClean(t *testing.T) {
 	_, stderr, err := f.runEthos(t, "serve")
 	require.NoError(t, err, stderr)
 	require.Empty(t, f.GitDiffFiles(t, base))
+}
+
+func TestResolveEthosBinary(t *testing.T) {
+	t.Run("uses executable ETHOS_BINARY without building", func(t *testing.T) {
+		dir := t.TempDir()
+		bin := filepath.Join(dir, "ethos")
+		require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+
+		built := false
+		got, err := resolveEthosBinary(bin, func() (string, error) {
+			built = true
+			return "", errors.New("should not build")
+		})
+		require.NoError(t, err)
+		assert.Equal(t, bin, got)
+		assert.False(t, built)
+	})
+
+	t.Run("rejects missing ETHOS_BINARY", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "does-not-exist")
+		_, err := resolveEthosBinary(missing, func() (string, error) {
+			return "/unused", nil
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("rejects directory ETHOS_BINARY", func(t *testing.T) {
+		_, err := resolveEthosBinary(t.TempDir(), func() (string, error) {
+			return "/unused", nil
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("rejects non-executable ETHOS_BINARY", func(t *testing.T) {
+		dir := t.TempDir()
+		bin := filepath.Join(dir, "ethos")
+		require.NoError(t, os.WriteFile(bin, []byte("not executable"), 0o600))
+
+		_, err := resolveEthosBinary(bin, func() (string, error) {
+			return "/unused", nil
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("builds when ETHOS_BINARY is empty", func(t *testing.T) {
+		built := false
+		got, err := resolveEthosBinary("", func() (string, error) {
+			built = true
+			return "/built/ethos", nil
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "/built/ethos", got)
+		assert.True(t, built)
+	})
 }
