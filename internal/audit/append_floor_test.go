@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"testing"
@@ -62,6 +63,69 @@ func TestAppendTailReadBudgetAndValidation(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestAppendSessionRechecksNewHistory(t *testing.T) {
+	for _, kind := range []string{"local archive", "checkout publication"} {
+		t.Run(kind, func(t *testing.T) {
+			p := repositoryPolicy(t, layout.RecordBlame)
+			s := Stream{Namespace: SessionNS, Session: "s"}
+			appendLine := func(want int64) {
+				t.Helper()
+				require.NoError(t, WithStreamLock(p, s, func() error {
+					return AppendSession(p, s, time.Unix(0, 100), func(ts int64) ([]byte, error) {
+						require.Equal(t, want, ts)
+						return bytes.TrimSuffix(floorTestRow(ts), []byte("\n")), nil
+					})
+				}))
+			}
+			published := filepath.Join(p.CheckoutRecordRoot(), "sessions")
+			require.NoError(t, os.MkdirAll(published, 0o700))
+			appendLine(100)
+			dir := filepath.Join(published, "2026-11-04-s")
+			if kind == "local archive" {
+				var err error
+				dir, err = ArchiveDir(p, s, "2026-11-04")
+				require.NoError(t, err)
+			}
+			require.NoError(t, WriteLocalAtomic(p, filepath.Join(dir, SessionChunkFile(200, 200)), floorTestRow(200)))
+			appendLine(201)
+			appendLine(202)
+		})
+	}
+}
+
+func TestAppendSessionDoesNotAdvanceCheckpointUntilDirectorySync(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bounded appends require a stable file identity")
+	}
+	p := repositoryPolicy(t, layout.RecordBlame)
+	s := Stream{Namespace: SessionNS, Session: "s"}
+	appendLine := func() error {
+		return WithStreamLock(p, s, func() error {
+			return AppendSession(p, s, time.Unix(0, 100), func(ts int64) ([]byte, error) {
+				return bytes.TrimSuffix(floorTestRow(ts), []byte("\n")), nil
+			})
+		})
+	}
+	require.NoError(t, appendLine())
+	cp, ok := readAppendFloor(p, s)
+	require.True(t, ok)
+	oldSync := syncAuditDirectory
+	t.Cleanup(func() { syncAuditDirectory = oldSync })
+	syncAuditDirectory = func(string) error { return errors.New("directory sync failed") }
+	require.ErrorIs(t, appendLine(), ErrAppendDurabilityUnconfirmed)
+	got, ok := readAppendFloor(p, s)
+	require.True(t, ok)
+	require.Equal(t, cp, got)
+	data, err := ReadStream(p, s)
+	require.NoError(t, err)
+	require.EqualValues(t, 101, data.Floor, "the append was applied, not rolled back")
+	syncAuditDirectory = oldSync
+	require.NoError(t, appendLine())
+	got, ok = readAppendFloor(p, s)
+	require.True(t, ok)
+	require.EqualValues(t, 102, got.Floor)
 }
 
 func TestAppendFloorInvalidationSyncBoundaries(t *testing.T) {

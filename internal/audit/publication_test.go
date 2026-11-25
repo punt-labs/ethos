@@ -2,11 +2,13 @@ package audit
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/layout"
+	"github.com/stretchr/testify/require"
 )
 
 func publicationFixture(t *testing.T) (layout.Policy, string, string) {
@@ -35,6 +37,38 @@ func stageFixturePublication(t *testing.T, p layout.Policy, path string) error {
 		t.Fatal(err)
 	}
 	return StagePublication(p, []PublicationCandidate{NewPublicationCandidate(path, body)})
+}
+
+func TestPublicationRejectsStagedBytesOrModeDifferentFromVerifiedChunk(t *testing.T) {
+	p, path, index := publicationFixture(t)
+	s := Stream{Namespace: SessionNS, Session: "s"}
+	dir, err := ArchiveDir(p, s, "2026-11-04")
+	require.NoError(t, err)
+	row, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, WriteLocalAtomic(p, filepath.Join(dir, SessionChunkFile(100, 100)), row))
+	chunks, err := ReadStreamForPublication(context.Background(), p, s, dir)
+	require.NoError(t, err)
+	require.Len(t, chunks, 1)
+	require.Len(t, chunks[0], 1)
+	require.Equal(t, bytes.TrimSpace(row), chunks[0][0].Raw)
+	before, err := os.ReadFile(index)
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(path))
+	require.NoError(t, os.Symlink("replacement", path))
+	for _, tc := range []struct {
+		verified []byte
+		message  string
+	}{
+		{row, "differs from verified bytes"},
+		{[]byte("replacement"), "is not a regular blob"},
+	} {
+		err := StagePublication(p, []PublicationCandidate{NewPublicationCandidate(path, tc.verified)})
+		require.ErrorContains(t, err, tc.message)
+		after, err := os.ReadFile(index)
+		require.NoError(t, err)
+		require.Equal(t, before, after)
+	}
 }
 
 func TestRepositoryPublicationFailurePreservesActualIndex(t *testing.T) {
