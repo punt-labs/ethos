@@ -1,10 +1,57 @@
 # Bounded session audit appends with full verification at seal
 
-**Status**: PROPOSED as DES-086. Design only; implementation requires operator review.
+**Status**: PROPOSED as DES-087. Design only; implementation requires operator review.
 
 Read first: DES-058 (live audit and sealing), DES-079 (trace and blame tiers),
 DES-080 (redaction), DES-083 (binary-owned hooks), DES-084 (storage repair),
 and the [storage contract](storage-layout.md#reader-outcomes).
+
+## Coverage for the reported long sessions
+
+**The initial fast path is likely to cover the vox and biff sessions Jim
+reported, if they used the default configuration.** The 89 MB vox and 61 MB
+biff transcripts do not by themselves affect eligibility. We checked fetched
+default-branch snapshots around the end of the sample and again at the
+latest fetched tips:
+
+| Repository | Sample-window snapshot | Latest checked | Tracked published session paths | Recording mode |
+| --- | --- | --- | ---: | --- |
+| `punt-labs/vox` | `7ffccc2` | `b53ae40` | 0 at both | `record` unset, defaults to `blame` |
+| `punt-labs/biff` | `f728556` | `b6e39a4` | 0 at both | `record` unset, defaults to `blame` |
+
+Neither default-branch history contains changes under
+`.punt-labs/ethos/sessions/`, and the inspected checkouts had no such
+working-tree directory. This does not establish whether Jim had untracked
+copies, a different branch, or local policy changes. Inspecting both actual
+working trees is still the eligibility check.
+
+A default-blame pre-commit seal writes to local `trace/sessions/` only;
+committing during a long default-blame session does not itself disable
+the fast path. A full-mode seal can install and stage eligible audit chunks
+in the published tree during the same session. The first eligible chunk
+disables the fast path as soon as it appears in either working tree, even
+before the commit completes. Switching back to blame does not remove
+existing files, and even a chunk from an unrelated session in either tree
+causes fallback in this initial design.
+
+**Expected warm append: tens of milliseconds per call.** The current
+wrapper costs about **17–43 ms median** at 0–1,000 live rows in our fixture;
+that is a scale estimate for eligible warm calls, not a measured result
+for DES-087 or Jim's machine. It omits the proposed checkpoint update.
+The verified path measured **431 ms median** at 18,000 live rows with no
+published history, and **820 ms median** with 18,000 additional published
+rows. Jim's 1.6–2.0 s medians were measured on a different workload; we
+cannot infer the exact speedup for either session from transcript size.
+
+To cover repositories with published history, the append floor would need
+to be bound to verified published content that cannot change unnoticed.
+One option is a verified chunk manifest and immutable content snapshots
+with a trusted, durably invalidated generation at import or checkout
+replacement. A manifest beside mutable working-tree files is not enough:
+hashing those files on every append reintroduces linear cost. Such a design
+adds import and seal work, local state, and recovery/compatibility rules
+for Git changes and legacy writers. Until those costs and guarantees are
+accepted, published-history repositories stay on the verified path.
 
 ## 1. Problem and current behavior
 
@@ -39,6 +86,17 @@ at `10a9db60aed259bbaabcfff1babf39a4d6aaafb9`, not a second A/B comparison.
 | 0 | 154.77 / 271.28 | 162.25 / 237.31 | 16.97 / 19.05 |
 | 1,000 (0.47 MB) | 169.64 / 726.45 | 146.96 / 399.43 | 43.20 / 45.15 |
 | 18,000 (8.48 MB) | 1,335.95 / 1,936.30 | 532.23 / 1,216.99 | 430.58 / 524.91 |
+
+Using the same post-merge binary and wrapper on an isolated synthetic
+working tree with one recognized 18,000-row published chunk (8.48 MB,
+earlier non-overlapping timestamps, no local archive), the verified path
+took 389.60 / 421.02 ms with no live rows, 432.27 / 456.03 ms with 1,000,
+and 819.59 / 922.74 ms with 18,000. This measures working-tree publication
+cost, not any published history in Jim's sessions. To reproduce the
+additional fixture, put it at
+`.punt-labs/ethos/sessions/<date>-<sid>/audit-<first>-<last>.jsonl`,
+with matching fixed-width nanosecond first/last filename fields; leave it
+in place while restoring the live fixture between timed calls.
 
 The post-merge `BenchmarkPolicyAuditAppendLongSession` CPU profile assigned
 77% of samples to `ReadStream` (65% to `CanonicalPayload`, included in that
