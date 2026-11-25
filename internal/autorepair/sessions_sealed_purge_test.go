@@ -62,7 +62,7 @@ func TestSessionsSealsDeadSessionThenPurges(t *testing.T) {
 	// A line one tick past the newest sealed chunk: nothing has sealed it.
 	f, err := os.OpenFile(live, os.O_APPEND|os.O_WRONLY, 0o600)
 	require.NoError(t, err)
-	_, err = f.WriteString(`{"ts":"` + audit.FormatLineTS(1794265403460920001) + `","session":"sess-corpus-0001","tool":"Read","path_format":2,"record":"blame","redacted":true}` + "\n")
+	_, err = f.WriteString(`{"ts":"` + audit.FormatLineTS(1794198163395301001) + `","session":"sess-corpus-0001","tool":"Read","path_format":2,"record":"blame","redacted":true}` + "\n")
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 	before, err := os.ReadFile(live)

@@ -102,8 +102,10 @@ def run_scenario(scenario: Scenario, proxy: LiteLLMProxy) -> TokenCapture:
     if not isinstance(scenario, TokenScenario):
         raise ValueError(f"run_scenario: unsupported scenario type {scenario.type!r}")
 
-    with tempfile.TemporaryDirectory(prefix=f"e2e-{scenario.id}-") as cwd:
-        result = _invoke_claude(scenario, proxy, Path(cwd))
+    with tempfile.TemporaryDirectory(prefix=f"e2e-{scenario.id}-") as fixture:
+        cwd = Path(fixture) / "repo"
+        cwd.mkdir()
+        result = _invoke_claude(scenario, proxy, cwd)
 
     capture_file = _latest_capture(scenario, proxy, result)
     raw_bytes = capture_file.read_bytes()
@@ -130,6 +132,12 @@ def _invoke_claude(
         argv.append("--bare")
     else:
         _require_e2e_bin()
+        session_home = cwd.parent / f"{cwd.name}-home"
+        (session_home / ".punt-labs" / "ethos").mkdir(parents=True)
+        env["HOME"] = str(session_home)
+        argv += ["--plugin-dir", str(_REPO_ROOT / "plugin")]
+        if coverdir := os.environ.get("ETHOS_TEST_COVERDIR"):
+            env["GOCOVERDIR"] = coverdir
         # cwd is a throwaway copy of repo_fixture with no .git of its own.
         # Without this override, a repo-root walk (ethos's StoreRepoRoot,
         # or anything else that climbs looking for a .git marker) would

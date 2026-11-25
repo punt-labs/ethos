@@ -1,11 +1,12 @@
 """type: token scenario assertions — payload shape, size, secret scan.
 
 Scenarios come from ``tests/e2e/scenarios/*.yaml`` via
-``conftest.py``'s ``pytest_generate_tests`` hook; this file never
-changes when a scenario is added.
+``conftest.py``'s ``pytest_generate_tests`` hook.
 """
 
 from __future__ import annotations
+
+import json
 
 import pytest
 
@@ -23,3 +24,8 @@ def test_token_scenario(scenario: TokenScenario, litellm_proxy: LiteLLMProxy) ->
     if scenario.no_secret_patterns:
         failures += capture.assert_no_secrets()
     assert not failures, "\n".join(failures)
+    if scenario.id == "ethos-loaded":
+        prefix = '"SessionStart hook additional context: You are Fix Turing (efx),'
+        assert prefix in json.dumps(capture.body.get("messages")), (
+            "the Ethos SessionStart persona must reach the captured request"
+        )

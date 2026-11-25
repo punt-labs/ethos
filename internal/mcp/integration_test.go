@@ -33,6 +33,7 @@ var ethosBinary string
 const mcpRPCTimeout = 30 * time.Second
 
 func TestMain(m *testing.M) {
+	testhelpers.EnableInheritedCoverage()
 	testhelpers.MustIsolateGit() // no inherited GIT_DIR; temp dirs stop at the temp root
 	// This suite normally runs inside a real Claude Code session, where
 	// CLAUDE_PID and CLAUDECODE are themselves set. DES-074 makes their
@@ -72,7 +73,7 @@ func TestMain(m *testing.M) {
 	}
 	root := filepath.Join(wd, "..", "..")
 
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/ethos")
+	cmd := exec.Command("go", testhelpers.CoverBuild("-o", bin, "./cmd/ethos")...)
 	cmd.Dir = root
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -155,7 +156,7 @@ func setupMCPTestEnv(t *testing.T) *mcpTestEnv {
 		process.ForceNotUnderClaudeCodeEnv + "=1",
 	}
 
-	return &mcpTestEnv{home: home, repo: repo, env: env}
+	return &mcpTestEnv{home: home, repo: repo, env: testhelpers.CoverEnv(env)}
 }
 
 // startMCPClient spawns ethos serve and returns an initialized MCP client.

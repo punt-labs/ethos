@@ -36,6 +36,7 @@ var ethosBinary string
 // runtime os.Exit error paths in `runMissionCreate` (the in-process
 // captureStdout pattern would crash on os.Exit).
 func TestMain(m *testing.M) {
+	testhelpers.EnableInheritedCoverage()
 	testhelpers.MustIsolateGit() // no inherited GIT_DIR; temp dirs stop at the temp root
 	// This suite normally runs inside a real Claude Code session, where
 	// CLAUDE_PID and CLAUDECODE are themselves set. DES-074 makes their
@@ -64,7 +65,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	bin := filepath.Join(dir, "ethos")
-	cmd := exec.Command("go", "build", "-o", bin, ".")
+	cmd := exec.Command("go", testhelpers.CoverBuild("-o", bin, ".")...)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "go build for cmd/ethos tests failed: %v\n", err)
@@ -5354,16 +5355,17 @@ func TestMissionClaim_RefusesWithoutSession_Subprocess(t *testing.T) {
 	// Claude Code session (as it normally does) — the negative-only
 	// escape hatch simulates the plain, non-Claude-Code process tree
 	// this test's own comment above describes wanting.
-	cmd.Env = []string{
+	cmd.Env = testhelpers.CoverEnv([]string{
 		"HOME=" + home,
 		"PATH=" + os.Getenv("PATH"),
 		"TMPDIR=" + t.TempDir(),
 		process.ForceNotUnderClaudeCodeEnv + "=1",
-	}
+	})
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = &stderrBuf
 	err := cmd.Run()
 	require.Error(t, err, "claim without a session must refuse")
+	assert.NotContains(t, stderrBuf.String(), "GOCOVERDIR not set")
 	assert.Contains(t, stderrBuf.String(), "no active session")
 	assert.Contains(t, stderrBuf.String(), "ethos session start",
 		"the refusal must name the remedy (DES-061 step-4 error)")

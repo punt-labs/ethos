@@ -98,7 +98,7 @@ exec "$REAL_GIT" "$@"
 	require.NoError(t, err)
 	cmd := exec.Command("/bin/sh", script, msg)
 	cmd.Dir = repo
-	cmd.Env = []string{"HOME=" + t.TempDir(), "REAL_GIT=" + realGit, "MISSION_ID=m-2026-01-01-001", "PATH=" + bin + ":" + ethosBinDir(t) + ":/usr/bin:/bin"}
+	cmd.Env = testhelpers.CoverEnv([]string{"HOME=" + t.TempDir(), "REAL_GIT=" + realGit, "MISSION_ID=m-2026-01-01-001", "PATH=" + bin + ":" + ethosBinDir(t) + ":/usr/bin:/bin"})
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	err = cmd.Run()

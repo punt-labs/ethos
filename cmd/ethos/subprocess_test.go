@@ -89,7 +89,7 @@ func setupCLISubprocessEnv(t *testing.T) *cliSubprocessEnv {
 
 	stampFixture(t, home, repo)
 
-	return &cliSubprocessEnv{home: home, repo: repo, env: env}
+	return &cliSubprocessEnv{home: home, repo: repo, env: testhelpers.CoverEnv(env)}
 }
 
 // withForcedNotUnderClaudeCode appends process.ForceNotUnderClaudeCodeEnv
@@ -105,7 +105,7 @@ func setupCLISubprocessEnv(t *testing.T) *cliSubprocessEnv {
 // conflict — no test here exercises the "under Claude Code via CLAUDE_PID/
 // CLAUDECODE, no explicit session" path through a spawned subprocess.
 func withForcedNotUnderClaudeCode(env []string) []string {
-	return append(append([]string{}, env...), process.ForceNotUnderClaudeCodeEnv+"=1")
+	return testhelpers.CoverEnv(append(append([]string{}, env...), process.ForceNotUnderClaudeCodeEnv+"=1"))
 }
 
 // runCLI spawns ethosBinary with the given args, waits up to 5 seconds,
@@ -150,6 +150,19 @@ func runCLI(t *testing.T, se *cliSubprocessEnv, args ...string) (stdout, stderr 
 		t.Fatalf("ethos %v hung — did not exit within 30 seconds\nstderr: %s", args, errBuf.String())
 		return "", "", -1
 	}
+}
+
+func TestCLIProcessStatementCoverage(t *testing.T) {
+	if os.Getenv(testhelpers.ProcessCoverDir) == "" {
+		t.Skip("requires subprocess coverage selection")
+	}
+	require.NotEmpty(t, ethosBinary)
+	t.Setenv(testhelpers.ProcessCoverDir, t.TempDir())
+	stdout, stderr, code := runCLI(t, setupCLISubprocessEnv(t), "version", "--json")
+	require.Zero(t, code, "stdout: %s, stderr: %s", stdout, stderr)
+	matches, err := filepath.Glob(filepath.Join(os.Getenv(testhelpers.ProcessCoverDir), "covcounters.*"))
+	require.NoError(t, err)
+	require.NotEmpty(t, matches, "CLI subprocess wrote no statement coverage counters")
 }
 
 func TestCLI_Version(t *testing.T) {

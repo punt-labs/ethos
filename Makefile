@@ -60,7 +60,7 @@ lint: ## Lint (golangci-lint + windows vet + shellcheck + ruff + mypy)
 	@test -x $(GOLANGCI_LINT) || { echo "golangci-lint not found at $(GOLANGCI_LINT) — run 'make tools' to install $(GOLANGCI_LINT_VERSION)"; exit 1; }
 	$(GOLANGCI_LINT) run ./...
 	GOOS=windows go vet ./... # the windows build, tests included: a unix-only helper or test file must carry its build tag
-	shellcheck plugin/hooks/*.sh install.sh .githooks/* scripts/test-changed.sh scripts/test-push.sh scripts/test-shard.sh scripts/test-timed.sh scripts/smoke-release.sh
+	shellcheck plugin/hooks/*.sh install.sh .githooks/* scripts/test-changed.sh scripts/test-push.sh scripts/test-shard.sh scripts/test-timed.sh scripts/test-snapshot.sh scripts/smoke-release.sh
 	cd tests/e2e && uv run ruff check .
 	cd tests/e2e && uv run ruff format --check .
 	cd tests/e2e && uv run mypy src/ tests/
@@ -114,19 +114,35 @@ clean-latex: ## Remove LaTeX build intermediates (keeps .pdf/.tex/.bib)
 TEST_PARALLEL ?= 2
 TEST_PUSH_PARALLEL ?= 4
 TEST_PACKAGES ?= ./...
+GO_COVERAGE_TEST = go test -race -count=1 -timeout 30m -p $(TEST_PARALLEL)
+package_coverage = $(GO_COVERAGE_TEST) -coverprofile="$(1)" ./...
 
 test: ## Run tests with race detection and write coverage to coverage.out
-	go test -race -count=1 -timeout 30m -p $(TEST_PARALLEL) -coverprofile=coverage.out $(TEST_PACKAGES)
+	$(GO_COVERAGE_TEST) -coverprofile=coverage.out $(TEST_PACKAGES)
 
 .PHONY: hooks test-changed test-push test-push-suite test-subprocess-fast
 hooks: ## Opt in to the repository's development Git hooks
 	python3 scripts/install-dev-hooks.py
 
+GITLEAKS := go run github.com/zricethezav/gitleaks/v8@v8.30.1
+GITLEAKS_LOG_OPTS ?= HEAD
+
+.PHONY: secret-scan-staged secret-scan-history
+secret-scan-staged: ## Scan staged Git changes for secrets
+	$(GITLEAKS) git --staged --redact=100 --no-banner .
+
+secret-scan-history: ## Scan Git history for secrets (defaults to all commits reachable from HEAD)
+	$(GITLEAKS) git --log-opts="--diff-merges=first-parent $(GITLEAKS_LOG_OPTS)" --redact=100 --no-banner .
+
 test-changed: ## Run Go checks in packages affected by staged paths
-	bash scripts/test-timed.sh pre-commit 30 bash scripts/test-changed.sh
+	@if [ -n "$$ETHOS_STAGED_PATHS" ]; then \
+		bash scripts/test-changed.sh; \
+	else \
+		bash scripts/test-timed.sh pre-commit 30 env -u GOTOOLCHAIN bash scripts/test-snapshot.sh staged $(MAKE) test-changed; \
+	fi
 
 test-push: ## Run the full default suite and a fast boundary check before pushing
-	GORACE="$$GORACE atexit_sleep_ms=0" bash scripts/test-timed.sh pre-push 180 $(MAKE) test-push-suite test-subprocess-fast
+	GORACE="$$GORACE atexit_sleep_ms=0" $(if $(ETHOS_TEST_PUSH_SNAPSHOT),,bash scripts/test-timed.sh pre-push 180) $(MAKE) test-push-suite test-subprocess-fast
 
 test-push-suite:
 	bash scripts/test-push.sh $(TEST_PUSH_PARALLEL)
@@ -135,11 +151,13 @@ test-subprocess-fast: ## Exercise dormant and unresolvable Git hook entry points
 	go test -race -count=1 -run '^TestHooks(DormantRepositoryRunsNoProbe|FailLoudWhenRevParseFails)$$' ./plugin/hooks
 
 .PHONY: test-unit test-subprocess test-performance test-live test-agent test-nightly test-release-candidate test-post-release test-quarantine test-quarantine-run
-test-unit: ## Run an in-process sample of data-handling contracts
-	go test -race -count=1 ./internal/redact
+TEST_KIND_ARGS ?= ./...
 
-test-subprocess: ## Run release smoke fixtures and the Git hook subprocess suite
-	go test -race -count=1 ./test ./plugin/hooks
+test-unit: ## Run default Go tests that do not launch a real subprocess
+	python3 scripts/test-kind.py unit -race -count=1 -timeout 30m -p $(TEST_PARALLEL) $(TEST_KIND_ARGS)
+
+test-subprocess: ## Run default Go tests that launch real local subprocesses
+	python3 scripts/test-kind.py subprocess -race -count=1 -timeout 30m -p $(TEST_PARALLEL) $(TEST_KIND_ARGS)
 
 test-performance: ## Report race-instrumented long-session redaction timing
 	go test -race -count=1 -run '^TestRedactLiveLongSessionBudget$$' -v ./internal/hook
@@ -167,27 +185,69 @@ test-quarantine-run: ## Run only the Go tests in the quarantine inventory
 
 check: test-quarantine
 
-.PHONY: coverage-check coverage-baseline coverage-baseline-from-ci
+.PHONY: coverage-check
+export COVERAGE_BASE ?= origin/main
 
-coverage-check: ## Compare per-package coverage in coverage.out (from make test) with coverage-baseline.txt
-	go run ./cmd/coverage-check -skip-os-mismatch -profile coverage.out -baseline coverage-baseline.txt
+coverage-check: ## Ratchet package statement coverage against the merge base with COVERAGE_BASE
+	@set -eu; \
+		base_ref=$$(git rev-parse --verify --end-of-options "$${COVERAGE_BASE}^{commit}"); \
+		base=$$(git merge-base HEAD "$$base_ref"); \
+		toolchain=$$(go env GOVERSION); \
+		export GOTOOLCHAIN="$$toolchain"; \
+		unset ETHOS_TEST_COVERDIR; \
+		printf 'Statement coverage: HEAD %s, merge base %s\n' "$$(git rev-parse HEAD)" "$$base"; \
+		$(call package_coverage,coverage.out); \
+		mkdir -p .tmp; \
+		scratch=$$(mktemp -d "$(CURDIR)/.tmp/coverage-base.XXXXXXXX"); \
+		trap 'if test -e "$$scratch/base/.git"; then git worktree remove --force "$$scratch/base"; fi; rm -f "$$scratch/base.out"; rmdir "$$scratch"' EXIT; \
+		git worktree add --detach "$$scratch/base" "$$base"; \
+		(cd "$$scratch/base" && $(call package_coverage,$$scratch/base.out)); \
+		go run ./cmd/coverage-check -profile coverage.out -base-profile "$$scratch/base.out"
 
-coverage-baseline: ## Regenerate coverage-baseline.txt from coverage.out (keeps overall-target and comments)
-	go run ./cmd/coverage-check -write -profile coverage.out -baseline coverage-baseline.txt
+.PHONY: coverage-subprocess coverage-release-companion
+STATEMENT_REPORTS := $(CURDIR)/.tmp/statement-coverage
 
-coverage-baseline-from-ci: ## Regenerate the linux coverage-baseline.txt from one successful CI run's coverage-out artifact (RUN=<id>; default: latest successful test.yml run on this branch)
-	@run="$(RUN)"; \
-	if [ -z "$$run" ]; then \
-		run=$$(gh run list --workflow test.yml --branch $$(git branch --show-current) --status success --limit 1 --json databaseId --jq '.[0].databaseId'); \
-	fi; \
-	if [ -z "$$run" ]; then \
-		echo "coverage-baseline-from-ci: no successful test.yml run on branch $$(git branch --show-current); pass RUN=<id>" >&2; \
-		exit 1; \
-	fi; \
-	rm -rf .tmp/coverage-ci; \
-	mkdir -p .tmp/coverage-ci; \
-	gh run download "$$run" --name coverage-out --dir .tmp/coverage-ci
-	go run ./cmd/coverage-check -write -os linux -profile .tmp/coverage-ci/coverage.out -baseline coverage-baseline.txt
+define coverage_text
+go tool covdata textfmt -i="$(1)" -o="$(2)"; \
+awk 'NR > 1 && $$3 > 0 { covered = 1 } END { exit !covered }' "$(2)" || \
+	{ echo "No executed statements found in $(2)" >&2; exit 1; }
+endef
+
+# These observers assert the installed binary's filesystem writes; Go counters
+# are additional writes. The regular package suite runs them uninstrumented.
+SUBPROCESS_COVER_SKIP := ^(TestEnabledInstalledHooksTransientWrites|TestEnabledInstalledPreCommitArchivalPlacement)$$
+
+coverage-subprocess: ## Report statement coverage for subprocess suites, including their built Go binaries
+	@set -eu; \
+		mkdir -p "$(STATEMENT_REPORTS)"; \
+		scratch=$$(mktemp -d "$(STATEMENT_REPORTS)/subprocess.XXXXXXXX"); \
+		trap 'rm -rf "$$scratch"' EXIT; \
+		ETHOS_TEST_COVERDIR="$$scratch" $(GO_COVERAGE_TEST) -coverprofile="$$scratch/packages.out" \
+			-skip '$(SUBPROCESS_COVER_SKIP)' \
+			./cmd/ethos ./cmd/validate-content ./internal/autorepair ./internal/hook ./internal/mcp ./plugin/hooks ./test; \
+		$(call coverage_text,$$scratch,$$scratch/children.out); \
+		go run ./cmd/coverage-check -merge "$$scratch/packages.out" "$$scratch/children.out" > "$$scratch/combined.out"; \
+		cp "$$scratch/children.out" "$(STATEMENT_REPORTS)/subprocess-children.out"; \
+		cp "$$scratch/combined.out" "$(STATEMENT_REPORTS)/subprocess-combined.out"; \
+		go tool cover -func="$$scratch/combined.out" > "$$scratch/functions.txt"; \
+		printf 'Subprocess suites and child binaries statement coverage: '; tail -n 1 "$$scratch/functions.txt"
+
+coverage-release-companion: ## Report statement coverage for the native release smoke using an instrumented companion
+	@set -eu; \
+		mkdir -p "$(STATEMENT_REPORTS)"; \
+		scratch=$$(mktemp -d "$(STATEMENT_REPORTS)/release.XXXXXXXX"); \
+		trap 'rm -rf "$$scratch"' EXIT; \
+		mkdir "$$scratch/counters"; \
+		version=$$(sed -n 's/^VERSION="\([^"]*\)"$$/\1/p' install.sh); \
+		asset=ethos-$$(go env GOOS)-$$(go env GOARCH); \
+		CGO_ENABLED=0 go build -cover -covermode=atomic -ldflags="-s -w -X main.version=$$version" -o "$$scratch/$$asset" ./cmd/ethos; \
+		(cd "$$scratch" && shasum -a 256 "$$asset" > checksums.txt); \
+		ETHOS_RELEASE_COVERDIR="$$scratch/counters" bash scripts/test-timed.sh release-companion 300 \
+			sh scripts/smoke-release.sh candidate "$$version" install.sh "$$scratch"; \
+		$(call coverage_text,$$scratch/counters,$$scratch/release.out); \
+		cp "$$scratch/release.out" "$(STATEMENT_REPORTS)/release-companion.out"; \
+		go tool cover -func="$$scratch/release.out" > "$$scratch/functions.txt"; \
+		printf 'Native release companion statement coverage: '; tail -n 1 "$$scratch/functions.txt"
 
 validate-content: ## Validate all ethos content files
 	go run ./cmd/validate-content
@@ -275,13 +335,26 @@ test-behavioral: ## Run L4 behavioral tests (requires ANTHROPIC_API_KEY and clau
 
 e2e-bin: ## Build the ethos binary a non-hermetic E2E scenario's hooks run
 	@mkdir -p .tmp/e2e-bin
-	CGO_ENABLED=0 go build -o .tmp/e2e-bin/ethos ./cmd/ethos/
+	CGO_ENABLED=0 go build $(if $(ETHOS_TEST_COVERDIR),-cover -covermode=atomic) -o .tmp/e2e-bin/ethos ./cmd/ethos/
 
-test-e2e-smoke: e2e-bin ## Run the fast E2E (L4) smoke scenario (every push; requires litellm + claude CLI)
-	cd tests/e2e && uv run pytest -m "e2e and smoke"
+test-e2e-smoke: WIRE_MARKS := e2e and smoke
+test-e2e-smoke: WIRE_PROFILE := wire-smoke.out
+test-e2e: WIRE_MARKS := e2e
+test-e2e: WIRE_PROFILE := wire-full.out
 
-test-e2e: e2e-bin ## Run the full E2E (L4) scenario sweep (per-release; requires litellm + claude CLI)
-	cd tests/e2e && uv run pytest -m e2e
+test-e2e-smoke: ## Run the E2E (L4) smoke scenarios and report Ethos statement coverage
+test-e2e: ## Run the full E2E (L4) sweep and report Ethos statement coverage
+test-e2e-smoke test-e2e:
+	@set -eu; \
+		mkdir -p "$(STATEMENT_REPORTS)"; \
+		scratch=$$(mktemp -d "$(STATEMENT_REPORTS)/wire.XXXXXXXX"); \
+		trap 'rm -rf "$$scratch"' EXIT; \
+		$(MAKE) e2e-bin ETHOS_TEST_COVERDIR="$$scratch"; \
+		(cd tests/e2e && ETHOS_TEST_COVERDIR="$$scratch" uv run pytest -m "$(WIRE_MARKS)"); \
+		$(call coverage_text,$$scratch,$$scratch/wire.out); \
+		cp "$$scratch/wire.out" "$(STATEMENT_REPORTS)/$(WIRE_PROFILE)"; \
+		go tool cover -func="$$scratch/wire.out" > "$$scratch/functions.txt"; \
+		printf 'Wire Ethos statement coverage: '; tail -n 1 "$$scratch/functions.txt"
 
 baseline-tokens: ## Recapture E2E token baselines (operator-invoked)
 	@echo "not yet implemented in initial land"
@@ -351,7 +424,7 @@ check-installed: ## Install a coverage-instrumented ethos and exercise the insta
 		printf 'Installed binary statement coverage (storage acceptance): '; \
 		tail -n 1 .tmp/opencode/installed-coverage/functions.txt
 
-check: lint docs test coverage-check validate-content fuzz-check check-opencode check-storage check-plugin-cache ## Run all quality gates
+check: lint docs coverage-check validate-content fuzz-check check-opencode check-storage check-plugin-cache ## Run all quality gates
 
 # The legacy corpus (internal/autorepair/testdata) is real on-disk state written
 # by nine released binaries. Regenerating it builds each from its git tag, so it

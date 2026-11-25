@@ -67,6 +67,9 @@ fi
 cd "$sandbox/work"
 
 clean() {
+    if [ "$mode" = candidate ] && [ -n "${ETHOS_RELEASE_COVERDIR:-}" ]; then
+        set -- "GOCOVERDIR=$ETHOS_RELEASE_COVERDIR" "$@"
+    fi
     env -i HOME="$sandbox/home" PATH="$sandbox/home/.local/bin:$sandbox/bin:/usr/bin:/bin" TMPDIR="$sandbox/tmp" \
         GIT_CONFIG_NOSYSTEM=1 GIT_CEILING_DIRECTORIES="$sandbox" PUNT_TELEMETRY=off "$@"
 }

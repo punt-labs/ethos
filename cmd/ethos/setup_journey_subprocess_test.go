@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,7 +39,7 @@ func freshCLIEnv(t *testing.T, humanHandle string) *cliSubprocessEnv {
 		"PATH=" + os.Getenv("PATH"),
 	}
 	stampFixture(t, home, repo)
-	return &cliSubprocessEnv{home: home, repo: repo, env: env}
+	return &cliSubprocessEnv{home: home, repo: repo, env: testhelpers.CoverEnv(env)}
 }
 
 // writeAnswers drops a non-interactive setup answers file in the repo and

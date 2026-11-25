@@ -91,7 +91,7 @@ func setupSubprocessEnv(t *testing.T) *subprocessEnv {
 		"PATH=" + os.Getenv("PATH"),
 	}
 
-	return &subprocessEnv{home: home, repo: repo, env: env}
+	return &subprocessEnv{home: home, repo: repo, env: testhelpers.CoverEnv(env)}
 }
 
 // runHookSubprocess spawns the ethos binary with "hook <event>",
@@ -687,6 +687,7 @@ func TestSubprocess_AuditLog(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
+	testhelpers.EnableInheritedCoverage()
 	testhelpers.MustIsolateGit() // no inherited GIT_DIR; temp dirs stop at the temp root
 	// This suite normally runs inside a real Claude Code session, where
 	// CLAUDE_PID and CLAUDECODE are themselves set. DES-074 makes their
@@ -720,7 +721,7 @@ func TestMain(m *testing.M) {
 	}
 	root := filepath.Join(wd, "..", "..")
 
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/ethos")
+	cmd := exec.Command("go", testhelpers.CoverBuild("-o", bin, "./cmd/ethos")...)
 	cmd.Dir = root
 	out, buildErr := cmd.CombinedOutput()
 	if buildErr != nil {
