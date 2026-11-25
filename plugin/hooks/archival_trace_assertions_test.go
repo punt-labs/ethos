@@ -913,6 +913,8 @@ func TestArchivalTraceUndecodableRecord(t *testing.T) {
 	}{
 		{"torn down by exit_group", "1 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 2\n1 exit_group(0 <unfinished ...>\n2 ???( <unfinished ...>\n1 <... exit_group resumed>) = ?\n2 +++ exited with 0 +++", ""},
 		{"captured killed syscall entry", "1900637 clone(child_stack=NULL, flags=SIGCHLD) = 1900651\n1900651 ????( <unfinished ...>\n1900651 +++ killed by SIGKILL +++\n1900637 exit_group(0) = ?\n1900637 +++ exited with 0 +++", ""},
+		{"killed syscall entry without parent exit", "1 clone(child_stack=NULL, flags=SIGCHLD) = 2\n2 ????() = ?\n2 +++ killed by SIGKILL +++", ""},
+		{"different task killed without parent exit", "1 clone(child_stack=NULL, flags=SIGCHLD) = 2\n1 clone(child_stack=NULL, flags=SIGCHLD) = 3\n2 ????() = ?\n3 +++ killed by SIGKILL +++\n2 +++ exited with 0 +++", "unsupported syscall record"},
 		{"complete undecodable entry at teardown", "1 clone(child_stack=NULL, flags=CLONE_VM|CLONE_THREAD) = 2\n1 exit_group(0) = ?\n2 ????() = ?\n2 +++ exited with 0 +++", ""},
 		{"unrelated process exit cannot explain undecodable entry", "1 clone(child_stack=NULL, flags=SIGCHLD) = 2\n1 exit_group(0) = ?\n2 ????() = ?\n2 +++ exited with 0 +++", "unsupported syscall record"},
 		{"complete undecodable entry followed by work", "1 clone(child_stack=NULL, flags=SIGCHLD) = 2\n2 ????() = ?\n2 getcwd(\"/t/003/feature\", 129) = 14\n2 +++ exited with 0 +++\n1 exit_group(0) = ?", "unsupported syscall record"},
