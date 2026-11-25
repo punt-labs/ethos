@@ -14,16 +14,14 @@ permissions:
 jobs:
   test-suite:
     runs-on: ubuntu-latest
-    # Each revision gets the same race suite; the package run alone can
-    # take over 30 minutes on one runner.
-    timeout-minutes: 120
+    # A PR can need three race runs: merge result, head, and merge base.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           # plugin/hooks builds old binaries (93c9f82, v4.8.0) with git archive
           # to prove the shims block an old ethos. A depth-1 clone has neither.
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
         with:
           go-version-file: go.mod
@@ -89,13 +87,23 @@ jobs:
           uname -sr
           strace --version
 
+      - name: Test the PR merge result
+        if: github.event_name == 'pull_request'
+        run: make test
+
       - name: Test and compare package statement coverage to the merge base
         env:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             : "${PR_BASE:?pull request base SHA is required}"
-            make coverage-check COVERAGE_BASE="$PR_BASE"
+            : "${PR_HEAD:?pull request head SHA is required}"
+            scratch=$(mktemp -d "$RUNNER_TEMP/ethos-pr-head.XXXXXXXX")
+            trap 'git worktree remove --force "$scratch/head"; rmdir "$scratch"' EXIT
+            git worktree add --detach "$scratch/head" "$PR_HEAD"
+            make -C "$scratch/head" coverage-check COVERAGE_BASE="$PR_BASE"
+            cp "$scratch/head/coverage.out" coverage.out
           elif [ "$GITHUB_REF" = refs/heads/main ]; then
             make coverage-check COVERAGE_BASE=HEAD^
           else
