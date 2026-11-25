@@ -14453,3 +14453,19 @@ a failing advisory test command does not block.
 back into generated files. Blocking defaults break deliberately red edit
 states. Trusting the edited worktree's config lets an edit change which
 commands the session executes.
+
+## DES-086: Bounded session audit appends with full verification at seal (PROPOSED)
+
+**Context.** PostToolUse rereads and validates the full repository session
+audit stream before appending each tool call. PR #688 reduced work per row
+but did not change the growth with stream size.
+
+**Proposal.** Bound routine appends to the live tail and a machine-local
+timestamp floor under the existing stream lock. Keep full-history validation
+in readers and at pre-commit/seal before archival or publication. A missing or
+unusable floor takes the verified slow path. This defers some corruption and
+conflict detection, rather than claiming the tail authenticates the prefix.
+No change to mission events or to the DES-079 publication contract is proposed.
+
+See [the design](docs/design-audit-tail-validation.md) for measurements,
+recovery rules, the provenance tradeoff, and decisions for operator review.
