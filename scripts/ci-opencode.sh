@@ -35,6 +35,7 @@ install_nightly() {
   fetch_sibling beadle 02c64874215a1cbd9c091d38093e0478de237f6b
 
   uv python install "$UV_PYTHON"
+  uv tool install 'punt-kit==0.19.0'
   uv tool install 'punt-vox==5.1.0'
   uv tool install 'punt-lux[display]==0.33.1'
   uv tool install 'punt-quarry==3.9.1'
