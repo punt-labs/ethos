@@ -94,10 +94,12 @@ jobs:
           go run ./cmd/coverage-check -autorepair-floor-only
 
       - name: Test and compare package statement coverage to the merge base
+        shell: bash
         env:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
+          profile_root=$PWD
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             : "${PR_BASE:?pull request base SHA is required}"
             : "${PR_HEAD:?pull request head SHA is required}"
@@ -106,12 +108,14 @@ jobs:
             git worktree add --detach "$scratch/head" "$PR_HEAD"
             make -C "$scratch/head" coverage-check COVERAGE_BASE="$PR_BASE"
             cp "$scratch/head/coverage.out" coverage.out
+            profile_root="$scratch/head"
           elif [ "$GITHUB_REF" = refs/heads/main ]; then
             make coverage-check COVERAGE_BASE=HEAD^
           else
             make test
             go run ./cmd/coverage-check -autorepair-floor-only
           fi
+          (cd "$profile_root" && go tool cover -func=coverage.out | tail -1)
 
       - name: Upload package statement coverage profile
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -143,9 +147,6 @@ jobs:
 
       - name: fuzz type-check (Z specs)
         run: make fuzz-check
-
-      - name: Coverage summary
-        run: go tool cover -func=coverage.out | tail -1
 
       - name: Audit redaction performance budget
         if: ${{ !cancelled() }}
