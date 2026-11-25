@@ -30,7 +30,7 @@ func TestDarwinHandoffSnapshotIsolation(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	proof, err := darwinHandoffProof(ctx, checkout, []string{"input"})
+	proof, err := digestGateInputs(ctx, checkout, "", []string{"input"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,8 +60,6 @@ func TestDarwinHandoffSnapshotIsolation(t *testing.T) {
 			}
 		}
 	}()
-	// The denied operands are passed as live aliases by the test, not as the
-	// expansion of {root} or {files}.
 	physical, err := filepath.EvalSymlinks(live)
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +68,7 @@ func TestDarwinHandoffSnapshotIsolation(t *testing.T) {
 	    test "$PWD/input" = "$1"
 	    shift
 	    for p; do
-	        if /bin/cat "$p" >/dev/null 2>&1; then
+	        if /bin/cat "${p#path:}" >/dev/null 2>&1; then
 	            echo "unexpected live read: $p"; exit 1
 	        fi
 	    done
@@ -81,11 +79,11 @@ func TestDarwinHandoffSnapshotIsolation(t *testing.T) {
 	        test "$(/bin/cat input)" = original
 	    done`
 	check := editCheck{name: "isolation", cwd: checkout, timeout: 10 * time.Second,
-		argv: []string{"/bin/sh", "-c", script, "sh", live, symlink, hardlink,
-			"/System/Volumes/Data" + physical}}
+		argv: []string{"/bin/sh", "-c", script, "sh", live, "path:" + live, "path:" + symlink, "path:" + hardlink,
+			"path:/System/Volumes/Data" + physical}}
 	caseAlias := strings.Replace(physical, "/TestDarwin", "/testdarwin", 1)
 	if info, err := os.Stat(caseAlias); err == nil && info.Mode().IsRegular() && caseAlias != physical {
-		check.argv = append(check.argv, caseAlias)
+		check.argv = append(check.argv, "path:"+caseAlias)
 	}
 	result, err := executeHandoffSnapshot(ctx, scratch, checkout, proof, []string{"input"}, check)
 	if err != nil || result != "" {
@@ -98,9 +96,32 @@ func TestDarwinHandoffSnapshotIsolation(t *testing.T) {
 	}
 }
 
+func TestDarwinHandoffRejectsLiveAliasOperand(t *testing.T) {
+	checkout, scratch, outside := t.TempDir(), t.TempDir(), t.TempDir()
+	live := filepath.Join(checkout, "input")
+	if err := os.WriteFile(live, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(outside, "alias")
+	if err := os.Symlink(live, alias); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	inputs := []string{"input"}
+	proof, err := digestGateInputs(ctx, checkout, "", inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := editCheck{cwd: gateRoot, argv: []string{"/bin/sh", "-c", "exit 1", "probe", alias}}
+	got, err := executeHandoffSnapshot(ctx, scratch, checkout, proof, inputs, check)
+	if err == nil || !strings.Contains(err.Error(), "a literal argument refers to the live checkout") || got != "" {
+		t.Fatalf("wanted live alias deferral, got result=%q err=%v", got, err)
+	}
+}
+
 func TestDarwinHandoffSnapshotDefersOnLaunchFailure(t *testing.T) {
 	checkout, scratch := t.TempDir(), t.TempDir()
-	proof, err := darwinHandoffProof(context.Background(), checkout, nil)
+	proof, err := digestGateInputs(context.Background(), checkout, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,14 +137,14 @@ func TestDarwinHandoffStripe(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "stripe")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	pin, pinned, err := pinHandoffStripe(ctx, path)
-	if err != nil || !pinned {
-		t.Fatalf("pin: pinned=%v err=%v", pinned, err)
+	pin, waited, err := pinHandoffStripe(ctx, path)
+	if err != nil || waited {
+		t.Fatalf("pin: waited=%v err=%v", waited, err)
 	}
 	defer pin.Close()
-	second, pinned, err := pinHandoffStripe(ctx, path)
-	if err != nil || !pinned {
-		t.Fatalf("second pin: pinned=%v err=%v", pinned, err)
+	second, waited, err := pinHandoffStripe(ctx, path)
+	if err != nil || waited {
+		t.Fatalf("second pin: waited=%v err=%v", waited, err)
 	}
 	if busy, err := withUnpinnedStripe(pin, func() error {
 		t.Error("pruned while another owner held a pin")
@@ -146,7 +167,7 @@ func TestDarwinHandoffSnapshotDefersOnSetupFailure(t *testing.T) {
 	if err := os.WriteFile(path, []byte("declared"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	proof, err := darwinHandoffProof(context.Background(), checkout, []string{"input"})
+	proof, err := digestGateInputs(context.Background(), checkout, "", []string{"input"})
 	if err != nil {
 		t.Fatal(err)
 	}

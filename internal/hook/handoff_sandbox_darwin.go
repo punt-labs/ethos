@@ -5,20 +5,20 @@ package hook
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"golang.org/x/sys/unix"
 )
 
@@ -46,12 +46,15 @@ func probeDarwinHandoff() bool {
 	if _, err := handoffSandboxIdentity(checkout); err != nil {
 		return false
 	}
+	if !probeDarwinHandoffPins(ctx, filepath.Join(scratch, "pin")) {
+		return false
+	}
 	input := filepath.Join(checkout, "input")
 	alias := filepath.Join(dir, "alias")
 	if os.WriteFile(input, []byte("snapshot"), 0o600) != nil || os.Link(input, alias) != nil {
 		return false
 	}
-	proof, err := darwinHandoffProof(ctx, checkout, []string{"input"})
+	proof, err := digestGateInputs(ctx, checkout, "", []string{"input"})
 	if err != nil {
 		return false
 	}
@@ -77,118 +80,24 @@ func handoffSandboxIdentity(root string) (string, error) {
 	return fmt.Sprintf("%d:%d:%s", stat.Dev, stat.Ino, boot), nil
 }
 
-func openGateInput(root *os.Root, input string) (*os.File, error) {
-	if !filepath.IsLocal(input) || filepath.Clean(input) != input || input == "." {
-		return nil, fmt.Errorf("invalid gate input %q", input)
-	}
-	dir, err := root.Open(".")
+func probeDarwinHandoffPins(ctx context.Context, path string) bool {
+	pin, _, err := pinHandoffStripe(ctx, path)
 	if err != nil {
-		return nil, err
+		return false
 	}
-	defer dir.Close()
-	parts := strings.Split(input, string(filepath.Separator))
-	fd := int(dir.Fd())
-	for i, part := range parts {
-		flags := unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_CLOEXEC | unix.O_NONBLOCK
-		if i < len(parts)-1 {
-			flags |= unix.O_DIRECTORY
-		}
-		next, openErr := unix.Openat(fd, part, flags, 0)
-		if i > 0 {
-			_ = unix.Close(fd)
-		}
-		if openErr != nil {
-			return nil, &os.PathError{Op: "open gate input", Path: input, Err: openErr}
-		}
-		fd = next
-	}
-	return os.NewFile(uintptr(fd), input), nil
-}
-
-func pinHandoffStripe(ctx context.Context, path string) (*os.File, bool, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|unix.O_NOFOLLOW, 0o600)
+	defer pin.Close()
+	other, _, err := pinHandoffStripe(ctx, path)
 	if err != nil {
-		return nil, false, err
+		return false
 	}
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		if err = ctx.Err(); err != nil {
-			_ = f.Close()
-			return nil, false, err
-		}
-		switch err = unix.Flock(int(f.Fd()), unix.LOCK_SH|unix.LOCK_NB); {
-		case err == nil:
-			return f, true, nil
-		case errors.Is(err, unix.EWOULDBLOCK), errors.Is(err, unix.EINTR):
-			select {
-			case <-ctx.Done():
-			case <-ticker.C:
-			}
-		default:
-			_ = f.Close()
-			return nil, false, err
-		}
+	pruned := false
+	prune := func() error { pruned = true; return nil }
+	busy, err := withUnpinnedStripe(pin, prune)
+	if closeErr := other.Close(); err != nil || closeErr != nil || !busy || pruned {
+		return false
 	}
-}
-
-func withUnpinnedStripe(pin *os.File, prune func() error) (busy bool, err error) {
-	fd := int(pin.Fd())
-	if err = unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		if errors.Is(err, unix.EWOULDBLOCK) {
-			// An unsuccessful flock conversion may release the shared lock.
-			return true, unix.Flock(fd, unix.LOCK_SH)
-		}
-		return false, err
-	}
-	defer func() { err = errors.Join(err, unix.Flock(fd, unix.LOCK_SH)) }()
-	return false, prune()
-}
-
-type darwinGateReader struct {
-	ctx context.Context
-	io.Reader
-}
-
-func (r darwinGateReader) Read(p []byte) (int, error) {
-	if err := r.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return r.Reader.Read(p)
-}
-
-func darwinHandoffProof(ctx context.Context, dir string, inputs []string) (string, error) {
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return "", err
-	}
-	defer root.Close()
-	inputs = append([]string(nil), inputs...)
-	sort.Strings(inputs)
-	hash := sha256.New()
-	for _, input := range inputs {
-		f, err := openGateInput(root, input)
-		if err != nil {
-			return "", err
-		}
-		info, err := f.Stat()
-		if err == nil && !info.Mode().IsRegular() {
-			err = fmt.Errorf("not a regular gate input: %q", input)
-		}
-		if err == nil {
-			_, _ = fmt.Fprintf(hash, "%q\x00%o\x00%d\x00", input, info.Mode().Perm(), info.Size())
-			var n int64
-			n, err = io.Copy(hash, darwinGateReader{ctx: ctx, Reader: f})
-			if err == nil && n != info.Size() {
-				err = fmt.Errorf("gate input size changed: %q", input)
-			}
-		}
-		_ = f.Close()
-		if err != nil {
-			return "", err
-		}
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
+	busy, err = withUnpinnedStripe(pin, prune)
+	return err == nil && !busy && pruned
 }
 
 func cloneDarwinGateInputs(ctx context.Context, checkout, snapshot string, inputs []string) error {
@@ -197,7 +106,9 @@ func cloneDarwinGateInputs(ctx context.Context, checkout, snapshot string, input
 		return err
 	}
 	defer root.Close()
-	for _, input := range inputs {
+	inputs = slices.Clone(inputs)
+	slices.Sort(inputs)
+	for _, input := range slices.Compact(inputs) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -225,7 +136,10 @@ func cloneDarwinGateInput(src *os.File, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return err
 	}
-	return unix.Fclonefileat(int(src.Fd()), unix.AT_FDCWD, dst, unix.CLONE_NOOWNERCOPY)
+	if err := unix.Fclonefileat(int(src.Fd()), unix.AT_FDCWD, dst, unix.CLONE_NOOWNERCOPY); err != nil {
+		return err
+	}
+	return os.Chmod(dst, info.Mode().Perm()&0o100|0o400)
 }
 
 func darwinPathWithin(root, path string) bool {
@@ -246,7 +160,7 @@ func darwinPathWithin(root, path string) bool {
 
 func darwinHandoffInvocation(check editCheck, original, checkout, snapshot string, inputs []string) ([]string, string, error) {
 	rebase := func(path string) (string, bool) {
-		for _, root := range []string{original, checkout} {
+		for _, root := range []string{gateRoot, original, checkout} {
 			rel, err := filepath.Rel(root, path)
 			if err == nil && filepath.IsLocal(rel) {
 				return filepath.Join(snapshot, rel), true
@@ -272,7 +186,13 @@ func darwinHandoffInvocation(check editCheck, original, checkout, snapshot strin
 				argv = append(argv, filepath.Join(snapshot, input))
 			}
 		default:
-			operand, _ := rebase(arg)
+			operand, rebased := rebase(arg)
+			if !rebased && filepath.IsAbs(arg) {
+				physical, err := filepath.EvalSymlinks(arg)
+				if darwinPathWithin(checkout, arg) || (err == nil && darwinPathWithin(checkout, physical)) {
+					return nil, "", errors.New("a literal argument refers to the live checkout")
+				}
+			}
 			argv = append(argv, operand)
 		}
 	}
@@ -343,7 +263,7 @@ func darwinHandoffEnvironment(ctx context.Context, run string) ([]string, []stri
 func writeDarwinHandoffProfile(run, checkout, snapshot string, toolchain []string) (string, error) {
 	read := []string{snapshot, "/bin", "/sbin", "/usr/bin", "/usr/lib", "/usr/libexec", "/usr/share",
 		"/System/Library", "/System/Volumes/Preboot/Cryptexes/OS", "/Library/Developer",
-		"/private/etc", "/dev", "/private/var/db/timezone"}
+		"/dev", "/private/var/db/timezone"}
 	read = append(read, toolchain...)
 	write := []string{filepath.Join(run, "home"), filepath.Join(run, "tmp"), filepath.Join(run, "gocache"),
 		filepath.Join(run, "gomodcache")}
@@ -401,16 +321,9 @@ func runDarwinHandoffSnapshot(ctx context.Context, scratch, checkout, proof stri
 	if err != nil {
 		return "", err
 	}
-	scratch, err = filepath.Abs(scratch)
+	scratch, err = darwinHandoffScratch(ctx, scratch, checkout)
 	if err != nil {
 		return "", err
-	}
-	scratch, err = filepath.EvalSymlinks(scratch)
-	if err != nil {
-		return "", err
-	}
-	if darwinPathWithin(checkout, scratch) {
-		return "", errors.New("sandbox scratch is inside checkout")
 	}
 	run, err := os.MkdirTemp(scratch, "ethos-handoff-")
 	if err != nil {
@@ -426,16 +339,26 @@ func runDarwinHandoffSnapshot(ctx context.Context, scratch, checkout, proof stri
 	if err := cloneDarwinGateInputs(ctx, checkout, snapshot, inputs); err != nil {
 		return "", err
 	}
-	got, err := darwinHandoffProof(ctx, snapshot, inputs)
+	got, err := digestGateInputs(ctx, snapshot, "", inputs)
 	if err != nil {
 		return "", err
 	}
 	if proof != got {
-		return "", errors.New("snapshot proof mismatch")
+		return "", errors.New("could not establish snapshot isolation: snapshot proof mismatch")
 	}
 	argv, cwd, err := darwinHandoffInvocation(check, original, checkout, snapshot, inputs)
 	if err != nil {
 		return "", err
+	}
+	info, err := os.Stat(cwd)
+	if err != nil {
+		return "", fmt.Errorf("check cwd missing from snapshot or is not a directory: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("check cwd missing from snapshot or is not a directory: %w", unix.ENOTDIR)
+	}
+	if !gatePlanInputsPresent(snapshot, check.argv) {
+		return "", errors.New("could not establish snapshot isolation: undeclared snapshot operand")
 	}
 	env, toolchain := darwinHandoffEnvironment(ctx, run)
 	profile, err := writeDarwinHandoffProfile(run, checkout, snapshot, toolchain)
@@ -448,10 +371,35 @@ func runDarwinHandoffSnapshot(ctx context.Context, scratch, checkout, proof stri
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return runDarwinHandoffCheck(ctx, profile, cwd, env, argv, check)
+	return runDarwinHandoffCheck(ctx, profile, checkout, cwd, env, argv, check)
 }
 
-func runDarwinHandoffCheck(ctx context.Context, profile, cwd string, env, argv []string, check editCheck) (string, error) {
+func darwinHandoffScratch(ctx context.Context, scratch, checkout string) (string, error) {
+	physical := func(path string) (string, error) {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return "", err
+		}
+		return filepath.EvalSymlinks(abs)
+	}
+	dir, err := physical(scratch)
+	if err != nil || !darwinPathWithin(checkout, dir) {
+		return dir, err
+	}
+	// Gate cache scratch is in the checkout and cannot be exposed as cwd or argv.
+	output, err := exec.CommandContext(ctx, "/usr/bin/getconf", "DARWIN_USER_TEMP_DIR").Output()
+	if err != nil {
+		return "", err
+	}
+	dir, err = physical(strings.TrimSpace(string(output)))
+	if err == nil && darwinPathWithin(checkout, dir) {
+		return "", errors.New("sandbox scratch is inside checkout")
+	}
+	return dir, err
+}
+
+func runDarwinHandoffCheck(ctx context.Context, profile, checkout, cwd string, env, argv []string, check editCheck) (string, error) {
+	start := time.Now()
 	read, write, err := os.Pipe()
 	if err != nil {
 		return "", err
@@ -471,13 +419,20 @@ func runDarwinHandoffCheck(ctx context.Context, profile, cwd string, env, argv [
 	}()
 	var stdout, stderr editTail
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err = cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("sandbox launch did not complete: %w", err)
+	}
 	_ = write.Close()
-	_ = read.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	var ready [1]byte
+	stop := context.AfterFunc(ctx, func() { _ = read.Close() })
 	_, readyErr := io.ReadFull(read, ready[:])
+	stop()
+	if readyErr == nil && ready[0] == 'R' {
+		diagnostic.LogHookCheck(ctx, checkout, checkout, "handoff", check.name, "launched", time.Since(start))
+	}
+	err = cmd.Wait()
 	if ctx.Err() != nil {
-		return "", ctx.Err()
+		return "", errors.New("snapshot check timed out or was interrupted")
 	}
 	var exit *exec.ExitError
 	if readyErr != nil || ready[0] != 'R' || (errors.As(err, &exit) &&
@@ -485,12 +440,14 @@ func runDarwinHandoffCheck(ctx context.Context, profile, cwd string, env, argv [
 		return "", fmt.Errorf("sandbox launch did not complete: %v: %s", err, stderr.data)
 	}
 	if err == nil && (!check.failOnOutput || len(stdout.data) == 0) {
+		diagnostic.LogHookCheck(ctx, checkout, checkout, "handoff", check.name, "completed", time.Since(start))
 		return "", nil
 	}
 	detail := "non-empty formatting output"
 	if err != nil {
 		detail = err.Error()
 	}
+	diagnostic.LogHookCheck(ctx, checkout, checkout, "handoff", check.name, "failed", time.Since(start))
 	return fmt.Sprintf("%s: %s\n%s", check.name, detail, bytes.Join([][]byte{stdout.data, stderr.data}, []byte("\n"))), nil
 }
 
