@@ -64,6 +64,8 @@ func TestVerifierEnvironmentComposition(t *testing.T) {
 	require.NoError(t, os.Symlink(filepath.Join(outside, "missing.go"), filepath.Join(repo, "extract-one", "dangling.go")))
 	require.NoError(t, os.Symlink(filepath.Join(repo, "src"), filepath.Join(repo, "undeclared")))
 
+	t.Chdir(t.TempDir())
+
 	// Clear ambient verifier state first. A producer key mutation must not
 	// inherit a working value from the operator or another test.
 	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
