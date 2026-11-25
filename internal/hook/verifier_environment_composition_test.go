@@ -18,7 +18,8 @@ import (
 // No splitting, rejoining, renaming keys or handwritten allowlist repairs are
 // permitted in this harness: delimiter/key drift must affect hook decisions.
 func TestVerifierEnvironmentComposition(t *testing.T) {
-	home := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home-alias")
+	require.NoError(t, os.Symlink(t.TempDir(), home))
 	t.Setenv("HOME", home)
 	repo := stageRepoRoot(t)
 	const missionID = "m-2026-09-08-804"
@@ -35,6 +36,11 @@ func TestVerifierEnvironmentComposition(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, filepath.IsAbs(contractPath), "contract entry must exercise an absolute store path")
 	require.FileExists(t, contractPath)
+	physicalContract, err := filepath.EvalSymlinks(contractPath)
+	require.NoError(t, err)
+	require.NotEqual(t, contractPath, physicalContract, "the allowlist must contain the alias spelling")
+	physicalRepo, err := filepath.EvalSymlinks(repo)
+	require.NoError(t, err)
 	for _, path := range []string{"src/first.go", "src/second.go", "extract-one/existing.go", "extract-two/existing.go"} {
 		abs := filepath.Join(repo, filepath.FromSlash(path))
 		require.NoError(t, os.MkdirAll(filepath.Dir(abs), 0o700))
@@ -63,7 +69,7 @@ func TestVerifierEnvironmentComposition(t *testing.T) {
 	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
 	t.Setenv("ETHOS_VERIFIER_EXTRACT_INTO", "")
 	t.Setenv("MISSION_ID", "")
-	t.Setenv("ETHOS_REPO_ROOT", repo)
+	t.Setenv("ETHOS_REPO_ROOT", alias)
 	env := buildVerifierAllowlistEnv([]verifierMission{{Contract: c}}, store)
 	require.NotEmpty(t, env)
 	for key, value := range env {
@@ -87,6 +93,9 @@ func TestVerifierEnvironmentComposition(t *testing.T) {
 		{"deny sibling of declared file", "Write", filepath.Join(repo, "src", "third.go"), "deny"},
 		{"deny outside extract directories", "Edit", filepath.Join(repo, "elsewhere", "new.go"), "deny"},
 		{"read undeclared existing file", "Read", filepath.Join(repo, "extract-one", "existing.go"), ""},
+		{"write physical contract from aliased allowlist entry", "Write", physicalContract, ""},
+		{"edit physical checkout from aliased root", "Edit", filepath.Join(physicalRepo, "src", "first.go"), ""},
+		{"create in physical checkout from aliased root", "Write", filepath.Join(physicalRepo, "extract-one", "physical.go"), ""},
 		{"write through checkout alias", "Write", filepath.Join(alias, "src", "first.go"), ""},
 		{"create through checkout alias with missing parents", "Write", filepath.Join(alias, "extract-one", "nested", "new.go"), ""},
 		{"deny existing extract file through alias", "Write", filepath.Join(alias, "extract-one", "existing.go"), "deny"},
