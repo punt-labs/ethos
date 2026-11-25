@@ -14,6 +14,8 @@ import (
 )
 
 func TestNightlyBiffWallOrdering(t *testing.T) {
+	_, err := exec.LookPath("jq")
+	require.NoError(t, err, "install jq to run the offline Nightly Biff wall test")
 	const wallURL = "https://github.com/punt-labs/ethos/actions/runs/"
 	const failure = "Nightly QA failure on Ethos — "
 	const cancelled = "Nightly QA cancelled on Ethos — "

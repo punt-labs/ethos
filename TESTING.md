@@ -15,7 +15,7 @@ The installed PR/main and Nightly rows describe the target state after
 | Tier | Runner, selection and prerequisites | Time budget | Gate behavior |
 | --- | --- | --- | --- |
 | Pre-commit | Local, `make hooks` once, then `git commit`; also `make test-changed` directly. Go with race support, Git and Bash. Checks staged whitespace and tests working-tree packages selected by staged paths. | <30 s on a provisioned checkout for a typical small change | A test failure stops the commit; the existing Git hook still runs on a pass. |
-| Pre-push | Local, `make test-push` (invoked by the hook). Full credential-free package suite plus `make test-subprocess-fast`. Requires the Go toolchain, full Git history, Bash and Python. | <3 min | A failure stops the push; branch and non-release tag updates must be pushed from the corresponding checkout. Release tags skip the local gate; the [Release] candidate smoke gates publication. |
+| Pre-push | Local, `make test-push` (invoked by the hook). Full credential-free package suite plus `make test-subprocess-fast`. Requires the Go toolchain, full Git history, Bash, Python and `jq`. | <3 min | A failure stops the push; branch and non-release tag updates must be pushed from the corresponding checkout. Release tags skip the local gate; the [Release] candidate smoke gates publication. |
 | PR | [Test] and [Docs], hosted runners. Full `make test`, storage and plugin-cache checks, Linux/macOS installed verification [#670], offline OpenCode checks, Z specs, wire smoke against a local stub, and docs. | <10 min | Required `test` and `docs` block merge. Wire smoke and tool-install verification also report independently. |
 | Merge to main | Repeat PR jobs on the main commit. Coverage uploads are tied to that run and commit. | <10 min | A red main requires triage; do not update coverage from an unsuccessful run. |
 | Nightly | [Behavioral] (Nightly [#671]), daily 06:07 UTC or manual dispatch, hosted Linux on upstream main. `make test-nightly` is the authorized local equivalent: review the quarantine inventory, then run the `behavioral` selection. Requires Claude CLI, an Anthropic test key and the configured judge model after [#671]. | ≤1 h (30-minute hosted live job) | Live failures are red and Biff alerts on failed or canceled runs after [#671]. Not a PR check. |
@@ -66,8 +66,10 @@ Both require a native Linux/macOS host, Bash, Python 3, and `shasum`.
 
 [wire harness]: tests/e2e/README.md
 
-Provision tools and module caches first (see [development guide]). Offline
-gates do not need a production key. Run live selectors only in a disposable
+Provision tools and module caches first (see [development guide]). The full
+`make test` suite requires `jq` on Linux and macOS for the offline Nightly
+Biff wall regression. Offline gates do not need a production key.
+Run live selectors only in a disposable
 checkout or authorized trusted job. Do not put provider secrets or private
 payloads in fixtures or artifacts.
 
