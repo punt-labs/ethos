@@ -60,4 +60,19 @@ if [[ ! ${packages[0]+selected} ]]; then
   echo "No staged paths belong to a default Go package."
   exit 0
 fi
-go test -race -count=1 "${packages[@]}"
+fast=()
+for package in "${packages[@]}"; do
+  case "$package" in
+    ./cmd/ethos) smoke='Slugify|VersionCommand|VersionCommandJSON' ;;
+    ./internal/enable) smoke='EnableDepositsFourArtifacts|EnableDisableRoundTrip' ;;
+    ./internal/gitenv) smoke='Parsed|TimeoutDefault' ;;
+    ./internal/hook) smoke='BuildPersonaBlock_Full|BuildExtensionContext' ;;
+    ./internal/mission) smoke='Store_RoundTrip|Store_RejectsSymlink_Load' ;;
+    ./plugin/hooks) smoke='HooksDormantRepositoryRunsNoProbe|HooksFailLoudWhenRevParseFails' ;;
+    *) fast+=("$package"); continue ;;
+  esac
+  go test -race -count=1 -run "^Test($smoke)$" "$package"
+done
+if [[ ${fast[0]+selected} ]]; then
+  go test -race -count=1 "${fast[@]}"
+fi

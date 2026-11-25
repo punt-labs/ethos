@@ -14,9 +14,9 @@ The installed PR/main and Nightly rows describe the target state after
 
 | Tier | Runner, selection and prerequisites | Time budget | Gate behavior |
 | --- | --- | --- | --- |
-| Pre-commit | Local, `make hooks` once, then `git commit`; also `make test-changed` directly. Go with race support, Git and Bash. Checks staged whitespace and tests working-tree packages selected by staged paths. | <30 s on a provisioned checkout for a typical small change | A test failure stops the commit; the existing Git hook still runs on a pass. |
+| Pre-commit | Local, `make hooks` once, then `git commit`; also `make test-changed` directly. Go with race support, Git and Bash. Checks staged whitespace and tests working-tree packages selected by staged paths, using the smoke cases listed in [test-changed.sh](scripts/test-changed.sh) for the slowest packages. | <30 s on a provisioned checkout for a typical small change | A test failure stops the commit; the existing Git hook still runs on a pass. |
 | Pre-push | Local, `make test-push` (invoked by the hook). Full credential-free package suite plus `make test-subprocess-fast`. Requires the Go toolchain, full Git history, Bash and Python. | <3 min | A failure stops the push; branch and non-release tag updates must be pushed from the corresponding checkout. Release tags skip the local gate; the [Release] candidate smoke gates publication. |
-| PR | [Test] and [Docs], hosted runners. Full `make test`, storage and plugin-cache checks, Linux/macOS installed verification [#670], offline OpenCode checks, Z specs, wire smoke against a local stub, and docs. | <10 min | Required `test` and `docs` block merge. Wire smoke and tool-install verification also report independently. |
+| PR | [Test] and [Docs], hosted runners. Full `make test` sharded by Go package, with combined statement coverage; storage and plugin-cache checks, Linux/macOS installed verification [#670], offline OpenCode checks, Z specs, wire smoke against a local stub, and docs. | <10 min | Required `test` aggregates all race shards, coverage, quality and both installed smoke legs. Required `docs` blocks merge separately. Wire smoke and both tool-install legs report independently. |
 | Merge to main | Repeat PR jobs on the main commit. Coverage uploads are tied to that run and commit. | <10 min | A red main requires triage; do not update coverage from an unsuccessful run. |
 | Nightly | [Behavioral] (Nightly [#671]), daily 06:07 UTC or manual dispatch, hosted Linux on upstream main. `make test-nightly` is the authorized local equivalent: review the quarantine inventory, then run the `behavioral` selection. Requires Claude CLI, an Anthropic test key and the configured judge model after [#671]. | ≤1 h (30-minute hosted live job) | Live failures are red and Biff alerts on failed or canceled runs after [#671]. Not a PR check. |
 | Release candidate | [Release] stages four checksummed binaries; each native Linux/macOS runner installs through shipped `install.sh` in a temporary HOME and verifies version and identity create/get. PR path or dispatch runs this stage without publishing. Local: `make test-release-candidate`. | 20-minute build, 5 minutes per native smoke | All four smokes gate tag publication; publish uses the staged bytes. |
@@ -45,6 +45,14 @@ If Git uses a different hooks directory or the existing gate hook cannot
 be safely edited, installation refuses and leaves the chain to the operator.
 If it finds a legacy standalone Ethos audit seal, run `ethos enable` to
 upgrade that seal before retrying `make hooks`.
+
+Pre-push runs the same uncached, race-instrumented tests as `make test`.
+[The pre-push runner](scripts/test-push.sh) splits the CLI and hook packages
+with complementary `-run` and `-skip` selectors and runs the remaining
+packages with four slots by default (`TEST_PUSH_PARALLEL`). It omits the
+race runtime's one-second exit delay, which otherwise repeats for every
+race-instrumented fixture subprocess. Statement coverage is collected by
+`make test` and PR/main CI rather than by the local hook.
 
 For a local release check, use the shipped `install.sh` for the intended
 version and place the version-matched staged artifact in `dist/`. Candidate
@@ -129,9 +137,7 @@ completed after the four PRs.
 
 | Clause | Scope and reason for deferral | Owner | Proposed expiry | Linear |
 | --- | --- | --- | --- | --- |
-| TST-1 / GO-TST-1 | Heavy affected packages may miss 30 s locally; measure representative changes and select smaller safe subsets without weakening the other gates. | Jim Freeman | 2026-12-08 | [PL-1585](https://linear.app/punt-labs/issue/PL-1585) |
-| TST-1 / GO-TST-1 | Full pre-push took 654 s against a 180 s budget; optimizing and sharding the suite are outside the hook changes. | Jim Freeman | 2026-12-08 | [PL-1581](https://linear.app/punt-labs/issue/PL-1581) |
-| TST-1 / GO-TST-1 | PR/main exceed 10 min and wire/tool jobs are not required; tuning and branch ruleset changes need separate work. | Jim Freeman | 2026-12-08 | [PL-1591](https://linear.app/punt-labs/issue/PL-1591) |
+| TST-1 / GO-TST-1 | Sharded PR/main runs replace the serial test job. The three independent wire/tool jobs still need to be made required in the main ruleset. | Jim Freeman | 2026-12-08 | [PL-1591](https://linear.app/punt-labs/issue/PL-1591) |
 | TST-1 / TST-4 | No pinned pre-commit/required PR secret scanner is configured; needs a scanner policy, config and ruleset rollout. | Jim Freeman | 2026-12-08 | [PL-1586](https://linear.app/punt-labs/issue/PL-1586) |
 | TST-2 / GO-TST-1 | Unit-only and subprocess-only selectors cover representative packages, not all tests of each kind; exhaustive separation needs classification of mixed packages. | Jim Freeman | 2026-12-22 | [PL-1589](https://linear.app/punt-labs/issue/PL-1589) |
 | TST-2 / GO-TST-1 | `test-legacy-corpus` and live OpenCode smoke are still manual; move them to suitable CI tiers after provisioning fixtures and the trusted runner. | Jim Freeman | 2026-12-22 | [PL-1584](https://linear.app/punt-labs/issue/PL-1584) |

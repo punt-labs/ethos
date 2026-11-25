@@ -60,7 +60,7 @@ lint: ## Lint (golangci-lint + windows vet + shellcheck + ruff + mypy)
 	@test -x $(GOLANGCI_LINT) || { echo "golangci-lint not found at $(GOLANGCI_LINT) — run 'make tools' to install $(GOLANGCI_LINT_VERSION)"; exit 1; }
 	$(GOLANGCI_LINT) run ./...
 	GOOS=windows go vet ./... # the windows build, tests included: a unix-only helper or test file must carry its build tag
-	shellcheck plugin/hooks/*.sh install.sh .githooks/* scripts/test-changed.sh scripts/test-timed.sh
+	shellcheck plugin/hooks/*.sh install.sh .githooks/* scripts/test-changed.sh scripts/test-push.sh scripts/test-shard.sh scripts/test-timed.sh
 	cd tests/e2e && uv run ruff check .
 	cd tests/e2e && uv run ruff format --check .
 	cd tests/e2e && uv run mypy src/ tests/
@@ -110,22 +110,26 @@ clean-latex: ## Remove LaTeX build intermediates (keeps .pdf/.tex/.bib)
 # Several packages run real git and subprocesses against wall-clock deadlines.
 # Running every package at once (go test's default -p is GOMAXPROCS) on a
 # developer machine starves those deadlines and times out the long packages
-# under -race; cmd/ethos alone takes minutes. CI's job budget is 30 minutes, and
-# the default per-package timeout is 10. Raise TEST_PARALLEL on a quiet host.
+# under -race. Raise TEST_PARALLEL on a quiet host.
 TEST_PARALLEL ?= 2
+TEST_PUSH_PARALLEL ?= 4
+TEST_PACKAGES ?= ./...
 
 test: ## Run tests with race detection and write coverage to coverage.out
-	go test -race -count=1 -timeout 30m -p $(TEST_PARALLEL) -coverprofile=coverage.out ./...
+	go test -race -count=1 -timeout 30m -p $(TEST_PARALLEL) -coverprofile=coverage.out $(TEST_PACKAGES)
 
-.PHONY: hooks test-changed test-push test-subprocess-fast
+.PHONY: hooks test-changed test-push test-push-suite test-subprocess-fast
 hooks: ## Opt in to the repository's development Git hooks
 	python3 scripts/install-dev-hooks.py
 
-test-changed: ## Run default Go tests in packages affected by staged paths
+test-changed: ## Run Go checks in packages affected by staged paths
 	bash scripts/test-timed.sh pre-commit 30 bash scripts/test-changed.sh
 
 test-push: ## Run the full default suite and a fast boundary check before pushing
-	bash scripts/test-timed.sh pre-push 180 $(MAKE) test test-subprocess-fast
+	GORACE="$$GORACE atexit_sleep_ms=0" bash scripts/test-timed.sh pre-push 180 $(MAKE) test-push-suite test-subprocess-fast
+
+test-push-suite:
+	bash scripts/test-push.sh $(TEST_PUSH_PARALLEL)
 
 test-subprocess-fast: ## Exercise dormant and unresolvable Git hook entry points
 	go test -race -count=1 -run '^TestHooks(DormantRepositoryRunsNoProbe|FailLoudWhenRevParseFails)$$' ./plugin/hooks
