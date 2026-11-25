@@ -48,6 +48,36 @@ func installDevelopmentHooks(t *testing.T, dir string, run func(string, string, 
 	require.NoError(t, err, "%s", out)
 }
 
+func TestDevelopmentPrePushTimesSnapshotCleanup(t *testing.T) {
+	dir, run := developmentHookFixture(t)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-push:\n\t@echo ran-tests\n"), 0o600))
+	out, err := run(dir, "git", "add", "Makefile")
+	require.NoError(t, err, "%s", out)
+	out, err = run(dir, "git", "commit", "-qm", "fixture")
+	require.NoError(t, err, "%s", out)
+	out, err = run(dir, "git", "rev-parse", "HEAD")
+	require.NoError(t, err, "%s", out)
+	head := strings.TrimSpace(string(out))
+
+	git, err := exec.LookPath("git")
+	require.NoError(t, err)
+	bin := filepath.Join(dir, ".test-bin")
+	require.NoError(t, os.Mkdir(filepath.Join(bin, "real"), 0o700))
+	require.NoError(t, os.Symlink(git, filepath.Join(bin, "real", "git")))
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(`#!/bin/sh
+set -e
+"${0%/*}/real/git" "$@"
+if [ "$3" = worktree ] && [ "$4" = remove ]; then
+    echo removed-snapshot
+fi
+`), 0o700))
+
+	ref := "HEAD " + head + " refs/heads/topic " + strings.Repeat("0", len(head))
+	out, err = run(dir, "bash", "-c", `printf '%s\n' "$1" | .githooks/pre-push`, "hook", ref)
+	require.NoError(t, err, "%s", out)
+	require.Contains(t, string(out), "ran-tests\nremoved-snapshot\npre-push:")
+}
+
 func TestDevelopmentHooksFutureWorktreeKeepsExistingHooks(t *testing.T) {
 	dir, run := developmentHookFixture(t)
 	out, err := run(dir, "git", "commit", "--allow-empty", "-m", "initial")

@@ -129,7 +129,7 @@ test-changed: ## Run default Go tests in packages affected by staged paths
 	fi
 
 test-push: ## Run the full default suite and a fast boundary check before pushing
-	bash scripts/test-timed.sh pre-push 180 $(MAKE) test test-subprocess-fast
+	$(MAKE) test test-subprocess-fast
 
 test-subprocess-fast: ## Exercise dormant and unresolvable Git hook entry points
 	go test -race -count=1 -run '^TestHooks(DormantRepositoryRunsNoProbe|FailLoudWhenRevParseFails)$$' ./plugin/hooks

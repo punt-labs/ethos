@@ -1664,6 +1664,7 @@ test TestDevelopmentHooksRequireLegacySealUpgrade
 test TestDevelopmentLiveRequiresKey
 test TestDevelopmentPreCommit
 test TestDevelopmentPrePush
+test TestDevelopmentPrePushTimesSnapshotCleanup
 test TestFilesystemReflectionShapes
 test TestNightlyStopsBeforeLiveOnQuarantineFailure
 test TestPluginScriptsFailLoudly
