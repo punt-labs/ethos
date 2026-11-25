@@ -21,6 +21,8 @@ type StageFeedback struct {
 	Notice   string
 }
 
+const handoffStageBudget = 29 * time.Minute
+
 // RunStageChecks runs configured commit or handoff checks, without marker defaults.
 func RunStageChecks(ctx context.Context, checkout, agent, stage string) StageFeedback {
 	return runStageChecks(ctx, checkout, agent, stage, func() ([]string, error) { return stageFiles(checkout, stage) })
@@ -39,7 +41,7 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 	}
 	cap := 15 * time.Minute
 	if stage == "handoff" {
-		cap = 30 * time.Minute
+		cap = handoffStageBudget
 	} else if stage != "commit" {
 		return StageFeedback{Blocking: "checks: unsupported stage " + stage}
 	}

@@ -601,6 +601,21 @@ func TestStagePolicyErrorsAndOptOut(t *testing.T) {
 	require.Contains(t, RunStageChecks(context.Background(), root, "", "commit").Blocking, "GIT_INDEX_FILE")
 }
 
+func TestHandoffStageLeavesWrapperFeedbackHeadroom(t *testing.T) {
+	data, err := os.ReadFile("../../plugin/hooks/hooks.json")
+	require.NoError(t, err)
+	var config struct {
+		Hooks map[string][]struct {
+			Hooks []struct {
+				Timeout int
+			}
+		}
+	}
+	require.NoError(t, json.Unmarshal(data, &config))
+	wrapper := config.Hooks["SubagentStop"][0].Hooks[0].Timeout
+	require.GreaterOrEqual(t, time.Duration(wrapper)*time.Second-handoffStageBudget, time.Minute)
+}
+
 func TestStageFailureTailAndDeadline(t *testing.T) {
 	root, bin := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())
