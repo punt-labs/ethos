@@ -234,7 +234,18 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 
 func handoffManualCommand(root string, files []string, check checkset.Check) string {
 	home, _ := os.UserHomeDir()
+	planRoot := root
+	if check.Snapshot != nil {
+		planRoot = gateRoot
+	}
 	word := func(s string) string {
+		if check.Snapshot != nil {
+			if s == gateRoot {
+				s = root
+			} else if rel, ok := strings.CutPrefix(s, gateRoot+"/"); ok && filepath.IsLocal(rel) {
+				s = filepath.Join(root, rel)
+			}
+		}
 		if home != "" && filepath.IsAbs(s) {
 			if rel, err := filepath.Rel(home, s); err == nil && filepath.IsLocal(rel) {
 				return `"$HOME"/` + audit.ShellQuote(rel)
@@ -243,7 +254,7 @@ func handoffManualCommand(root string, files []string, check checkset.Check) str
 		return audit.ShellQuote(s)
 	}
 	var commands []string
-	for _, invocation := range stageInvocationsAt(root, files, check, true) {
+	for _, invocation := range stageInvocationsAt(planRoot, files, check, true) {
 		if len(invocation.argv) == 0 {
 			continue
 		}

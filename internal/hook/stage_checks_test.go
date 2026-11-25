@@ -252,6 +252,19 @@ func TestHandoffDeferralPrintsRunnableManualCommand(t *testing.T) {
 	require.Equal(t, strings.Join([]string{dir, root, dir, filepath.Join(dir, "report.txt"), "$(exit 1)", ""}, "\n"), string(out))
 }
 
+func TestHandoffManualCommandMapsDeclaredSnapshotPaths(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "gate.sh"), "printf 'live gate\n'\n")
+	check := checkset.Check{
+		Name: "manual", Stage: "handoff", Files: checkset.Patterns{All: true}, Cwd: "root",
+		Run: []string{"/bin/sh", "/checkout/gate.sh"}, Snapshot: &checkset.Snapshot{Inputs: []string{"gate.sh"}},
+	}
+	manual := handoffManualCommand(root, nil, check)
+	out, err := exec.Command("/bin/sh", "-c", manual).CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	require.Equal(t, "live gate\n", string(out))
+}
+
 func TestHandoffRootOperandIsNotLive(t *testing.T) {
 	root, _ := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())
