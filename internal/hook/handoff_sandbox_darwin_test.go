@@ -133,6 +133,43 @@ func TestDarwinHandoffSnapshotDefersOnLaunchFailure(t *testing.T) {
 	}
 }
 
+func TestDarwinHandoffSnapshotExit125IsCheckFailure(t *testing.T) {
+	checkout, scratch := t.TempDir(), t.TempDir()
+	ctx := context.Background()
+	proof, err := digestGateInputs(ctx, checkout, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := editCheck{name: "exit 125", cwd: gateRoot, argv: []string{"/bin/sh", "-c", "echo check-output; exit 125"}}
+	got, err := executeHandoffSnapshot(ctx, scratch, checkout, proof, nil, check)
+	if err != nil || !strings.Contains(got, "exit status 125") || !strings.Contains(got, "check-output") {
+		t.Fatalf("wanted an ordinary exit-125 check failure, got result=%q err=%v", got, err)
+	}
+}
+
+func TestDarwinHandoffSnapshotSetupUsesCheckDeadline(t *testing.T) {
+	checkout, scratch := t.TempDir(), t.TempDir()
+	ctx := context.Background()
+	inputs := []string{"input"}
+	input := filepath.Join(checkout, inputs[0])
+	if err := os.WriteFile(input, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	proof, err := digestGateInputs(ctx, checkout, "", inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(input, []byte("changed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	check := editCheck{cwd: gateRoot, argv: []string{"/bin/sh", "-c", "exit 0"}, timeout: time.Nanosecond}
+	got, err := executeHandoffSnapshot(ctx, scratch, checkout, proof, inputs, check)
+	var deferred *darwinHandoffDeferred
+	if !errors.As(err, &deferred) || !errors.Is(err, context.DeadlineExceeded) || got != "" {
+		t.Fatalf("wanted setup deadline deferral before proof comparison, got result=%q err=%v", got, err)
+	}
+}
+
 func TestDarwinHandoffStripe(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "stripe")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

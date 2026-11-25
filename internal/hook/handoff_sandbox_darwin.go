@@ -308,6 +308,12 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 }
 
 func runDarwinHandoffSnapshot(ctx context.Context, scratch, checkout, proof string, inputs []string, check editCheck) (_ string, err error) {
+	timeout := check.timeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	defer func() {
 		if err != nil {
 			err = &darwinHandoffDeferred{cause: err}
@@ -361,16 +367,13 @@ func runDarwinHandoffSnapshot(ctx context.Context, scratch, checkout, proof stri
 		return "", errors.New("could not establish snapshot isolation: undeclared snapshot operand")
 	}
 	env, toolchain := darwinHandoffEnvironment(ctx, run)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	profile, err := writeDarwinHandoffProfile(run, checkout, snapshot, toolchain)
 	if err != nil {
 		return "", err
 	}
-	timeout := check.timeout
-	if timeout <= 0 {
-		timeout = 10 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	return runDarwinHandoffCheck(ctx, profile, checkout, cwd, env, argv, check)
 }
 
@@ -436,7 +439,7 @@ func runDarwinHandoffCheck(ctx context.Context, profile, checkout, cwd string, e
 	}
 	var exit *exec.ExitError
 	if readyErr != nil || ready[0] != 'R' || (errors.As(err, &exit) &&
-		(exit.ExitCode() < 0 || (exit.ExitCode() >= 125 && exit.ExitCode() <= 127))) {
+		(exit.ExitCode() < 0 || exit.ExitCode() >= 126)) {
 		return "", fmt.Errorf("sandbox launch did not complete: %v: %s", err, stderr.data)
 	}
 	if err == nil && (!check.failOnOutput || len(stdout.data) == 0) {
