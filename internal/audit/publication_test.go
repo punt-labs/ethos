@@ -54,21 +54,25 @@ func TestPublicationRejectsStagedBytesOrModeDifferentFromVerifiedChunk(t *testin
 	require.Equal(t, bytes.TrimSpace(row), chunks[0][0].Raw)
 	before, err := os.ReadFile(index)
 	require.NoError(t, err)
-	require.NoError(t, os.Remove(path))
-	require.NoError(t, os.Symlink("replacement", path))
-	for _, tc := range []struct {
-		verified []byte
-		message  string
-	}{
-		{row, "differs from verified bytes"},
-		{[]byte("replacement"), "is not a regular blob"},
-	} {
-		err := StagePublication(p, []PublicationCandidate{NewPublicationCandidate(path, tc.verified)})
-		require.ErrorContains(t, err, tc.message)
+	assertRejected := func(t *testing.T, verified []byte, message string) {
+		t.Helper()
+		err := StagePublication(p, []PublicationCandidate{NewPublicationCandidate(path, verified)})
+		require.ErrorContains(t, err, message)
 		after, err := os.ReadFile(index)
 		require.NoError(t, err)
 		require.Equal(t, before, after)
 	}
+	t.Run("different bytes", func(t *testing.T) {
+		require.NoError(t, os.WriteFile(path, []byte("replacement"), 0o600))
+		assertRejected(t, row, "differs from verified bytes")
+	})
+	t.Run("symlink mode", func(t *testing.T) {
+		require.NoError(t, os.Remove(path))
+		if err := os.Symlink("replacement", path); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		assertRejected(t, []byte("replacement"), "is not a regular blob")
+	})
 }
 
 func TestRepositoryPublicationFailurePreservesActualIndex(t *testing.T) {
