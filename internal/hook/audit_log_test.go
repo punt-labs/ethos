@@ -35,6 +35,33 @@ func BenchmarkPolicyAuditAppendLongSession(b *testing.B) {
 	}
 }
 
+func TestPolicyAuditAppendDefersPrefixValidation(t *testing.T) {
+	root := t.TempDir()
+	p, err := layout.NewRepository(root, root, layout.RecordBlame)
+	require.NoError(t, err)
+	entry := auditEntry{Session: "long-session", Tool: "Bash"}
+	s := audit.Stream{Namespace: audit.SessionNS, Session: entry.Session}
+	var stream bytes.Buffer
+	for i := 1; i <= 1000; i++ {
+		fmt.Fprintf(&stream, `{"ts":%q,"session":"long-session","record":"blame","tool":"Bash"}`+"\n", audit.FormatLineTS(int64(i)))
+	}
+	require.NoError(t, audit.ReplaceLocalFile(p, s.LivePath(p), stream.Bytes()))
+	now := time.Unix(0, 100)
+	first, _, err := appendPolicyAudit(p, entry, now)
+	require.NoError(t, err)
+	require.Equal(t, audit.FormatLineTS(1001), first.Ts)
+	f, err := os.OpenFile(s.LivePath(p), os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = f.WriteAt([]byte("!"), 0)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	second, _, err := appendPolicyAudit(p, entry, now)
+	require.NoError(t, err, "warm append must not read the damaged prefix")
+	require.Equal(t, audit.FormatLineTS(1002), second.Ts)
+	_, err = audit.ReadStream(p, s)
+	require.Error(t, err, "a full reader must still detect damage")
+}
+
 func TestHandleAuditLog_ValidPayload(t *testing.T) {
 	dir := t.TempDir()
 	payload := map[string]any{
