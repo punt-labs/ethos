@@ -121,6 +121,16 @@ test: ## Run tests with race detection and write coverage to coverage.out
 hooks: ## Opt in to the repository's development Git hooks
 	python3 scripts/install-dev-hooks.py
 
+GITLEAKS := go run github.com/zricethezav/gitleaks/v8@v8.30.1
+GITLEAKS_LOG_OPTS ?= HEAD
+
+.PHONY: secret-scan-staged secret-scan-history
+secret-scan-staged: ## Scan staged Git changes for secrets
+	$(GITLEAKS) git --staged --redact=100 --no-banner .
+
+secret-scan-history: ## Scan Git history for secrets (defaults to all commits reachable from HEAD)
+	$(GITLEAKS) git --log-opts="--diff-merges=first-parent $(GITLEAKS_LOG_OPTS)" --redact=100 --no-banner .
+
 test-changed: ## Run default Go tests in packages affected by staged paths
 	bash scripts/test-timed.sh pre-commit 30 bash scripts/test-changed.sh
 

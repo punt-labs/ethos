@@ -17,7 +17,9 @@ func TestDevelopmentPreCommit(t *testing.T) {
 		name, gate, want string
 		fail             bool
 		sealed           bool
+		rejectSecret     bool
 	}{
+		{name: "failed secret scan", gate: "true", want: "secret scan ran", fail: true, rejectSecret: true},
 		{name: "failed gate", gate: "false", want: "test-changed", fail: true},
 		{name: "successful gate", gate: "true", want: "existing hook"},
 		{name: "installed seal keeps existing checks", gate: "true", want: "existing hook", sealed: true},
@@ -35,7 +37,12 @@ func TestDevelopmentPreCommit(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-commit"), []byte(hook), 0o700))
 			require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "hooks", "commit-msg"),
 				[]byte("#!/bin/sh\nprintf '\\nHost trailer: preserved\\n' >> \"$1\"\n"), 0o700))
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-changed:\n\t"+tc.gate+"\n"), 0o600))
+			scan := "true"
+			if tc.rejectSecret {
+				scan = "false"
+			}
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte(
+				"test-changed:\n\t"+tc.gate+"\nsecret-scan-staged:\n\t@echo 'secret scan ran'\n\t"+scan+"\n"), 0o600))
 			installDevelopmentHooks(t, dir, run)
 
 			out, err := git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
@@ -50,6 +57,10 @@ func TestDevelopmentPreCommit(t *testing.T) {
 				require.Contains(t, string(msg), "Host trailer: preserved")
 			}
 			require.Contains(t, string(out), tc.want)
+			require.Contains(t, string(out), "secret scan ran")
+			if tc.rejectSecret {
+				require.NotContains(t, string(out), "test-changed")
+			}
 			if tc.sealed {
 				require.Contains(t, string(out), "development seal")
 			}
