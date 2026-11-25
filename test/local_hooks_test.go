@@ -65,10 +65,11 @@ func TestDevelopmentPrePush(t *testing.T) {
 	const tagNotice = "Version tags are gated by the release workflow's candidate smoke."
 	for _, tc := range []struct {
 		name, gate, oid, want string
-		fail                  bool
+		fail, legacy          bool
 	}{
 		{name: "failed gate", gate: "false", oid: "head", want: "test-push", fail: true},
 		{name: "passes refs to existing hook", gate: "true", oid: "head", want: "refs/heads/topic"},
+		{name: "commit predates snapshot helper", gate: "@echo ran-legacy-tests", oid: "head", want: "ran-legacy-tests", legacy: true},
 		{name: "delete bypasses gate but not existing hook", gate: "false", oid: "zero", want: "refs/heads/topic"},
 		{name: "refuses untested commit", gate: "true", oid: "other", want: "check it out", fail: true},
 		{name: "release tags bypass the gate", gate: "false", oid: "release", want: tagNotice},
@@ -90,7 +91,11 @@ func TestDevelopmentPrePush(t *testing.T) {
 			require.NoError(t, err, "%s", out)
 			writePushedHookScripts(t, dir)
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-push:\n\t"+tc.gate+"\n"), 0o600))
-			out, err = run("", "git", "add", "Makefile", "scripts")
+			paths := []string{"Makefile", "scripts/install-dev-hooks.py", "scripts/test-timed.sh"}
+			if !tc.legacy {
+				paths = append(paths, "scripts/test-snapshot.sh")
+			}
+			out, err = run("", "git", append([]string{"add"}, paths...)...)
 			require.NoError(t, err, "%s", out)
 			out, err = run("", "git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
 				"commit", "--allow-empty", "-m", "fixture")
