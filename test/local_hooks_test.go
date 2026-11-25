@@ -62,6 +62,7 @@ func TestDevelopmentPreCommit(t *testing.T) {
 			}
 			require.Contains(t, string(out), tc.want)
 			require.Contains(t, string(out), "secret scan ran")
+			require.Regexp(t, `(?s)secret scan ran.*\npre-commit: \d+s elapsed \((within|over) 30s budget\), exit \d+`, string(out))
 			if tc.rejectSecret {
 				require.NotContains(t, string(out), "test-changed")
 				require.NotContains(t, string(out), "ran-staged-tests")
