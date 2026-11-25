@@ -150,7 +150,7 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		return "", errors.New(reason)
 	}
 	var exit *exec.ExitError
-	if err != nil && (!errors.As(err, &exit) || exit.ExitCode() < 0 || exit.ExitCode() >= 126) {
+	if err != nil && (!errors.As(err, &exit) || exit.ExitCode() < 0) {
 		return "", errors.New("snapshot check did not complete")
 	}
 	if err == nil && (!check.failOnOutput || len(stdout.data) == 0) {

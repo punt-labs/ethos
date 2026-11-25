@@ -351,6 +351,26 @@ func TestHandoffSandboxReportsMissingSnapshotCwd(t *testing.T) {
 	require.ErrorContains(t, err, "check cwd missing from snapshot")
 }
 
+func TestHandoffSandboxReportsHighExitStatuses(t *testing.T) {
+	live := t.TempDir()
+	writeFile(t, filepath.Join(live, "README"), "snapshot input\n")
+	inputs := []string{"README"}
+	proof, err := digestGateInputs(context.Background(), live, "", inputs)
+	require.NoError(t, err)
+	for _, code := range []string{"126", "127", "128"} {
+		t.Run(code, func(t *testing.T) {
+			failure, err := executeHandoffSnapshot(context.Background(), t.TempDir(), live, proof, inputs, editCheck{
+				name: "gate", cwd: gateRoot, timeout: 5 * time.Second,
+				argv: []string{"/bin/sh", "-c", "echo gate-stdout; echo gate-stderr >&2; exit \"$1\"", "gate", code},
+			})
+			require.NoError(t, err)
+			require.Contains(t, failure, "gate: exit status "+code)
+			require.Contains(t, failure, "\ngate-stdout\n")
+			require.Contains(t, failure, "\ngate-stderr")
+		})
+	}
+}
+
 func TestHandoffSnapshotLeaseAndProof(t *testing.T) {
 	root, _ := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())
