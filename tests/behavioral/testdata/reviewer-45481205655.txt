@@ -1,0 +1,13 @@
+I didn't change `counter.go`. I'm a read-only reviewer, and the mission contract only lets me write `REVIEW_NOTES.md`. I read the file, reported findings and submitted them as my result for m-2026-11-24-001. Someone with write access will have to make the change if it's needed.
+
+The repo doesn't show that the current behavior is a bug. The file is at `pkg/counter/counter.go`:
+
+- **Line 8** is the doc comment, not code: `// Increment adds 1 to the counter.`
+- **Line 10** is the code, `c.n++`, which adds 1. It matches what the comment says.
+- There are no tests or other files in the repo saying `Increment` should add 2.
+
+If the requirement really is +2, two lines need to change: line 10 to `c.n += 2` and line 8 to say "adds 2". Please confirm the intended step size before anyone edits it, since the code currently does what it says.
+
+Two other findings:
+1. There are no `_test.go` files. A test that checks the step size would settle this question and stop it from coming back.
+2. `Counter` isn't safe to use from several goroutines at once. That's fine if it's never shared, but it should be documented or switched to `sync/atomic` if it might be.
