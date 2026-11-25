@@ -143,11 +143,12 @@ func sealPolicyStreamsContext(ctx context.Context, p layout.Policy, streams []au
 	if opts.beforePublication != nil {
 		opts.beforePublication()
 	}
+	publicationCtx := context.WithoutCancel(ctx)
 	var publish []audit.PublicationCandidate
 	var publicationErrors []error
 	for _, entry := range archives {
 		err := withSealStreamLock(p, entry.stream, bounded, func() error {
-			paths, err := prepareStreamPublication(ctx, p, entry.stream, entry.dir)
+			paths, err := prepareStreamPublication(publicationCtx, p, entry.stream, entry.dir)
 			publish = append(publish, paths...)
 			return err
 		})
@@ -160,9 +161,6 @@ func sealPolicyStreamsContext(ctx context.Context, p layout.Policy, streams []au
 	}
 	if opts.beforeStage != nil {
 		opts.beforeStage()
-	}
-	if err := ctx.Err(); err != nil {
-		return res, fmt.Errorf("full audit publication incomplete; local archive retained: %w", err)
 	}
 	if err := audit.StagePublication(p, publish); err != nil {
 		return res, fmt.Errorf("full audit publication incomplete; local archive retained: %w", err)

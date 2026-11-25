@@ -110,6 +110,24 @@ func TestRepositorySealRefusesChangedPublication(t *testing.T) {
 	}
 }
 
+func TestFullSealPublishesAfterArchivalBudgetExpires(t *testing.T) {
+	root := t.TempDir()
+	policyGit(t, root, "init", "-q")
+	p := hookPolicy(t, root, root, layout.RecordFull)
+	s := audit.Stream{Namespace: audit.SessionNS, Session: "s"}
+	now := time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)
+	raw := []byte(`{"ts":"` + audit.FormatLineTS(100) + `","tool":"Read","record":"full"}` + "\n")
+	require.NoError(t, audit.ReplaceLocalFile(p, s.LivePath(p), raw))
+
+	ctx := &sealCheckBudget{Context: context.Background(), remaining: 100}
+	opts := SealOptions{beforePublication: func() { ctx.remaining = 0 }}
+	res, err := sealPolicyStreamsContext(ctx, p, []audit.Stream{s}, now, opts, true)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.LinesSealed)
+	require.Equal(t, 1, res.ChunksStaged)
+	require.Contains(t, policyGit(t, root, "diff", "--cached", "--name-only"), audit.SessionChunkFile(100, 100))
+}
+
 func TestRepositorySealPublishesVerifiedArchiveWithoutLiveRows(t *testing.T) {
 	root := t.TempDir()
 	policyGit(t, root, "init", "-q")
@@ -192,7 +210,7 @@ func TestFullSealResumesHistoryAndStagesLaterStream(t *testing.T) {
 	require.NoError(t, audit.WriteLocalAtomic(p, filepath.Join(dir, audit.SessionChunkFile(1, 30)), history.Bytes()))
 	require.NoError(t, audit.ReplaceLocalFile(p, later.LivePath(p), []byte(`{"ts":"`+audit.FormatLineTS(100)+`","tool":"Read","record":"full"}`+"\n")))
 	for attempt := 0; attempt < 8; attempt++ {
-		ctx := &sealCheckBudget{Context: context.Background(), remaining: 24}
+		ctx := &sealCheckBudget{Context: context.Background(), remaining: 12}
 		res, err := sealPolicyStreamsContext(ctx, p, []audit.Stream{first, later}, now, SealOptions{}, true)
 		if attempt == 0 {
 			require.ErrorIs(t, err, context.DeadlineExceeded)
@@ -279,7 +297,7 @@ func TestBoundedSealRetriesWithUpdatedLiveGuard(t *testing.T) {
 	_, err = seal(1)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Empty(t, policyGit(t, root, "diff", "--cached", "--name-only"))
-	res, err := seal(16)
+	res, err := seal(8)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.ChunksStaged)
 	data, err := audit.ReadStream(p, s)
