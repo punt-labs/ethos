@@ -36,9 +36,12 @@ func TestDevelopmentPreCommit(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "hooks", "commit-msg"),
 				[]byte("#!/bin/sh\nprintf '\\nHost trailer: preserved\\n' >> \"$1\"\n"), 0o700))
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-changed:\n\t"+tc.gate+"\n"), 0o600))
+			out, err := git("add", "Makefile")
+			require.NoError(t, err, "%s", out)
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-changed:\n\t@echo ran-dirty-makefile\n"), 0o600))
 			installDevelopmentHooks(t, dir, run)
 
-			out, err := git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+			out, err = git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
 				"commit", "--allow-empty", "-m", "fixture")
 			if tc.fail {
 				require.Error(t, err, "%s", out)
@@ -50,6 +53,7 @@ func TestDevelopmentPreCommit(t *testing.T) {
 				require.Contains(t, string(msg), "Host trailer: preserved")
 			}
 			require.Contains(t, string(out), tc.want)
+			require.NotContains(t, string(out), "ran-dirty-makefile")
 			if tc.sealed {
 				require.Contains(t, string(out), "development seal")
 			}
@@ -84,6 +88,9 @@ func TestDevelopmentPrePush(t *testing.T) {
 			}
 			out, err := run("", "git", "init", "-q", "--template=")
 			require.NoError(t, err, "%s", out)
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-push:\n\t"+tc.gate+"\n"), 0o600))
+			out, err = run("", "git", "add", "Makefile")
+			require.NoError(t, err, "%s", out)
 			out, err = run("", "git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
 				"commit", "--allow-empty", "-m", "fixture")
 			require.NoError(t, err, "%s", out)
@@ -92,7 +99,7 @@ func TestDevelopmentPrePush(t *testing.T) {
 			head := strings.TrimSpace(string(out))
 			require.NoError(t, os.Mkdir(filepath.Join(dir, ".git", "hooks"), 0o700))
 			require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-push"), []byte("#!/bin/sh\ncat\n"), 0o700))
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-push:\n\t"+tc.gate+"\n"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-push:\n\t@echo ran-dirty-makefile\n"), 0o600))
 			root, err := filepath.Abs("..")
 			require.NoError(t, err)
 			for _, path := range []string{"scripts", "go.mod", "docs", ".githooks"} {
@@ -144,6 +151,7 @@ func TestDevelopmentPrePush(t *testing.T) {
 				require.Contains(t, string(out), input)
 			}
 			require.Contains(t, string(out), tc.want)
+			require.NotContains(t, string(out), "ran-dirty-makefile")
 			if tc.oid == "release" || tc.oid == "mixed" {
 				require.Equal(t, 1, strings.Count(string(out), tagNotice))
 			} else {
@@ -173,40 +181,62 @@ func TestChangedPackages(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "changed"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "changed", "example.go"), []byte("package changed\n"), 0o600))
 	run("git", "add", "changed/example.go")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "changed", "example.go"), []byte("unstaged\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "untracked"), nil, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "go"), []byte(`#!/bin/sh
 if [ "$1" = list ]; then
-    printf '%s\n' "$(pwd -P)/changed" "$(pwd -P)/untouched" "$(pwd -P)/internal/seed" "$(pwd -P)/test"
+    root=$(pwd -P)
+    printf '%s\n' "fixture/changed|$root/changed|" "fixture/untouched|$root/untouched|" \
+        "fixture/internal/seed|$root/internal/seed|" "fixture/test|$root/test|" \
+        "fixture/direct|$root/direct|fixture/changed" "fixture/transitive|$root/transitive|fixture/direct"
 else
     if [ "${GIT_INDEX_FILE+x}" = x ]; then
         echo "go test inherited the parent Git index"
         exit 1
+    fi
+    [ ! -e untracked ] || exit 2
+    if [ -e changed/example.go ]; then
+        [ "$(cat changed/example.go)" = "package changed" ] || exit 3
     fi
     printf 'go %s\n' "$*"
 fi
 `), 0o700))
 	script, err := filepath.Abs("../scripts/test-changed.sh")
 	require.NoError(t, err)
-	require.Equal(t, "go test -race -count=1 ./changed\n", string(run("bash", script)))
+	snapshot, err := filepath.Abs("../scripts/test-snapshot.sh")
+	require.NoError(t, err)
+	selectPackages := func() string {
+		return string(run("bash", snapshot, "staged", "bash", script))
+	}
+	require.Equal(t, "go test -race -count=1 ./changed ./direct ./transitive\n", selectPackages())
+	require.Equal(t, "unstaged\n", string(run("cat", "changed/example.go")))
 
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "changed", "example.go"), []byte("package changed\n"), 0o600))
 	run("git", "rm", "--cached", "changed/example.go")
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "changed", "testdata", "nested"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "changed", "testdata", "nested", "sample.json"), []byte("{}\n"), 0o600))
 	run("git", "add", "changed/testdata/nested/sample.json")
-	require.Equal(t, "go test -race -count=1 ./changed\n", string(run("bash", script)))
+	require.Equal(t, "go test -race -count=1 ./changed ./direct ./transitive\n", selectPackages())
 
 	run("git", "rm", "--cached", "changed/testdata/nested/sample.json")
 	template := "internal/seed/sidecar/agents/example.md"
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, filepath.Dir(template)), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, template), []byte("# Example\n"), 0o600))
 	run("git", "add", template)
-	require.Equal(t, "go test -race -count=1 ./internal/seed\n", string(run("bash", script)))
+	require.Equal(t, "go test -race -count=1 ./internal/seed\n", selectPackages())
 
 	run("git", "rm", "--cached", template)
 	helper := "scripts/legacy-seal.go"
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, filepath.Dir(helper)), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, helper), []byte("package main\n"), 0o600))
 	run("git", "add", helper)
-	require.Equal(t, "go test -race -count=1 ./test\n", string(run("bash", script)))
+	require.Equal(t, "go test -race -count=1 ./test\n", selectPackages())
+
+	run("git", "rm", "--cached", helper)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.test/fixture\n"), 0o600))
+	run("git", "add", "go.mod")
+	require.Equal(t, "go test -race -count=1 ./changed ./untouched ./internal/seed ./test ./direct ./transitive\n", selectPackages())
+	require.NotContains(t, string(run("git", "worktree", "list", "--porcelain")), "checkout\n")
 }
 
 func TestDevelopmentLiveRequiresKey(t *testing.T) {

@@ -20,5 +20,5 @@ while read -r local_ref local_oid remote_ref _remote_oid; do
   fi
 done
 if [[ -n "$head" ]]; then
-  make test-push </dev/null
+  bash scripts/test-snapshot.sh commit "$head" make test-push </dev/null
 fi
