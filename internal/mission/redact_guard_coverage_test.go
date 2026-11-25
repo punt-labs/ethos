@@ -68,7 +68,8 @@ var guardedSinks = map[string]string{
 // only with an exact source-chain rationale. The raw damaged-byte exception is
 // limited to QuarantineLocal's canonical-local quarantine destination.
 var guardAllowed = map[string]string{
-	"internal/audit.AppendMonotonic":                 "appends the line its callback returns; every caller's callback returns guardAuditLine output (hook) or is guardWrite-checked (mission live log)",
+	"internal/audit.appendFromFloor":                 "AppendSession opens existing machine-local audit history and forwards only the callback from appendPolicyAudit, which calls guardAuditLineFull before stamping consent",
+	"internal/audit.appendAtFloor":                   "appends the line its callback returns; AppendSession receives guardAuditLineFull output and AppendMonotonic receives guardWrite-checked mission events",
 	"internal/audit.WriteChunkAtomic":                "the production caller audit.Quarantine checks recovered lines with guardLine before sealing; the old hook.sealDirLocked now exists only in a test fixture",
 	"internal/audit.writeMarkerAtomic":               "quarantine marker whose reason went through redactReason, which replaces a reason that still leaks",
 	"internal/mission.localReplace":                  "forward callers writeBytesWithOutcome, persistIntent, persistCorrectionIntent, ApplyReflection, finishReflection, applySharedCorrection and WriteDelegationSkeletonWithPolicy call guardWrite; writeBytesWithOutcome(false) via restoreBytes and restoreAtomicFile restore saved destination bytes only",

@@ -48,7 +48,7 @@ var ErrAuditDropped = errors.New("audit entry not written")
 // ErrAuditDurabilityUnconfirmed means the payload was appended and synced, but
 // the live name's directory sync failed. Do not describe it as a rolled-back
 // write or emit a second synthetic loss for a line that is already retained.
-var ErrAuditDurabilityUnconfirmed = errors.New("audit entry retained; directory durability unconfirmed")
+var ErrAuditDurabilityUnconfirmed = audit.ErrAppendDurabilityUnconfirmed
 
 // WriteAuditNotice writes the PostToolUse hook output that tells the
 // session about an audit entry that was dropped, or written without its
@@ -222,15 +222,7 @@ func appendPolicyAudit(p layout.Policy, entry auditEntry, now time.Time) (auditE
 	s := audit.Stream{Namespace: audit.SessionNS, Session: entry.Session}
 	var report guardReport
 	err := audit.WithStreamLock(p, s, func() error {
-		if err := layout.EnsureLocalDir(p, filepath.Dir(s.LivePath(p))); err != nil {
-			return err
-		}
-		data, err := audit.ReadStream(p, s)
-		if err != nil {
-			return err
-		}
-		floor := data.Floor
-		_, err = audit.AppendMonotonic(s.LivePath(p), floor, now, func(ts int64) ([]byte, error) {
+		return audit.AppendSession(p, s, now, func(ts int64) ([]byte, error) {
 			entry.Ts = audit.FormatLineTS(ts)
 			raw, err := json.Marshal(entry)
 			if err != nil {
@@ -240,13 +232,6 @@ func appendPolicyAudit(p layout.Policy, entry auditEntry, now time.Time) (auditE
 			report = guardReport{Rule: rule, Marker: marker}
 			return audit.StampEligibility(p, s, ts, out)
 		})
-		if err != nil {
-			return err
-		}
-		if err := audit.ConfirmStreamDurability(p, s); err != nil {
-			return fmt.Errorf("%w: %v", ErrAuditDurabilityUnconfirmed, err)
-		}
-		return nil
 	})
 	return entry, report, err
 }

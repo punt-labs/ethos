@@ -69,7 +69,7 @@ func TestPublicationDurabilityPersistentFailureAndRetry(t *testing.T) {
 				if attempt == 3 {
 					failing = false
 				}
-				err := StagePublication(f.policy, []string{f.publication})
+				err := stageFixturePublication(t, f.policy, f.publication)
 				if failing {
 					require.ErrorIs(t, err, fault)
 					var applied *layout.InstallDurabilityError
@@ -216,7 +216,7 @@ func TestPublicationDurabilityPreInstallFailureDoesNotConfirm(t *testing.T) {
 				calls++
 				return errors.New("unexpected pre-install confirmation")
 			}
-			err = StagePublication(p, []string{path})
+			err = stageFixturePublication(t, p, path)
 			require.Error(t, err)
 			var applied *layout.InstallDurabilityError
 			assert.False(t, errors.As(err, &applied), "pre-install failure reported as applied")

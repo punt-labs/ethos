@@ -56,7 +56,7 @@ func TestPublicationActualIndexStates(t *testing.T) {
 					original, err = os.Stat(index)
 					require.NoError(t, err)
 				}
-				err = StagePublication(p, []string{path})
+				err = stageFixturePublication(t, p, path)
 				t.Logf("StagePublication: err=%v; before bytes=%d sha256=%x", err, len(before), sha256.Sum256(before))
 				if state == "empty" || state == "malformed" {
 					assert.Error(t, err, "corrupt actual index must not be initialized")
@@ -113,7 +113,7 @@ func TestPublicationEmptySymlinkIndexPreserved(t *testing.T) {
 	if err := os.Symlink(target, index); err != nil {
 		t.Skipf("symlink creation unavailable: %v", err)
 	}
-	err = StagePublication(p, []string{path})
+	err = stageFixturePublication(t, p, path)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "is empty or corrupt")
 	assert.Contains(t, err.Error(), index)

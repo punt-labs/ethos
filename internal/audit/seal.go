@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -60,32 +61,47 @@ var writeFile = func(f *os.File, b []byte) (int, error) { return f.Write(b) }
 // the truncate too and reports a second failure distinctly; see that
 // function for the rationale.
 func AppendMonotonic(livePath string, watermark int64, now time.Time, line func(ts int64) ([]byte, error)) (int64, error) {
-	if info, err := os.Lstat(livePath); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		return 0, fmt.Errorf("live audit file %s is a symlink", livePath)
-	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+	f, err := openMonotonic(livePath)
+	if err != nil {
 		return 0, err
 	}
+	defer f.Close()
+	return recoverAndAppend(f, watermark, now, line)
+}
+
+func openMonotonic(livePath string) (*os.File, error) {
+	if info, err := os.Lstat(livePath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("live audit file %s is a symlink", livePath)
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
 	if err := os.MkdirAll(filepath.Dir(livePath), 0o700); err != nil {
-		return 0, fmt.Errorf("creating live dir: %w", err)
+		return nil, fmt.Errorf("creating live dir: %w", err)
 	}
 	f, err := os.OpenFile(livePath, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
-		return 0, fmt.Errorf("opening %s: %w", livePath, err)
+		return nil, fmt.Errorf("opening %s: %w", livePath, err)
 	}
-	defer f.Close()
+	return f, nil
+}
 
-	lastTS, err := truncateTornTailAndRecover(f, livePath)
+func recoverAndAppend(f *os.File, watermark int64, now time.Time, line func(ts int64) ([]byte, error)) (int64, error) {
+	lastTS, err := truncateTornTailAndRecover(f, f.Name())
 	if err != nil {
 		return 0, err
 	}
-	floor := lastTS
-	if watermark > floor {
-		floor = watermark
-	}
+	return appendAtFloor(f, max(lastTS, watermark), now, line)
+}
+
+func appendAtFloor(f *os.File, floor int64, now time.Time, line func(ts int64) ([]byte, error)) (int64, error) {
 	ts := now.UnixNano()
 	if ts <= floor {
+		if floor == math.MaxInt64 {
+			return 0, fmt.Errorf("allocating audit timestamp: floor overflow")
+		}
 		ts = floor + 1
 	}
+	livePath := f.Name()
 	body, err := line(ts)
 	if err != nil {
 		return 0, err

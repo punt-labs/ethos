@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,109 @@ func BenchmarkPolicyAuditAppendLongSession(b *testing.B) {
 		_, _, err := appendPolicyAudit(p, entry, time.Now())
 		require.NoError(b, err)
 	}
+}
+
+func TestPolicyAuditAppendDefersPrefixValidation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bounded appends require a stable file identity")
+	}
+	root := t.TempDir()
+	p, err := layout.NewRepository(root, root, layout.RecordBlame)
+	require.NoError(t, err)
+	entry := auditEntry{Session: "long-session", Tool: "Bash"}
+	s := audit.Stream{Namespace: audit.SessionNS, Session: entry.Session}
+	var stream bytes.Buffer
+	for i := 1; i <= 1000; i++ {
+		fmt.Fprintf(&stream, `{"ts":%q,"session":"long-session","record":"blame","tool":"Bash"}`+"\n", audit.FormatLineTS(int64(i)))
+	}
+	require.NoError(t, audit.ReplaceLocalFile(p, s.LivePath(p), stream.Bytes()))
+	now := time.Unix(0, 100)
+	first, _, err := appendPolicyAudit(p, entry, now)
+	require.NoError(t, err)
+	require.Equal(t, audit.FormatLineTS(1001), first.Ts)
+	f, err := os.OpenFile(s.LivePath(p), os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = f.WriteAt([]byte("!"), 0)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	second, _, err := appendPolicyAudit(p, entry, now)
+	require.NoError(t, err, "warm append must not read the damaged prefix")
+	require.Equal(t, audit.FormatLineTS(1002), second.Ts)
+	_, err = audit.ReadStream(p, s)
+	require.Error(t, err, "a full reader must still detect damage")
+}
+
+func TestPolicyAuditAppendRestoredPublishedHistoryOverridesFloor(t *testing.T) {
+	root := t.TempDir()
+	policyGit(t, root, "init", "-q")
+	p := hookPolicy(t, root, root, layout.RecordBlame)
+	entry := auditEntry{Session: "s", Tool: "Bash"}
+	s := audit.Stream{Namespace: audit.SessionNS, Session: entry.Session}
+	rel := filepath.Join(".punt-labs", "ethos", "sessions", "2026-11-04-s", audit.SessionChunkFile(1000, 1000))
+	published := filepath.Join(root, rel)
+	require.NoError(t, audit.WriteLocalAtomic(p, published, []byte(`{"ts":"`+audit.FormatLineTS(1000)+`","tool":"Read","record":"full"}`+"\n")))
+	policyGit(t, root, "add", "--", rel)
+	policyGit(t, root, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-qm", "published")
+	head := policyGit(t, root, "rev-parse", "HEAD")
+	checkout := filepath.Join(t.TempDir(), "linked")
+	policyGit(t, root, "worktree", "add", "--detach", checkout, strings.TrimSpace(head))
+	linked := hookPolicy(t, root, checkout, layout.RecordBlame)
+	require.NoError(t, os.Remove(published))
+	require.NoError(t, os.Remove(filepath.Dir(published)))
+	require.NoError(t, os.Remove(filepath.Join(checkout, rel)))
+	require.NoError(t, os.Remove(filepath.Dir(filepath.Join(checkout, rel))))
+	now := time.Unix(0, 100)
+	first, _, err := appendPolicyAudit(p, entry, now)
+	require.NoError(t, err)
+	require.Equal(t, audit.FormatLineTS(100), first.Ts)
+	policyGit(t, root, "restore", "--", rel)
+	require.Equal(t, head, policyGit(t, root, "rev-parse", "HEAD"))
+	after, _, err := appendPolicyAudit(p, entry, now)
+	require.NoError(t, err)
+	require.Equal(t, audit.FormatLineTS(1001), after.Ts)
+	require.NoError(t, os.Remove(published))
+	require.NoError(t, os.Remove(filepath.Dir(published)))
+	// Seed a new floor without either working-tree copy, then restore only in C.
+	entry.Session = "linked"
+	s.Session = entry.Session
+	local, _, err := appendPolicyAudit(p, entry, now)
+	require.NoError(t, err)
+	require.Equal(t, audit.FormatLineTS(100), local.Ts)
+	policyGit(t, checkout, "restore", "--", rel)
+	require.Equal(t, head, policyGit(t, checkout, "rev-parse", "HEAD"))
+	linkedDir := filepath.Join(linked.CheckoutRecordRoot(), "sessions", "2026-11-04-linked")
+	cn, kind := audit.Classify(audit.SessionChunkFile(2000, 2000), audit.SessionNS)
+	require.Equal(t, audit.KindValid, kind)
+	marker, err := audit.MarshalMarker(audit.Marker{Chunk: cn.Stem(), VerifiedLast: 2000, Reason: "fixture"})
+	require.NoError(t, err)
+	require.NoError(t, audit.WriteLocalAtomic(linked, filepath.Join(linkedDir, cn.MarkerFile()), marker))
+	after, _, err = appendPolicyAudit(linked, entry, now)
+	require.NoError(t, err)
+	require.Equal(t, audit.FormatLineTS(2001), after.Ts)
+	_, err = audit.ReadStream(linked, s)
+	require.NoError(t, err)
+}
+
+func TestPolicyAuditAppendRecoversTornTailAndForwardRows(t *testing.T) {
+	root := t.TempDir()
+	p := hookPolicy(t, root, root, layout.RecordBlame)
+	entry := auditEntry{Session: "s", Tool: "Bash"}
+	s := audit.Stream{Namespace: audit.SessionNS, Session: entry.Session}
+	now := time.Unix(0, 100)
+	_, _, err := appendPolicyAudit(p, entry, now)
+	require.NoError(t, err)
+	f, err := os.OpenFile(s.LivePath(p), os.O_WRONLY|os.O_APPEND, 0)
+	require.NoError(t, err)
+	_, err = f.WriteString(`{"ts":"` + audit.FormatLineTS(200) + `","tool":"Read","record":"blame"}` + "\n" + "{torn")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	after, _, err := appendPolicyAudit(p, entry, now)
+	require.NoError(t, err)
+	require.Equal(t, audit.FormatLineTS(201), after.Ts)
+	data, err := audit.ReadStream(p, s)
+	require.NoError(t, err)
+	require.Len(t, data.Lines, 3)
+	require.EqualValues(t, 200, data.Lines[1].TS)
 }
 
 func TestHandleAuditLog_ValidPayload(t *testing.T) {

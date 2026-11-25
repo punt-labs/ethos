@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +13,15 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
+type PublicationCandidate struct {
+	path string
+	sum  [sha256.Size]byte
+}
+
+func NewPublicationCandidate(path string, verified []byte) PublicationCandidate {
+	return PublicationCandidate{path: path, sum: sha256.Sum256(verified)}
+}
+
 // StagePublication stages an explicit trace selection in a private candidate
 // index. Git's actual lock excludes intervening cooperating writers from the
 // snapshot through installation. A failed add never changes the actual index;
@@ -19,16 +29,17 @@ import (
 // A post-install directory sync failure returns layout.InstallDurabilityError:
 // the index is applied, not rolled back, and retry must confirm durability again.
 // This function is used ONLY for full publication, never local archival.
-func StagePublication(p layout.Policy, paths []string) error {
-	if len(paths) == 0 {
+func StagePublication(p layout.Policy, chunks []PublicationCandidate) error {
+	if len(chunks) == 0 {
 		return nil
 	}
 	if _, err := p.LockPath("audit-publication", "validate"); err != nil {
 		return err
 	}
 	checkout := filepath.Dir(filepath.Dir(p.CheckoutRecordRoot()))
-	specs := make([]string, 0, len(paths))
-	for _, path := range paths {
+	specs := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		path := chunk.path
 		rel, err := filepath.Rel(p.CheckoutRecordRoot(), path)
 		if err != nil || !filepath.IsLocal(rel) {
 			return fmt.Errorf("publication outside checkout record tree: %s", path)
@@ -100,6 +111,24 @@ func StagePublication(p layout.Policy, paths []string) error {
 			return fmt.Errorf("staging audit publication (actual index unchanged): %w: %s", err, strings.TrimSpace(string(exit.Stderr)))
 		}
 		return fmt.Errorf("staging audit publication (actual index unchanged): %w", err)
+	}
+	for i, path := range specs {
+		spec := gitenv.Spec{Git: "git", Dir: checkout, Env: env, Args: []string{"cat-file", "blob", ":0:" + path}}
+		blob, err := gitenv.Run(spec)
+		if err != nil {
+			return fmt.Errorf("reading staged audit blob %s (actual index unchanged): %w", path, err)
+		}
+		if sha256.Sum256(blob) != chunks[i].sum {
+			return fmt.Errorf("staged audit blob %s differs from verified bytes (actual index unchanged)", path)
+		}
+		spec.Args = []string{"--literal-pathspecs", "ls-files", "--stage", "--", path}
+		entry, err := gitenv.Run(spec)
+		if err != nil {
+			return fmt.Errorf("reading staged audit mode %s (actual index unchanged): %w", path, err)
+		}
+		if !strings.HasPrefix(string(entry), "100644 ") && !strings.HasPrefix(string(entry), "100755 ") {
+			return fmt.Errorf("staged audit entry %s is not a regular blob (actual index unchanged)", path)
+		}
 	}
 	f, err := os.OpenFile(candidate.Name(), os.O_RDWR, 0)
 	if err != nil {

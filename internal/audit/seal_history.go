@@ -31,6 +31,20 @@ type verifiedHistory struct {
 // The caller holds the stream lock. The returned lines exclude those already
 // present in the destination archive directory.
 func ReadStreamForSeal(ctx context.Context, p layout.Policy, s Stream, dir string, persist bool) (StreamData, error) {
+	return readStreamForSeal(ctx, p, s, dir, persist, nil)
+}
+
+// ReadStreamForPublication verifies the union under the stream lock and returns
+// the verified lines by destination archive chunk, before union deduplication.
+func ReadStreamForPublication(ctx context.Context, p layout.Policy, s Stream, dir string) ([][]Line, error) {
+	var chunks [][]Line
+	if _, err := readStreamForSeal(ctx, p, s, dir, false, &chunks); err != nil {
+		return nil, err
+	}
+	return chunks, nil
+}
+
+func readStreamForSeal(ctx context.Context, p layout.Policy, s Stream, dir string, persist bool, publication *[][]Line) (StreamData, error) {
 	history := map[string][]verifiedHistoryLine{}
 	checkedBytes := map[[sha256.Size]byte]verifiedHistoryLine{}
 	archived := map[int64]bool{}
@@ -45,6 +59,9 @@ func ReadStreamForSeal(ctx context.Context, p layout.Policy, s Stream, dir strin
 			checkedBytes[sha256.Sum256(l.Raw)] = rows[i]
 		}
 		if filepath.Dir(path) == dir {
+			if publication != nil {
+				*publication = append(*publication, lines)
+			}
 			for _, l := range lines {
 				archived[l.TS] = true
 			}

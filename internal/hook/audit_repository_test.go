@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -71,6 +72,126 @@ func TestBoundedSealResumesAfterBudgetExhaustion(t *testing.T) {
 	// Verify the new chunk and its two rows and perform the two seal checks, but
 	// do not replay the two already-checked live rows.
 	require.NoError(t, seal(&sealCheckBudget{Context: context.Background(), remaining: 5}))
+}
+
+func TestRepositorySealRefusesChangedPublication(t *testing.T) {
+	for _, changed := range []string{"archive overlap", "prepared file"} {
+		t.Run(changed, func(t *testing.T) {
+			root := t.TempDir()
+			policyGit(t, root, "init", "-q")
+			p := hookPolicy(t, root, root, layout.RecordFull)
+			s := audit.Stream{Namespace: audit.SessionNS, Session: "s"}
+			now := time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)
+			opts := SealOptions{StartDate: func(string) string { return "2026-11-04" }}
+			row := func(ts int64, tool string) string {
+				return `{"ts":"` + audit.FormatLineTS(ts) + `","tool":"` + tool + `","record":"full"}` + "\n"
+			}
+			require.NoError(t, audit.ReplaceLocalFile(p, s.LivePath(p), []byte(row(100, "Read"))))
+			if changed == "archive overlap" {
+				opts.beforePublication = func() {
+					require.NoError(t, audit.WithStreamLock(p, s, func() error {
+						dir, err := audit.ArchiveDir(p, s, "2026-11-04")
+						if err != nil {
+							return err
+						}
+						return audit.WriteLocalAtomic(p, filepath.Join(dir, audit.SessionChunkFile(100, 200)), []byte(row(100, "Other")+row(200, "Read")))
+					}))
+				}
+			} else {
+				opts.beforeStage = func() {
+					path := filepath.Join(p.CheckoutRecordRoot(), "sessions", "2026-11-04-s", audit.SessionChunkFile(100, 100))
+					require.NoError(t, os.WriteFile(path, []byte(row(100, "Other")), 0o600))
+				}
+			}
+			_, err := SealRepoWithPolicy(p, now, opts)
+			require.Error(t, err, "changed evidence must stop publication")
+			require.Empty(t, policyGit(t, root, "ls-files"), "actual index must stay unchanged")
+		})
+	}
+}
+
+func TestFullSealPublishesAfterArchivalBudgetExpires(t *testing.T) {
+	root := t.TempDir()
+	policyGit(t, root, "init", "-q")
+	p := hookPolicy(t, root, root, layout.RecordFull)
+	s := audit.Stream{Namespace: audit.SessionNS, Session: "s"}
+	now := time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)
+	raw := []byte(`{"ts":"` + audit.FormatLineTS(100) + `","tool":"Read","record":"full"}` + "\n")
+	require.NoError(t, audit.ReplaceLocalFile(p, s.LivePath(p), raw))
+
+	ctx := &sealCheckBudget{Context: context.Background(), remaining: 100}
+	opts := SealOptions{beforePublication: func() { ctx.remaining = 0 }}
+	res, err := sealPolicyStreamsContext(ctx, p, []audit.Stream{s}, now, opts, true)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.LinesSealed)
+	require.Equal(t, 1, res.ChunksStaged)
+	require.Contains(t, policyGit(t, root, "diff", "--cached", "--name-only"), audit.SessionChunkFile(100, 100))
+}
+
+func TestRepositorySealPublishesVerifiedArchiveWithoutLiveRows(t *testing.T) {
+	root := t.TempDir()
+	policyGit(t, root, "init", "-q")
+	p := hookPolicy(t, root, root, layout.RecordFull)
+	s := audit.Stream{Namespace: audit.SessionNS, Session: "s"}
+	dir, err := audit.ArchiveDir(p, s, "2026-11-04")
+	require.NoError(t, err)
+	private := `{"ts":"` + audit.FormatLineTS(100) + `","tool":"Private","record":"blame"}` + "\n"
+	eligible := `{"ts":"` + audit.FormatLineTS(200) + `","tool":"Read","record":"full"}` + "\n"
+	require.NoError(t, audit.WriteLocalAtomic(p, filepath.Join(dir, audit.SessionChunkFile(100, 200)), []byte(private+eligible)))
+	res, err := SealRepoWithPolicy(p, time.Now(), SealOptions{})
+	require.NoError(t, err)
+	require.Zero(t, res.LinesSealed)
+	require.Equal(t, 1, res.ChunksStaged)
+	path := filepath.Join(p.CheckoutRecordRoot(), "sessions", "2026-11-04-s", audit.SessionChunkFile(200, 200))
+	blob, present, err := audit.IndexBlob(root, path)
+	require.NoError(t, err)
+	require.True(t, present)
+	require.Equal(t, eligible, string(blob))
+}
+
+func TestRepositorySealDetectsEarlyArchiveDamageDeferredByAppend(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bounded appends require a stable file identity")
+	}
+	root := t.TempDir()
+	p := hookPolicy(t, root, root, layout.RecordBlame)
+	entry := auditEntry{Session: "s", Tool: "Bash"}
+	s := audit.Stream{Namespace: audit.SessionNS, Session: entry.Session}
+	dir, err := audit.ArchiveDir(p, s, "2026-11-04")
+	require.NoError(t, err)
+	row := func(ts int64) string {
+		return `{"ts":"` + audit.FormatLineTS(ts) + `","tool":"Read","record":"blame"}` + "\n"
+	}
+	path := filepath.Join(dir, audit.SessionChunkFile(100, 200))
+	require.NoError(t, audit.WriteLocalAtomic(p, path, []byte(row(100)+row(200))))
+	now := time.Unix(0, 99)
+	first, _, err := appendPolicyAudit(p, entry, now)
+	require.NoError(t, err)
+	require.Equal(t, audit.FormatLineTS(201), first.Ts)
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = f.WriteAt([]byte("!"), 0)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	second, _, err := appendPolicyAudit(p, entry, now)
+	require.NoError(t, err)
+	require.Equal(t, audit.FormatLineTS(202), second.Ts)
+	_, err = SealRepoWithPolicy(p, now, SealOptions{})
+	require.ErrorContains(t, err, "invalid character '!'")
+	// A digest mismatch in the floor forces the next append back to that
+	// same verified union instead of accepting stale history.
+	cursors, err := filepath.Glob(filepath.Join(p.LocalRoot(), "cursors", "append-*.json"))
+	require.NoError(t, err)
+	require.Len(t, cursors, 1)
+	require.NoError(t, os.WriteFile(cursors[0], []byte("invalid"), 0o600))
+	_, _, err = appendPolicyAudit(p, entry, now)
+	require.ErrorContains(t, err, "invalid character '!'")
+	require.NoError(t, os.Remove(cursors[0]))
+	_, _, err = appendPolicyAudit(p, entry, now)
+	require.ErrorContains(t, err, "invalid character '!'")
+	require.NoError(t, os.Mkdir(cursors[0], 0o700))
+	_, _, err = appendPolicyAudit(p, entry, now)
+	require.ErrorContains(t, err, "invalid character '!'")
 }
 
 func TestFullSealResumesHistoryAndStagesLaterStream(t *testing.T) {

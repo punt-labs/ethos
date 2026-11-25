@@ -325,6 +325,13 @@ func (a *archiver) archiveAndDelete(kind traceKind, rel string, item repair.Item
 	if !utf8.Valid(data) {
 		return false, errors.New("not valid UTF-8; left in place")
 	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if parts[0] == "sessions" {
+		s := audit.Stream{Namespace: audit.SessionNS, Session: sessionOfDir(parts[1])}
+		if err := audit.InvalidateAppendFloor(a.env.Policy, s); err != nil {
+			return false, err
+		}
+	}
 	if err := a.archive(kind, rel, data); err != nil {
 		return false, err
 	}
