@@ -27,10 +27,6 @@ func handoffSandboxIdentity(string) (string, error) {
 	return "", errors.New("snapshot isolation unavailable on this host")
 }
 
-func openGateInput(_ *os.Root, _ string) (*os.File, error) {
-	return nil, errors.New("snapshot isolation unavailable on this host")
-}
-
 func executeHandoffSnapshot(_ context.Context, _, _, _ string, _ []string, _ editCheck) (string, error) {
 	return "", errors.New("snapshot isolation unavailable on this host")
 }

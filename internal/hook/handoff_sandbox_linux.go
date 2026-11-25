@@ -80,27 +80,6 @@ func handoffSandboxIdentity(root string) (string, error) {
 	return fmt.Sprintf("%s:%d:%d", strings.TrimSpace(string(boot)), physical.Dev, physical.Ino), nil
 }
 
-func openGateInput(root *os.Root, input string) (*os.File, error) {
-	dir, err := root.Open(".")
-	if err != nil {
-		return nil, err
-	}
-	parts := strings.Split(input, "/")
-	for i, part := range parts {
-		flags := unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK
-		if i < len(parts)-1 {
-			flags |= unix.O_DIRECTORY
-		}
-		fd, err := unix.Openat(int(dir.Fd()), part, flags, 0)
-		_ = dir.Close()
-		if err != nil {
-			return nil, err
-		}
-		dir = os.NewFile(uintptr(fd), input)
-	}
-	return dir, nil
-}
-
 func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string, inputs []string, check editCheck) (string, error) {
 	for _, root := range sandboxRuntime {
 		physical, err := filepath.EvalSymlinks(root)
