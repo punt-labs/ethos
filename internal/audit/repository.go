@@ -237,7 +237,7 @@ func replaceAuditFile(p layout.Policy, dest string, data []byte) error {
 	}
 	err = errors.Join(err, f.Close())
 	if err != nil {
-		return err
+		return fmt.Errorf("persisting audit staging file: %w", err)
 	}
 	if err := os.Rename(f.Name(), dest); err != nil {
 		return fmt.Errorf("installing local audit collection (no cross-device fallback): %w", err)

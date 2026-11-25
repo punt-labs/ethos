@@ -279,7 +279,7 @@ func TestBoundedSealRetriesWithUpdatedLiveGuard(t *testing.T) {
 	_, err = seal(1)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Empty(t, policyGit(t, root, "diff", "--cached", "--name-only"))
-	res, err := seal(8)
+	res, err := seal(16)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.ChunksStaged)
 	data, err := audit.ReadStream(p, s)
