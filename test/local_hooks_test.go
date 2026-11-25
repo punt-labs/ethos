@@ -239,6 +239,40 @@ fi
 	require.NotContains(t, string(run("git", "worktree", "list", "--porcelain")), "checkout\n")
 }
 
+func TestChangedPackagesFindsTestsImportingMovedPackage(t *testing.T) {
+	fixture, run := developmentHookFixture(t)
+	dir := filepath.Join(fixture, "repo")
+	require.NoError(t, os.Mkdir(dir, 0o700))
+	git := func(args ...string) {
+		t.Helper()
+		out, err := run(dir, "git", args...)
+		require.NoError(t, err, "%s", out)
+	}
+	write := func(path, data string) {
+		t.Helper()
+		name := filepath.Join(dir, path)
+		require.NoError(t, os.MkdirAll(filepath.Dir(name), 0o700))
+		require.NoError(t, os.WriteFile(name, []byte(data), 0o600))
+	}
+	git("init", "-q", "--template=")
+	write("go.mod", "module example.test/move\n\ngo 1.26\n")
+	write("old/pkg.go", "package moved\n")
+	write("consumer/pkg.go", "package consumer\n")
+	write("consumer/pkg_test.go", "package consumer_test\nimport _ \"example.test/move/old\"\n")
+	git("add", ".")
+	git("commit", "-qm", "initial packages")
+	git("mv", "old", "new")
+
+	snapshot, err := filepath.Abs("../scripts/test-snapshot.sh")
+	require.NoError(t, err)
+	selector, err := filepath.Abs("../scripts/test-changed.sh")
+	require.NoError(t, err)
+	out, err := run(dir, "bash", snapshot, "staged", "bash", selector)
+	require.Error(t, err, "%s", out)
+	require.Contains(t, string(out), "example.test/move/consumer")
+	require.Contains(t, string(out), "no required module provides package example.test/move/old")
+}
+
 func TestDevelopmentLiveRequiresKey(t *testing.T) {
 	cmd := exec.CommandContext(t.Context(), "env", "-u", "ANTHROPIC_API_KEY", "make", "test-live")
 	cmd.Dir = ".."

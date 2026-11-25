@@ -41,9 +41,9 @@ fi
 
 root=$(pwd -P)
 
-graph=$(go list -race -f '{{.ImportPath}}|{{.Dir}}|{{join .Imports " "}} {{join .TestImports " "}} {{join .XTestImports " "}}' ./...)
+graph=$(go list -race -f '{{.ImportPath}}|{{.Dir}}|{{join .Imports " "}} {{join .TestImports " "}} {{join .XTestImports " "}}|{{with .Module}}{{.Path}}{{end}}' ./...)
 imports=() dirs=() dependencies=() selected=()
-while IFS='|' read -r import dir deps; do
+while IFS='|' read -r import dir deps module; do
   [[ -n "$import" ]] || continue
   imports+=("$import")
   dirs+=("$dir")
@@ -51,7 +51,12 @@ while IFS='|' read -r import dir deps; do
   selected+=("$all")
   i=$(("${#imports[@]}" - 1))
   for path in ${requested[@]+"${requested[@]}"}; do
-    if [[ "$dir" == "$root/$path" || ( "$path" == . && "$dir" == "$root" ) ]]; then
+    affected=$module
+    if [[ "$path" != . ]]; then
+      affected+="/$path"
+    fi
+    if [[ "$dir" == "$root/$path" || ( "$path" == . && "$dir" == "$root" ) ||
+      ( -n "$module" && "${dependencies[i]}" == *" $affected "* ) ]]; then
       selected[i]=1
       break
     fi
