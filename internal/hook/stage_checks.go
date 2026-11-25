@@ -18,6 +18,7 @@ import (
 type StageFeedback struct {
 	Advisory string
 	Blocking string
+	deferred bool
 }
 
 // RunStageChecks runs configured commit or handoff checks, without marker defaults.
@@ -131,13 +132,24 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 		if feedback.Blocking != "" {
 			blocking = append(blocking, feedback.Blocking)
 		}
+		if feedback.deferred {
+			break
+		}
 	}
 	return StageFeedback{Advisory: editRedact(strings.Join(advisory, "\n\n")), Blocking: editRedact(strings.Join(blocking, "\n\n"))}
 }
 
 func runStageInvocations(ctx context.Context, root, stage string, invocations []editCheck, env []string) StageFeedback {
 	var advisory, blocking []string
+	deferred := false
 	for _, invocation := range invocations {
+		if stage == "handoff" {
+			if reason := waitHandoffLoad(ctx); reason != "" {
+				blocking = append(blocking, reason)
+				deferred = true
+				break
+			}
+		}
 		invocation.env = env
 		if failure := runLoggedCheck(ctx, root, stage, invocation); failure != "" {
 			if invocation.policy.OnFail == "block" {
@@ -147,7 +159,7 @@ func runStageInvocations(ctx context.Context, root, stage string, invocations []
 			}
 		}
 	}
-	return StageFeedback{Advisory: editRedact(strings.Join(advisory, "\n\n")), Blocking: editRedact(strings.Join(blocking, "\n\n"))}
+	return StageFeedback{Advisory: editRedact(strings.Join(advisory, "\n\n")), Blocking: editRedact(strings.Join(blocking, "\n\n")), deferred: deferred}
 }
 
 func handoffPolicySelected(checkout, agent string) bool {

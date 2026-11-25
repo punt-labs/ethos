@@ -63,7 +63,7 @@ func cachedHandoff(ctx context.Context, store, root string, checks []checkset.Ch
 			}
 			feedback = run()
 			executed = true
-			if !errors.Is(readErr, os.ErrNotExist) || ctx.Err() != nil {
+			if !errors.Is(readErr, os.ErrNotExist) || feedback.deferred || ctx.Err() != nil {
 				return nil
 			}
 			if after, err := checkoutState(root); err != nil || after != state {
@@ -86,7 +86,7 @@ func cachedHandoff(ctx context.Context, store, root string, checks []checkset.Ch
 		}
 		select {
 		case <-ctx.Done():
-			return StageFeedback{Blocking: "handoff checks deferred: another stop is running checks for this checkout state"}
+			return StageFeedback{Blocking: "handoff checks deferred: another stop is running checks for this checkout state", deferred: true}
 		case <-time.After(100 * time.Millisecond):
 		}
 	}

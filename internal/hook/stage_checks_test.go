@@ -185,6 +185,29 @@ func TestHandoffKilledBeforeInput(t *testing.T) {
 	}
 }
 
+func TestHandoffDefersUnderLoad(t *testing.T) {
+	load, err := os.ReadFile("/proc/loadavg")
+	if err != nil || strings.HasPrefix(string(load), "0.00 ") {
+		t.Skip("requires a positive Linux load average")
+	}
+	root, bin := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("ETHOS_HANDOFF_MAX_LOAD", "0.001")
+	marker := filepath.Join(t.TempDir(), "ran")
+	t.Setenv("HANDOFF_MARKER", marker)
+	checkPolicy(t, root, "project", handoffProbe)
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	postEditTool(t, bin, "probe", "echo ran > \"$HANDOFF_MARKER\"\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	feedback := RunStageChecks(ctx, root, "", "handoff")
+	require.Contains(t, feedback.Blocking, "handoff checks deferred")
+	require.NoFileExists(t, marker)
+	t.Setenv("ETHOS_HANDOFF_MAX_LOAD", "1000000")
+	require.Empty(t, RunStageChecks(context.Background(), root, "", "handoff").Blocking)
+	require.FileExists(t, marker)
+}
+
 func TestHandoffAuditFiles(t *testing.T) {
 	root, _ := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())

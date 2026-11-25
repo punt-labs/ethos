@@ -356,6 +356,19 @@ trigger checks. An agent that deletes its own audit records can skip the gate
 only by also restoring the checkout and policy byte for byte, which leaves
 nothing new for the checks to see.
 
+A dispatched evaluator (or an unmodified, project-installed Ethos review
+checklist agent) also skips when its audit shows no own or recent unattributed
+write. A worker changing the tree does not force that reviewer to gate it.
+When attribution is unknown the fingerprint rule still applies.
+
+Handoff results are reused for the same checkout state, resolved policy and
+expanded commands, including any recorded failure. Results live under
+`.punt-labs/local/ethos/handoff-results/` and are not written when the tree
+changes while checks run. Before launching a check, Ethos waits up to ten
+seconds for the one-minute host load to fall to 40 or lower on Linux and
+macOS. Set `ETHOS_HANDOFF_MAX_LOAD` to a positive number to override the limit.
+If load stays high, the hook reports a deferral without caching it.
+
 A blocking failure or broken policy returns
 `{"decision":"block","reason":...}` with exit zero. On `stop_hook_active`
 the hook allows the stop and sends the failure to stderr instead. Advisory
