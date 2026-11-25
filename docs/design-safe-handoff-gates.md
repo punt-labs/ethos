@@ -45,10 +45,12 @@ on keble was not measured.
    binding, where available, is stronger than inference from a shared tree.
 4. Admission is per checkout and execution plan, not per reply, agent ID
    or session. Use a versioned key over the physical checkout identity,
-   HEAD, index and effective dirty content, resolved policy, expanded argv
-   and cwd, and the enforced execution profile. Policy may select different
-   commands for different roles; two genuinely different plans must not
-   inherit each other's result.
+   HEAD, index and effective dirty content, resolved policy, logical argv
+   and cwd, and the enforced execution profile. Represent the checkout
+   root symbolically and file and directory operands relative to it;
+   the key never includes the temporary snapshot path. Policy may select
+   different commands for different roles; two genuinely different plans
+   must not inherit each other's result.
 
 The current roster contains the harness agent ID, agent type and persona;
 it has no general worker/non-worker field. A verifier spawn with a validated
@@ -159,8 +161,10 @@ checks that are compatible with an isolated snapshot. Resolve matching and
 grouping as checkout-relative paths. At launch, set the working directory
 under the snapshot root and expand `{root}` to that root and `{files}` to
 snapshot-local paths; resolve `{package_dir}` in the snapshot as well.
-Key the logical invocation before expansion with the ephemeral snapshot
-path. Changing only the working directory is insufficient: no expanded
+Build the key from the logical invocation before substituting the
+temporary snapshot root for execution. Materializing the same plan in
+another directory must not change the key. Changing only the working
+directory is insufficient: no expanded
 argument may still point to the live checkout. Literal paths into that
 checkout or wrappers that reopen it are ineligible unless execution
 isolation makes those accesses resolve to the same verified snapshot.
