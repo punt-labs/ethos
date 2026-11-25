@@ -5355,16 +5355,17 @@ func TestMissionClaim_RefusesWithoutSession_Subprocess(t *testing.T) {
 	// Claude Code session (as it normally does) — the negative-only
 	// escape hatch simulates the plain, non-Claude-Code process tree
 	// this test's own comment above describes wanting.
-	cmd.Env = []string{
+	cmd.Env = testhelpers.CoverEnv([]string{
 		"HOME=" + home,
 		"PATH=" + os.Getenv("PATH"),
 		"TMPDIR=" + t.TempDir(),
 		process.ForceNotUnderClaudeCodeEnv + "=1",
-	}
+	})
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = &stderrBuf
 	err := cmd.Run()
 	require.Error(t, err, "claim without a session must refuse")
+	assert.NotContains(t, stderrBuf.String(), "GOCOVERDIR not set")
 	assert.Contains(t, stderrBuf.String(), "no active session")
 	assert.Contains(t, stderrBuf.String(), "ethos session start",
 		"the refusal must name the remedy (DES-061 step-4 error)")
