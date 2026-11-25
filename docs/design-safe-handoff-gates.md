@@ -143,6 +143,15 @@ owner has exited, without changing the tree. A new tree or policy qualifies
 normally. Keep hit/miss, wait, launch, defer and reuse outcomes in redacted
 hook diagnostics, with durations and a reason code.
 
+The initial cache keeps up to eight results per lock stripe. It retires
+results older than 24 hours when the stripe is visited, then retires the
+oldest other keys if necessary to stay within the cap. Requests pin the
+stripe before waiting. A full pinned stripe defers a new key rather than
+discarding a result a waiter can still read. The kernel releases the
+exclusive lease on owner death; once the lease is acquired again, a
+pending record denotes an orphan, not a terminal result, and the next
+eligible request runs the gate.
+
 ## 4. Correctness, costs and feedback
 
 The fingerprint must cover staged changes, unstaged bytes and non-ignored
@@ -203,6 +212,33 @@ Unconfigured handoffs remain fail-open. An unavailable safety mechanism
 never turns into permission to launch. An operator can still run the
 explicit project gate. A later mission-result gate must not infer that a
 stop allowed on re-entry was a verified pass.
+
+### Snapshot check profile
+
+A handoff check can opt into the Linux snapshot runner, for example:
+
+```yaml
+- name: verify-manifest
+  stage: handoff
+  files: all
+  run: [/bin/sh, verify-manifest.sh]
+  snapshot:
+    profile: linux-shell-v1
+    inputs: [verify-manifest.sh, manifest.txt]
+    epoch: v1
+```
+
+List every required checkout file as a literal relative path. The runner
+copies the declared regular files into a private in-memory filesystem and
+verifies their digest before launch. Directories, symlinks, Git metadata,
+and Ethos local state are not inputs. Checks run in a read-only filesystem
+with a minimal environment, no host checkout, no home directory, and a
+private network namespace. The profile supplies the host's standard system
+shell, binaries and libraries on read-only mounts; change the epoch when the
+check depends on a changed system runtime. Do not opt in a command that
+depends on additional host files, live Git state, or nondeterministic inputs.
+A host without the required Linux namespaces defers rather than running
+live. An undeclared gate such as `make check` must be run explicitly.
 
 Keep scheduling in the binary. No new wrapper flags, stdin behavior or
 generated SubagentStop shim are required. A newer wrapper can pass timing
@@ -279,3 +315,50 @@ resource budget with a bounded synthetic fan-out, then do a supervised
 Vox canary with load sampled every ten seconds and correlated hook log
 events. Obtain operator sign-off on limits, platform deferral and required
 gate feedback before merging implementation.
+
+### Consumer rollout and release gate
+
+Do not release the change that enables snapshot-only handoff execution
+until the consuming projects have verified replacement profiles. Land
+those profiles with or immediately after the Ethos change and before
+its release. A visible deferral on an unsupported host is intentional;
+it is not a replacement for the existing automatic gate on supported
+hosts.
+
+Stage the policy definitions before activation. The older check-set
+parser rejects unknown fields, so don't point older binaries at a check
+set containing `snapshot`. Canary with a snapshot-capable binary and a
+separate check set; keep the existing check set active elsewhere until
+the binary and policy can be switched together. Verify that mixed-version
+deployment before publishing the release.
+
+Start with Vox. Preserve all eight components of its `make check`
+target: lint, type checking, Markdown lint, API docs, tests, and the
+OO, coupling, and suppression ratchets. The initial `linux-shell-v1`
+profile only exposes declared regular files and a read-only system
+runtime. It does not provide Vox's UV environment, Node tooling,
+writable build paths, or Git merge-base inputs. Do not declare the
+existing command snapshot-compatible as-is. First prototype an offline,
+pinned runtime and writable scratch isolated from the source snapshot;
+have the project specify the source files, dependency locks, tool
+versions, and Git baseline inputs it needs. Extend the execution profile
+if the full gate cannot be reproduced within the current one. Bump the
+epoch on runtime changes. Compare the replacement against the explicit
+`make check` for known passing and failing changes before enabling it.
+
+Use the same acceptance test for the other handoff gate policies:
+
+| Consumers | Profile work to verify |
+| --- | --- |
+| Beadle, Biff, Cryptd, Ethos, MCP Proxy, Points, Quarry | Pin the Go and native tools; include module, build, quality gate, and baseline inputs; pre-provision dependencies offline. |
+| Lux, PRFAQ, Public Website | Inventory locked dependencies and test, docs, and build tooling; provide offline runtimes and isolated output paths. |
+| Postern | Verify ShellCheck and Markdown lint against the declared config and selected files with pinned runtimes. |
+| Anthropic SDK Pharo, Claude Agent SDK Smalltalk, Koch Trainer Swift, Homebrew Tap | Verify the image, SDK, or Homebrew runtime and platform requirements; preserve each gate's required or advisory setting. |
+| Punt Kit, Punt Labs workspace, Z Spec | Inventory tool-specific binaries, specs, scripts, and cross-repository dependencies before choosing one or more profiles. |
+
+Re-scan consumers' effective check sets before release, including layered
+and workspace policies. For each, retain evidence that a dirty edit
+launches the automatic gate, a known failure is surfaced with the
+existing severity, and reuse does not hide a later change. Verify
+unsupported hosts get the named manual gate on stdout; macOS continues
+to defer until its isolation mechanism is verified on a real host.
