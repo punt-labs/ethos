@@ -159,6 +159,7 @@ instead of assuming the work moved there for free.
 For a later implementation, use the existing Go benchmark for the profile:
 
 ```sh
+mkdir -p .tmp
 go test ./internal/hook -run '^$' -bench '^BenchmarkPolicyAuditAppendLongSession$' \
   -benchtime=8x -cpuprofile .tmp/audit-tail.pprof -o .tmp/audit-tail.test
 go tool pprof -top -cum .tmp/audit-tail.test .tmp/audit-tail.pprof
