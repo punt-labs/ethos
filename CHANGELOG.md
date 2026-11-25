@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   newer Nightly alert already on the Biff wall.
 - The Nightly behavioral judge requests a schema-constrained verdict and
   rejects ambiguous, refused, or truncated responses.
+- The Nightly reviewer check distinguishes code examples in reports from
+  prohibited file changes.
 
 ## [5.2.2] - 2026-11-24
 
