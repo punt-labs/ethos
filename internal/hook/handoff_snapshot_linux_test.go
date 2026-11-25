@@ -154,6 +154,21 @@ func TestHandoffPinWaitIsCancellable(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestHandoffOversizedResultRemainsReadable(t *testing.T) {
+	root, _ := postEditFixture(t)
+	p, err := (resolve.Located{Checkout: root, Store: root}).Layout()
+	require.NoError(t, err)
+	slot := filepath.Join(t.TempDir(), "result.json")
+	original := gateResult{Key: "key", Proof: "proof", Failure: strings.Repeat("<\n", 100000)}
+	require.NoError(t, writeGateResult(p, slot, original))
+	result, ok := readGateResult(slot)
+	require.True(t, ok)
+	require.Equal(t, original.Key, result.Key)
+	require.Equal(t, original.Proof, result.Proof)
+	require.NotEmpty(t, result.Failure)
+	require.Less(t, len(result.Failure), len(original.Failure))
+}
+
 func TestHandoffResultKeepsPendingOnPublishFailure(t *testing.T) {
 	root, _ := postEditFixture(t)
 	p, err := (resolve.Located{Checkout: root, Store: root}).Layout()

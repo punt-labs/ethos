@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/checkset"
@@ -28,6 +29,7 @@ const gateBytes = 256 << 20
 const gateInputTime = time.Second
 const gateRecordAge = 24 * time.Hour
 const gateRecordsPerStripe = 8
+const gateRecordBytes = 512 << 10
 
 type gateResult struct {
 	Key     string
@@ -380,7 +382,7 @@ func readGateResult(path string) (gateResult, bool) {
 		return result, false
 	}
 	defer f.Close()
-	err = json.NewDecoder(io.LimitReader(f, 512<<10)).Decode(&result)
+	err = json.NewDecoder(io.LimitReader(f, gateRecordBytes)).Decode(&result)
 	return result, err == nil
 }
 
@@ -392,12 +394,32 @@ func writeGateResult(p layout.Policy, path string, result gateResult) error {
 	if redact.LeakRule(result.Failure, home) != "" {
 		return errors.New("handoff result failed the redaction guard")
 	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	if len(data) >= gateRecordBytes {
+		const suffix = "\n[handoff feedback truncated]"
+		// JSON can expand each input byte up to six bytes.
+		n := min(len(result.Failure), gateRecordBytes/6-len(suffix))
+		for n > 0 && n < len(result.Failure) && !utf8.RuneStart(result.Failure[n]) {
+			n--
+		}
+		result.Failure = result.Failure[:n] + suffix
+		data, err = json.Marshal(result)
+		if err != nil {
+			return err
+		}
+		if len(data) >= gateRecordBytes {
+			return errors.New("handoff result metadata exceeds the record limit")
+		}
+	}
 	f, err := layout.CreateLocalTemp(p, "handoff-result", ".json")
 	if err != nil {
 		return err
 	}
 	defer func() { _ = os.Remove(f.Name()) }()
-	err = json.NewEncoder(f).Encode(result)
+	_, err = f.Write(append(data, '\n'))
 	if err := errors.Join(err, f.Close()); err != nil {
 		return err
 	}
