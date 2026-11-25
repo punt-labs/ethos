@@ -100,9 +100,15 @@ suffix within the window or fall back. A durable row is not reported as
 dropped just because a derived checkpoint could not be refreshed.
 
 Supported operations that can change the floor or live boundary (including
-seal, quarantine/repair and migration) must invalidate affected records
-under the same lock, before mutating inputs, so interrupted operations also
-force a rebuild. A sibling worktree may share the changed input. Git can
+seal, quarantine/repair and migration) must durably invalidate affected
+records under the same stream lock, including records used by sibling
+worktrees. Before changing history, fsync an invalidation marker (or new
+generation), install it atomically and fsync its directory and any newly
+created ancestors. If any step fails, stop before mutating history. An
+absent, invalid or otherwise uncertain floor requires the full verified
+read. Test a host crash at each sync boundary: recovery must see either
+unchanged history or an invalidated floor, never new history with an old
+floor accepted as current. Git can
 also replace published inputs at the same checkout path; a path match alone
 does not establish that the verified checkout context still applies.
 If a supported input change cannot be tracked safely, keep the verified path
