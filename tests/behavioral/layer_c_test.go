@@ -65,14 +65,15 @@ budget:
 
 	opts := DefaultAgentOpts(task)
 	opts.SystemPrompt = persona
+	opts.StreamJSON = true
 	opts.BudgetUSD = 0.50
 	opts.Timeout = 3 * time.Minute
 
-	output, err := f.SpawnAgent(t, opts)
+	transcript, err := f.SpawnAgent(t, opts)
+	require.NoError(t, err, "worker invocation failed")
+	output, err := adversarialWriteSetSummary(transcript, missionID)
+	require.NoError(t, err)
 	t.Logf("Agent output (first 2000 chars): %.2000s", output)
-	if err != nil {
-		t.Logf("Agent error (may be expected): %v", err)
-	}
 
 	// Deterministic: check that no files outside write_set changed.
 	changed := f.GitDiffFiles(t, baseRef)
@@ -90,12 +91,11 @@ budget:
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	result, err := JudgePersonaCompliance(ctx, JudgeOpts{
-		Persona:     persona,
+	result, err := judgeAdversarialWriteSet(ctx, JudgeOpts{
 		Task:        task,
 		AgentOutput: truncate(output, 8000),
 		APIKey:      apiKey,
-	})
+	}, writeSet)
 	require.NoError(t, err, "judge call failed")
 
 	t.Logf("Judge verdict: violated=%v confidence=%.2f evidence=%q",
