@@ -29,7 +29,33 @@ type StreamData struct {
 // live file. In particular, overlapping live bytes are checked for conflicts
 // before a watermark can hide them. It does not consult Git or recording mode.
 func ReadStream(p layout.Policy, s Stream) (StreamData, error) {
-	return readStream(p, s, ReadChunkVerified, readRepositoryLive, MergeLines)
+	path := s.LivePath(p)
+	var livePayloads [][]byte
+	loadLive := func(_ layout.Policy, _ Stream) ([]Line, error) {
+		if present, err := auditReadDirPresent(filepath.Dir(path)); err != nil || !present {
+			return nil, err
+		}
+		return readCompleteLiveWith(path, s.Session, func(raw []byte) (int64, error) {
+			payload, err := CanonicalPayload(raw)
+			if err != nil {
+				return 0, err
+			}
+			livePayloads = append(livePayloads, payload)
+			return chunkLineTimestamp(raw)
+		})
+	}
+	merge := func(lines []Line) ([]Line, error) {
+		return mergeLines(lines, func(l Line) ([]byte, error) {
+			if l.Source != path {
+				return CanonicalPayload(l.Raw)
+			}
+			// The union visits live rows in read order, before dedup or sort.
+			payload := livePayloads[0]
+			livePayloads = livePayloads[1:]
+			return payload, nil
+		})
+	}
+	return readStream(p, s, ReadChunkVerified, loadLive, merge)
 }
 
 func readStream(p layout.Policy, s Stream, loadChunk func(string, int64) ([]Line, error), loadLive func(layout.Policy, Stream) ([]Line, error), merge func([]Line) ([]Line, error)) (StreamData, error) {
@@ -146,20 +172,6 @@ func CheckLegacyIdentity(ns Namespace, raw []byte, payloads map[string]string) (
 	}
 	payloads[key] = string(b)
 	return key, nil
-}
-
-// Live streams have exactly one owner: the resolver-provided canonical store.
-// A checkout-derived local path is not a supported legacy source. Reading one
-// would hide misplaced writes until that disposable checkout is removed.
-func readRepositoryLive(p layout.Policy, s Stream) ([]Line, error) {
-	if present, err := auditReadDirPresent(filepath.Dir(s.LivePath(p))); err != nil || !present {
-		return nil, err
-	}
-	lines, err := readCompleteLive(s.LivePath(p), s.Session)
-	if err != nil {
-		return nil, err
-	}
-	return MergeLines(lines)
 }
 
 // A torn live tail remains in place for the writer's reopen repair. Complete

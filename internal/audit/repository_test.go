@@ -384,6 +384,31 @@ func TestRepositoryUnionDetectsCoveredLiveConflict(t *testing.T) {
 	}
 }
 
+func TestRepositoryUnionMatchesLivePayloadsBeforeSorting(t *testing.T) {
+	p := repositoryPolicy(t, layout.RecordBlame)
+	s := Stream{Namespace: SessionNS, Session: "s"}
+	dir, err := ArchiveDir(p, s, "2026-11-04")
+	if err != nil {
+		t.Fatal(err)
+	}
+	archived := sessLine(100, "Read")
+	if err := WriteLocalAtomic(p, filepath.Join(dir, SessionChunkFile(100, 100)), []byte(archived)); err != nil {
+		t.Fatal(err)
+	}
+	newer := sessLine(200, "Bash")
+	reordered := fmt.Sprintf(`{"tool":"Read","ts":%q}`+"\n", FormatLineTS(100))
+	if err := WriteLocalAtomic(p, s.LivePath(p), []byte(newer+"\n"+reordered+newer)); err != nil {
+		t.Fatal(err)
+	}
+	data, err := ReadStream(p, s)
+	if err != nil || len(data.Lines) != 2 || data.Floor != 200 {
+		t.Fatalf("stream union = %+v, %v", data, err)
+	}
+	if got := string(data.Lines[0].Raw) + "\n" + string(data.Lines[1].Raw) + "\n"; got != archived+newer {
+		t.Fatalf("stream union chose wrong rows: %s", got)
+	}
+}
+
 func TestRepositoryLocalStagingRefusesCrossDeviceAndCleans(t *testing.T) {
 	p := repositoryPolicy(t, layout.RecordFull)
 	old := installLocalFile
