@@ -125,6 +125,12 @@ class ConfigTests(unittest.TestCase):
                              "allow" if name == "jms" else "deny")
             self.assertEqual(oc.effect(rules, "shell", "git push origin topic"), "deny")
 
+    def test_bwk_cannot_run_a_release(self):
+        config = oc.check(self.root)
+        info, _ = oc.frontmatter(self.root / ".opencode/agents/bwk.md")
+        rules = config["permissions"] + info["permissions"]
+        self.assertEqual(oc.effect(rules, "shell", "punt release run 1.0.0"), "deny")
+
     def test_qodo_adapter_is_required_and_review_cannot_bypass_router(self):
         command = self.root / ".opencode/commands/review.md"
         original = command.read_text()
@@ -979,6 +985,7 @@ class LiveHelperTests(unittest.TestCase):
                   for command in live.DISCOVERY_COMMANDS]
         calls += [self.read_tool(path) for path in paths]
         self.assertIn("z-spec --help", live.DISCOVERY_COMMANDS)
+        self.assertIn("punt release run --help", live.DISCOVERY_COMMANDS)
         with patch.object(live, "sources", return_value=paths):
             live.discovery_evidence(calls, oc.ROOT)
             for index in range(len(calls) - len(paths), len(calls)):

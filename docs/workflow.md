@@ -172,7 +172,7 @@ Epic
   ├─ Team repo
   ├─ Submodule ← blocked by Role, Team, Team repo
   ├─ Installer ← blocked by Submodule
-  └─ punt init ← blocked by Installer
+  └─ punt repo init ← blocked by Installer
 ```
 
 Phases that can run in parallel should be parallelized. The COO

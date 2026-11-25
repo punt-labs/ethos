@@ -234,8 +234,10 @@ def check(root=ROOT):
         require(effect(rules, "subagent", "bwk") == "deny", f"{path.stem}: nested delegation allowed")
         require("task-result" in body and "docs/opencode-workflow.md" in body,
                 f"{path.stem}: missing result protocol")
+        require(effect(rules, "shell", "punt release run 1.0.0") == "deny",
+                f"{path.stem}: release allowed")
         if path.stem != "bwk":
-            for command in ("git push origin main", "gh release create v1", "punt release 1.0.0",
+            for command in ("git push origin main", "gh release create v1",
                             "make --eval 'x: ; true' x", "python3 -c 'print(1)'"):
                 require(effect(rules, "shell", command) == "deny", f"{path.stem}: overly broad shell")
             require(effect(rules, "edit", "internal/a.go") == "deny", f"{path.stem}: source edits allowed")

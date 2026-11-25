@@ -35,7 +35,7 @@ Pre-push preserves Git's original remote arguments and input. Like the
 [Release] workflow's `v*` filter, the exemption applies only to tag names
 starting with `v` and containing no slash. Deletions also skip the local
 test suite; branch and other tag updates in the same push still run it.
-`punt release` can push a release tag that differs from checkout HEAD;
+`punt release run` can push a release tag that differs from checkout HEAD;
 the workflow tests that tagged candidate before publication. The opt-in is
 per checkout: other
 linked worktrees and branches without `.githooks` still run their existing

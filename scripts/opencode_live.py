@@ -190,7 +190,7 @@ def required_read(calls, matches, path, description):
 
 DISCOVERY_SKILLS = ("ethos-prfaq", "ethos-punt-release", "ethos-zspec")
 DISCOVERY_COMMANDS = ("python3 scripts/opencode.py sources", "z-spec --help",
-                      "z-spec doctor", "punt release --help")
+                      "z-spec doctor", "punt release run --help")
 DISCOVERY_ADAPTER_COMMANDS = tuple("python3 scripts/opencode.py sources " + kind
                                    for kind in ("prfaq", "release", "zspec")) + ("punt --help",)
 
@@ -646,7 +646,7 @@ def smoke(root, stages=None):
                 "READ ONLY discovery, no release/model-check/compile/install/source writes. Load skills "
                 "ethos-prfaq, ethos-punt-release and ethos-zspec. Run python3 scripts/opencode.py sources, "
                 "read the returned prfaq SKILL.md, punt-kit auto SKILL.md and release.yaml. Run "
-                "z-spec --help, z-spec doctor (availability only) and punt release --help. "
+                "z-spec --help, z-spec doctor (availability only) and punt release run --help. "
                 "Report sources and exit results. "
                 "Do not run the release playbook or repeat user discovery questions.")
             discovery_evidence(tools(discovery), root)

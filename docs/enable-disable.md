@@ -191,7 +191,7 @@ deterministic; the port adds the exclusive lock and the code-block scan.
 - **Canonical string.** Exactly `@.punt-labs/ethos/CLAUDE.md` — forward
   slashes, no `./`, no trailing slash, no surrounding whitespace, one
   physical line. This is what `enable` writes, `disable` matches, and
-  `punt audit` greps; it must be byte-identical across all 15 CLIs (§2.4).
+  `punt repo audit` greps; it must be byte-identical across all 15 CLIs (§2.4).
 - **Terminator-insensitive idempotent match.** Presence is decided by
   comparing the canonical line against each host line **net of its
   terminator** (strip trailing `\r`, `\n`, `\r\n` before comparing), so a
@@ -513,7 +513,7 @@ order they choose; `enable` never writes identity config, and `disable`
 never removes it. The repo config file is **no longer** an enabled signal —
 the marker is.
 
-## `punt audit` checks ethos must satisfy (acceptance criteria)
+## `punt repo audit` checks ethos must satisfy (acceptance criteria)
 
 From §2.11 (and punt-labs-dir PLD-11, keyed by the marker):
 
@@ -608,7 +608,7 @@ is nothing to retire — the migration is pure convergence:
 - **Hooks-only `enable` verb** (the leader's rejected first bead). A verb
   that only chains git hooks and skips the guide, marker, and import line
   fails §2.3 items 1–3 and §2.7. The marker is the load-bearing signal for
-  `punt audit` and the hook gates; without it there is no three-state
+  `punt repo audit` and the hook gates; without it there is no three-state
   model. Rejected.
 - **`install.sh`-owned per-repo enablement** (the v4.1.1 arrangement). A
   machine-scoped installer reaching into a specific repo's hooks conflates
