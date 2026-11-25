@@ -70,7 +70,16 @@ done < "$(dirname -- "${BASH_SOURCE[0]}")/test-smoke.tsv"
 for package in "${packages[@]}"; do
   for i in "${!smoke_packages[@]}"; do
     if [[ "$package" == "${smoke_packages[i]}" ]]; then
-      go test -race -count=1 -run "^Test(${smoke_patterns[i]})$" "$package"
+      status=0
+      output=$(go test -race -count=1 -v -run "^Test(${smoke_patterns[i]})$" "$package" 2>&1) || status=$?
+      printf '%s\n' "$output"
+      if (( status != 0 )); then
+        exit "$status"
+      fi
+      if [[ $'\n'"$output" != *$'\n=== RUN   Test'* ]]; then
+        printf 'No smoke tests matched for %s\n' "$package" >&2
+        exit 1
+      fi
       continue 2
     fi
   done

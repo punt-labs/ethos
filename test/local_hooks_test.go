@@ -219,12 +219,15 @@ func TestChangedPackages(t *testing.T) {
 	index := filepath.Join(t.TempDir(), "index")
 	env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"HOME=" + home, "GIT_CONFIG_NOSYSTEM=1", "GIT_INDEX_FILE=" + index}
-	run := func(name string, args ...string) []byte {
-		t.Helper()
+	invoke := func(name string, args ...string) ([]byte, error) {
 		cmd := exec.CommandContext(t.Context(), name, args...)
 		cmd.Dir = dir
 		cmd.Env = env
-		out, err := cmd.CombinedOutput()
+		return cmd.CombinedOutput()
+	}
+	run := func(name string, args ...string) []byte {
+		t.Helper()
+		out, err := invoke(name, args...)
 		require.NoError(t, err, "%s", out)
 		return out
 	}
@@ -241,6 +244,10 @@ else
         exit 1
     fi
     printf 'go %s\n' "$*"
+    case "$*" in
+        *NoSuchTest*) printf 'testing: warning: no tests to run\nPASS\n' ;;
+        *-run*) printf '=== RUN   TestSlugify\n--- PASS: TestSlugify (0.00s)\nPASS\n' ;;
+    esac
 fi
 `), 0o700))
 	script, err := filepath.Abs("../scripts/test-changed.sh")
@@ -272,7 +279,7 @@ fi
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "cmd/ethos/main.go"), []byte("package main\n"), 0o600))
 	run("git", "add", "cmd/ethos/main.go", "changed/example.go")
 	got := string(run("bash", script))
-	require.Contains(t, got, "go test -race -count=1 -run ^Test(Slugify|VersionCommand|VersionCommandJSON)$ ./cmd/ethos\n")
+	require.Contains(t, got, "go test -race -count=1 -v -run ^Test(Slugify|VersionCommand|VersionCommandJSON)$ ./cmd/ethos\n")
 	require.Contains(t, got, "go test -race -count=1 ./changed\n")
 
 	smokeScript := filepath.Join(t.TempDir(), "test-changed.sh")
@@ -287,6 +294,12 @@ fi
 	t.Run("final smoke row without a newline", func(t *testing.T) {
 		require.NoError(t, os.WriteFile(smokeFile, []byte("./internal/hook\tBuildPersonaBlock_Full\n./cmd/ethos\tSlugify"), 0o600))
 		require.Contains(t, string(run("bash", smokeScript)), "-run ^Test(Slugify)$ ./cmd/ethos\n")
+	})
+	t.Run("empty smoke run", func(t *testing.T) {
+		require.NoError(t, os.WriteFile(smokeFile, []byte("./cmd/ethos\tNoSuchTest\n"), 0o600))
+		out, err := invoke("bash", smokeScript)
+		require.Error(t, err, "%s", out)
+		require.Contains(t, string(out), "No smoke tests matched for ./cmd/ethos")
 	})
 }
 
