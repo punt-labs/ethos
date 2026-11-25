@@ -157,9 +157,13 @@ jobs:
           pattern: race-coverage-*
           path: coverage-shards
       - name: Combine package statement coverage
+        id: combine
+        env:
+          EXPECTED_PROFILES: 5
         run: |
+          shopt -s nullglob
           profiles=(coverage-shards/race-coverage-*/coverage.out)
-          test "${#profiles[@]}" -eq 5
+          test "${#profiles[@]}" -eq "$EXPECTED_PROFILES"
           printf 'mode: atomic\n' > coverage.out
           for profile in "${profiles[@]}"; do
             test "$(head -n 1 "$profile")" = "mode: atomic"

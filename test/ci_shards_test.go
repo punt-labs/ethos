@@ -5,6 +5,7 @@ package test
 import (
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -15,6 +16,10 @@ import (
 func TestCIRaceShardsPartitionDefaultPackages(t *testing.T) {
 	var workflow struct {
 		Jobs map[string]struct {
+			Steps []struct {
+				ID  string
+				Env map[string]string
+			}
 			Strategy struct {
 				Matrix struct {
 					Shard []string
@@ -27,6 +32,15 @@ func TestCIRaceShardsPartitionDefaultPackages(t *testing.T) {
 	require.NoError(t, yaml.Unmarshal(data, &workflow))
 	shards := workflow.Jobs["test-suite"].Strategy.Matrix.Shard
 	require.NotEmpty(t, shards)
+
+	var expectedProfiles string
+	for _, step := range workflow.Jobs["coverage"].Steps {
+		if step.ID == "combine" {
+			expectedProfiles = step.Env["EXPECTED_PROFILES"]
+			break
+		}
+	}
+	require.Equal(t, strconv.Itoa(len(shards)), expectedProfiles)
 
 	cmd := exec.CommandContext(t.Context(), "go", "list", "-race", "./...")
 	cmd.Dir = ".."
