@@ -82,6 +82,13 @@ func TestAdapterSchemaRuntimeParity(t *testing.T) {
 	}
 	snapshot := map[string]any{"profile": "linux-shell-v1", "inputs": []string{"gate.sh"}, "epoch": "v1"}
 	validate(t, map[string]any{"stage": "handoff", "run": []string{"/bin/sh", "gate.sh"}, "snapshot": snapshot}, true)
+	for _, input := range []string{"../gate.sh", "lib/../gate.sh", "lib/./gate.sh", "/gate.sh", "lib//gate.sh", "lib/", ".git/config", "lib/.tmp/cache", ".punt-labs/local/data", ".punt-labs/ethos/sessions/session", "lib/*.sh", "lib\\gate.sh"} {
+		t.Run(input, func(t *testing.T) {
+			validate(t, map[string]any{"stage": "handoff", "run": []string{"/bin/sh"}, "snapshot": map[string]any{
+				"profile": "linux-shell-v1", "inputs": []string{input}, "epoch": "v1",
+			}}, false)
+		})
+	}
 	validate(t, map[string]any{"stage": "handoff", "run": []string{"sh", "gate.sh"}, "snapshot": snapshot}, false)
 	validate(t, map[string]any{"stage": "commit", "run": []string{"/bin/sh", "gate.sh"}, "snapshot": snapshot}, false)
 	validate(t, map[string]any{"stage": "handoff", "run": []string{"/bin/sh"}, "snapshot": map[string]any{"profile": "linux-shell-v1"}}, false)

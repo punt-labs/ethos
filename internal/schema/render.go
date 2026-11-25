@@ -79,7 +79,11 @@ func (e Entity) JSONSchema() map[string]any {
 func snapshotSchema(items map[string]any) {
 	snapshot := items["properties"].(map[string]any)["snapshot"].(map[string]any)
 	fields := snapshot["properties"].(map[string]any)
-	fields["inputs"].(map[string]any)["minItems"] = 1
+	inputs := fields["inputs"].(map[string]any)
+	inputs["minItems"] = 1
+	input := inputs["items"].(map[string]any)
+	input["pattern"] = `^[^/\\:*?\[\]{}\x00]+(/[^/\\:*?\[\]{}\x00]+)*$`
+	input["not"] = map[string]any{"pattern": `(^|/)[.](\.?|git|tmp)(/|$)|^[.]punt-labs/(local|ethos/sessions)(/|$)`}
 	epoch := fields["epoch"].(map[string]any)
 	epoch["minLength"] = 1
 	epoch["maxLength"] = 128
