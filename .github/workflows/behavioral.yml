@@ -59,15 +59,35 @@ jobs:
     if: >-
       github.repository == 'punt-labs/ethos' && github.ref == 'refs/heads/main' &&
       !(github.event_name == 'workflow_dispatch' && inputs.force-failure)
-    runs-on:
-      group: ethos-opencode-nightly
+    runs-on: ubuntu-latest
     timeout-minutes: 55
     steps:
+      - name: Check live credentials are configured
+        env:
+          BIFROST_VK: ${{ secrets.BIFROST_VK }}
+          BIFROST_BASE_URL: ${{ vars.BIFROST_BASE_URL }}
+          CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
+        run: |
+          : "${BIFROST_VK:?Set the BIFROST_VK Actions secret}"
+          : "${BIFROST_BASE_URL:?Set the BIFROST_BASE_URL Actions variable}"
+          : "${CONTEXT7_API_KEY:?Set the CONTEXT7_API_KEY Actions secret}"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: '0.13.9'
+      - name: Install OpenCode and isolated smoke dependencies
+        run: bash scripts/ci-opencode.sh install
       - name: Verify the live OpenCode roster and exercise all smoke stages
-        run: make smoke-opencode
+        env:
+          BIFROST_VK: ${{ secrets.BIFROST_VK }}
+          BIFROST_BASE_URL: ${{ vars.BIFROST_BASE_URL }}
+          CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
+        run: bash scripts/ci-opencode.sh smoke
 
   notify:
     needs: [behavioral, opencode-live]

@@ -51,14 +51,14 @@ from HEAD. Both scan targets download and build the pinned gitleaks Go module
 on first use and redact findings. CI limits the scan to the PR base or
 pre-push main tip through the checked-out commit.
 
-The `ethos-opencode-nightly` organization runner group must restrict workflow
-access to `punt-labs/ethos/.github/workflows/behavioral.yml@refs/heads/main`.
-Provision an isolated ephemeral runner with the [OpenCode setup] dependencies,
-including OpenCode 2.2.5, approved direnv and sibling checkouts. Give the
-OpenCode service scoped test Bifrost credentials and `CONTEXT7_API_KEY`;
-configure the other five MCP services for isolated test accounts/state as
-applicable. Do not share a developer's accounts or state. This job does not
-read GitHub Actions secrets; the runner's secret store supplies live access.
+The trusted `main` Nightly uses a GitHub-hosted Ubuntu runner and installs
+checksum-pinned OpenCode 2.2.5 and the [OpenCode setup] dependencies. Configure
+Actions secrets `BIFROST_VK` (a scoped key for the three pinned model routes)
+and `CONTEXT7_API_KEY`, plus the Actions variable `BIFROST_BASE_URL` (the
+runner-reachable HTTPS Responses API base URL ending in `/openai/v1`).
+Vox uses local eSpeak and Beadle uses a disposable loopback IMAP server;
+the other local MCP state is isolated as well. Missing live credentials fail
+the job and trigger the existing Nightly failure notification.
 
 [OpenCode setup]: docs/opencode-setup.md
 
@@ -150,7 +150,7 @@ completed after the four PRs.
 | TST-1 / GO-TST-1 | PR/main exceed 10 min and wire/tool jobs are not required; tuning and branch ruleset changes need separate work. | Jim Freeman | 2026-12-08 | [PL-1591](https://linear.app/punt-labs/issue/PL-1591) |
 | TST-1 / TST-4 | The pinned scanner reports on PRs; add the `secret-scan` check to the main ruleset after it has reported success. | Jim Freeman | 2026-12-08 | [PL-1586](https://linear.app/punt-labs/issue/PL-1586) |
 | TST-2 / GO-TST-1 | Unit-only and subprocess-only selectors cover representative packages, not all tests of each kind; exhaustive separation needs classification of mixed packages. | Jim Freeman | 2026-12-22 | [PL-1589](https://linear.app/punt-labs/issue/PL-1589) |
-| TST-2 / GO-TST-1 | The corpus runs in PR CI. Commission the restricted OpenCode runner group and verify the first successful live Nightly run. | Jim Freeman | 2026-12-22 | [PL-1584](https://linear.app/punt-labs/issue/PL-1584) |
+| TST-2 / GO-TST-1 | The corpus runs in PR CI. Provision the hosted Nightly's Actions secrets and variable and verify its first successful live OpenCode run. | Jim Freeman | 2026-12-22 | [PL-1584](https://linear.app/punt-labs/issue/PL-1584) |
 | TST-3 / GO-TST-1 | The audit latency budget deliberately omits the race flag to measure uninstrumented performance; keep the race companion and track the exception. | Jim Freeman | 2026-12-22 | [PL-1590](https://linear.app/punt-labs/issue/PL-1590) |
 | TST-3 / GO-TST-1 | Local hooks test working-tree sources, not isolated staged or pushed snapshots. Pre-commit selects direct changed packages and fixtures, not reverse dependents; module metadata changes select the tooling package. Snapshot testing needs a worktree strategy, and the full dependency matrix remains at pre-push and CI until a bounded impact selector is available. | Jim Freeman | 2026-12-22 | [PL-1587](https://linear.app/punt-labs/issue/PL-1587) |
 | TST-5 / GO-TST-3 | Coverage ratchet compares with a committed reference, not an equivalently measured exact merge base; replacing the gate needs matched base/head profiles. | Jim Freeman | 2026-12-22 | [PL-1583](https://linear.app/punt-labs/issue/PL-1583) |
