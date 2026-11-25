@@ -135,7 +135,17 @@ the current key to its recorded snapshot proof. A
 before-and-after hash on a live checkout can catch many races, but misses
 a change followed by a revert, and does not prove what a running command
 read. Locking Ethos requests does not lock human or Bash edits. Start with
-checks that are compatible with an isolated snapshot. A project that
+checks that are compatible with an isolated snapshot. Resolve matching and
+grouping as checkout-relative paths. At launch, set the working directory
+under the snapshot root and expand `{root}` to that root and `{files}` to
+snapshot-local paths; resolve `{package_dir}` in the snapshot as well.
+Key the logical invocation before expansion with the ephemeral snapshot
+path. Changing only the working directory is insufficient: no expanded
+argument may still point to the live checkout. Literal paths into that
+checkout or wrappers that reopen it are ineligible unless execution
+isolation makes those accesses resolve to the same verified snapshot.
+
+A project that
 depends on ignored files, mutable tools, ambient environment or network
 state must declare inputs and a cache epoch, or use an explicit gate until
 its dependencies can be represented. Do not put environment values,
