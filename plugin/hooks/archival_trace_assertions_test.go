@@ -50,7 +50,7 @@ var archivalUnresolvedEntry = regexp.MustCompile(`^\?\?\?\?\((?: <unfinished \.\
 
 func parseArchivalCalls(trace string) ([]archivalCall, error) {
 	pending := map[int]archivalCall{}
-	unresolved := map[int]string{}
+	unresolved := map[int]archivalCall{}
 	ended := map[int]int{}
 	killed := map[int]bool{}
 	exitGroup, exitOrder := false, 0
@@ -91,13 +91,13 @@ func parseArchivalCalls(trace string) ([]archivalCall, error) {
 			continue
 		}
 		if record, ok := unresolved[tid]; ok {
-			return nil, fmt.Errorf("unsupported syscall record %q before further activity by tid %d", record, tid)
+			return nil, fmt.Errorf("unsupported syscall record %q before further activity by tid %d", record.args, tid)
 		}
 		if _, inFlight := pending[tid]; !inFlight && archivalUnresolvedEntry.MatchString(text) {
 			if ended[tid] != 0 {
 				return nil, fmt.Errorf("unsupported syscall record %q after termination of tid %d", text, tid)
 			}
-			unresolved[tid] = text
+			unresolved[tid] = archivalCall{tid: tid, order: n, args: text}
 			continue
 		}
 		if strings.HasPrefix(text, "<... ") {
@@ -139,14 +139,16 @@ func parseArchivalCalls(trace string) ([]archivalCall, error) {
 		for tid, record := range unresolved {
 			// The unreadable entry must belong to a terminating task, not
 			// merely coincide with an unrelated process's exit_group.
-			cutoff, sameGroupExit := groupExit[group(tid)]
-			if killed[tid] {
-				cutoff, sameGroupExit = exitOrder, exitGroup
-			} else {
-				sameGroupExit = sameGroupExit && cutoff < ended[tid]-1
+			tgid := group(tid)
+			exit, hasExit := groupExit[tgid]
+			cutoff := record.order
+			if !killed[tid] && hasExit {
+				cutoff = min(cutoff, exit)
 			}
-			if ended[tid] == 0 || !sameGroupExit || mutatesAfter(cutoff, calls, pending) {
-				return nil, fmt.Errorf("unsupported syscall record %q", record)
+			tearingDown := killed[tid] || (hasExit && exit < ended[tid]-1)
+			sameGroup := func(other int) bool { return group(other) == tgid }
+			if ended[tid] == 0 || !tearingDown || mutatesAfter(cutoff, calls, pending, sameGroup) {
+				return nil, fmt.Errorf("unsupported syscall record %q", record.args)
 			}
 		}
 	}
@@ -161,7 +163,7 @@ func parseArchivalCalls(trace string) ([]archivalCall, error) {
 		// is left that the hidden call could have been, and every mutation
 		// before it was fully decoded and classified. Any other undecodable
 		// record still refuses below.
-		if c.name == "???" && ended[tid] != 0 && exitGroup && !mutatesAfter(exitOrder, calls, pending) {
+		if c.name == "???" && ended[tid] != 0 && exitGroup && !mutatesAfter(exitOrder, calls, pending, nil) {
 			continue
 		}
 		// A killed task may never resume. Still classify all printed destination
@@ -201,9 +203,12 @@ func archivalThreadGroupExits(calls []archivalCall) (func(int) int, map[int]int)
 }
 
 // mutatesAfter reports whether any namespace-mutating call, finished or still
-// pending, starts at or after line order.
-func mutatesAfter(order int, calls []archivalCall, pending map[int]archivalCall) bool {
+// pending, starts at or after line order on an included task.
+func mutatesAfter(order int, calls []archivalCall, pending map[int]archivalCall, includes func(int) bool) bool {
 	mutating := func(c archivalCall) bool {
+		if c.order < order || (includes != nil && !includes(c.tid)) {
+			return false
+		}
 		switch c.name {
 		case "linkat", "link", "renameat", "renameat2", "rename", "mkdirat", "mkdir", "mknod", "mknodat", "symlinkat", "symlink", "unlinkat", "unlink", "rmdir", "creat":
 			return true
@@ -218,12 +223,12 @@ func mutatesAfter(order int, calls []archivalCall, pending map[int]archivalCall)
 		return false
 	}
 	for _, c := range calls {
-		if c.order >= order && mutating(c) {
+		if mutating(c) {
 			return true
 		}
 	}
 	for _, c := range pending {
-		if c.order >= order && mutating(c) {
+		if mutating(c) {
 			return true
 		}
 	}
@@ -916,6 +921,33 @@ func TestArchivalTraceUndecodableRecord(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := checkArchivalTrace(tc.trace, p)
+			if tc.wantError == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantError)
+			}
+		})
+	}
+}
+
+func TestArchivalTraceChildTeardownScopesWrites(t *testing.T) {
+	const trace = `1 clone(child_stack=NULL, flags=SIGCHLD) = 2
+2 clone(child_stack=NULL, flags=CLONE_VM|CLONE_THREAD) = 3
+2 exit_group(0 <unfinished ...>
+3 ????() = ?
+2 <... exit_group resumed>) = ?
+3 +++ exited with 0 +++
+2 +++ exited with 0 +++
+`
+	for _, tc := range []struct {
+		name, tail, wantError string
+	}{
+		{"allowed parent write", `1 mkdir("/t/001/.punt-labs/local/ethos/tmp", 0700) = 0`, ""},
+		{"forbidden parent write", `1 mkdir("/t/003/feature/src/unexpected", 0700) = 0`, "destination not permitted"},
+		{"later write in exiting group", `2 mkdir("/t/001/.punt-labs/local/ethos/tmp", 0700) = 0`, "unsupported syscall record"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := checkArchivalTrace(trace+tc.tail, linkedFullPolicy())
 			if tc.wantError == "" {
 				require.NoError(t, err)
 			} else {
