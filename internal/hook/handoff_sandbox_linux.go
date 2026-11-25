@@ -49,13 +49,21 @@ func runHandoffSandbox(writeCoverage func(string) error) {
 	if dir := os.Getenv("GOCOVERDIR"); filepath.IsAbs(dir) {
 		coverDir, err := os.Open(dir)
 		if err != nil {
-			_, _ = fmt.Fprintln(status, err)
+			_, _ = fmt.Fprintln(status, "open sandbox coverage directory")
 			os.Exit(126)
 		}
 		reportCoverage = func() error { return writeSandboxCoverage(coverDir, cwd, writeCoverage) }
 	}
 	err := enterHandoffSandbox(os.Args[2], os.Args[3], cwd, os.Args[5], os.Args[6], os.Args[7:], status, reportCoverage)
-	_, _ = fmt.Fprintln(status, err)
+	var setup *handoffSetupError
+	if errors.As(err, &setup) {
+		var errno unix.Errno
+		if errors.As(setup.cause, &errno) {
+			_, _ = fmt.Fprintf(status, "%s: %s\n", setup.phase, errno)
+		} else {
+			_, _ = fmt.Fprintln(status, setup.phase)
+		}
+	}
 	os.Exit(126)
 }
 
@@ -135,7 +143,11 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 	}
 	if !ready {
 		diagnostic.FromContext(ctx).Info("Handoff sandbox setup failed", "error_type", diagnostic.ErrorType(setupErr))
-		return "", errors.New("could not establish snapshot isolation or enter its working directory")
+		reason := "could not establish snapshot isolation or enter its working directory"
+		if detail := strings.TrimSpace(string(setup)); setupErr == nil && detail != "" {
+			reason += " (" + detail + ")"
+		}
+		return "", errors.New(reason)
 	}
 	var exit *exec.ExitError
 	if err != nil && (!errors.As(err, &exit) || exit.ExitCode() < 0 || exit.ExitCode() >= 126) {
@@ -159,16 +171,33 @@ func insideGatePath(root, path string) bool {
 	return err == nil && filepath.IsLocal(rel)
 }
 
-func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string, status io.Writer, reportCoverage func() error) error {
+type handoffSetupError struct {
+	phase string
+	cause error
+}
+
+func (e *handoffSetupError) Error() string { return e.phase + ": " + e.cause.Error() }
+func (e *handoffSetupError) Unwrap() error { return e.cause }
+
+func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string, status io.Writer, reportCoverage func() error) (err error) {
+	phase := "validate sandbox plan"
+	defer func() {
+		if err != nil {
+			err = &handoffSetupError{phase: phase, cause: err}
+		}
+	}()
 	if argv[0] != "/bin/sh" || !insideGatePath(gateRoot, cwd) {
 		return errors.New("invalid sandbox plan")
 	}
+	phase = "make mount propagation private"
 	if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
 		return err
 	}
+	phase = "bind sandbox root"
 	if err := unix.Mount(root, root, "", unix.MS_BIND, ""); err != nil {
 		return err
 	}
+	phase = "materialize snapshot inputs"
 	checkout := filepath.Join(root, gateRoot)
 	if err := os.MkdirAll(checkout, 0o700); err != nil {
 		return err
@@ -189,6 +218,7 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 	if err := unix.Mount("", checkout, "", unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV, ""); err != nil {
 		return err
 	}
+	phase = "mount read-only system runtime"
 	for _, runtimeDir := range sandboxRuntime {
 		if _, err := os.Stat(runtimeDir); errors.Is(err, os.ErrNotExist) {
 			continue
@@ -200,6 +230,7 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 		}
 	}
 	oldRoot := filepath.Join(root, ".old-root")
+	phase = "pivot to sandbox root"
 	if err := os.Mkdir(oldRoot, 0o700); err != nil {
 		return err
 	}
@@ -209,6 +240,7 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 	if err := unix.Chdir(cwd); err != nil {
 		return err
 	}
+	phase = "detach live filesystem"
 	if err := unix.Unmount("/.old-root", unix.MNT_DETACH); err != nil {
 		return err
 	}
@@ -218,6 +250,7 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 	if err := unix.Mount("", "/", "", unix.MS_REMOUNT|unix.MS_BIND|unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV, ""); err != nil {
 		return err
 	}
+	phase = "drop sandbox privileges"
 	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
 		return err
 	}
@@ -230,9 +263,11 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 	if err := unix.Capset(&unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}, &caps[0]); err != nil {
 		return err
 	}
+	phase = "collect sandbox coverage"
 	if err := reportCoverage(); err != nil {
 		return err
 	}
+	phase = "start sandbox command"
 	if _, err := io.WriteString(status, handoffSandboxReady); err != nil {
 		return err
 	}

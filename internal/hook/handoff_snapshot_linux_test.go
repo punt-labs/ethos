@@ -322,6 +322,17 @@ func TestHandoffSandboxRejectsInvalidPlan(t *testing.T) {
 	require.ErrorIs(t, hashWorktreePath(&bytes.Buffer{}, root, &gateHashBudget{ctx: ctx}), context.Canceled)
 }
 
+func TestHandoffSandboxReportsSetupPhase(t *testing.T) {
+	root := t.TempDir()
+	_, err := executeHandoffSnapshot(context.Background(), root, t.TempDir(), "", nil, editCheck{
+		argv: []string{"/bin/sh"}, cwd: "/invalid", timeout: time.Second,
+	})
+	if err != nil && strings.Contains(err.Error(), "isolation unavailable on this host") {
+		t.Skip(err.Error())
+	}
+	require.ErrorContains(t, err, "validate sandbox plan")
+}
+
 func TestHandoffSnapshotLeaseAndProof(t *testing.T) {
 	root, _ := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())
