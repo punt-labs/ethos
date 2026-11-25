@@ -51,7 +51,8 @@ var archivalUnresolvedEntry = regexp.MustCompile(`^\?\?\?\?\((?: <unfinished \.\
 func parseArchivalCalls(trace string) ([]archivalCall, error) {
 	pending := map[int]archivalCall{}
 	unresolved := map[int]string{}
-	ended := map[int]bool{}
+	ended := map[int]int{}
+	killed := map[int]bool{}
 	exitGroup, exitOrder := false, 0
 	var calls []archivalCall
 	finish := func(c archivalCall, text string) error {
@@ -81,7 +82,8 @@ func parseArchivalCalls(trace string) ([]archivalCall, error) {
 		text = strings.TrimSpace(text)
 		if strings.HasPrefix(text, "+++") {
 			if strings.HasPrefix(text, "+++ exited") || strings.HasPrefix(text, "+++ killed") {
-				ended[tid] = true
+				ended[tid] = n + 1
+				killed[tid] = strings.HasPrefix(text, "+++ killed by ")
 			}
 			continue
 		}
@@ -92,7 +94,7 @@ func parseArchivalCalls(trace string) ([]archivalCall, error) {
 			return nil, fmt.Errorf("unsupported syscall record %q before further activity by tid %d", record, tid)
 		}
 		if _, inFlight := pending[tid]; !inFlight && archivalUnresolvedEntry.MatchString(text) {
-			if ended[tid] {
+			if ended[tid] != 0 {
 				return nil, fmt.Errorf("unsupported syscall record %q after termination of tid %d", text, tid)
 			}
 			unresolved[tid] = text
@@ -131,12 +133,21 @@ func parseArchivalCalls(trace string) ([]archivalCall, error) {
 			return nil, err
 		}
 	}
-	for tid, record := range unresolved {
-		// strace prints this stub at an unreadable syscall-entry stop. Require
-		// teardown evidence and no subsequent activity by that task, rather
-		// than treating arbitrary undecodable records as harmless.
-		if !ended[tid] || !exitGroup || mutatesAfter(exitOrder, calls, pending) {
-			return nil, fmt.Errorf("unsupported syscall record %q", record)
+	if len(unresolved) > 0 {
+		sort.Slice(calls, func(i, j int) bool { return calls[i].order < calls[j].order })
+		group, groupExit := archivalThreadGroupExits(calls)
+		for tid, record := range unresolved {
+			// The unreadable entry must belong to a terminating task, not
+			// merely coincide with an unrelated process's exit_group.
+			cutoff, sameGroupExit := groupExit[group(tid)]
+			if killed[tid] {
+				cutoff, sameGroupExit = exitOrder, exitGroup
+			} else {
+				sameGroupExit = sameGroupExit && cutoff < ended[tid]-1
+			}
+			if ended[tid] == 0 || !sameGroupExit || mutatesAfter(cutoff, calls, pending) {
+				return nil, fmt.Errorf("unsupported syscall record %q", record)
+			}
 		}
 	}
 	for tid, c := range pending {
@@ -150,7 +161,7 @@ func parseArchivalCalls(trace string) ([]archivalCall, error) {
 		// is left that the hidden call could have been, and every mutation
 		// before it was fully decoded and classified. Any other undecodable
 		// record still refuses below.
-		if c.name == "???" && ended[tid] && exitGroup && !mutatesAfter(exitOrder, calls, pending) {
+		if c.name == "???" && ended[tid] != 0 && exitGroup && !mutatesAfter(exitOrder, calls, pending) {
 			continue
 		}
 		// A killed task may never resume. Still classify all printed destination
@@ -162,6 +173,31 @@ func parseArchivalCalls(trace string) ([]archivalCall, error) {
 	}
 	sort.Slice(calls, func(i, j int) bool { return calls[i].order < calls[j].order })
 	return calls, nil
+}
+
+func archivalThreadGroupExits(calls []archivalCall) (func(int) int, map[int]int) {
+	groups := map[int]int{}
+	group := func(tid int) int {
+		if id, ok := groups[tid]; ok {
+			return id
+		}
+		return tid
+	}
+	exits := map[int]int{}
+	for _, c := range calls {
+		switch c.name {
+		case "clone", "clone3":
+			if strings.Contains(c.args, "CLONE_THREAD") {
+				child, err := strconv.Atoi(strings.Fields(c.result)[0])
+				if err == nil && child > 0 {
+					groups[child] = group(c.tid)
+				}
+			}
+		case "exit_group":
+			exits[group(c.tid)] = c.order
+		}
+	}
+	return group, exits
 }
 
 // mutatesAfter reports whether any namespace-mutating call, finished or still
@@ -872,7 +908,8 @@ func TestArchivalTraceUndecodableRecord(t *testing.T) {
 	}{
 		{"torn down by exit_group", "1 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 2\n1 exit_group(0 <unfinished ...>\n2 ???( <unfinished ...>\n1 <... exit_group resumed>) = ?\n2 +++ exited with 0 +++", ""},
 		{"captured killed syscall entry", "1900637 clone(child_stack=NULL, flags=SIGCHLD) = 1900651\n1900651 ????( <unfinished ...>\n1900651 +++ killed by SIGKILL +++\n1900637 exit_group(0) = ?\n1900637 +++ exited with 0 +++", ""},
-		{"complete undecodable entry at teardown", "1 clone(child_stack=NULL, flags=SIGCHLD) = 2\n1 exit_group(0) = ?\n2 ????() = ?\n2 +++ exited with 0 +++", ""},
+		{"complete undecodable entry at teardown", "1 clone(child_stack=NULL, flags=CLONE_VM|CLONE_THREAD) = 2\n1 exit_group(0) = ?\n2 ????() = ?\n2 +++ exited with 0 +++", ""},
+		{"unrelated process exit cannot explain undecodable entry", "1 clone(child_stack=NULL, flags=SIGCHLD) = 2\n1 exit_group(0) = ?\n2 ????() = ?\n2 +++ exited with 0 +++", "unsupported syscall record"},
 		{"complete undecodable entry followed by work", "1 clone(child_stack=NULL, flags=SIGCHLD) = 2\n2 ????() = ?\n2 getcwd(\"/t/003/feature\", 129) = 14\n2 +++ exited with 0 +++\n1 exit_group(0) = ?", "unsupported syscall record"},
 		{"no exit_group", "1 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 2\n2 ???( <unfinished ...>\n2 +++ exited with 0 +++", "unsupported syscall record"},
 		{"thread never ended", "1 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 2\n1 exit_group(0) = ?\n2 ???( <unfinished ...>", "unsupported syscall record"},
