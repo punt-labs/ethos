@@ -15,7 +15,7 @@ The installed PR/main and Nightly rows describe the target state after
 | Tier | Runner, selection and prerequisites | Time budget | Gate behavior |
 | --- | --- | --- | --- |
 | Pre-commit | Local, `make hooks` once, then `git commit`; also `make secret-scan-staged` and `make test-changed` directly. Go with race support, Git and Bash. The timer covers the pinned gitleaks scan of the Git index and the subsequent staged whitespace and affected package checks from an isolated copy of the index. The slowest packages use the cases in [test-smoke.tsv](scripts/test-smoke.tsv). | <30 s on a provisioned checkout for a typical small change | A scan or test failure stops the commit; the existing Git hook still runs on a pass. |
-| Pre-push | Local, the hook runs `make test-push` in a detached worktree of the commit being pushed. Full credential-free package suite plus `make test-subprocess-fast`. Requires the Go toolchain, full Git history, Bash and Python. | <3 min | A failure stops the push; branch and non-release tag updates must be pushed from the corresponding checkout. Release tags skip the local gate; the [Release] candidate smoke gates publication. |
+| Pre-push | Local, the hook runs `make test-push` in a detached worktree of the commit being pushed. Full credential-free package suite plus `make test-subprocess-fast`. Requires the Go toolchain, full Git history, Bash, Python and `jq`. | <3 min | A failure stops the push; branch and non-release tag updates must be pushed from the corresponding checkout. Release tags skip the local gate; the [Release] candidate smoke gates publication. |
 | PR | [Test] and [Docs], hosted runners. Full race suite sharded by Go package, exact merge-base statement coverage, legacy corpus regeneration, storage and plugin-cache checks, Linux/macOS installed verification [#670], offline OpenCode checks, Z specs, wire smoke against a local stub, and docs. `secret-scan` scans introduced commits using the same pinned gitleaks as the hook. | <10 min | Required `test` (including race shards, coverage, quality, installed smoke and `legacy-corpus`) and `docs` block merge. `secret-scan` reports independently pending ruleset rollout, as do wire smoke and tool-install verification. |
 | Merge to main | Repeat PR jobs on the main commit and compare package statement coverage with its parent. | <10 min | A red main requires triage. |
 | Nightly | [Behavioral] (Nightly [#671]), daily 06:07 UTC or manual dispatch on upstream main. The hosted Claude job runs `make test-quarantine` and then `go test` with the `behavioral` tag and a 20-minute test timeout, using Claude CLI, an Anthropic test key and the configured judge model. The local counterpart is `make test-nightly`. A separate hosted Linux job runs `bash scripts/ci-opencode.sh smoke`, including doctor; the workstation counterpart is `make smoke-opencode`. | ≤1 h (30-minute Claude and 55-minute OpenCode jobs in parallel) | Live failures are red and Biff alerts on failed or canceled runs. Not a PR check. |
@@ -103,8 +103,10 @@ an entry whenever a test or any of its subtests starts a real child process,
 including Git processes started by fixture setup. An in-process mock does not
 count.
 
-Provision tools and module caches first (see [development guide]). Offline
-gates do not need a production key. Run live selectors only in a disposable
+Provision tools and module caches first (see [development guide]). The full
+`make test` suite requires `jq` on Linux and macOS for the offline Nightly
+Biff wall regression. Offline gates do not need a production key. Run live
+selectors only in a disposable
 checkout or authorized trusted job. Do not put provider secrets or private
 payloads in fixtures or artifacts.
 
@@ -153,7 +155,7 @@ running quarantined tests.
 | TST-3 / GO-TST-1 | `make help` lists selectors; [#670] makes PR/main use `make test`. Local and CI use the same Go tests and race/count flags, apart from the explicit performance measurement. |
 | TST-4 / GO-TST-2 | Offline suites use temporary repos and HOME, explicit subprocess fixtures and loopback provider stubs; [#670] isolates Git and prevents the regenerated agents from touching the checkout. |
 | TST-5 / GO-TST-3 | `coverage.out` is Go package **statement** coverage and is ratcheted against the equivalently measured exact merge base (parent on main). CI separately reports subprocess, installed storage [#670], wire, and native release companion statement coverage. The reports exclude branch coverage, external tools/providers, historical compatibility builds, and the exact staged and published release bytes. |
-| TST-6 / GO-TST-4 | [#671] gates secrets and live execution to upstream main; live requests, job time, and spend are bounded. Missing required credentials are red. |
+| TST-6 / GO-TST-4 | [#671] gates secrets and live execution to upstream main; live requests, job time, and spend are bounded. Missing required credentials are red. Nightly detects ignored-file changes outside Ethos runtime paths ([PL-1579](https://linear.app/punt-labs/issue/PL-1579)) and serializes failure and cancellation notifications so an older run or attempt cannot replace a newer Nightly alert already on the Biff wall ([PL-1580](https://linear.app/punt-labs/issue/PL-1580)). |
 | TST-7 / GO-TST-4 | [Release] verifies staged, installed native bytes across CLI, plugin manifest (`claude plugin validate`), MCP stdio, and release-critical hooks on all four runners, plus tag-time live behavioral verification against the exact `ETHOS_BINARY`, blocking promotion on any failed leg. |
 | TST-8 / GO-TST-4 | [Release] installs the production binary and marketplace plugin (`ethos@punt-labs`) after publication, checks digest, version, CLI, MCP, and hooks, and delivers a verified Biff wall alert on failure (drillable via `force-published-failure=true`). |
 | TST-9 / GO-TST-5 | Separately selected, owned, dated quarantines are listed in the tracked inventory and reviewed on Nightly. |
@@ -170,6 +172,4 @@ completed after the four PRs.
 | TST-1 / TST-4 | The pinned scanner reports on PRs; add the `secret-scan` check to the main ruleset after it has reported success. | Jim Freeman | 2026-12-08 | [PL-1586](https://linear.app/punt-labs/issue/PL-1586) |
 | TST-2 / GO-TST-1 | The corpus runs in PR CI. Verify the hosted Nightly's first successful live OpenCode run with direct OpenAI credentials. | Jim Freeman | 2026-12-22 | [PL-1584](https://linear.app/punt-labs/issue/PL-1584) |
 | TST-6 / GO-TST-4 | Green Nightly on main and alert delivery: proved post-merge of [#671]. | Jim Freeman | — | — |
-| TST-6 / GO-TST-4 | Git-visible assertions miss ignored agent writes; distinguishing them from legitimate Ethos runtime files requires a separate write-set design. | Jim Freeman | 2026-12-22 | [PL-1579](https://linear.app/punt-labs/issue/PL-1579) |
-| TST-6 / GO-TST-4 | Overlapping Biff alerts are last-writer-wins; ordering pending alerts needs a separate policy. | Jim Freeman | 2026-12-22 | [PL-1580](https://linear.app/punt-labs/issue/PL-1580) |
 | TST-8 / GO-TST-4 | Post-release Biff alert delivery drill (`force-published-failure=true`) requires running on `main` after merge. | Jim Freeman | — | — |

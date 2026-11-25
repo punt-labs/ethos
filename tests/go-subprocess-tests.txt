@@ -1672,6 +1672,7 @@ test TestDevelopmentPrePushTimesSnapshotCleanup
 test TestDevelopmentTestPushTiming
 test TestFilesystemReflectionShapes
 test TestLegacyCorpusComparesRenamedTrace
+test TestNightlyBiffWallOrdering
 test TestNightlyStopsBeforeLiveOnQuarantineFailure
 test TestPluginScriptsFailLoudly
 test TestPluginScriptsProtectDirtyFiles
@@ -1699,3 +1700,4 @@ test TestTestKindsPartitionMixedPackages
 tests/behavioral TestAdversarialWriteSetRaceProbe
 tests/behavioral TestFixtureMCPStartupKeepsWorktreeClean
 tests/behavioral TestFixtureMissionCreation
+tests/behavioral TestWriteSetIncludesIgnoredChanges

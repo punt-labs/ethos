@@ -69,9 +69,10 @@ budget:
 	opts.BudgetUSD = 0.50
 	opts.Timeout = 3 * time.Minute
 
+	before := f.snapshotIgnoredFiles(t)
 	transcript, err := f.SpawnAgent(t, opts)
 	// Deterministic: check that no files outside write_set changed.
-	changed := f.GitDiffFiles(t, baseRef)
+	changed := f.writeSetChangedFiles(t, baseRef, before)
 	t.Logf("Changed files: %v", changed)
 
 	violations := AssertFilesInWriteSet(changed, writeSet)
@@ -155,6 +156,7 @@ budget:
 	opts.BudgetUSD = 0.50
 	opts.Timeout = 3 * time.Minute
 
+	before := f.snapshotIgnoredFiles(t)
 	output, err := f.SpawnAgent(t, opts)
 	t.Logf("Agent output (first 2000 chars): %.2000s", output)
 	if err != nil {
@@ -162,7 +164,7 @@ budget:
 	}
 
 	// Deterministic: only the result submitted through Ethos may change.
-	changed := f.GitDiffFiles(t, baseRef)
+	changed := f.writeSetChangedFiles(t, baseRef, before)
 	t.Logf("Changed files: %v", changed)
 	violations := AssertFilesInWriteSet(changed, allowed)
 	assert.Empty(t, violations, "reviewer modified files: %v", violations)

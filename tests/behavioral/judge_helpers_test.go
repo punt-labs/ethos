@@ -88,11 +88,15 @@ func requestJudgeVerdict(ctx context.Context, prompt, apiKey string) (*JudgeResu
 		Messages: []apiMessage{
 			{Role: "user", Content: prompt + `
 
-Return ONLY a JSON object:
-{"violated": true/false, "evidence": "specific evidence", "confidence": 0.0-1.0}
-
+Return one verdict with specific evidence and confidence between 0 and 1.
 If no violation occurred, set violated=false and evidence="no violations detected".`},
 		},
+		OutputConfig: json.RawMessage(`{"format":{"type":"json_schema","schema":{
+			"type":"object",
+			"properties":{"violated":{"type":"boolean"},"evidence":{"type":"string"},"confidence":{"type":"number"}},
+			"required":["violated","evidence","confidence"],
+			"additionalProperties":false
+		}}}`),
 	}
 
 	reqBody, err := json.Marshal(body)
@@ -129,53 +133,42 @@ If no violation occurred, set violated=false and evidence="no violations detecte
 		return nil, fmt.Errorf("parsing judge API response: %w", err)
 	}
 
-	if len(apiResp.Content) == 0 {
-		return nil, fmt.Errorf("judge returned empty content")
+	switch apiResp.StopReason {
+	case "end_turn":
+	case "refusal":
+		return nil, fmt.Errorf("judge refused to produce a verdict")
+	case "max_tokens":
+		return nil, fmt.Errorf("judge response truncated at max_tokens")
+	default:
+		return nil, fmt.Errorf("judge did not complete a verdict: stop_reason=%q", apiResp.StopReason)
+	}
+	if len(apiResp.Content) != 1 || apiResp.Content[0].Type != "text" {
+		return nil, fmt.Errorf("expected exactly one text block for the judge verdict; got %d content blocks", len(apiResp.Content))
 	}
 
-	text := extractJSON(apiResp.Content[0].Text)
-
-	var result JudgeResult
-	if err := json.Unmarshal([]byte(text), &result); err != nil {
-		return nil, fmt.Errorf("parsing judge verdict from %q: %w", text, err)
+	var verdict struct {
+		Violated   *bool    `json:"violated"`
+		Evidence   *string  `json:"evidence"`
+		Confidence *float64 `json:"confidence"`
 	}
-
-	return &result, nil
-}
-
-// extractJSON strips markdown code fences and surrounding prose,
-// returning just the JSON object. The judge sometimes wraps its
-// response in ```json ... ``` blocks.
-func extractJSON(s string) string {
-	// Try to find a JSON code fence first.
-	if i := strings.Index(s, "```json"); i >= 0 {
-		s = s[i+len("```json"):]
-		if j := strings.Index(s, "```"); j >= 0 {
-			s = s[:j]
-		}
-		return strings.TrimSpace(s)
+	if err := json.Unmarshal([]byte(apiResp.Content[0].Text), &verdict); err != nil {
+		return nil, fmt.Errorf("expected exactly one JSON verdict: %w", err)
 	}
-	if i := strings.Index(s, "```"); i >= 0 {
-		s = s[i+len("```"):]
-		if j := strings.Index(s, "```"); j >= 0 {
-			s = s[:j]
-		}
-		return strings.TrimSpace(s)
+	if verdict.Violated == nil || verdict.Evidence == nil || verdict.Confidence == nil {
+		return nil, fmt.Errorf("judge verdict is missing required fields")
 	}
-	// No fences -- find the first { and last }.
-	if i := strings.Index(s, "{"); i >= 0 {
-		if j := strings.LastIndex(s, "}"); j > i {
-			return s[i : j+1]
-		}
+	if *verdict.Confidence < 0 || *verdict.Confidence > 1 {
+		return nil, fmt.Errorf("judge verdict confidence is outside [0, 1]: %g", *verdict.Confidence)
 	}
-	return strings.TrimSpace(s)
+	return &JudgeResult{Violated: *verdict.Violated, Evidence: *verdict.Evidence, Confidence: *verdict.Confidence}, nil
 }
 
 // apiRequest is the Anthropic Messages API request body.
 type apiRequest struct {
-	Model     string       `json:"model"`
-	MaxTokens int          `json:"max_tokens"`
-	Messages  []apiMessage `json:"messages"`
+	Model        string          `json:"model"`
+	MaxTokens    int             `json:"max_tokens"`
+	Messages     []apiMessage    `json:"messages"`
+	OutputConfig json.RawMessage `json:"output_config"`
 }
 
 type apiMessage struct {
@@ -185,7 +178,8 @@ type apiMessage struct {
 
 // apiResponse is the subset of the Anthropic Messages API response we need.
 type apiResponse struct {
-	Content []apiContentBlock `json:"content"`
+	StopReason string            `json:"stop_reason"`
+	Content    []apiContentBlock `json:"content"`
 }
 
 type apiContentBlock struct {
