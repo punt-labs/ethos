@@ -39,9 +39,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	profilePath := fs.String("profile", "coverage.out", "head Go statement coverage profile")
 	basePath := fs.String("base-profile", "", "merge-base Go statement coverage profile")
+	floorOnly := fs.Bool("autorepair-floor-only", false, "check only the independent autorepair statement coverage floor")
 	merge := fs.Bool("merge", false, "write the statement coverage union of the given profiles to stdout")
 	root := fs.String("root", ".", "head repository root (to detect internal/autorepair test files)")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *floorOnly && (*merge || *basePath != "" || fs.NArg() != 0) {
+		fmt.Fprintln(stderr, "coverage-check: -autorepair-floor-only does not accept a base, merge mode, or positional arguments")
 		return 2
 	}
 	if *merge {
@@ -51,7 +56,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
-	if *basePath == "" || fs.NArg() != 0 {
+	if !*floorOnly && (*basePath == "" || fs.NArg() != 0) {
 		fmt.Fprintln(stderr, "coverage-check: -base-profile is required and no positional arguments are allowed")
 		return 2
 	}
@@ -59,6 +64,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "coverage-check: head profile: %v\n", err)
 		return 1
+	}
+	autorepairHasTests := hasTestFiles(filepath.Join(*root, autorepairPkg))
+	if *floorOnly {
+		pkgs, _ := head.tallies()
+		var failures []string
+		if failure := autorepairFailure(pkgs, autorepairHasTests); failure != "" {
+			failures = append(failures, failure)
+		}
+		return reportFailures(stdout, failures)
 	}
 	base, err := readProfile(*basePath)
 	if err != nil {
@@ -69,7 +83,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "coverage-check: coverage modes differ: head %s, merge base %s\n", head.mode, base.mode)
 		return 1
 	}
-	return check(stdout, head, base, hasTestFiles(filepath.Join(*root, autorepairPkg)))
+	return check(stdout, head, base, autorepairHasTests)
 }
 
 func check(out io.Writer, head, base coverProfile, autorepairHasTests bool) int {
@@ -107,9 +121,27 @@ func check(out io.Writer, head, base coverProfile, autorepairHasTests bool) int 
 	if overall.pct() < baseOverall.pct()-epsilon {
 		failures = append(failures, fmt.Sprintf("overall: %.1f%% is below merge base %.1f%%", overall.pct(), baseOverall.pct()))
 	}
-	if cur, ok := pkgs[autorepairPkg]; ok && autorepairHasTests && cur.pct() < autorepairFloor-epsilon {
-		failures = append(failures, fmt.Sprintf("%s: %.1f%% is below the %.1f floor", autorepairPkg, cur.pct(), autorepairFloor))
+	if failure := autorepairFailure(pkgs, autorepairHasTests); failure != "" {
+		failures = append(failures, failure)
 	}
+	return reportFailures(out, failures)
+}
+
+func autorepairFailure(pkgs map[string]tally, hasTests bool) string {
+	if !hasTests {
+		return ""
+	}
+	cur, ok := pkgs[autorepairPkg]
+	if !ok {
+		return autorepairPkg + ": absent from head profile"
+	}
+	if cur.pct() < autorepairFloor-epsilon {
+		return fmt.Sprintf("%s: %.1f%% is below the %.1f floor", autorepairPkg, cur.pct(), autorepairFloor)
+	}
+	return ""
+}
+
+func reportFailures(out io.Writer, failures []string) int {
 	for _, failure := range failures {
 		fmt.Fprintf(out, "FAIL %s\n", failure)
 	}

@@ -89,6 +89,36 @@ func TestMissingPackageInProfileFails(t *testing.T) {
 	}
 }
 
+func TestAutorepairFloorWithoutBase(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "internal/autorepair")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "x_test.go"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(root, "coverage.out")
+	for _, tc := range []struct {
+		name, contents, message string
+		code                    int
+	}{
+		{"pass", profile([3]any{"internal/autorepair/a.go", 81, true}, [3]any{"internal/autorepair/b.go", 19, false}), "coverage-check: ok", 0},
+		{"below floor", profile([3]any{"internal/autorepair/a.go", 80, true}, [3]any{"internal/autorepair/b.go", 20, false}), "80.0% is below the 81.0 floor", 1},
+		{"missing package", profile([3]any{"cmd/ethos/a.go", 1, true}), "internal/autorepair: absent from head profile", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(p, []byte(tc.contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			if code := run([]string{"-profile", p, "-autorepair-floor-only", "-root", root}, &out, &out); code != tc.code || !strings.Contains(out.String(), tc.message) {
+				t.Fatalf("want exit %d and %q, got %d: %s", tc.code, tc.message, code, &out)
+			}
+		})
+	}
+}
+
 func TestReadProfileRejectsNegativeCounts(t *testing.T) {
 	for _, line := range []string{"-5 1", "5 -1"} {
 		prof := "mode: atomic\n" + mod + "internal/a/a.go:1.1,1.2 " + line + "\n"

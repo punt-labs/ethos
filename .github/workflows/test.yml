@@ -89,7 +89,9 @@ jobs:
 
       - name: Test the PR merge result
         if: github.event_name == 'pull_request'
-        run: make test
+        run: |
+          make test
+          go run ./cmd/coverage-check -autorepair-floor-only
 
       - name: Test and compare package statement coverage to the merge base
         env:
@@ -108,6 +110,7 @@ jobs:
             make coverage-check COVERAGE_BASE=HEAD^
           else
             make test
+            go run ./cmd/coverage-check -autorepair-floor-only
           fi
 
       - name: Upload package statement coverage profile
