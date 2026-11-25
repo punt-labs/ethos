@@ -23,6 +23,7 @@ type workflowFile struct {
 }
 
 type workflowJob struct {
+	Needs yaml.Node      `yaml:"needs"`
 	Steps []workflowStep `yaml:"steps"`
 }
 
@@ -133,7 +134,11 @@ func TestAuditLatencyWorkflowRunsBothModes(t *testing.T) {
 	var wf workflowFile
 	require.NoError(t, yaml.Unmarshal(data, &wf))
 	var budget, companion bool
-	for _, step := range wf.Jobs["test-suite"].Steps {
+	testJob := wf.Jobs["test"]
+	var needs []string
+	require.NoError(t, testJob.Needs.Decode(&needs))
+	require.Contains(t, needs, "quality")
+	for _, step := range wf.Jobs["quality"].Steps {
 		if !strings.Contains(step.Run, "TestRedactLiveLongSessionBudget") {
 			continue
 		}

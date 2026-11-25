@@ -202,13 +202,19 @@ after Nightly ends, outside the cancelled run.
 `make test` writes Go package statement coverage to `coverage.out`.
 `make coverage-check` measures the checkout and a detached worktree at the
 exact merge base with `COVERAGE_BASE` (default `origin/main`) using the same
-Go toolchain, race flags and package selection. PR CI uses the event's head
-and base SHAs; a push to main compares with `HEAD^`.
+Go toolchain, race flags and package selection. CI combines separately
+sharded profiles for the PR merge result, head and exact merge base. A
+push to main compares the sharded main profile with its first parent's.
+For the known legacy archival trace decoder, the CI base shard uses the
+corrected test-only decoder to avoid rejecting valid split syscall records.
+It still runs the archival placement test and measures the exact base's
+production code.
 
 Package coverage may drop by at most 0.1 percentage point; overall coverage
 must not drop. The independent 81.0% `internal/autorepair` floor remains.
 Missing, empty, malformed, or incompatible profiles fail the gate. CI uploads
-the head package profile as `coverage-out` on success (seven-day retention).
+the complete head package profile as `coverage-out` before evaluating the
+ratchet (seven-day retention).
 
 Separately exercised binaries have their own reports, not inputs to the
 ratchet. The harness builds them with `go build -cover`, passes a dedicated

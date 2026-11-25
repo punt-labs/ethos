@@ -49,8 +49,73 @@ jobs:
 
   test-suite:
     runs-on: ubuntu-latest
-    # A PR can need three race runs: merge result, head, and merge base.
-    timeout-minutes: 180
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        snapshot: ${{ fromJSON(github.event_name == 'pull_request' && '["candidate","head","base"]' || github.ref == 'refs/heads/main' && '["candidate","base"]' || '["candidate"]') }}
+        shard: [cli, git, hook, storage, remaining]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          # Legacy hook tests build old binaries from Git history.
+          fetch-depth: 0
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+      - name: Archival observer toolchain
+        run: |
+          uname -sr
+          strace --version
+      - name: Test
+        shell: bash
+        env:
+          GORACE: atexit_sleep_ms=0
+          SHARD: ${{ matrix.shard }}
+          SNAPSHOT: ${{ matrix.snapshot }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          toolchain=$(go env GOVERSION)
+          export GOTOOLCHAIN="$toolchain"
+          selector=$RUNNER_TEMP/test-shard.sh
+          cp scripts/test-shard.sh "$selector"
+          observer=plugin/hooks/archival_trace_assertions_test.go
+          if [[ "$SNAPSHOT" == base && "$SHARD" == git ]]; then
+            cp "$observer" "$RUNNER_TEMP/archival_trace_assertions_test.go"
+          fi
+          case "$SNAPSHOT" in
+            candidate) ;;
+            head) git checkout --detach "${PR_HEAD:?missing PR head SHA}" ;;
+            base)
+              if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+                base=$(git merge-base "${PR_HEAD:?missing PR head SHA}" "${PR_BASE:?missing PR base SHA}")
+                git checkout --detach "$base"
+              else
+                git checkout --detach HEAD^
+              fi
+              ;;
+            *) exit 1 ;;
+          esac
+          # Replace only the known legacy test decoder; production code stays at the exact base.
+          if [[ "$SNAPSHOT" == base && "$SHARD" == git && -f "$observer" ]] &&
+             [[ "$(git hash-object -- "$observer")" == 8e368c5948b336311cde1332de81e6243f5db0dd ]]; then
+            cp "$RUNNER_TEMP/archival_trace_assertions_test.go" "$observer"
+          fi
+          packages=$(bash "$selector" "$SHARD")
+          mapfile -t selected <<< "$packages"
+          go test -race -count=1 -timeout 30m -p 2 -coverprofile=coverage.out "${selected[@]}"
+      - name: Upload shard coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: race-coverage-${{ matrix.snapshot }}-${{ matrix.shard }}
+          path: coverage.out
+          if-no-files-found: error
+          retention-days: 7
+
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
@@ -73,7 +138,7 @@ jobs:
           version: v2.13.1
 
       - name: ShellCheck
-        run: shellcheck plugin/hooks/*.sh install.sh .githooks/* scripts/test-changed.sh scripts/test-timed.sh scripts/test-snapshot.sh scripts/smoke-release.sh
+        run: shellcheck plugin/hooks/*.sh install.sh .githooks/* scripts/test-changed.sh scripts/test-push.sh scripts/test-shard.sh scripts/test-timed.sh scripts/test-snapshot.sh scripts/smoke-release.sh
 
       - name: Validate test quarantine inventory
         run: make test-quarantine
@@ -117,48 +182,6 @@ jobs:
           .tmp/z-spec-installer/install.sh --fuzz-only
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Archival observer toolchain
-        run: |
-          uname -sr
-          strace --version
-
-      - name: Test the PR merge result
-        if: github.event_name == 'pull_request'
-        run: |
-          make test
-          go run ./cmd/coverage-check -autorepair-floor-only
-
-      - name: Test and compare package statement coverage to the merge base
-        shell: bash
-        env:
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
-        run: |
-          profile_root=$PWD
-          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
-            : "${PR_BASE:?pull request base SHA is required}"
-            : "${PR_HEAD:?pull request head SHA is required}"
-            scratch=$(mktemp -d "$RUNNER_TEMP/ethos-pr-head.XXXXXXXX")
-            trap 'git worktree remove --force "$scratch/head"; rmdir "$scratch"' EXIT
-            git worktree add --detach "$scratch/head" "$PR_HEAD"
-            make -C "$scratch/head" coverage-check COVERAGE_BASE="$PR_BASE"
-            cp "$scratch/head/coverage.out" coverage.out
-            profile_root="$scratch/head"
-          elif [ "$GITHUB_REF" = refs/heads/main ]; then
-            make coverage-check COVERAGE_BASE=HEAD^
-          else
-            make test
-            go run ./cmd/coverage-check -autorepair-floor-only
-          fi
-          (cd "$profile_root" && go tool cover -func=coverage.out | tail -1)
-
-      - name: Upload package statement coverage profile
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: coverage-out
-          path: coverage.out
-          retention-days: 7
-
       - name: Validate content
         run: go run ./cmd/validate-content
 
@@ -190,6 +213,75 @@ jobs:
       - name: Audit redaction race companion
         if: ${{ !cancelled() }}
         run: go test -race -count=1 -run '^TestRedactLiveLongSessionBudget$' ./internal/hook/
+
+  coverage:
+    needs: test-suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: race-coverage-*
+          path: coverage-shards
+      - name: Combine package statement coverage
+        id: combine
+        env:
+          EXPECTED_PROFILES: 5
+        run: |
+          shopt -s nullglob
+          combine() {
+            local snapshot=$1 output=$2 profile
+            local profiles=(coverage-shards/race-coverage-"$snapshot"-*/coverage.out)
+            test "${#profiles[@]}" -eq "$EXPECTED_PROFILES"
+            printf 'mode: atomic\n' > "$output"
+            for profile in "${profiles[@]}"; do
+              test "$(head -n 1 "$profile")" = "mode: atomic"
+              tail -n +2 "$profile" >> "$output"
+            done
+          }
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            combine candidate candidate.out
+            combine head coverage.out
+            combine base base.out
+          else
+            combine candidate coverage.out
+            if [[ "$GITHUB_REF" == refs/heads/main ]]; then
+              combine base base.out
+            fi
+          fi
+      - name: Upload package statement coverage profile
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-out
+          path: coverage.out
+          if-no-files-found: error
+          retention-days: 7
+      - name: Enforce the coverage ratchet and autorepair floor
+        shell: bash
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          profile_root=$PWD
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            go run ./cmd/coverage-check -profile candidate.out -autorepair-floor-only
+            scratch=$(mktemp -d "$RUNNER_TEMP/ethos-pr-head.XXXXXXXX")
+            trap 'git worktree remove --force "$scratch/head"; rmdir "$scratch"' EXIT
+            git worktree add --detach "$scratch/head" "${PR_HEAD:?missing PR head SHA}"
+            profile_root="$scratch/head"
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == pull_request || "$GITHUB_REF" == refs/heads/main ]]; then
+            (cd "$profile_root" && go run ./cmd/coverage-check -profile "$GITHUB_WORKSPACE/coverage.out" -base-profile "$GITHUB_WORKSPACE/base.out")
+          else
+            go run ./cmd/coverage-check -autorepair-floor-only
+          fi
+          (cd "$profile_root" && go tool cover -func="$GITHUB_WORKSPACE/coverage.out" | tail -1)
 
   subprocess-coverage:
     runs-on: ubuntu-latest
@@ -245,19 +337,17 @@ jobs:
           retention-days: 7
 
   test:
-    needs: [test-suite, installed-smoke, legacy-corpus]
+    needs: [test-suite, quality, coverage, installed-smoke, legacy-corpus]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - name: Require the test suite, both installed smoke legs and the legacy corpus
+      - name: Require all test, coverage, quality installed smoke and legacy corpus jobs
         env:
-          SUITE_RESULT: ${{ needs.test-suite.result }}
-          INSTALLED_RESULT: ${{ needs.installed-smoke.result }}
-          CORPUS_RESULT: ${{ needs.legacy-corpus.result }}
+          RESULTS: ${{ toJSON(needs) }}
         run: |
-          printf 'Test suite: %s; installed smoke: %s; legacy corpus: %s\n' "$SUITE_RESULT" "$INSTALLED_RESULT" "$CORPUS_RESULT"
-          test "$SUITE_RESULT" = success && test "$INSTALLED_RESULT" = success && test "$CORPUS_RESULT" = success
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$RESULTS"
+          jq -e 'all(.[]; .result == "success")' <<< "$RESULTS"
 
   verify-tools:
     # Exercises `make tools` against the REAL golangci-lint release -- no

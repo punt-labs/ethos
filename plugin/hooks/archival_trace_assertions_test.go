@@ -27,7 +27,8 @@ import (
 // Each line has a numeric tid. Paths use strace C escapes; numeric dirfds need
 // absolute -yy annotations. Relative paths use annotated AT_FDCWD or traced cwd
 // (inherited on fork, shared with CLONE_FS). Split/resumed calls join by tid and
-// are ordered by their starting line. Split chdir/fchdir refuses. Truncation,
+// are ordered by their starting line. Split chdir/fchdir refuses when its
+// outcome or ordering relative to users of the same cwd is ambiguous. Truncation,
 // unknown dirfds, missing destination operands and unsupported open flags refuse,
 // including killed calls whose required path/flags never appeared. Fully printed
 // killed mutations still contribute attempted destinations, not proof of success.
@@ -38,17 +39,20 @@ import (
 // semantics are not implemented here. Open pathname/dirfd operands cannot be
 // empty; a present mode is checked even when its text is empty.
 type archivalCall struct {
-	tid, order int
-	name, args string
-	result     string
-	split      bool
+	tid, order, endOrder int
+	name, args           string
+	result               string
+	split                bool
 }
 
 var archivalCallPattern = regexp.MustCompile(`^([a-z0-9_]+)\((.*)\)\s+=\s+(.*)$`)
+var archivalUnresolvedEntry = regexp.MustCompile(`^\?\?\?\?\((?: <unfinished \.\.\.>|\)\s+=\s+\?)$`)
 
 func parseArchivalCalls(trace string) ([]archivalCall, error) {
 	pending := map[int]archivalCall{}
-	ended := map[int]bool{}
+	unresolved := map[int]archivalCall{}
+	ended := map[int]int{}
+	killed := map[int]bool{}
 	exitGroup, exitOrder := false, 0
 	var calls []archivalCall
 	finish := func(c archivalCall, text string) error {
@@ -65,7 +69,8 @@ func parseArchivalCalls(trace string) ([]archivalCall, error) {
 		calls = append(calls, c)
 		return nil
 	}
-	for n, line := range strings.Split(trace, "\n") {
+	lines := strings.Split(trace, "\n")
+	for n, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
@@ -77,11 +82,22 @@ func parseArchivalCalls(trace string) ([]archivalCall, error) {
 		text = strings.TrimSpace(text)
 		if strings.HasPrefix(text, "+++") {
 			if strings.HasPrefix(text, "+++ exited") || strings.HasPrefix(text, "+++ killed") {
-				ended[tid] = true
+				ended[tid] = n + 1
+				killed[tid] = strings.HasPrefix(text, "+++ killed by ")
 			}
 			continue
 		}
 		if strings.HasPrefix(text, "---") {
+			continue
+		}
+		if record, ok := unresolved[tid]; ok {
+			return nil, fmt.Errorf("unsupported syscall record %q before further activity by tid %d", record.args, tid)
+		}
+		if _, inFlight := pending[tid]; !inFlight && archivalUnresolvedEntry.MatchString(text) {
+			if ended[tid] != 0 {
+				return nil, fmt.Errorf("unsupported syscall record %q after termination of tid %d", text, tid)
+			}
+			unresolved[tid] = archivalCall{tid: tid, order: n, args: text}
 			continue
 		}
 		if strings.HasPrefix(text, "<... ") {
@@ -94,26 +110,46 @@ func parseArchivalCalls(trace string) ([]archivalCall, error) {
 				return nil, fmt.Errorf("mismatched resume for tid %d: %q", tid, text)
 			}
 			delete(pending, tid)
-			if err := finish(c, c.args+strings.TrimPrefix(text, marker)); err != nil {
+			c.endOrder = n
+			if err := finish(c, c.name+"("+c.args+strings.TrimPrefix(text, marker)); err != nil {
 				return nil, err
 			}
 			continue
 		}
-		c := archivalCall{tid: tid, order: n}
+		c := archivalCall{tid: tid, order: n, endOrder: n}
 		if start, _, ok := strings.Cut(text, "<unfinished ...>"); ok {
 			if _, exists := pending[tid]; exists {
 				return nil, fmt.Errorf("two unfinished calls for tid %d", tid)
 			}
-			name, _, ok := strings.Cut(start, "(")
+			name, args, ok := strings.Cut(start, "(")
 			if !ok {
 				return nil, fmt.Errorf("malformed unfinished call %q", text)
 			}
-			c.name, c.args, c.split = name, start, true
+			c.name, c.args, c.split = name, args, true
 			pending[tid] = c
 			continue
 		}
 		if err := finish(c, text); err != nil {
 			return nil, err
+		}
+	}
+	if len(unresolved) > 0 {
+		sort.Slice(calls, func(i, j int) bool { return calls[i].order < calls[j].order })
+		group, groupExit := archivalThreadGroupExits(calls)
+		for tid, record := range unresolved {
+			// The unreadable entry must belong to a terminating task, not
+			// merely coincide with an unrelated process's exit_group.
+			tgid := group(tid)
+			exit, hasExit := groupExit[tgid]
+			cutoff := record.order
+			if !killed[tid] && hasExit {
+				cutoff = min(cutoff, exit)
+			}
+			tearingDown := killed[tid] || (hasExit && exit < ended[tid]-1)
+			sameGroup := func(other int) bool { return group(other) == tgid }
+			if ended[tid] == 0 || !tearingDown || mutatesAfter(cutoff, calls, pending, sameGroup) {
+				return nil, fmt.Errorf("unsupported syscall record %q", record.args)
+			}
 		}
 	}
 	for tid, c := range pending {
@@ -127,12 +163,13 @@ func parseArchivalCalls(trace string) ([]archivalCall, error) {
 		// is left that the hidden call could have been, and every mutation
 		// before it was fully decoded and classified. Any other undecodable
 		// record still refuses below.
-		if c.name == "???" && ended[tid] && exitGroup && !mutatesAfter(exitOrder, calls, pending) {
+		if c.name == "???" && ended[tid] != 0 && exitGroup && !mutatesAfter(exitOrder, calls, pending, nil) {
 			continue
 		}
 		// A killed task may never resume. Still classify all printed destination
 		// operands; if any required operand is missing, the later parser refuses.
-		if err := finish(c, strings.TrimSuffix(strings.TrimSpace(c.args), ")")+") = ?"); err != nil {
+		c.endOrder = len(lines)
+		if err := finish(c, c.name+"("+strings.TrimSuffix(strings.TrimSpace(c.args), ")")+") = ?"); err != nil {
 			return nil, err
 		}
 	}
@@ -140,23 +177,58 @@ func parseArchivalCalls(trace string) ([]archivalCall, error) {
 	return calls, nil
 }
 
-// mutatesAfter reports whether any namespace-mutating call, finished or still
-// pending, starts at or after line order.
-func mutatesAfter(order int, calls []archivalCall, pending map[int]archivalCall) bool {
-	mutating := func(c archivalCall) bool {
-		switch c.name {
-		case "linkat", "link", "renameat", "renameat2", "rename", "mkdirat", "mkdir", "symlinkat", "symlink", "unlinkat", "unlink", "rmdir", "creat":
-			return true
+func archivalThreadGroupExits(calls []archivalCall) (func(int) int, map[int]int) {
+	groups := map[int]int{}
+	group := func(tid int) int {
+		if id, ok := groups[tid]; ok {
+			return id
 		}
-		return strings.HasPrefix(c.name, "open") && strings.Contains(c.args, "O_CREAT")
+		return tid
+	}
+	exits := map[int]int{}
+	for _, c := range calls {
+		switch c.name {
+		case "clone", "clone3":
+			if strings.Contains(c.args, "CLONE_THREAD") {
+				child, err := strconv.Atoi(strings.Fields(c.result)[0])
+				if err == nil && child > 0 {
+					groups[child] = group(c.tid)
+				}
+			}
+		case "exit_group":
+			exits[group(c.tid)] = c.order
+		}
+	}
+	return group, exits
+}
+
+// mutatesAfter reports whether any namespace-mutating call, finished or still
+// pending, starts at or after line order on an included task.
+func mutatesAfter(order int, calls []archivalCall, pending map[int]archivalCall, includes func(int) bool) bool {
+	mutating := func(c archivalCall) bool {
+		if c.order < order || (includes != nil && !includes(c.tid)) {
+			return false
+		}
+		switch c.name {
+		case "linkat", "link", "renameat", "renameat2", "rename", "mkdirat", "mkdir", "mknod", "mknodat", "symlinkat", "symlink", "unlinkat", "unlink", "rmdir", "creat":
+			return true
+		case "open", "openat", "openat2":
+			args, err := archivalArguments(c.args)
+			if err != nil {
+				return true
+			}
+			writes, err := archivalOpenWrites(c.name, args)
+			return writes || err != nil
+		}
+		return false
 	}
 	for _, c := range calls {
-		if c.order >= order && mutating(c) {
+		if mutating(c) {
 			return true
 		}
 	}
 	for _, c := range pending {
-		if c.order >= order && mutating(c) {
+		if mutating(c) {
 			return true
 		}
 	}
@@ -546,14 +618,14 @@ func checkArchivalTrace(trace string, p archivalTracePolicy) (archivalTraceSumma
 			}
 		}
 		if c.name == "chdir" || c.name == "fchdir" {
-			if c.split {
+			if c.split && (c.result == "?" || overlapsSharedCWD(c, calls, cwds)) {
 				return summary, fmt.Errorf("concurrent/split cwd change is outside trace contract")
 			}
 			if c.result == "0" {
 				if c.name == "chdir" {
-					*cwd, err = archivalPath(c.args, nil, *cwd)
+					*cwd, err = archivalPath(strings.TrimSpace(c.args), nil, *cwd)
 				} else {
-					*cwd, err = archivalFDPath(c.args)
+					*cwd, err = archivalFDPath(strings.TrimSpace(c.args))
 				}
 				if err != nil {
 					return summary, err
@@ -583,6 +655,18 @@ func checkArchivalTrace(trace string, p archivalTracePolicy) (archivalTraceSumma
 	return summary, nil
 }
 
+func overlapsSharedCWD(change archivalCall, calls []archivalCall, cwds map[int]*string) bool {
+	for _, c := range calls {
+		if c.order >= change.endOrder {
+			break
+		}
+		if c.tid != change.tid && c.endOrder > change.order && cwds[c.tid] == cwds[change.tid] {
+			return true
+		}
+	}
+	return false
+}
+
 func TestArchivalTraceDestinations(t *testing.T) {
 	p := archivalTracePolicy{checkout: "/c", local: "/s/local", archive: "/s/local/trace/a.jsonl", published: "/c/records/a.jsonl", index: "/s/git/index", objects: "/s/git/objects", full: true}
 	for _, tc := range []struct {
@@ -594,7 +678,7 @@ func TestArchivalTraceDestinations(t *testing.T) {
 		{"fork inherits cwd before resume", "1 chdir(\"/c/records\") = 0\n1 vfork( <unfinished ...>\n2 rename(\"/s/local/tmp/stage\", \"a.jsonl\") = 0\n1 <... vfork resumed>) = 2", ""},
 		{"shared cwd", "1 clone(child_stack=NULL, flags=CLONE_FS|SIGCHLD) = 2\n2 chdir(\"/c/records\") = 0\n1 rename(\"/s/local/tmp/stage\", \"a.jsonl\") = 0", ""},
 		{"fchdir", "1 fchdir(3</c/records>) = 0\n1 rename(\"/s/local/tmp/stage\", \"a.jsonl\") = 0", ""},
-		{"ambiguous shared cwd refuses", "1 chdir(\"/c/records\" <unfinished ...>\n1 <... chdir resumed>) = 0", "outside trace contract"},
+		{"ambiguous shared cwd refuses", "1 clone(child_stack=NULL, flags=CLONE_FS|SIGCHLD) = 2\n1 chdir(\"/c/records\" <unfinished ...>\n2 rename(\"/s/local/tmp/stage\", \"a.jsonl\") = 0\n1 <... chdir resumed>) = 0", "outside trace contract"},
 		{"annotated dirfd", `1 renameat(3</s/local/tmp>, "stage", 4</c/records>, "a.jsonl") = 0`, ""},
 		{"annotated cwd", `1 linkat(AT_FDCWD</s/local/tmp>, "stage", AT_FDCWD</c/records>, "a.jsonl", 0) = 0`, ""},
 		{"split destination", "1 renameat2(3</s/local/tmp>, \"stage\", 4</c/records>, <unfinished ...>\n1 <... renameat2 resumed>\"a.jsonl\", RENAME_NOREPLACE) = 0", ""},
@@ -629,6 +713,25 @@ func TestArchivalTraceDestinations(t *testing.T) {
 		_, err := checkArchivalTrace(`1 link("/s/local/tmp/stage", `+strconv.Quote(path)+`) = 0`, p)
 		assert.ErrorContains(t, err, "destination not permitted", "blame cannot publish or touch index/objects")
 	}
+}
+
+func TestArchivalTraceCapturedSplitCwd(t *testing.T) {
+	p := linkedFullPolicy()
+	const trace = `23389 clone(child_stack=NULL, flags=SIGCHLD) = 23405
+23405 getcwd("/t/003/feature", 129) = 14
+23405 chdir("/t/003/feature" <unfinished ...>
+23389 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=23379, si_uid=1001} ---
+23405 <... chdir resumed>)              = 0
+23405 getcwd("/t/003/feature", 129) = 14
+`
+	_, err := checkArchivalTrace(trace, p)
+	require.NoError(t, err)
+
+	p.checkout = "/t/003"
+	call := `23405 link("/t/001/.punt-labs/local/ethos/tmp/stage", ".punt-labs/ethos/sessions/d/audit-1.jsonl") = 0`
+	summary, err := checkArchivalTrace(trace+call, p)
+	require.NoError(t, err)
+	require.True(t, summary.publicationInstall)
 }
 
 func TestArchivalTraceContract(t *testing.T) {
@@ -809,6 +912,12 @@ func TestArchivalTraceUndecodableRecord(t *testing.T) {
 		name, trace, wantError string
 	}{
 		{"torn down by exit_group", "1 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 2\n1 exit_group(0 <unfinished ...>\n2 ???( <unfinished ...>\n1 <... exit_group resumed>) = ?\n2 +++ exited with 0 +++", ""},
+		{"captured killed syscall entry", "1900637 clone(child_stack=NULL, flags=SIGCHLD) = 1900651\n1900651 ????( <unfinished ...>\n1900651 +++ killed by SIGKILL +++\n1900637 exit_group(0) = ?\n1900637 +++ exited with 0 +++", ""},
+		{"killed syscall entry without parent exit", "1 clone(child_stack=NULL, flags=SIGCHLD) = 2\n2 ????() = ?\n2 +++ killed by SIGKILL +++", ""},
+		{"different task killed without parent exit", "1 clone(child_stack=NULL, flags=SIGCHLD) = 2\n1 clone(child_stack=NULL, flags=SIGCHLD) = 3\n2 ????() = ?\n3 +++ killed by SIGKILL +++\n2 +++ exited with 0 +++", "unsupported syscall record"},
+		{"complete undecodable entry at teardown", "1 clone(child_stack=NULL, flags=CLONE_VM|CLONE_THREAD) = 2\n1 exit_group(0) = ?\n2 ????() = ?\n2 +++ exited with 0 +++", ""},
+		{"unrelated process exit cannot explain undecodable entry", "1 clone(child_stack=NULL, flags=SIGCHLD) = 2\n1 exit_group(0) = ?\n2 ????() = ?\n2 +++ exited with 0 +++", "unsupported syscall record"},
+		{"complete undecodable entry followed by work", "1 clone(child_stack=NULL, flags=SIGCHLD) = 2\n2 ????() = ?\n2 getcwd(\"/t/003/feature\", 129) = 14\n2 +++ exited with 0 +++\n1 exit_group(0) = ?", "unsupported syscall record"},
 		{"no exit_group", "1 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 2\n2 ???( <unfinished ...>\n2 +++ exited with 0 +++", "unsupported syscall record"},
 		{"thread never ended", "1 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 2\n1 exit_group(0) = ?\n2 ???( <unfinished ...>", "unsupported syscall record"},
 	} {
@@ -821,6 +930,47 @@ func TestArchivalTraceUndecodableRecord(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestArchivalTraceChildTeardownScopesWrites(t *testing.T) {
+	const trace = `1 clone(child_stack=NULL, flags=SIGCHLD) = 2
+2 clone(child_stack=NULL, flags=CLONE_VM|CLONE_THREAD) = 3
+2 exit_group(0 <unfinished ...>
+3 ????() = ?
+2 <... exit_group resumed>) = ?
+3 +++ exited with 0 +++
+2 +++ exited with 0 +++
+`
+	for _, tc := range []struct {
+		name, tail, wantError string
+	}{
+		{"allowed parent write", `1 mkdir("/t/001/.punt-labs/local/ethos/tmp", 0700) = 0`, ""},
+		{"forbidden parent write", `1 mkdir("/t/003/feature/src/unexpected", 0700) = 0`, "destination not permitted"},
+		{"later write in exiting group", `2 mkdir("/t/001/.punt-labs/local/ethos/tmp", 0700) = 0`, "unsupported syscall record"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := checkArchivalTrace(trace+tc.tail, linkedFullPolicy())
+			if tc.wantError == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantError)
+			}
+		})
+	}
+}
+
+func TestArchivalTraceTeardownAllowsPendingRead(t *testing.T) {
+	const trace = `1 clone(child_stack=NULL, flags=CLONE_VM|CLONE_THREAD) = 2
+1 clone(child_stack=NULL, flags=CLONE_VM|CLONE_THREAD) = 3
+1 exit_group(0 <unfinished ...>
+2 ????() = ?
+3 openat(AT_FDCWD, "/proc/self/stat", O_RDONLY|O_CLOEXEC <unfinished ...>
+1 <... exit_group resumed>) = ?
+2 +++ exited with 0 +++
+3 +++ exited with 0 +++
+`
+	_, err := checkArchivalTrace(trace, linkedFullPolicy())
+	require.NoError(t, err)
 }
 
 func TestArchivalTraceTeardownSkipNeverHidesWrite(t *testing.T) {
