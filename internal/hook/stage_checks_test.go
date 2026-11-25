@@ -229,6 +229,29 @@ func TestHandoffFallbackIsolation(t *testing.T) {
 	}
 }
 
+func TestHandoffDeferralPrintsRunnableManualCommand(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := filepath.Join(home, "checkout with spaces")
+	dir := filepath.Join(root, "it's here")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	check := checkset.Check{
+		Name: "manual", Stage: "handoff", Files: checkset.Patterns{Globs: []string{"**"}},
+		Cwd: "file_dir", Run: []string{"/bin/sh", "-c", `printf '%s\n' "$PWD" "$@"`, "manual", "{root}", "{package_dir}", "{files}", "$(exit 1)"},
+	}
+	f := runHandoffGate(context.Background(), root, "worker", []string{"it's here/report.txt"}, check, nil)
+	var feedback bytes.Buffer
+	stopFeedback(&feedback, f, false)
+	var response map[string]string
+	require.NoError(t, json.Unmarshal(feedback.Bytes(), &response))
+	_, manual, found := strings.Cut(response["systemMessage"], "Run the explicit project gate: ")
+	require.True(t, found, response["systemMessage"])
+	require.NotContains(t, manual, home)
+	out, err := exec.Command("/bin/sh", "-c", manual).CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	require.Equal(t, strings.Join([]string{dir, root, dir, filepath.Join(dir, "report.txt"), "$(exit 1)", ""}, "\n"), string(out))
+}
+
 func TestHandoffRootOperandIsNotLive(t *testing.T) {
 	root, _ := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())

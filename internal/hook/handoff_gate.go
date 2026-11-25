@@ -39,6 +39,7 @@ type gateResult struct {
 }
 
 func runHandoffGate(ctx context.Context, root, agent string, files []string, check checkset.Check, policy []checkset.Check) StageFeedback {
+	manualRoot := root
 	plan := stageInvocationsAt(gateRoot, files, check, true)
 	if len(plan) == 0 {
 		return StageFeedback{}
@@ -52,8 +53,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	}
 	deferGate := func(reason string) StageFeedback {
 		diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "deferred", time.Since(start))
-		argv, _ := check.Argv()
-		message := fmt.Sprintf("handoff checks deferred (%s): %s. Run the explicit project gate: %s", check.Name, reason, strings.Join(argv, " "))
+		message := fmt.Sprintf("handoff checks deferred (%s): %s. Run the explicit project gate: %s", check.Name, reason, handoffManualCommand(manualRoot, files, check))
 		f := feedback(message)
 		if f.Blocking != "" {
 			f.Notice = message
@@ -230,6 +230,30 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		}
 	}
 	return deferGate("interrupted while waiting for the handoff lease")
+}
+
+func handoffManualCommand(root string, files []string, check checkset.Check) string {
+	home, _ := os.UserHomeDir()
+	word := func(s string) string {
+		if home != "" && filepath.IsAbs(s) {
+			if rel, err := filepath.Rel(home, s); err == nil && filepath.IsLocal(rel) {
+				return `"$HOME"/` + audit.ShellQuote(rel)
+			}
+		}
+		return audit.ShellQuote(s)
+	}
+	var commands []string
+	for _, invocation := range stageInvocationsAt(root, files, check, true) {
+		if len(invocation.argv) == 0 {
+			continue
+		}
+		argv := make([]string, len(invocation.argv))
+		for i, arg := range invocation.argv {
+			argv[i] = word(arg)
+		}
+		commands = append(commands, "(cd "+word(invocation.cwd)+" && "+strings.Join(argv, " ")+")")
+	}
+	return strings.Join(commands, " && ")
 }
 
 func handoffGatePaths(cache, key string) (lock, result string) {
