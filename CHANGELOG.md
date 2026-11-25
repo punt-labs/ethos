@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.2.3] - 2026-11-25
+
 ### Added
 
 - Opt-in Git test hooks, selectable testing tiers, and a quarantine inventory
