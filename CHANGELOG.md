@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Verifier writes accept macOS checkout path aliases such as `/var` without
+  allowing symlinks to redirect writes outside the declared paths.
 - Nightly write-set checks detect changed ignored files outside Ethos runtime
   paths. Nightly failure and cancellation notifications do not replace a
   newer Nightly alert already on the Biff wall.

@@ -26,7 +26,8 @@ func TestVerifierEnvironmentComposition(t *testing.T) {
 	store := mission.NewStore(filepath.Join(home, ".punt-labs", "ethos"))
 	c, err := store.Load(missionID)
 	require.NoError(t, err)
-	c.ExtractInto = []string{"extract-one/", "extract-two/"}
+	c.WriteSet = append(c.WriteSet, "write-dir/**")
+	c.ExtractInto = []string{"extract-one/", "extract-two/", "extract-link/"}
 	require.NoError(t, store.Update(c))
 	c, err = store.Load(missionID)
 	require.NoError(t, err)
@@ -39,6 +40,15 @@ func TestVerifierEnvironmentComposition(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(abs), 0o700))
 		require.NoError(t, os.WriteFile(abs, []byte("package fixture\n"), 0o600))
 	}
+	alias := filepath.Join(t.TempDir(), "checkout-alias")
+	require.NoError(t, os.Symlink(repo, alias))
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "existing.go"), nil, 0o600))
+	require.NoError(t, os.Mkdir(filepath.Join(repo, "write-dir"), 0o700))
+	require.NoError(t, os.Symlink(outside, filepath.Join(repo, "write-dir", "escape")))
+	require.NoError(t, os.Symlink(outside, filepath.Join(repo, "extract-link")))
+	require.NoError(t, os.Symlink(filepath.Join(outside, "missing.go"), filepath.Join(repo, "extract-one", "dangling.go")))
+	require.NoError(t, os.Symlink(filepath.Join(repo, "src"), filepath.Join(repo, "undeclared")))
 
 	// Clear ambient verifier state first. A producer key mutation must not
 	// inherit a working value from the operator or another test.
@@ -69,6 +79,13 @@ func TestVerifierEnvironmentComposition(t *testing.T) {
 		{"deny sibling of declared file", "Write", filepath.Join(repo, "src", "third.go"), "deny"},
 		{"deny outside extract directories", "Edit", filepath.Join(repo, "elsewhere", "new.go"), "deny"},
 		{"read undeclared existing file", "Read", filepath.Join(repo, "extract-one", "existing.go"), ""},
+		{"write through checkout alias", "Write", filepath.Join(alias, "src", "first.go"), ""},
+		{"create through checkout alias with missing parents", "Write", filepath.Join(alias, "extract-one", "nested", "new.go"), ""},
+		{"deny existing extract file through alias", "Write", filepath.Join(alias, "extract-one", "existing.go"), "deny"},
+		{"deny write-set symlink escape", "Edit", filepath.Join(repo, "write-dir", "escape", "existing.go"), "deny"},
+		{"deny extract directory symlink escape", "Write", filepath.Join(repo, "extract-link", "new.go"), "deny"},
+		{"deny dangling extract symlink", "Write", filepath.Join(repo, "extract-one", "dangling.go"), "deny"},
+		{"deny undeclared symlink inside checkout", "Write", filepath.Join(repo, "undeclared", "first.go"), "deny"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

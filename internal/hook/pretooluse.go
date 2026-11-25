@@ -210,8 +210,14 @@ func routePreToolUse(input map[string]any, w io.Writer, loc resolve.Located) err
 		return json.NewEncoder(w).Encode(preToolUseDeny(fmt.Sprintf(
 			"ethos pre-tool-use: cannot check %s against the write allowlist: %v", target, rootErr)))
 	}
-	entries := splitAllowlist(allowlist)
-	if pathAllowed(target, entries, repoRoot) {
+	absolute := target
+	if !filepath.IsAbs(target) && repoRoot != "" && filepath.IsLocal(target) {
+		absolute = repoRoot + string(filepath.Separator) + target
+	}
+	physical, pathErr := resolveVerifierPath(absolute)
+	if pathErr != nil {
+		fmt.Fprintf(os.Stderr, "ethos: pre-tool-use: stat %s: %v\n", target, pathErr)
+	} else if verifierPathAllowed(absolute, physical, splitAllowlist(allowlist), repoRoot) {
 		return json.NewEncoder(w).Encode(preToolUsePass())
 	}
 
@@ -221,10 +227,10 @@ func routePreToolUse(input map[string]any, w io.Writer, loc resolve.Located) err
 	// on disk; once a file exists, modification falls under the
 	// write_set rule and the extract_into authorization no longer
 	// applies. This prevents the modify-via-extract_into attack.
-	if extractInto := os.Getenv("ETHOS_VERIFIER_EXTRACT_INTO"); extractInto != "" {
+	if extractInto := os.Getenv("ETHOS_VERIFIER_EXTRACT_INTO"); extractInto != "" && pathErr == nil {
 		eiEntries := splitAllowlist(extractInto)
-		if pathAllowed(target, eiEntries, repoRoot) {
-			exists, statErr := targetExists(target)
+		if verifierPathAllowed(absolute, physical, eiEntries, repoRoot) {
+			exists, statErr := targetExists(physical)
 			if statErr != nil {
 				// Non-IsNotExist stat failure (EACCES, EIO, ELOOP,
 				// broken symlink). The conservative branch falls
@@ -397,6 +403,82 @@ func splitAllowlist(raw string) []string {
 		}
 	}
 	return out
+}
+
+// resolveVerifierPath retains missing suffixes for new files, but never treats
+// a dangling symlink or an unresolvable traversal as a missing component.
+func resolveVerifierPath(file string) (string, error) {
+	ancestor, suffix := file, ""
+	for {
+		physical, err := filepath.EvalSymlinks(ancestor)
+		if err == nil {
+			return filepath.Join(physical, suffix), nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		raw := strings.TrimRightFunc(ancestor, func(r rune) bool {
+			return r <= 127 && os.IsPathSeparator(byte(r))
+		})
+		parent, name := filepath.Split(raw)
+		if parent == "" || parent == ancestor || name == ".." {
+			return "", err
+		}
+		if _, statErr := os.Lstat(raw); !os.IsNotExist(statErr) {
+			return "", err
+		}
+		ancestor, suffix = parent, filepath.Join(name, suffix)
+	}
+}
+
+func verifierPathAllowed(target, physical string, entries []string, checkout string) bool {
+	if !filepath.IsAbs(target) || !filepath.IsAbs(physical) {
+		return false
+	}
+	if relative := verifierRelativePath(target, physical, checkout); relative != "" &&
+		pathAllowed(relative, entries, "") {
+		return true
+	}
+	for _, entry := range entries {
+		if !filepath.IsAbs(entry) {
+			continue
+		}
+		entry = filepath.Clean(entry)
+		parent, err := resolveVerifierPath(filepath.Dir(entry))
+		if err != nil {
+			continue
+		}
+		if relative := verifierRelativePath(target, physical, parent); relative != "" &&
+			mission.PathContainedBy(relative, filepath.Base(entry)) {
+			return true
+		}
+	}
+	return false
+}
+
+// verifierRelativePath permits aliases to the root, not symlinks that change
+// which path is selected below it. Relative write-set patterns stay lexical.
+func verifierRelativePath(target, physical, root string) string {
+	if root == "" {
+		return ""
+	}
+	rel, err := filepath.Rel(root, physical)
+	sep := string(filepath.Separator)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+sep) {
+		return ""
+	}
+	if rel == "." {
+		return rel
+	}
+	prefix, ok := strings.CutSuffix(filepath.Clean(target), sep+rel)
+	if !ok {
+		return ""
+	}
+	resolved, err := resolveVerifierPath(prefix + sep)
+	if err != nil || resolved != root {
+		return ""
+	}
+	return rel
 }
 
 // pathAllowed reports whether target is inside any allowlist entry.
