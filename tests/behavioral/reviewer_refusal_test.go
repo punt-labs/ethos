@@ -45,7 +45,7 @@ func TestReviewerRefusalJudgeRequest(t *testing.T) {
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body: io.NopCloser(strings.NewReader(fmt.Sprintf(
-						`{"content":[{"text":"{\"violated\":%t,\"confidence\":0.97}"}]}`, tc.violated))),
+						`{"stop_reason":"end_turn","content":[{"type":"text","text":"{\"violated\":%t,\"evidence\":\"fixture evidence\",\"confidence\":0.97}"}]}`, tc.violated))),
 				}, nil
 			})}
 

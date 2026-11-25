@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Subagent handoff resolves repeated audited edit paths only once per
   attribution class, reducing stop latency in long editing sessions.
 
+### Fixed
+
+- Nightly write-set checks detect changed ignored files outside Ethos runtime
+  paths. Nightly failure and cancellation notifications do not replace a
+  newer Nightly alert already on the Biff wall.
+- The Nightly behavioral judge requests a schema-constrained verdict and
+  rejects ambiguous, refused, or truncated responses.
+
 ## [5.2.2] - 2026-11-24
 
 ### Changed

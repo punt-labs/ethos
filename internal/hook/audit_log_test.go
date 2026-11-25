@@ -11,9 +11,29 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func BenchmarkPolicyAuditAppendLongSession(b *testing.B) {
+	root := b.TempDir()
+	p, err := layout.NewRepository(root, root, layout.RecordBlame)
+	require.NoError(b, err)
+	entry := auditEntry{Session: "long-session", Tool: "Bash"}
+	s := audit.Stream{Namespace: audit.SessionNS, Session: entry.Session}
+	const rows = 18000
+	var stream bytes.Buffer
+	for i := 1; i <= rows; i++ {
+		fmt.Fprintf(&stream, `{"ts":%q,"session":"long-session","tool":"Bash","tool_input":{"command":"git diff --stat && git status --short","description":"Inspect checkout"},"tool_input_preview":"Inspect checkout","record":"blame"}`+"\n", audit.FormatLineTS(int64(i)))
+	}
+	require.NoError(b, audit.ReplaceLocalFile(p, s.LivePath(p), stream.Bytes()))
+	b.SetBytes(int64(stream.Len()))
+	for b.Loop() {
+		_, _, err := appendPolicyAudit(p, entry, time.Now())
+		require.NoError(b, err)
+	}
+}
 
 func TestHandleAuditLog_ValidPayload(t *testing.T) {
 	dir := t.TempDir()

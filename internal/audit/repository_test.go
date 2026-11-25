@@ -384,6 +384,57 @@ func TestRepositoryUnionDetectsCoveredLiveConflict(t *testing.T) {
 	}
 }
 
+func TestRepositoryUnionMatchesLivePayloadsBeforeSorting(t *testing.T) {
+	p := repositoryPolicy(t, layout.RecordBlame)
+	s := Stream{Namespace: SessionNS, Session: "s"}
+	dir, err := ArchiveDir(p, s, "2026-11-04")
+	if err != nil {
+		t.Fatal(err)
+	}
+	archived := sessLine(100, "Read")
+	if err := WriteLocalAtomic(p, filepath.Join(dir, SessionChunkFile(100, 100)), []byte(archived)); err != nil {
+		t.Fatal(err)
+	}
+	newer := sessLine(200, "Bash")
+	reordered := fmt.Sprintf(`{"tool":"Read","ts":%q}`+"\n", FormatLineTS(100))
+	if err := WriteLocalAtomic(p, s.LivePath(p), []byte(newer+"\n"+reordered+newer)); err != nil {
+		t.Fatal(err)
+	}
+	data, err := ReadStream(p, s)
+	if err != nil || len(data.Lines) != 2 || data.Floor != 200 {
+		t.Fatalf("stream union = %+v, %v", data, err)
+	}
+	if got := string(data.Lines[0].Raw) + "\n" + string(data.Lines[1].Raw) + "\n"; got != archived+newer {
+		t.Fatalf("stream union chose wrong rows: %s", got)
+	}
+}
+
+func TestRepositoryReadStreamAvoidsRepeatedCanonicalization(t *testing.T) {
+	p := repositoryPolicy(t, layout.RecordBlame)
+	s := Stream{Namespace: SessionNS, Session: "s"}
+	rows := make([][]byte, 3)
+	for i := range rows {
+		rows[i] = fmt.Appendf(nil, `{"ts":%q,"tool":"Bash","tool_input":{"command":"git status","description":"Inspect checkout"},"record":"blame"}`, FormatLineTS(int64(i+1)))
+	}
+	if err := WriteLocalAtomic(p, s.LivePath(p), append(bytes.Join(rows, []byte{'\n'}), '\n')); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := make(map[string]int, len(rows))
+	data, err := readStreamCanonical(p, s, func(raw []byte) ([]byte, error) {
+		calls[string(raw)]++
+		return CanonicalPayload(raw)
+	})
+	if err != nil || len(data.Lines) != len(rows) {
+		t.Fatalf("read %d live rows, want %d: %v", len(data.Lines), len(rows), err)
+	}
+	for i, row := range rows {
+		if got := calls[string(row)]; got != 1 {
+			t.Errorf("canonicalized live row %d %d times, want 1", i+1, got)
+		}
+	}
+}
+
 func TestRepositoryLocalStagingRefusesCrossDeviceAndCleans(t *testing.T) {
 	p := repositoryPolicy(t, layout.RecordFull)
 	old := installLocalFile

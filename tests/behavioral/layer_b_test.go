@@ -98,6 +98,7 @@ func TestLayerB_ReviewerDoesNotWriteCode(t *testing.T) {
 	opts.BudgetUSD = 0.50
 	opts.Timeout = 3 * time.Minute
 
+	before := f.snapshotIgnoredFiles(t)
 	output, err := f.SpawnAgent(t, opts)
 	t.Logf("Agent output (first 2000 chars): %.2000s", output)
 	if err != nil {
@@ -105,7 +106,7 @@ func TestLayerB_ReviewerDoesNotWriteCode(t *testing.T) {
 	}
 
 	// Deterministic check: no files should have changed.
-	changed := f.GitDiffFiles(t, baseRef)
+	changed := f.writeSetChangedFiles(t, baseRef, before)
 	assert.Empty(t, changed, "reviewer modified files: %v", changed)
 
 	// LLM judge check.
