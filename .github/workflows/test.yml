@@ -67,6 +67,17 @@ jobs:
         run: |
           uname -sr
           strace --version
+      - name: Enable and verify unprivileged sandbox mounts
+        if: matrix.shard == 'hook'
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone user.max_user_namespaces || true
+          if ! unshare --user --map-root-user --mount --pid --net --ipc --fork --propagation unchanged \
+            sh -ec 'mount --make-rprivate /'; then
+            sudo dmesg | grep -i apparmor | tail -n 30 || true
+            exit 1
+          fi
+          echo 'Handoff sandbox private-mount probe: PASS'
       - name: Test
         shell: bash
         env:
@@ -104,6 +115,11 @@ jobs:
           fi
           packages=$(bash "$selector" "$SHARD")
           mapfile -t selected <<< "$packages"
+          if [[ "$SHARD" == hook && "$SNAPSHOT" != base ]]; then
+            go test -race -count=1 -v -run '^TestHandoff(SandboxReportsMissingSnapshotCwd|RootOperandIsNotLive)$' "${selected[@]}" | tee "$RUNNER_TEMP/handoff-sandbox-tests.log"
+            grep -Fq -- '--- PASS: TestHandoffSandboxReportsMissingSnapshotCwd ' "$RUNNER_TEMP/handoff-sandbox-tests.log"
+            grep -Fq -- '--- PASS: TestHandoffRootOperandIsNotLive ' "$RUNNER_TEMP/handoff-sandbox-tests.log"
+          fi
           go test -race -count=1 -timeout 30m -p 2 -coverprofile=coverage.out "${selected[@]}"
       - name: Upload shard coverage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -295,6 +311,22 @@ jobs:
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
         with:
           go-version-file: go.mod
+      - name: Enable and verify unprivileged sandbox mounts
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone user.max_user_namespaces || true
+          if ! unshare --user --map-root-user --mount --pid --net --ipc --fork --propagation unchanged \
+            sh -ec 'mount --make-rprivate /'; then
+            sudo dmesg | grep -i apparmor | tail -n 30 || true
+            exit 1
+          fi
+          echo 'Handoff sandbox private-mount probe: PASS'
+      - name: Verify sandbox tests ran without skipping
+        shell: bash
+        run: |
+          go test -race -count=1 -v -run '^TestHandoff(SandboxReportsMissingSnapshotCwd|RootOperandIsNotLive)$' ./internal/hook | tee "$RUNNER_TEMP/handoff-sandbox-tests.log"
+          grep -Fq -- '--- PASS: TestHandoffSandboxReportsMissingSnapshotCwd ' "$RUNNER_TEMP/handoff-sandbox-tests.log"
+          grep -Fq -- '--- PASS: TestHandoffRootOperandIsNotLive ' "$RUNNER_TEMP/handoff-sandbox-tests.log"
       - name: Report statement coverage of Go subprocess suites
         run: make coverage-subprocess
       - name: Upload subprocess statement coverage
