@@ -14,6 +14,19 @@ done <<< "$packages"
 
 flags=(-race -count=1 -timeout 30m)
 pids=()
+set -m
+# shellcheck disable=SC2329
+cleanup() {
+  local pid
+  for pid in "${pids[@]+"${pids[@]}"}"; do
+    kill -TERM -- "-$pid" 2>/dev/null || true
+  done
+  wait
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 partition() {
   local package=$1 selector=$2 mode
   for mode in -run -skip; do
@@ -28,7 +41,8 @@ go test "${flags[@]}" -p "$parallel" "${remaining[@]}" &
 pids+=("$!")
 
 status=0
-for pid in "${pids[@]}"; do
-  wait "$pid" || status=$?
+for index in "${!pids[@]}"; do
+  wait "${pids[index]}" || status=$?
+  unset 'pids[index]'
 done
 exit "$status"

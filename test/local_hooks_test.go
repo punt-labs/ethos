@@ -7,7 +7,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -182,6 +184,32 @@ fi
 		"test -race -count=1 -timeout 30m -p 4 github.com/punt-labs/ethos/v4/internal/mission github.com/punt-labs/ethos/v4/plugin/hooks github.com/punt-labs/ethos/v4/internal/resolve",
 		"test -race -count=1 -run ^TestHooks(DormantRepositoryRunsNoProbe|FailLoudWhenRevParseFails)$ ./plugin/hooks",
 	}, calls)
+}
+
+func TestPushSignalsWorkersOnInterrupt(t *testing.T) {
+	bin := t.TempDir()
+	worker := filepath.Join(bin, "worker")
+	stopped := filepath.Join(bin, "stopped")
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "go"), []byte(`#!/bin/sh
+if [ "$1" = list ]; then
+    printf '%s\n' 'example.org/rest example.org'
+elif [ "$8" = -run ] && [ "${10}" = ./cmd/ethos ]; then
+    trap 'touch "$STOPPED"; exit' TERM
+    touch "$WORKER"
+    sleep 5
+fi
+`), 0o700))
+	cmd := exec.CommandContext(t.Context(), "bash", "scripts/test-push.sh", "1")
+	cmd.Dir = ".."
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "WORKER="+worker, "STOPPED="+stopped)
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	require.Eventually(t, func() bool { _, err := os.Stat(worker); return err == nil }, 3*time.Second, 10*time.Millisecond)
+	require.NoError(t, cmd.Process.Signal(syscall.SIGINT))
+	var exit *exec.ExitError
+	require.ErrorAs(t, cmd.Wait(), &exit)
+	require.Equal(t, 130, exit.ExitCode())
+	require.FileExists(t, stopped)
 }
 
 func TestChangedPackages(t *testing.T) {
