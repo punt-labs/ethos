@@ -196,15 +196,21 @@ Full publication currently releases the stream lock after the union check,
 then reacquires it to prepare publication from a fresh archive scan. A
 cooperating writer can add a chunk between those phases. Before selecting
 publication candidates, repeat the full union check under the reacquired
-stream lock and prepare only the exact eligible bytes from that verified
-view. Do not rescan into a broader candidate set afterward. Bind the
+stream lock. Keep the verified bytes by destination archive source chunk
+before union deduplication and pending-row filtering. The current
+`ReadStreamForSeal` result excludes rows already in the destination archive;
+it is an archival worklist, not a publication input. Prepare only eligible
+rows from the retained verified bytes, including already-archived rows
+whose publication must be retried. Do not rescan for candidates. Bind the
 prepared paths to their verified content and check the blobs in the
 candidate index against that content before installing the actual index;
 a changed file must not be staged just because its path matches. Keep the
 current all-stream publication failure behavior and index-lock ordering.
 Test an overlapping chunk introduced between the two phases and a prepared
 file changed before staging; conflicting or unverified bytes must not
-enter the index.
+enter the index. Also retry publication with an empty live file and
+previously archived eligible rows; the verified archived bytes must still
+be staged.
 
 Retain the existing failure distinction: the default blame-mode pre-commit
 path reports archival errors without blocking unrelated source commits;
