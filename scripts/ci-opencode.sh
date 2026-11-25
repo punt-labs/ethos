@@ -65,15 +65,10 @@ await_address() {
 }
 
 run_smoke() {
-  : "${BIFROST_VK:?Set the BIFROST_VK Actions secret}"
-  : "${BIFROST_BASE_URL:?Set the BIFROST_BASE_URL Actions variable}"
+  : "${OPENAI_API_KEY:?Set the OPENAI_API_KEY Actions secret}"
   : "${CONTEXT7_API_KEY:?Set the CONTEXT7_API_KEY Actions secret}"
-  if [[ "$BIFROST_BASE_URL" != https://*/openai/v1 ]]; then
-    echo "::error::BIFROST_BASE_URL must be an HTTPS base URL ending in /openai/v1" >&2
-    return 1
-  fi
   umask 077
-  install -D "$root/scripts/testdata/opencode-nightly.json" "$XDG_CONFIG_HOME/opencode/opencode.json"
+  python3 -B scripts/opencode.py prepare-nightly
   export NIGHTLY_IMAP_ADDR_FILE="$state/imap-address"
   export BEADLE_IMAP_PASSWORD=nightly-fixture
 
@@ -93,7 +88,7 @@ EOF
   trap 'opencode service stop >/dev/null 2>&1 || true; jobs -pr | xargs -r kill' EXIT
 
   # Do not pass the live credentials to local daemons.
-  local -a local_env=(env -u BIFROST_VK -u CONTEXT7_API_KEY)
+  local -a local_env=(env -u OPENAI_API_KEY -u CONTEXT7_API_KEY)
   "${local_env[@]}" nightly-imap -test.run '^TestServeNightlyIMAP$' -test.timeout=0 >"$state/imap.log" 2>&1 &
   await_address "$NIGHTLY_IMAP_ADDR_FILE" "$!"
   local address
@@ -113,7 +108,7 @@ EOF
   "${local_env[@]}" env LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a luxd-display >"$state/lux-display.log" 2>&1 &
 
   opencode service start
-  make smoke-opencode
+  python3 -B scripts/opencode.py smoke --nightly
 }
 
 case "${1:-}" in

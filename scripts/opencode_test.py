@@ -218,9 +218,48 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(oc.model_ref(oc.ASTRA.split("#")[0]),
                          {"providerID": "bifrost", "id": "openai/gpt-6-astra"})
 
+    def test_nightly_routes_the_same_roles_through_native_openai(self):
+        local = oc.check(self.root)
+        oc.prepare_nightly(self.root)
+        config = oc.check(self.root, nightly=True)
+        self.assertEqual(config["model"], "openai/gpt-6-astra")
+        self.assertEqual(config["agents"]["build"]["model"], "openai/gpt-6-astra#high")
+        self.assertEqual(config["providers"], {"openai": {"models": {
+            "gpt-6-astra": {"settings": {"reasoningEffort": "high"}}
+        }}})
+        self.assertEqual(config["mcp"], local["mcp"])
+        self.assertEqual(live.runtime_config([{"info": config}], oc.NIGHTLY_BUILD)[:2],
+                         ("openai/gpt-6-astra", "high"))
+        for name, expected in (("rsc", "openai/gpt-6-astra#high"), ("bwk", "openai/gpt-6.1-sol#high"),
+                               ("qa", "openai/gpt-6.1-sol#high"), ("researcher", "openai/gpt-5.6-terra#medium")):
+            info, _ = oc.frontmatter(self.root / f".opencode/agents/{name}.md")
+            self.assertEqual(info["model"], expected)
+        api = live.API(self.root, nightly=True)
+        with patch.object(api, "call", return_value={"data": {"id": "ses_fixture"}}) as call:
+            self.assertEqual(api.create("fixture"), "ses_fixture")
+            self.assertEqual(call.call_args.args[2]["model"],
+                             {"providerID": "openai", "id": "gpt-6-astra", "variant": "high"})
+        with self.assertRaises(oc.CheckError):
+            oc.check(self.root)
+
     def test_duplicate_json_key(self):
         with self.assertRaises(oc.CheckError):
             oc.load_json('{"model":1,"model":2}')
+
+    def test_nightly_formatter_uses_openai_in_fixture_and_session(self):
+        oc.prepare_nightly(self.root)
+        subprocess.run(["git", "init", "-q"], cwd=self.root, check=True)
+        (self.root / ".gitignore").write_text(".tmp/\n")
+        with patch.object(live, "doctor", return_value=live.API(self.root, nightly=True)), \
+                patch.object(live.API, "call", return_value={"data": {"id": "ses_fixture"}}) as call, \
+                patch.object(live.API, "prompt", return_value=[]), \
+                patch.object(live, "formatter_inputs"), patch.object(live, "formatter_outputs"):
+            live.smoke(self.root, ["formatter"], nightly=True)
+        fixture, = (self.root / ".tmp/opencode").glob("smoke-*/fixture/opencode.json")
+        self.assertEqual(json.loads(fixture.read_text())["model"], "openai/gpt-6-astra")
+        call.assert_called_once()
+        self.assertEqual(call.call_args.args[2]["model"],
+                         {"providerID": "openai", "id": "gpt-6-astra", "variant": "high"})
 
     def test_json_command_alias_cannot_drop_its_release_adapter(self):
         self.mutate_config(lambda c: c["commands"]["punt:auto"].update(template="No workflow"))
@@ -1037,6 +1076,11 @@ class LiveHelperTests(unittest.TestCase):
                 patch.object(live, "smoke") as smoke:
             oc.main()
         smoke.assert_called_once_with(oc.ROOT, ["discovery", "health"])
+
+    def test_smoke_cli_selects_nightly_routing_explicitly(self):
+        with patch("sys.argv", ["opencode.py", "smoke", "--nightly"]), patch.object(live, "smoke") as smoke:
+            oc.main()
+        smoke.assert_called_once_with(oc.ROOT, None, nightly=True)
 
     def test_api_failures_keep_safe_operation_exit_and_timeout(self):
         api = live.API(oc.ROOT)

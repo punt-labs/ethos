@@ -64,12 +64,10 @@ jobs:
     steps:
       - name: Check live credentials are configured
         env:
-          BIFROST_VK: ${{ secrets.BIFROST_VK }}
-          BIFROST_BASE_URL: ${{ vars.BIFROST_BASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
         run: |
-          : "${BIFROST_VK:?Set the BIFROST_VK Actions secret}"
-          : "${BIFROST_BASE_URL:?Set the BIFROST_BASE_URL Actions variable}"
+          : "${OPENAI_API_KEY:?Set the OPENAI_API_KEY Actions secret}"
           : "${CONTEXT7_API_KEY:?Set the CONTEXT7_API_KEY Actions secret}"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
@@ -84,8 +82,7 @@ jobs:
         run: bash scripts/ci-opencode.sh install
       - name: Verify the live OpenCode roster and exercise all smoke stages
         env:
-          BIFROST_VK: ${{ secrets.BIFROST_VK }}
-          BIFROST_BASE_URL: ${{ vars.BIFROST_BASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
         run: bash scripts/ci-opencode.sh smoke
       - name: Prepare publishable smoke receipts
