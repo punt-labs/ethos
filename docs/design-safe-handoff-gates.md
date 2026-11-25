@@ -157,8 +157,17 @@ Use explicit outcomes:
 | --- | --- |
 | Ineligible, unconfigured or killed | No execution; preserve the existing quiet path. |
 | Passed for the key | Skip execution; record a cache hit if reused. |
-| Failed for the key | Reuse the redacted result without rerunning. Respect advisory/block policy; on `stop_hook_active` send recorded failure to stderr and allow re-entry. |
-| Deferred or indeterminate | Do not record pass or fail. Report the reason and what can be retried. A required gate blocks the initial stop; re-entry keeps the existing stderr escape. Advisory gates do not block. |
+| Failed for the key | Reuse the redacted result without rerunning. Respect advisory/block policy; on `stop_hook_active` emit a visible notice without blocking re-entry. |
+| Deferred or indeterminate | Do not record pass or fail. Report the reason and what can be retried. A required gate blocks the initial stop; advisory deferrals and re-entry get a visible notice without blocking. |
+
+The current plugin wrapper redirects stderr to the hook log. Send advisory
+and re-entry feedback on stdout as a single Claude Code hook JSON response
+with a top-level `systemMessage`, exit zero, and omit `decision` for
+non-blocking outcomes. Include `decision: block` and `reason` only when the
+initial stop must block; if advisory feedback also exists, include it in the
+same response. Keep redacted diagnostic details in the hook log rather
+than relying on stderr to reach the session. Verify that an actual Claude
+Code SubagentStop visibly renders the message and permits re-entry.
 
 Unconfigured handoffs remain fail-open. An unavailable safety mechanism
 never turns into permission to launch. An operator can still run the

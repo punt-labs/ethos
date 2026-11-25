@@ -14466,8 +14466,8 @@ by verified checkout inputs and the resolved execution plan, for both passes
 and failures. Make concurrent requests reuse the owner's result. Require
 binary-owned host admission and resource limits; unclassified commands use
 the heavy profile. Report deferral separately from pass or failure.
-Preserve old hook transport, kill-switch and re-entry
-behavior. No implementation is approved by this entry.
+Preserve old hook transport and the kill switch. Emit visible hook output
+without blocking re-entry. No implementation is approved by this entry.
 
 See [Safe-by-default SubagentStop handoff gates](docs/design-safe-handoff-gates.md)
 for the measured spike, safety defaults, rejected alternatives and
