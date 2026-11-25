@@ -44,8 +44,10 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 	}
 	ctx, cancel := context.WithTimeout(ctx, cap)
 	defer cancel()
+	var store string
 	if stage == "handoff" {
-		store, err := resolve.StoreOf(checkout)
+		var err error
+		store, err = resolve.StoreOf(checkout)
 		if err != nil {
 			return StageFeedback{Blocking: editRedact(stage + " policy: " + err.Error())}
 		}
@@ -109,16 +111,39 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 				continue
 			}
 		}
+		var invocations []editCheck
 		for _, check := range rootChecks {
-			for _, invocation := range stageInvocations(root, filesByRoot[root], check) {
-				invocation.env = env
-				if failure := runLoggedCheck(ctx, root, stage, invocation); failure != "" {
-					if check.OnFail == "block" {
-						blocking = append(blocking, failure)
-					} else {
-						advisory = append(advisory, failure)
-					}
-				}
+			invocations = append(invocations, stageInvocations(root, filesByRoot[root], check)...)
+		}
+		if len(invocations) == 0 {
+			continue
+		}
+		run := func() StageFeedback { return runStageInvocations(ctx, root, stage, invocations, env) }
+		var feedback StageFeedback
+		if stage == "handoff" {
+			feedback = cachedHandoff(ctx, store, root, rootChecks, invocations, run)
+		} else {
+			feedback = run()
+		}
+		if feedback.Advisory != "" {
+			advisory = append(advisory, feedback.Advisory)
+		}
+		if feedback.Blocking != "" {
+			blocking = append(blocking, feedback.Blocking)
+		}
+	}
+	return StageFeedback{Advisory: editRedact(strings.Join(advisory, "\n\n")), Blocking: editRedact(strings.Join(blocking, "\n\n"))}
+}
+
+func runStageInvocations(ctx context.Context, root, stage string, invocations []editCheck, env []string) StageFeedback {
+	var advisory, blocking []string
+	for _, invocation := range invocations {
+		invocation.env = env
+		if failure := runLoggedCheck(ctx, root, stage, invocation); failure != "" {
+			if invocation.policy.OnFail == "block" {
+				blocking = append(blocking, failure)
+			} else {
+				advisory = append(advisory, failure)
 			}
 		}
 	}

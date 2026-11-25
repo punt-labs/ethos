@@ -140,6 +140,40 @@ func TestHandoffChecks(t *testing.T) {
 	}
 }
 
+func TestHandoffResultPerTree(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint(fail), func(t *testing.T) {
+			root, bin := postEditFixture(t)
+			t.Setenv("HOME", t.TempDir())
+			checkPolicy(t, root, "project", "  - name: gate\n    stage: handoff\n    files: all\n    run: [probe]\n")
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+			count := filepath.Join(t.TempDir(), "runs")
+			t.Setenv("GATE_COUNT", count)
+			body := "echo gate >> \"$GATE_COUNT\"\n"
+			if fail {
+				body += "echo failure; exit 1\n"
+			}
+			postEditTool(t, bin, "probe", body)
+			run := func() StageFeedback { return RunStageChecks(context.Background(), root, "", "handoff") }
+			first := run()
+			require.Equal(t, fail, first.Blocking != "")
+			require.Equal(t, first, run())
+			runs, err := os.ReadFile(count)
+			require.NoError(t, err)
+			require.Equal(t, "gate\n", string(runs))
+			writeFile(t, filepath.Join(root, "dirty"), "one\n")
+			run()
+			writeFile(t, filepath.Join(root, "dirty"), "two\n")
+			run()
+			checkPolicy(t, root, "project", "  - name: changed-policy\n    stage: handoff\n    files: all\n    run: [probe]\n")
+			run()
+			runs, err = os.ReadFile(count)
+			require.NoError(t, err)
+			require.Equal(t, strings.Repeat("gate\n", 4), string(runs))
+		})
+	}
+}
+
 func TestHandoffKilledBeforeInput(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	writeFile(t, filepath.Join(os.Getenv("HOME"), ".punt-hooks-kill"), "")
