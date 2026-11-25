@@ -66,6 +66,9 @@ func TestAppendTailReadBudgetAndValidation(t *testing.T) {
 }
 
 func TestAppendSessionRechecksNewHistory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bounded appends require a stable file identity")
+	}
 	for _, kind := range []string{"local archive", "checkout publication"} {
 		t.Run(kind, func(t *testing.T) {
 			p := repositoryPolicy(t, layout.RecordBlame)
@@ -82,6 +85,9 @@ func TestAppendSessionRechecksNewHistory(t *testing.T) {
 			published := filepath.Join(p.CheckoutRecordRoot(), "sessions")
 			require.NoError(t, os.MkdirAll(published, 0o700))
 			appendLine(100)
+			cp, ok := readAppendFloor(p, s)
+			require.True(t, ok, "must warm a checkpoint before adding history")
+			require.EqualValues(t, 100, cp.Floor)
 			dir := filepath.Join(published, "2026-11-04-s")
 			if kind == "local archive" {
 				var err error
