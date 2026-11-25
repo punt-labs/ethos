@@ -125,7 +125,7 @@ func TestDevelopmentHooksFutureWorktreeKeepsExistingHooks(t *testing.T) {
 	require.Contains(t, string(out), "existing pre-commit ran")
 	require.Contains(t, string(out), "existing commit-msg ran")
 
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-changed:\n\t@echo 'development gate ran'\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-changed:\n\t@echo 'development gate ran'\nsecret-scan-staged:\n\t@true\n"), 0o600))
 	out, err = run(dir, "git", "add", ".githooks", "Makefile")
 	require.NoError(t, err, "%s", out)
 	out, err = run(dir, "git", "commit", "-m", "checkout with development gates")

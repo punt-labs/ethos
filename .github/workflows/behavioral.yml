@@ -55,12 +55,68 @@ jobs:
           ETHOS_BEHAVIORAL_JUDGE_MODEL: ${{ vars.ETHOS_BEHAVIORAL_JUDGE_MODEL || 'claude-sonnet-4-6' }}
         run: go test -race -count=1 -tags behavioral -timeout 20m -v ./tests/behavioral/
 
+  opencode-live:
+    if: >-
+      github.repository == 'punt-labs/ethos' && github.ref == 'refs/heads/main' &&
+      !(github.event_name == 'workflow_dispatch' && inputs.force-failure)
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - name: Check live credentials are configured
+        env:
+          BIFROST_VK: ${{ secrets.BIFROST_VK }}
+          BIFROST_BASE_URL: ${{ vars.BIFROST_BASE_URL }}
+          CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
+        run: |
+          : "${BIFROST_VK:?Set the BIFROST_VK Actions secret}"
+          : "${BIFROST_BASE_URL:?Set the BIFROST_BASE_URL Actions variable}"
+          : "${CONTEXT7_API_KEY:?Set the CONTEXT7_API_KEY Actions secret}"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: '0.13.9'
+      - name: Install OpenCode and isolated smoke dependencies
+        run: bash scripts/ci-opencode.sh install
+      - name: Verify the live OpenCode roster and exercise all smoke stages
+        env:
+          BIFROST_VK: ${{ secrets.BIFROST_VK }}
+          BIFROST_BASE_URL: ${{ vars.BIFROST_BASE_URL }}
+          CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
+        run: bash scripts/ci-opencode.sh smoke
+      - name: Prepare publishable smoke receipts
+        if: always()
+        run: |
+          shopt -s nullglob
+          destination="$RUNNER_TEMP/opencode-receipts"
+          for receipt in .tmp/opencode/smoke-*/receipt.json; do
+            mkdir -p "$destination"
+            run_dir=${receipt%/receipt.json}
+            jq '{
+              status, stage, scope, requested_stages, completed_stages,
+              sessions: [.sessions[] | select(test("^ses_[A-Za-z0-9]+$"))],
+              checks: [.checks[] | del(.parent, .child)]
+            }' "$receipt" >"$destination/${run_dir##*/}.json"
+          done
+      - name: Upload OpenCode smoke receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: opencode-smoke-receipts
+          path: ${{ runner.temp }}/opencode-receipts/*.json
+          if-no-files-found: ignore
+          retention-days: 7
+
   notify:
-    needs: behavioral
+    needs: [behavioral, opencode-live]
     if: >-
       ${{ always() && github.repository == 'punt-labs/ethos' &&
           github.ref == 'refs/heads/main' &&
-          needs.behavioral.result == 'failure' }}
+          contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -75,12 +131,11 @@ jobs:
           BIFF_RELAY_TOKEN: ${{ secrets.BIFF_RELAY_TOKEN }}
           BIFF_RELAY_TLS_HANDSHAKE_FIRST: ${{ vars.BIFF_RELAY_TLS_HANDSHAKE_FIRST }}
           ALERT_DRILL: ${{ github.event_name == 'workflow_dispatch' && inputs.force-failure }}
-          BEHAVIORAL_RESULT: ${{ needs.behavioral.result }}
         run: |
           : "${BIFF_RELAY_TOKEN:?BIFF_RELAY_TOKEN is required to deliver Nightly alerts}"
           biff=(uvx --from punt-biff==1.24.2 biff --user github-actions --json)
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}"
-          message="Nightly QA ${BEHAVIORAL_RESULT} on Ethos — ${run_url}"
+          message="Nightly QA failure on Ethos — ${run_url}"
           if [[ "$ALERT_DRILL" == true ]]; then
             printf 'peers:\n  orgs: []\n  repos: []\n' > .punt-labs/biff/config.local.yaml
             current=$("${biff[@]}" wall)

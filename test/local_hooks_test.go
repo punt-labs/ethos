@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -17,7 +18,9 @@ func TestDevelopmentPreCommit(t *testing.T) {
 		name, gate, want string
 		fail             bool
 		sealed           bool
+		rejectSecret     bool
 	}{
+		{name: "failed secret scan", gate: "@echo ran-staged-tests", want: "secret scan ran", fail: true, rejectSecret: true},
 		{name: "failed gate", gate: "false", want: "test-changed", fail: true},
 		{name: "successful gate", gate: "true", want: "existing hook"},
 		{name: "installed seal keeps existing checks", gate: "true", want: "existing hook", sealed: true},
@@ -35,10 +38,16 @@ func TestDevelopmentPreCommit(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-commit"), []byte(hook), 0o700))
 			require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "hooks", "commit-msg"),
 				[]byte("#!/bin/sh\nprintf '\\nHost trailer: preserved\\n' >> \"$1\"\n"), 0o700))
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-changed:\n\t"+tc.gate+"\n"), 0o600))
+			scan := "true"
+			if tc.rejectSecret {
+				scan = "false"
+			}
+			scanRecipe := "\nsecret-scan-staged:\n\t@echo 'secret scan ran'\n\t" + scan + "\n"
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte(
+				"test-changed:\n\t"+tc.gate+scanRecipe), 0o600))
 			out, err := git("add", "Makefile")
 			require.NoError(t, err, "%s", out)
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-changed:\n\t@echo ran-dirty-makefile\n"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test-changed:\n\t@echo ran-dirty-makefile"+scanRecipe), 0o600))
 			installDevelopmentHooks(t, dir, run)
 
 			out, err = git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
@@ -53,6 +62,12 @@ func TestDevelopmentPreCommit(t *testing.T) {
 				require.Contains(t, string(msg), "Host trailer: preserved")
 			}
 			require.Contains(t, string(out), tc.want)
+			require.Contains(t, string(out), "secret scan ran")
+			require.Regexp(t, `(?s)secret scan ran.*\npre-commit: \d+s elapsed \((within|over) 30s budget\), exit \d+`, string(out))
+			if tc.rejectSecret {
+				require.NotContains(t, string(out), "test-changed")
+				require.NotContains(t, string(out), "ran-staged-tests")
+			}
 			require.NotContains(t, string(out), "ran-dirty-makefile")
 			if tc.sealed {
 				require.Contains(t, string(out), "development seal")
@@ -277,6 +292,39 @@ func TestChangedPackagesFindsTestsImportingMovedPackage(t *testing.T) {
 	require.Error(t, err, "%s", out)
 	require.Contains(t, string(out), "example.test/move/consumer")
 	require.Contains(t, string(out), "no required module provides package example.test/move/old")
+}
+
+func TestChangedPackagesDirectDoesNotScanSecrets(t *testing.T) {
+	fixture, run := developmentHookFixture(t)
+	dir := filepath.Join(fixture, "repo")
+	require.NoError(t, os.Mkdir(dir, 0o700))
+	for _, subdir := range []string{"scripts", ".githooks", "docs"} {
+		require.NoError(t, os.Mkdir(filepath.Join(dir, subdir), 0o700))
+	}
+	for _, path := range []string{"scripts/test-snapshot.sh", "scripts/test-changed.sh", "scripts/test-timed.sh", ".githooks/pre-commit", "Makefile"} {
+		data, err := os.ReadFile(filepath.Join("..", path))
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, path), data, 0o700))
+	}
+	const module = "module example.test/changed\n\ngo 1.26\n"
+	toolchain, _, _ := strings.Cut(strings.Fields(runtime.Version())[0], "-X:")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(module+"\ntoolchain "+toolchain+"\n"), 0o600))
+	for _, args := range [][]string{{"init", "-q", "--template="}, {"add", "."}, {"commit", "-qm", "fixture"}} {
+		out, err := run(dir, "git", args...)
+		require.NoError(t, err, "%s", out)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "changed.go"), []byte("package changed\n"), 0o600))
+	out, err := run(dir, "git", "add", "changed.go")
+	require.NoError(t, err, "%s", out)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(module+"\ntoolchain go1.0.1\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "changed.go"), []byte("not staged\n"), 0o600))
+
+	out, err = run(dir, "make", "secret-scan-staged", "GITLEAKS=false")
+	require.Error(t, err, "%s", out)
+	out, err = run(dir, "make", "test-changed", "GITLEAKS=false", "GOPROXY=off")
+	require.NoError(t, err, "%s", out)
+	require.Contains(t, string(out), "example.test/changed")
+	require.NotContains(t, string(out), "secret-scan-staged")
 }
 
 func TestDevelopmentLiveRequiresKey(t *testing.T) {
