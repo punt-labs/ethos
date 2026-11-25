@@ -29,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   audit redaction race check separately from its latency measurement.
 - Subagent handoff resolves repeated audited edit paths only once per
   attribution class, reducing stop latency in long editing sessions.
+- Warm audit-log appends validate a bounded tail when no session audit history
+  has been published. Full reads and pre-commit sealing still verify all
+  history (DES-087).
 
 ### Fixed
 
