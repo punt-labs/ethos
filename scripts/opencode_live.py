@@ -175,20 +175,26 @@ def required_calls(calls, name, matches, description):
 
 
 def required_read(calls, matches, path, description):
-    """Bind required reads to a nonempty, bounded prefix of the trusted file.
+    """Bind required reads to a nonempty excerpt of the requested page.
 
-    Observed 2.2.5 read content has a header followed by numbered source lines.
-    Compare up to 10 complete lines, not a filename/header or model summary.
-    The retained researcher smoke legitimately requested only the first 10.
-    Other reads may legitimately be empty; keep this out of completed().
+    OpenCode 2.2.5 numbers text pages from the requested 1-based offset.
+    Compare up to 10 complete lines from there, not a header or model summary.
     """
-    lines = path.read_text().splitlines()[:10]
-    require(any(line.strip() for line in lines), description + ": trusted file prefix is empty")
-    expected = "\n" + "\n".join(f"{number}: {line}" for number, line in enumerate(lines, 1)) + "\n"
+    lines = path.read_text().splitlines()
     for state in required_calls(calls, "read", matches, description):
+        args = state["input"]
+        offset, limit = args.get("offset", 0), args.get("limit", 0)
+        require(type(offset) is int and offset >= 0 and type(limit) is int and limit >= 0,
+                description + ": invalid native read offset or limit")
+        start, count = offset or 1, min(limit or 10, 10)
+        excerpt = lines[start - 1:start - 1 + count]
+        require(any(line.strip() for line in excerpt),
+                f"{description}: trusted file excerpt is empty (offset {start}, checking up to {count} lines)")
+        expected = "\n" + "\n".join(f"{number}: {line}" for number, line in enumerate(excerpt, start)) + "\n"
         require(any(part.get("type") == "text" and isinstance(part.get("text"), str)
                     and expected in "\n" + part["text"] + "\n" for part in state.get("content", [])),
-                description + ": returned text does not match trusted file prefix")
+                f"{description}: returned text does not match trusted file excerpt "
+                f"(offset {start}, checking {len(excerpt)} lines)")
 
 
 DISCOVERY_SKILLS = ("ethos-prfaq", "ethos-punt-release", "ethos-zspec")
