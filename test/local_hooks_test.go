@@ -284,6 +284,10 @@ fi
 		require.NoError(t, os.WriteFile(smokeFile, []byte("./cmd/ethos\tSlugify|VersionCommand\r\n"), 0o600))
 		require.Contains(t, string(run("bash", smokeScript)), "-run ^Test(Slugify|VersionCommand)$ ./cmd/ethos\n")
 	})
+	t.Run("final smoke row without a newline", func(t *testing.T) {
+		require.NoError(t, os.WriteFile(smokeFile, []byte("./internal/hook\tBuildPersonaBlock_Full\n./cmd/ethos\tSlugify"), 0o600))
+		require.Contains(t, string(run("bash", smokeScript)), "-run ^Test(Slugify)$ ./cmd/ethos\n")
+	})
 }
 
 func TestDevelopmentLiveRequiresKey(t *testing.T) {

@@ -62,7 +62,7 @@ if [[ ! ${packages[0]+selected} ]]; then
 fi
 fast=()
 declare -a smoke_packages=() smoke_patterns=()
-while IFS=$'\t' read -r smoke_package smoke_pattern; do
+while IFS=$'\t' read -r smoke_package smoke_pattern || [[ -n "$smoke_package" ]]; do
   smoke_packages+=("$smoke_package")
   smoke_patterns+=("${smoke_pattern%$'\r'}")
 done < "$(dirname -- "${BASH_SOURCE[0]}")/test-smoke.tsv"
