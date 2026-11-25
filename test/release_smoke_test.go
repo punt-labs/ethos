@@ -39,9 +39,37 @@ func fakeEthosBinary(version string, createRC int, identity, tracePath string, m
   "seed"|"doctor"|"enable") exit 0 ;;
   "identity create -f identity.yaml") test -r identity.yaml && exit %d ;;
   "identity get release-smoke --json") echo '%s' ;;
-  "session show release-smoke-session --json") echo '{"session":"release-smoke-session","participants":[{"agent_id":"release-smoke"}]}' ;;
-  "hook session-start") cat >/dev/null; %s exit 0 ;;
-  "hook pre-tool-use"|"hook audit-log"|"hook format-output"|"hook session-end") cat >/dev/null; exit 0 ;;
+  "session show release-smoke-session --json")
+    test -f "$HOME/.punt-labs/ethos/.smoke-session-active" || exit 1
+    echo '{"session":"release-smoke-session","participants":[{"agent_id":"release-smoke"}]}'
+    ;;
+  "hook session-start")
+    cat >/dev/null
+    mkdir -p "$HOME/.punt-labs/ethos"
+    : > "$HOME/.punt-labs/ethos/.smoke-session-active"
+    %s
+    echo '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Ethos session started."}}'
+    exit 0
+    ;;
+  "hook pre-tool-use")
+    cat >/dev/null
+    echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse"}}'
+    exit 0
+    ;;
+  "hook audit-log")
+    cat >/dev/null
+    exit 0
+    ;;
+  "hook format-output")
+    cat >/dev/null
+    echo '{"hookSpecificOutput":{"hookEventName":"PostToolUse","updatedMCPToolOutput":"release-smoke"}}'
+    exit 0
+    ;;
+  "hook session-end")
+    cat >/dev/null
+    rm -f "$HOME/.punt-labs/ethos/.smoke-session-active"
+    exit 0
+    ;;
   "serve")
     while IFS= read -r line; do
       case "$line" in

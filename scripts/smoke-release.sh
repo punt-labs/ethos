@@ -169,19 +169,33 @@ if self_srv.get("command") != "ethos" or self_srv.get("args") != ["serve"]:
 
 hooks_doc = json.loads((plugin_dir / "hooks" / "hooks.json").read_text())
 hook_count = 0
-for entries in hooks_doc.get("hooks", {}).values():
+registered: dict[str, set[str]] = {}
+for event, entries in hooks_doc.get("hooks", {}).items():
     for entry in entries:
         for hook in entry.get("hooks", []):
             cmd = hook.get("command", "")
             prefix = "${CLAUDE_PLUGIN_ROOT}/"
             if not cmd.startswith(prefix):
                 sys.exit(f"unexpected hook command path: {cmd!r}")
-            target = plugin_dir / cmd[len(prefix):]
+            rel = cmd[len(prefix):]
+            target = plugin_dir / rel
             if not target.is_file() or not os.access(target, os.X_OK):
                 sys.exit(f"missing or non-executable hook script: {target}")
+            registered.setdefault(event, set()).add(rel)
             hook_count += 1
 if hook_count == 0:
     sys.exit("hooks.json declared zero hooks")
+
+required_registrations = {
+    "SessionStart": {"hooks/session-start.sh"},
+    "PreToolUse": {"hooks/pre-tool-use.sh"},
+    "PostToolUse": {"hooks/audit-log.sh", "hooks/suppress-output.sh"},
+    "SessionEnd": {"hooks/session-end.sh"},
+}
+for event, expected_scripts in required_registrations.items():
+    missing = sorted(expected_scripts - registered.get(event, set()))
+    if missing:
+        sys.exit(f"hooks.json missing {event} registrations: {missing}")
 PY
     then
         fail "plugin manifest or hooks validation failed"
@@ -206,6 +220,7 @@ proc = subprocess.Popen(
     env=dict(os.environ),
 )
 messages: "queue.Queue[bytes]" = queue.Queue()
+stderr_chunks: list[bytes] = []
 
 
 def reader() -> None:
@@ -215,8 +230,20 @@ def reader() -> None:
     messages.put(b"")
 
 
+def stderr_reader() -> None:
+    assert proc.stderr is not None
+    for chunk in iter(lambda: proc.stderr.read(4096), b""):
+        stderr_chunks.append(chunk)
+
+
 thread = threading.Thread(target=reader, daemon=True)
+err_thread = threading.Thread(target=stderr_reader, daemon=True)
 thread.start()
+err_thread.start()
+
+
+def collected_stderr() -> str:
+    return b"".join(stderr_chunks).decode(errors="replace")
 
 
 def send(payload: dict) -> None:
@@ -237,8 +264,8 @@ def call(req_id: int, method: str, params: dict) -> dict:
         except queue.Empty:
             sys.exit(f"MCP timeout waiting for {method}")
         if not raw:
-            stderr = proc.stderr.read().decode(errors="replace") if proc.stderr else ""
-            sys.exit(f"MCP server closed before {method} response: {stderr}")
+            err_thread.join(timeout=1)
+            sys.exit(f"MCP server closed before {method} response: {collected_stderr()}")
         msg = json.loads(raw)
         if msg.get("id") == req_id:
             if "error" in msg:
@@ -276,10 +303,10 @@ finally:
     except subprocess.TimeoutExpired:
         proc.terminate()
         rc = proc.wait(timeout=5)
-    thread.join(timeout=5)
+    thread.join(timeout=2)
+    err_thread.join(timeout=2)
 if rc != 0:
-    stderr = proc.stderr.read().decode(errors="replace") if proc.stderr else ""
-    sys.exit(f"MCP server exited with {rc}: {stderr}")
+    sys.exit(f"MCP server exited with {rc}: {collected_stderr()}")
 PY
 then
     fail "MCP stdio round trip failed"
@@ -297,8 +324,16 @@ if [ -n "$plugin_dir" ]; then
     rm -f "$hook_err_log"
 
     printf '%s\n' '{"session_id":"release-smoke-session"}' |
-        clean CLAUDE_PLUGIN_ROOT="$plugin_dir" bash "$plugin_dir/hooks/session-start.sh" >/dev/null ||
+        clean CLAUDE_PLUGIN_ROOT="$plugin_dir" bash "$plugin_dir/hooks/session-start.sh" > "$sandbox/session-start.json" ||
         fail "session-start hook failed"
+    if ! clean "$python" -c '
+import json, sys
+out = json.load(sys.stdin).get("hookSpecificOutput", {})
+sys.exit(out.get("hookEventName") != "SessionStart")
+' < "$sandbox/session-start.json"; then
+        cat "$sandbox/session-start.json" >&2
+        fail "session-start hook returned unexpected output"
+    fi
     clean "$ethos" session show release-smoke-session --json > "$sandbox/roster.json" ||
         fail "session show after session-start hook failed"
     if ! clean "$python" -c 'import json, sys; data = json.load(sys.stdin); sys.exit(not data)' < "$sandbox/roster.json"; then
@@ -307,17 +342,43 @@ if [ -n "$plugin_dir" ]; then
     fi
 
     printf '%s\n' '{"session_id":"release-smoke-session","tool_name":"Read","tool_input":{"file_path":"README.md"}}' |
-        clean CLAUDE_PLUGIN_ROOT="$plugin_dir" bash "$plugin_dir/hooks/pre-tool-use.sh" >/dev/null ||
+        clean CLAUDE_PLUGIN_ROOT="$plugin_dir" bash "$plugin_dir/hooks/pre-tool-use.sh" > "$sandbox/pre-tool-use.json" ||
         fail "pre-tool-use hook failed"
+    if ! clean "$python" -c '
+import json, sys
+out = json.load(sys.stdin).get("hookSpecificOutput", {})
+sys.exit(out.get("hookEventName") != "PreToolUse" or out.get("permissionDecision") == "deny")
+' < "$sandbox/pre-tool-use.json"; then
+        cat "$sandbox/pre-tool-use.json" >&2
+        fail "pre-tool-use hook returned unexpected decision"
+    fi
+
     printf '%s\n' '{"session_id":"release-smoke-session","tool_name":"Bash","tool_input":{"command":"echo release-smoke"}}' |
-        clean CLAUDE_PLUGIN_ROOT="$plugin_dir" bash "$plugin_dir/hooks/audit-log.sh" >/dev/null ||
+        clean CLAUDE_PLUGIN_ROOT="$plugin_dir" bash "$plugin_dir/hooks/audit-log.sh" > "$sandbox/audit-log.out" ||
         fail "audit-log hook failed"
+    if [ -s "$sandbox/audit-log.out" ]; then
+        cat "$sandbox/audit-log.out" >&2
+        fail "audit-log hook emitted unexpected output"
+    fi
+
     printf '%s\n' '{"session_id":"release-smoke-session","tool_name":"mcp__plugin_ethos_self__whoami","tool_response":"release-smoke"}' |
-        clean CLAUDE_PLUGIN_ROOT="$plugin_dir" bash "$plugin_dir/hooks/suppress-output.sh" >/dev/null ||
+        clean CLAUDE_PLUGIN_ROOT="$plugin_dir" bash "$plugin_dir/hooks/suppress-output.sh" > "$sandbox/suppress-output.json" ||
         fail "suppress-output hook failed"
+    if ! clean "$python" -c '
+import json, sys
+out = json.load(sys.stdin).get("hookSpecificOutput", {})
+sys.exit(out.get("hookEventName") != "PostToolUse" or "updatedMCPToolOutput" not in out)
+' < "$sandbox/suppress-output.json"; then
+        cat "$sandbox/suppress-output.json" >&2
+        fail "suppress-output hook returned unexpected output"
+    fi
+
     printf '%s\n' '{"session_id":"release-smoke-session"}' |
         clean CLAUDE_PLUGIN_ROOT="$plugin_dir" bash "$plugin_dir/hooks/session-end.sh" >/dev/null ||
         fail "session-end hook failed"
+    if clean "$ethos" session show release-smoke-session --json >/dev/null 2>&1; then
+        fail "session-end hook did not remove session roster"
+    fi
 
     if [ -s "$hook_err_log" ]; then
         cat "$hook_err_log" >&2
