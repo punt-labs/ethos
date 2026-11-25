@@ -28,7 +28,7 @@ while IFS= read -r -d '' path; do
       fi
       requested+=("$dir")
       ;;
-    go.mod|go.sum|Makefile|.githooks/*|scripts/install-dev-hooks.py|scripts/test-changed.sh|scripts/test-timed.sh|scripts/test-quarantine.py|tests/quarantine.tsv)
+    go.mod|go.sum|Makefile|.githooks/*|scripts/install-dev-hooks.py|scripts/test-changed.sh|scripts/test-smoke.tsv|scripts/test-timed.sh|scripts/test-quarantine.py|tests/quarantine.tsv)
       requested+=(test)
       ;;
   esac
@@ -61,17 +61,20 @@ if [[ ! ${packages[0]+selected} ]]; then
   exit 0
 fi
 fast=()
+declare -a smoke_packages=() smoke_patterns=()
+while IFS=$'\t' read -r smoke_package smoke_pattern; do
+  smoke_packages+=("$smoke_package")
+  smoke_patterns+=("$smoke_pattern")
+done < "$(dirname -- "${BASH_SOURCE[0]}")/test-smoke.tsv"
+
 for package in "${packages[@]}"; do
-  case "$package" in
-    ./cmd/ethos) smoke='Slugify|VersionCommand|VersionCommandJSON' ;;
-    ./internal/enable) smoke='EnableDepositsFourArtifacts|EnableDisableRoundTrip' ;;
-    ./internal/gitenv) smoke='Parsed|TimeoutDefault' ;;
-    ./internal/hook) smoke='BuildPersonaBlock_Full|BuildExtensionContext' ;;
-    ./internal/mission) smoke='Store_RoundTrip|Store_RejectsSymlink_Load' ;;
-    ./plugin/hooks) smoke='HooksDormantRepositoryRunsNoProbe|HooksFailLoudWhenRevParseFails' ;;
-    *) fast+=("$package"); continue ;;
-  esac
-  go test -race -count=1 -run "^Test($smoke)$" "$package"
+  for i in "${!smoke_packages[@]}"; do
+    if [[ "$package" == "${smoke_packages[i]}" ]]; then
+      go test -race -count=1 -run "^Test(${smoke_patterns[i]})$" "$package"
+      continue 2
+    fi
+  done
+  fast+=("$package")
 done
 if [[ ${fast[0]+selected} ]]; then
   go test -race -count=1 "${fast[@]}"
