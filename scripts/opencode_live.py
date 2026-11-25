@@ -681,14 +681,14 @@ def smoke(root, stages=None, *, nightly=False):
             stage("formatter sentinel fixture")
             fixture = evidence / "fixture"
             fixture.mkdir()
-            fixture_config = copy.deepcopy(check(root))
+            fixture_config = copy.deepcopy(check(root, nightly=nightly))
             fixture_config["instructions"] = []
             for server in fixture_config["mcp"]["servers"].values():
                 if server["type"] == "local":
                     server["cwd"] = str(root)
                     server["command"][2] = str(root)
             (fixture / "opencode.json").write_text(json.dumps(fixture_config, indent=2) + "\n")
-            fixture_api = API(fixture)
+            fixture_api = API(fixture, nightly=nightly)
             samples = {"sample.go": "package smoke\nfunc f( ){ }\n// SMOKE_BEFORE\n",
                        "sample.md": "#   Title\n\nSMOKE_BEFORE   \n",
                        "sample.py": "value=  [1,2] # SMOKE_BEFORE\n",

@@ -246,6 +246,21 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(oc.CheckError):
             oc.load_json('{"model":1,"model":2}')
 
+    def test_nightly_formatter_uses_openai_in_fixture_and_session(self):
+        oc.prepare_nightly(self.root)
+        subprocess.run(["git", "init", "-q"], cwd=self.root, check=True)
+        (self.root / ".gitignore").write_text(".tmp/\n")
+        with patch.object(live, "doctor", return_value=live.API(self.root, nightly=True)), \
+                patch.object(live.API, "call", return_value={"data": {"id": "ses_fixture"}}) as call, \
+                patch.object(live.API, "prompt", return_value=[]), \
+                patch.object(live, "formatter_inputs"), patch.object(live, "formatter_outputs"):
+            live.smoke(self.root, ["formatter"], nightly=True)
+        fixture, = (self.root / ".tmp/opencode").glob("smoke-*/fixture/opencode.json")
+        self.assertEqual(json.loads(fixture.read_text())["model"], "openai/gpt-6-astra")
+        call.assert_called_once()
+        self.assertEqual(call.call_args.args[2]["model"],
+                         {"providerID": "openai", "id": "gpt-6-astra", "variant": "high"})
+
     def test_json_command_alias_cannot_drop_its_release_adapter(self):
         self.mutate_config(lambda c: c["commands"]["punt:auto"].update(template="No workflow"))
         self.rejected()
