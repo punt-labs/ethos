@@ -24,7 +24,7 @@ func TestPreCommitSmokeSelectionsMatchTests(t *testing.T) {
 	var packages []string
 	selections := make(map[string][]string)
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		pkg, names, ok := strings.Cut(line, "\t")
+		pkg, names, ok := strings.Cut(strings.TrimSuffix(line, "\r"), "\t")
 		require.True(t, ok, "invalid smoke selection %q", line)
 		require.NotContains(t, selections, pkg)
 		selections[pkg] = strings.Split(names, "|")

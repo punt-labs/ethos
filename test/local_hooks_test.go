@@ -274,6 +274,16 @@ fi
 	got := string(run("bash", script))
 	require.Contains(t, got, "go test -race -count=1 -run ^Test(Slugify|VersionCommand|VersionCommandJSON)$ ./cmd/ethos\n")
 	require.Contains(t, got, "go test -race -count=1 ./changed\n")
+
+	smokeScript := filepath.Join(t.TempDir(), "test-changed.sh")
+	source, err := os.ReadFile(script)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(smokeScript, source, 0o600))
+	smokeFile := filepath.Join(filepath.Dir(smokeScript), "test-smoke.tsv")
+	t.Run("CRLF smoke row", func(t *testing.T) {
+		require.NoError(t, os.WriteFile(smokeFile, []byte("./cmd/ethos\tSlugify|VersionCommand\r\n"), 0o600))
+		require.Contains(t, string(run("bash", smokeScript)), "-run ^Test(Slugify|VersionCommand)$ ./cmd/ethos\n")
+	})
 }
 
 func TestDevelopmentLiveRequiresKey(t *testing.T) {
