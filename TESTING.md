@@ -14,8 +14,8 @@ The installed PR/main and Nightly rows describe the target state after
 
 | Tier | Runner, selection and prerequisites | Time budget | Gate behavior |
 | --- | --- | --- | --- |
-| Pre-commit | Local, `make hooks` once, then `git commit`; also `make secret-scan-staged` and `make test-changed` directly. Go with race support, Git and Bash. Pinned gitleaks scans the Git index before staged whitespace and selected working-tree package tests. | <30 s on a provisioned checkout for a typical small change | A scan or test failure stops the commit; the existing Git hook still runs on a pass. |
-| Pre-push | Local, `make test-push` (invoked by the hook). Full credential-free package suite plus `make test-subprocess-fast`. Requires the Go toolchain, full Git history, Bash and Python. | <3 min | A failure stops the push; branch and non-release tag updates must be pushed from the corresponding checkout. Release tags skip the local gate; the [Release] candidate smoke gates publication. |
+| Pre-commit | Local, `make hooks` once, then `git commit`; also `make secret-scan-staged` and `make test-changed` directly. Go with race support, Git and Bash. Pinned gitleaks scans the Git index; the timed test step checks staged whitespace, then runs affected Go packages from an isolated copy of the Git index. | <30 s on a provisioned checkout for a typical small change | A scan or test failure stops the commit; the existing Git hook still runs on a pass. |
+| Pre-push | Local, the hook runs `make test-push` in a detached worktree of the commit being pushed. Full credential-free package suite plus `make test-subprocess-fast`. Requires the Go toolchain, full Git history, Bash and Python. | <3 min | A failure stops the push; branch and non-release tag updates must be pushed from the corresponding checkout. Release tags skip the local gate; the [Release] candidate smoke gates publication. |
 | PR | [Test] and [Docs], hosted runners. Full `make test`, legacy corpus regeneration, storage and plugin-cache checks, Linux/macOS installed verification [#670], offline OpenCode checks, Z specs, wire smoke against a local stub, and docs. `secret-scan` scans introduced commits using the same pinned gitleaks as the hook. | <10 min | Required `test` (including `legacy-corpus`) and `docs` block merge. `secret-scan` reports independently pending ruleset rollout, as do wire smoke and tool-install verification. |
 | Merge to main | Repeat PR jobs on the main commit. Coverage uploads are tied to that run and commit. | <10 min | A red main requires triage; do not update coverage from an unsuccessful run. |
 | Nightly | [Behavioral] (Nightly [#671]), daily 06:07 UTC or manual dispatch on upstream main. The hosted Claude job runs `make test-quarantine` and then `go test` with the `behavioral` tag and a 20-minute test timeout, using Claude CLI, an Anthropic test key and the configured judge model. The local counterpart is `make test-nightly`. A separate hosted Linux job runs `make smoke-opencode`, including doctor. | ≤1 h (30-minute Claude and 55-minute OpenCode jobs in parallel) | Live failures are red and Biff alerts on failed or canceled runs. Not a PR check. |
@@ -46,6 +46,12 @@ be safely edited, installation refuses and leaves the chain to the operator.
 If it finds a legacy standalone Ethos audit seal, run `ethos enable` to
 upgrade that seal before retrying `make hooks`.
 
+The development gates leave unstaged and untracked files out of both snapshots
+and remove their temporary worktrees. Pre-commit selects the packages owning
+staged sources or test fixtures and their transitive reverse dependents,
+including dependencies imported only by tests. Staging a change to `go.mod`
+or `go.sum` selects the full package set.
+
 `make secret-scan-history` is the local history audit for all commits reachable
 from HEAD. Both scan targets download and build the pinned gitleaks Go module
 on first use and redact findings. CI limits the scan to the PR base or
@@ -72,15 +78,21 @@ Both require a native Linux/macOS host, Bash, Python 3, and `shasum`.
 
 | Kind | Entry point | Regular placement and boundary |
 | --- | --- | --- |
-| Unit and component | `make test-unit` (in-process redaction sample); `make test` (all default packages) | Local, PR and main. Go selectors use `-race -count=1`; the full suite also contains real subprocess tests. |
+| Unit and component | `make test-unit` (default Go tests without a real subprocess) | Local, PR and main. Go selectors use `-race -count=1`; `make test` runs both kinds. |
 | Subprocess | `make test-subprocess-fast`, `make test-subprocess`, `make check-storage` | Fast Git-hook paths at pre-push; broader Git, installer-fixture, CLI and MCP coverage in PR/main. `check-storage` executes a real binary in an isolated fixture. |
 | End-to-end | `make check-installed` [#670], `make test-e2e-smoke`, `make test-e2e`; native candidate and published smokes in [Release] | Installed Linux/macOS proof on PR/main; the separate wire smoke drives a real Claude CLI against local LiteLLM and stubbed providers. The full wire sweep runs on tags against a checkout-built binary, not the installed candidate. See [wire harness]. |
-| Domain-specific | `make validate-content`, `make fuzz-check`, `make check-opencode`, `make check-plugin-cache`, `make test-legacy-corpus`, `make test-performance` | Validate Ethos content, Z specs, OpenCode config, cache switching, repair fixtures and redaction. The corpus runs on PR/main with release tag history. The race-instrumented performance selector reports time; the existing dedicated CI budget is deliberately uninstrumented because race/coverage overhead changes the workload. |
+| Domain-specific | `make validate-content`, `make fuzz-check`, `make check-opencode`, `make check-plugin-cache`, `make test-legacy-corpus`, `make test-performance` | Validate Ethos content, Z specs, OpenCode config, cache switching, repair fixtures and redaction. The corpus runs on PR/main with release tag history. PR/main run the audit latency case twice: a dedicated race run verifies correctness, and an uninstrumented run enforces the timing budget without race or coverage overhead. |
 | Live | `make test-live` (`make test-behavioral`), `make doctor-opencode` | Trusted Nightly/authorized local execution only. The live Anthropic judge scores outcomes from synthetic fixtures. The OpenCode smoke starts with doctor, which checks live dependencies; doctor is not an offline PR gate. |
 | Agent | `make test-agent` (`make test-behavioral`), `make smoke-opencode` | Trusted Nightly/authorized local execution only. Claude follows or rejects mission instructions; OpenCode exercises all configured specialists and native tool paths. The wire stub is not live provider evidence. |
 | Quarantined | `make test-quarantine` (inventory), `make test-quarantine-run` (execute only listed tests) | Never in ordinary Go selection. PR/main validate the inventory; Nightly reviews it daily. Use the separate run to diagnose and restore tests. |
 
 [wire harness]: tests/e2e/README.md
+
+The Go selectors split mixed packages by package directory and top-level test name using
+[`tests/go-subprocess-tests.txt`](tests/go-subprocess-tests.txt). Add or update
+an entry whenever a test or any of its subtests starts a real child process,
+including Git processes started by fixture setup. An in-process mock does not
+count.
 
 Provision tools and module caches first (see [development guide]). Offline
 gates do not need a production key. Run live selectors only in a disposable
@@ -149,10 +161,7 @@ completed after the four PRs.
 | TST-1 / GO-TST-1 | Full pre-push took 654 s against a 180 s budget; optimizing and sharding the suite are outside the hook changes. | Jim Freeman | 2026-12-08 | [PL-1581](https://linear.app/punt-labs/issue/PL-1581) |
 | TST-1 / GO-TST-1 | PR/main exceed 10 min and wire/tool jobs are not required; tuning and branch ruleset changes need separate work. | Jim Freeman | 2026-12-08 | [PL-1591](https://linear.app/punt-labs/issue/PL-1591) |
 | TST-1 / TST-4 | The pinned scanner reports on PRs; add the `secret-scan` check to the main ruleset after it has reported success. | Jim Freeman | 2026-12-08 | [PL-1586](https://linear.app/punt-labs/issue/PL-1586) |
-| TST-2 / GO-TST-1 | Unit-only and subprocess-only selectors cover representative packages, not all tests of each kind; exhaustive separation needs classification of mixed packages. | Jim Freeman | 2026-12-22 | [PL-1589](https://linear.app/punt-labs/issue/PL-1589) |
 | TST-2 / GO-TST-1 | The corpus runs in PR CI. Provision the hosted Nightly's Actions secrets and variable and verify its first successful live OpenCode run. | Jim Freeman | 2026-12-22 | [PL-1584](https://linear.app/punt-labs/issue/PL-1584) |
-| TST-3 / GO-TST-1 | The audit latency budget deliberately omits the race flag to measure uninstrumented performance; keep the race companion and track the exception. | Jim Freeman | 2026-12-22 | [PL-1590](https://linear.app/punt-labs/issue/PL-1590) |
-| TST-3 / GO-TST-1 | Local hooks test working-tree sources, not isolated staged or pushed snapshots. Pre-commit selects direct changed packages and fixtures, not reverse dependents; module metadata changes select the tooling package. Snapshot testing needs a worktree strategy, and the full dependency matrix remains at pre-push and CI until a bounded impact selector is available. | Jim Freeman | 2026-12-22 | [PL-1587](https://linear.app/punt-labs/issue/PL-1587) |
 | TST-5 / GO-TST-3 | Coverage ratchet compares with a committed reference, not an equivalently measured exact merge base; replacing the gate needs matched base/head profiles. | Jim Freeman | 2026-12-22 | [PL-1583](https://linear.app/punt-labs/issue/PL-1583) |
 | TST-5 / GO-TST-3 | Extra subprocess, wire and release processes remain outside the installed-storage coverage report; instrumentation for those paths is independent work. | Jim Freeman | 2026-12-22 | [PL-1588](https://linear.app/punt-labs/issue/PL-1588) |
 | TST-6 / GO-TST-4 | Green Nightly on main and alert delivery: proved post-merge of [#671]. | Jim Freeman | — | — |

@@ -2,4 +2,4 @@
 set -euo pipefail
 
 make secret-scan-staged
-make test-changed
+bash scripts/test-timed.sh pre-commit 30 bash scripts/test-snapshot.sh staged make test-changed
