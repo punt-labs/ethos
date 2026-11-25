@@ -402,6 +402,27 @@ func TestHandoffSnapshotLeaseAndProof(t *testing.T) {
 	require.Equal(t, 7, strings.Count(logs.String(), "outcome=launched"))
 }
 
+func TestHandoffReadOnlyStopTracksIgnoredSnapshotInputs(t *testing.T) {
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, ".gitignore"), "verdict\n")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	checkPolicy(t, root, "project", "  - name: snapshot-check\n    stage: handoff\n    files: all\n    run: [/bin/sh, -c, 'exit 1']\n    snapshot: {profile: linux-shell-v1, inputs: [verdict], epoch: v1}\n")
+	input := filepath.Join(root, "verdict")
+	writeFile(t, input, "pass\n")
+	start, err := handoffState(root, "worker")
+	require.NoError(t, err)
+	state, err := checkoutState(root)
+	require.NoError(t, err)
+	writeFile(t, input, "fail\n")
+	current, err := checkoutState(root)
+	require.NoError(t, err)
+	require.Equal(t, state, current)
+	after, err := handoffState(root, "worker")
+	require.NoError(t, err)
+	require.NotEqual(t, start, after)
+}
+
 func TestHandoffSnapshotRejectsChangedInputs(t *testing.T) {
 	root, _ := postEditFixture(t)
 	inputs := []string{"README"}

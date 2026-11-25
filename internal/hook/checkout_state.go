@@ -65,7 +65,23 @@ func handoffState(checkout, agent string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(append(append(policy, 0), state...))
+	var inputs []string
+	for _, check := range checks {
+		if check.Snapshot != nil {
+			inputs = append(inputs, check.Snapshot.Inputs...)
+		}
+	}
+	key := append(append(policy, 0), state...)
+	if len(inputs) != 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), gateInputTime)
+		defer cancel()
+		proof, err := digestGateInputs(ctx, checkout, "", inputs)
+		if err != nil {
+			return "", err
+		}
+		key = append(append(key, 0), proof...)
+	}
+	sum := sha256.Sum256(key)
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
