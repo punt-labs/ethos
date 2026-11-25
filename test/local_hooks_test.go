@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -305,10 +306,8 @@ func TestChangedPackagesDirectDoesNotScanSecrets(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(filepath.Join(dir, path), data, 0o700))
 	}
-	version, err := run(dir, "go", "env", "GOVERSION")
-	require.NoError(t, err, "%s", version)
 	const module = "module example.test/changed\n\ngo 1.26\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(module+"\ntoolchain "+strings.TrimSpace(string(version))+"\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(module+"\ntoolchain "+runtime.Version()+"\n"), 0o600))
 	for _, args := range [][]string{{"init", "-q", "--template="}, {"add", "."}, {"commit", "-qm", "fixture"}} {
 		out, err := run(dir, "git", args...)
 		require.NoError(t, err, "%s", out)
