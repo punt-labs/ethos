@@ -89,9 +89,15 @@ Key preparation, admission, all invocations, process-tree cleanup and
 feedback spend from that same deadline. Reserve the final 10 seconds of the
 internal budget for cleanup and feedback; do not start an invocation if
 that reserve would be consumed. Cap each command by its configured timeout
-and the remaining execution time. If cleanup cannot finish before feedback
-is due, retain the slot under coordinator ownership and report the
-interrupted outcome before the harness cutoff, never a pass.
+and the remaining execution time. If the shared deadline cuts a check
+short, report a timeout as deferred, without caching it as pass or
+failure, even if cleanup finishes on time. The same key is eligible on a
+later stop once cleanup has released its slot. The current `runEditCheck`
+formats a deadline expiry as failure text; the handoff runner must keep
+the timeout status separate from that display text and distinguish the
+shared deadline from a completed failing command. If cleanup cannot
+finish before feedback is due, retain the slot under coordinator
+ownership and report the interrupted outcome before the harness cutoff.
 
 Within the execution portion of that deadline, use a single wait budget of
 at most 10 seconds for a running owner, a free slot or load to drop. Sample
