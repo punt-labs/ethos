@@ -28,7 +28,7 @@ while IFS= read -r -d '' path; do
     go.mod|go.sum)
       all=1
       ;;
-    Makefile|.githooks/*|scripts/install-dev-hooks.py|scripts/test-changed.sh|scripts/test-timed.sh|scripts/test-snapshot.sh|scripts/test-quarantine.py|tests/quarantine.tsv)
+    Makefile|.githooks/*|scripts/install-dev-hooks.py|scripts/test-changed.sh|scripts/test-timed.sh|scripts/test-snapshot.sh|scripts/test-kind.py|scripts/test-quarantine.py|tests/go-subprocess-tests.txt|tests/quarantine.tsv)
       requested+=(test)
       ;;
   esac

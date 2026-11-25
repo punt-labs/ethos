@@ -135,11 +135,13 @@ test-subprocess-fast: ## Exercise dormant and unresolvable Git hook entry points
 	go test -race -count=1 -run '^TestHooks(DormantRepositoryRunsNoProbe|FailLoudWhenRevParseFails)$$' ./plugin/hooks
 
 .PHONY: test-unit test-subprocess test-performance test-live test-agent test-nightly test-release-candidate test-post-release test-quarantine test-quarantine-run
-test-unit: ## Run an in-process sample of data-handling contracts
-	go test -race -count=1 ./internal/redact
+TEST_KIND_ARGS ?= ./...
 
-test-subprocess: ## Run release smoke fixtures and the Git hook subprocess suite
-	go test -race -count=1 ./test ./plugin/hooks
+test-unit: ## Run default Go tests that do not launch a real subprocess
+	python3 scripts/test-kind.py unit -race -count=1 -timeout 30m -p $(TEST_PARALLEL) $(TEST_KIND_ARGS)
+
+test-subprocess: ## Run default Go tests that launch real local subprocesses
+	python3 scripts/test-kind.py subprocess -race -count=1 -timeout 30m -p $(TEST_PARALLEL) $(TEST_KIND_ARGS)
 
 test-performance: ## Report race-instrumented long-session redaction timing
 	go test -race -count=1 -run '^TestRedactLiveLongSessionBudget$$' -v ./internal/hook

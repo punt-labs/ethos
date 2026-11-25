@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Opt-in Git test hooks, selectable testing tiers, and a quarantine inventory
   with owner and expiry checks. See [TESTING.md](TESTING.md).
 
+### Changed
+
+- Development Git hooks test the staged index or pushed commit in isolated
+  worktrees. Pre-commit includes reverse dependents of affected packages.
+- The Go unit and subprocess selectors split mixed packages, and CI runs an
+  audit redaction race check separately from its latency measurement.
+
 ## [5.2.2] - 2026-11-24
 
 ### Changed
