@@ -205,6 +205,10 @@ exact merge base with `COVERAGE_BASE` (default `origin/main`) using the same
 Go toolchain, race flags and package selection. CI combines separately
 sharded profiles for the PR merge result, head and exact merge base. A
 push to main compares the sharded main profile with its first parent's.
+For the known legacy archival trace decoder, the CI base shard uses the
+corrected test-only decoder to avoid rejecting valid split syscall records.
+It still runs the archival placement test and measures the exact base's
+production code.
 
 Package coverage may drop by at most 0.1 percentage point; overall coverage
 must not drop. The independent 81.0% `internal/autorepair` floor remains.

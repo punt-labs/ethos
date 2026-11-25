@@ -80,6 +80,10 @@ jobs:
           export GOTOOLCHAIN="$toolchain"
           selector=$RUNNER_TEMP/test-shard.sh
           cp scripts/test-shard.sh "$selector"
+          observer=plugin/hooks/archival_trace_assertions_test.go
+          if [[ "$SNAPSHOT" == base && "$SHARD" == git ]]; then
+            cp "$observer" "$RUNNER_TEMP/archival_trace_assertions_test.go"
+          fi
           case "$SNAPSHOT" in
             candidate) ;;
             head) git checkout --detach "${PR_HEAD:?missing PR head SHA}" ;;
@@ -93,6 +97,11 @@ jobs:
               ;;
             *) exit 1 ;;
           esac
+          # Replace only the known legacy test decoder; production code stays at the exact base.
+          if [[ "$SNAPSHOT" == base && "$SHARD" == git && -f "$observer" ]] &&
+             [[ "$(git hash-object -- "$observer")" == 8e368c5948b336311cde1332de81e6243f5db0dd ]]; then
+            cp "$RUNNER_TEMP/archival_trace_assertions_test.go" "$observer"
+          fi
           packages=$(bash "$selector" "$SHARD")
           mapfile -t selected <<< "$packages"
           go test -race -count=1 -timeout 30m -p 2 -coverprofile=coverage.out "${selected[@]}"
