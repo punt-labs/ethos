@@ -292,6 +292,36 @@ func TestChangedPackagesFindsTestsImportingMovedPackage(t *testing.T) {
 	require.Contains(t, string(out), "no required module provides package example.test/move/old")
 }
 
+func TestChangedPackagesDirectDoesNotScanSecrets(t *testing.T) {
+	fixture, run := developmentHookFixture(t)
+	dir := filepath.Join(fixture, "repo")
+	require.NoError(t, os.Mkdir(dir, 0o700))
+	for _, subdir := range []string{"scripts", ".githooks", "docs"} {
+		require.NoError(t, os.Mkdir(filepath.Join(dir, subdir), 0o700))
+	}
+	for _, path := range []string{"scripts/test-snapshot.sh", "scripts/test-changed.sh", "scripts/test-timed.sh", ".githooks/pre-commit", "Makefile"} {
+		data, err := os.ReadFile(filepath.Join("..", path))
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, path), data, 0o700))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.test/changed\n\ngo 1.26\n"), 0o600))
+	for _, args := range [][]string{{"init", "-q", "--template="}, {"add", "."}, {"commit", "-qm", "fixture"}} {
+		out, err := run(dir, "git", args...)
+		require.NoError(t, err, "%s", out)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "changed.go"), []byte("package changed\n"), 0o600))
+	out, err := run(dir, "git", "add", "changed.go")
+	require.NoError(t, err, "%s", out)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "changed.go"), []byte("not staged\n"), 0o600))
+
+	out, err = run(dir, "make", "secret-scan-staged", "GITLEAKS=false")
+	require.Error(t, err, "%s", out)
+	out, err = run(dir, "make", "test-changed", "GITLEAKS=false")
+	require.NoError(t, err, "%s", out)
+	require.Contains(t, string(out), "example.test/changed")
+	require.NotContains(t, string(out), "secret-scan-staged")
+}
+
 func TestDevelopmentLiveRequiresKey(t *testing.T) {
 	cmd := exec.CommandContext(t.Context(), "env", "-u", "ANTHROPIC_API_KEY", "make", "test-live")
 	cmd.Dir = ".."
