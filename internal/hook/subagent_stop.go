@@ -101,6 +101,11 @@ func handoffFilesWithAdvice(checkout, sessionID, agentID string, advice func(str
 	if err != nil {
 		return nil, err
 	}
+	type auditPath struct {
+		file string
+		own  bool
+	}
+	seenAuditPaths := map[auditPath]bool{}
 	seen := map[string]bool{}
 	files := map[string][]string{}
 	otherWriters := map[string]bool{}
@@ -116,13 +121,19 @@ func handoffFilesWithAdvice(checkout, sessionID, agentID string, advice func(str
 			fallbackUncertain = true
 			continue
 		}
+		own := entry.AgentID == agentID
+		key := auditPath{file: file, own: own}
+		if seenAuditPaths[key] {
+			continue
+		}
+		seenAuditPaths[key] = true
 		file, err = mission.ExpandPath(file, checkout)
 		if err != nil {
 			fallbackUncertain = true
 			continue
 		}
 		scope := postEditScope
-		if entry.AgentID != agentID {
+		if !own {
 			scope = postEditRoot
 		}
 		root, physical, err := scope(checkout, file)
@@ -133,7 +144,7 @@ func handoffFilesWithAdvice(checkout, sessionID, agentID string, advice func(str
 		if root == "" {
 			continue
 		}
-		if entry.AgentID != agentID {
+		if !own {
 			otherWriters[root] = true
 			otherPaths[physical] = true
 			continue

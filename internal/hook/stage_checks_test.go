@@ -259,6 +259,38 @@ func TestHandoffConcurrentAgents(t *testing.T) {
 	}
 }
 
+func TestHandoffRepeatedAuditPaths(t *testing.T) {
+	root, bin := postEditFixture(t)
+	git := filepath.Join(bin, "git")
+	require.NoError(t, os.Rename(git, filepath.Join(bin, "real-git")))
+	log := filepath.Join(t.TempDir(), "lookups")
+	t.Setenv("LOOKUP_LOG", log)
+	dir := filepath.Join(root, "src")
+	t.Setenv("LOOKUP_DIR", dir)
+	postEditTool(t, bin, "git", `if [ "$1" = -C ] && [ "$2" = "$LOOKUP_DIR" ] && [ "$3" = rev-parse ]; then printf 'lookup\n' >> "$LOOKUP_LOG"; fi
+exec "${0%/*}/real-git" "$@"
+`)
+	writeFile(t, filepath.Join(dir, "file.go"), "package example\n")
+	var entries []auditEntry
+	for i := range 6 {
+		agent := "other"
+		if i%2 != 0 {
+			agent = "sub"
+		}
+		entries = append(entries, auditEntry{
+			Ts: fmt.Sprintf("2026-11-22T10:00:0%dZ", i), Session: "repeated", AgentID: agent,
+			Tool: "Edit", ToolInput: map[string]any{"file_path": "<repo>/src/file.go"}, PathFormat: auditPathFormat,
+		})
+	}
+	writeRepoTreeSession(t, root, "2026-11-22", "repeated", entries)
+	files, err := handoffFiles(root, "repeated", "sub")
+	require.NoError(t, err)
+	require.Equal(t, map[string][]string{root: {filepath.Join("src", "file.go")}}, files)
+	lookups, err := os.ReadFile(log)
+	require.NoError(t, err)
+	require.Equal(t, "lookup\nlookup\n", string(lookups))
+}
+
 func TestHandoffVanishedPaths(t *testing.T) {
 	for _, agent := range []string{"sub", "other", ""} {
 		for _, parentGone := range []bool{false, true} {

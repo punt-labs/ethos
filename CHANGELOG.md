@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worktrees. Pre-commit includes reverse dependents of affected packages.
 - The Go unit and subprocess selectors split mixed packages, and CI runs an
   audit redaction race check separately from its latency measurement.
+- Subagent handoff resolves repeated audited edit paths only once per
+  attribution class, reducing stop latency in long editing sessions.
 
 ## [5.2.2] - 2026-11-24
 
