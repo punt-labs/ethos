@@ -24,6 +24,7 @@ budget:
 	require.Equal(t, "implement", f.MissionShow(t, id)["type"])
 	require.Empty(t, f.MissionResults(t, id))
 	base := f.CommitMissionFixture(t, id)
+	before := f.snapshotIgnoredFiles(t)
 
 	result := filepath.Join(f.Root, "result.yaml")
 	writeFile(t, result, "mission: "+id+"\n"+`round: 1
@@ -41,6 +42,7 @@ evidence:
 	require.Len(t, results, 1)
 	require.Equal(t, "pass", results[0]["verdict"])
 	require.Equal(t, []string{missionResultPath(id)}, f.GitDiffFiles(t, base))
+	require.Equal(t, []string{missionResultPath(id)}, f.writeSetChangedFiles(t, base, before))
 
 	f.Reflect(t, id, "mission: "+id+"\n"+`round: 1
 author: test-leader
@@ -59,7 +61,9 @@ recommendation: continue
 func TestFixtureMCPStartupKeepsWorktreeClean(t *testing.T) {
 	f := SetupFixture(t)
 	base := f.GitHead(t)
+	before := f.snapshotIgnoredFiles(t)
 	_, stderr, err := f.runEthos(t, "serve")
 	require.NoError(t, err, stderr)
 	require.Empty(t, f.GitDiffFiles(t, base))
+	require.Empty(t, f.writeSetChangedFiles(t, base, before))
 }
