@@ -108,13 +108,20 @@ created ancestors. If any step fails, stop before mutating history. An
 absent, invalid or otherwise uncertain floor requires the full verified
 read. Test a host crash at each sync boundary: recovery must see either
 unchanged history or an invalidated floor, never new history with an old
-floor accepted as current. Git can
-also replace published inputs at the same checkout path; a path match alone
-does not establish that the verified checkout context still applies.
-If a supported input change cannot be tracked safely, keep the verified path
-for that case. The fast path is flat in historical size when its prerequisites
-are met, not a promise that cold starts, reconciliation, or all appends are
-flat.
+floor accepted as current.
+
+`StreamDirs` discovers published inputs from the actual working trees of
+both the canonical store and the invoking checkout. `git restore`, a
+same-HEAD checkout, or a direct write can change these inputs without
+changing HEAD or either path. For the initial design, take the fast path
+only when both published `sessions/` directories are absent or empty.
+Check actual directories on every append; presence of any entry or
+uncertainty takes the full verified path, even if the files might belong
+to another session. Do not use recording mode, HEAD or file metadata as
+a substitute. Test that published history restored at the same HEAD
+forces a full read and contributes its verified timestamp floor.
+This limits the flat path to local-only audit history for now, not all
+recording modes or all repositories.
 
 ### Seal, reads and recovery
 
