@@ -16,6 +16,8 @@ from urllib.parse import urlencode
 from opencode import (
     ASTRA,
     COMMANDS,
+    NIGHTLY_BUILD,
+    NIGHTLY_ROSTER,
     NON_GO,
     ROSTER,
     SERVERS,
@@ -34,8 +36,9 @@ from opencode import (
 
 
 class API:
-    def __init__(self, root):
+    def __init__(self, root, *, nightly=False):
         self.root = root.resolve()
+        self.build, self.roster = (NIGHTLY_BUILD, NIGHTLY_ROSTER) if nightly else (ASTRA, ROSTER)
 
     def run(self, args, timeout=180):
         scratch = self.root / ".tmp/opencode"
@@ -94,7 +97,7 @@ class API:
             query["cursor"] = cursor
 
     def create(self, title, permissions=None):
-        body = {"title": title, "agent": "build", "model": model_ref(ASTRA),
+        body = {"title": title, "agent": "build", "model": model_ref(self.build),
                 "location": {"directory": str(self.root)}}
         if permissions is not None:
             body["permissions"] = permissions
@@ -104,12 +107,12 @@ class API:
         self.call("post", f"/api/session/{session}/prompt", {"text": text})
         self.call("post", f"/api/experimental/session/{session}/wait")
         info = self.call("get", f"/api/session/{session}")["data"]
-        require(info.get("outcome") == "succeeded" and info.get("model") == model_ref(ASTRA),
+        require(info.get("outcome") == "succeeded" and info.get("model") == model_ref(self.build),
                 f"session {session}: smoke parent did not succeed on Astra/high")
         messages = self.pages(f"/api/session/{session}/message")
         for message in messages:
             if message.get("type") == "assistant":
-                require(message.get("model") == model_ref(ASTRA) and message.get("agent") == "build",
+                require(message.get("model") == model_ref(self.build) and message.get("agent") == "build",
                         f"session {session}: parent assistant identity/model mismatch")
                 require(not message.get("error"), f"session {session}: parent assistant reported an error")
         return messages
@@ -358,14 +361,15 @@ def resolved_permissions(name, rules, config):
              f"{name}: live effective permission structure/exceptions differ")
 
 
-def runtime_config(entries):
+def runtime_config(entries, build=ASTRA):
     """Project only safe fields in memory. Never serialize merged configuration."""
     default, reasoning, fmt = None, None, {}
+    model = model_ref(build)
     for entry in entries:
         info = entry.get("info", {})
         default = info.get("model", default)
-        reasoning = (info.get("providers", {}).get("bifrost", {}).get("models", {})
-                     .get("openai/gpt-6-astra", {}).get("settings", {}).get("reasoningEffort", reasoning))
+        reasoning = (info.get("providers", {}).get(model["providerID"], {}).get("models", {})
+                     .get(model["id"], {}).get("settings", {}).get("reasoningEffort", reasoning))
         setting = info.get("formatter")
         if setting is False:
             fmt = {}
@@ -405,13 +409,13 @@ def connected_servers(api, budget=180):
         time.sleep(2)
 
 
-def doctor(root):
-    config = check(root)
-    api = API(root)
+def doctor(root, *, nightly=False):
+    config = check(root, nightly=nightly)
+    api = API(root, nightly=nightly)
     version = api.call("get", "/api/info")["version"]
     require(version == "2.2.5", "live helper targets OpenCode 2.2.5; review API/built-ins before upgrading gate")
     agents = {a["id"]: a for a in api.location("/api/agent")["data"]}
-    for name, selector in dict(ROSTER, build=ASTRA).items():
+    for name, selector in dict(api.roster, build=api.build).items():
         require(name in agents and agents[name].get("model") == model_ref(selector),
                 f"{name}: live model/variant differs; reload and verify location")
         require(agents[name]["mode"] == ("primary" if name == "build" else "subagent"),
@@ -424,20 +428,20 @@ def doctor(root):
             require(agents[name].get("system", "").strip() == body.strip(),
                     f"{name}: live prompt differs; inspect duplicate definition sources")
     models = {(m["providerID"], m["id"]): m for m in api.location("/api/model")["data"]}
-    for selector in set(ROSTER.values()):
+    for selector in {api.build, *api.roster.values()}:
         ref = model_ref(selector)
         model = models.get((ref["providerID"], ref["id"]))
         require(model and model.get("enabled") and ref["variant"] in {v["id"] for v in model["variants"]},
                 "intended model/variant missing from live location catalog")
         variant = next(v for v in model["variants"] if v["id"] == ref["variant"])
         require(variant.get("settings", {}).get("reasoningEffort") == ref["variant"],
-                "live Bifrost variant reasoning differs from its pinned effort")
-        if selector == ASTRA:
+                "live variant reasoning differs from its pinned effort")
+        if selector == api.build:
             require(model.get("settings", {}).get("reasoningEffort") == "high",
                     "live catalog default Astra reasoning is not high")
-    default, reasoning, fmt = runtime_config(api.location("/api/config"))
-    expected = model_ref(ASTRA)
-    require(default in (ASTRA.split("#")[0], {"providerID": expected["providerID"], "model": expected["id"]},
+    default, reasoning, fmt = runtime_config(api.location("/api/config"), api.build)
+    expected = model_ref(api.build)
+    require(default in (api.build.split("#")[0], {"providerID": expected["providerID"], "model": expected["id"]},
                         {"providerID": expected["providerID"], "id": expected["id"]}),
             "live default model differs from project Astra")
     require(reasoning == "high", "live default reasoning is not high")
@@ -558,7 +562,7 @@ def child_evidence(api, parent, author, task):
     child = children[0]["id"]
     info = api.call("get", f"/api/session/{child}")["data"]
     messages = api.pages(f"/api/session/{child}/message")
-    artifact = result(info, messages, child, parent, task, 1, author)
+    artifact = result(info, messages, child, parent, task, 1, author, roster=api.roster)
     calls = tools(messages)
     required_read(calls, lambda args: args.get("path") == "go.mod", api.root / "go.mod", "child read go.mod")
     for tool in calls:
@@ -567,7 +571,7 @@ def child_evidence(api, parent, author, task):
     return child, artifact
 
 
-def smoke(root, stages=None):
+def smoke(root, stages=None, *, nightly=False):
     stages = list(SMOKE_STAGES if stages is None else stages)
     require(stages and len(set(stages)) == len(stages) and set(stages) <= set(SMOKE_STAGES),
             "smoke stages must be nonempty, known and unique")
@@ -610,9 +614,9 @@ def smoke(root, stages=None):
         baseline = tree_snapshot(root)
         (evidence / "source-before.json").write_text(json.dumps(baseline, indent=2) + "\n")
         stage("live doctor")
-        api = doctor(root)
+        api = doctor(root, nightly=nightly)
         # Each role's actual model/permissions must work, not just representatives.
-        for author in (ROSTER if "children" in selected else ()):
+        for author in (api.roster if "children" in selected else ()):
             stage("child " + author)
             task = "bootstrap-smoke-" + evidence.name + "-" + author
             parent = new_session(api, task, [{"action": "edit", "resource": "*", "effect": "deny"}])
@@ -626,7 +630,7 @@ def smoke(root, stages=None):
             dispatch_evidence(tools(messages), child)
             (evidence / f"{author}-result.md").write_text(artifact)
             receipt["checks"].append({"agent": author, "parent": parent, "child": child,
-                                      "model": ROSTER[author], "go_mod_read": True})
+                                      "model": api.roster[author], "go_mod_read": True})
             guard_sources()
             save()
         if "children" in selected:

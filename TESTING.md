@@ -59,9 +59,10 @@ pre-push main tip through the checked-out commit.
 
 The trusted `main` Nightly uses a GitHub-hosted Ubuntu runner and installs
 checksum-pinned OpenCode 2.2.5 and the [OpenCode setup] dependencies. Configure
-Actions secrets `BIFROST_VK` (a scoped key for the three pinned model routes)
-and `CONTEXT7_API_KEY`, plus the Actions variable `BIFROST_BASE_URL` (the
-runner-reachable HTTPS Responses API base URL ending in `/openai/v1`).
+Actions secrets `OPENAI_API_KEY` (with access to `gpt-6-astra`,
+`gpt-6.1-sol`, and `gpt-5.6-terra`) and `CONTEXT7_API_KEY`.
+The job uses OpenCode's native OpenAI provider; only the disposable Actions
+checkout switches model routes. Workstations still use Bifrost.
 Vox uses local eSpeak and Beadle uses a disposable loopback IMAP server;
 the other local MCP state is isolated as well. Missing live credentials fail
 the job and trigger the existing Nightly failure notification.
@@ -161,7 +162,7 @@ completed after the four PRs.
 | TST-1 / GO-TST-1 | Full pre-push took 654 s against a 180 s budget; optimizing and sharding the suite are outside the hook changes. | Jim Freeman | 2026-12-08 | [PL-1581](https://linear.app/punt-labs/issue/PL-1581) |
 | TST-1 / GO-TST-1 | PR/main exceed 10 min and wire/tool jobs are not required; tuning and branch ruleset changes need separate work. | Jim Freeman | 2026-12-08 | [PL-1591](https://linear.app/punt-labs/issue/PL-1591) |
 | TST-1 / TST-4 | The pinned scanner reports on PRs; add the `secret-scan` check to the main ruleset after it has reported success. | Jim Freeman | 2026-12-08 | [PL-1586](https://linear.app/punt-labs/issue/PL-1586) |
-| TST-2 / GO-TST-1 | The corpus runs in PR CI. Provision the hosted Nightly's Actions secrets and variable and verify its first successful live OpenCode run. | Jim Freeman | 2026-12-22 | [PL-1584](https://linear.app/punt-labs/issue/PL-1584) |
+| TST-2 / GO-TST-1 | The corpus runs in PR CI. Provision the hosted Nightly's `OPENAI_API_KEY` Actions secret and verify its first successful live OpenCode run. | Jim Freeman | 2026-12-22 | [PL-1584](https://linear.app/punt-labs/issue/PL-1584) |
 | TST-5 / GO-TST-3 | Coverage ratchet compares with a committed reference, not an equivalently measured exact merge base; replacing the gate needs matched base/head profiles. | Jim Freeman | 2026-12-22 | [PL-1583](https://linear.app/punt-labs/issue/PL-1583) |
 | TST-5 / GO-TST-3 | Extra subprocess, wire and release processes remain outside the installed-storage coverage report; instrumentation for those paths is independent work. | Jim Freeman | 2026-12-22 | [PL-1588](https://linear.app/punt-labs/issue/PL-1588) |
 | TST-6 / GO-TST-4 | Green Nightly on main and alert delivery: proved post-merge of [#671]. | Jim Freeman | — | — |
