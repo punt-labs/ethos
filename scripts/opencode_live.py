@@ -189,8 +189,9 @@ def required_read(calls, matches, path, description):
 
 
 DISCOVERY_SKILLS = ("ethos-prfaq", "ethos-punt-release", "ethos-zspec")
+RELEASE_HELP_COMMAND = "punt release run --help"
 DISCOVERY_COMMANDS = ("python3 scripts/opencode.py sources", "z-spec --help",
-                      "z-spec doctor", "punt release run --help")
+                      "z-spec doctor", RELEASE_HELP_COMMAND)
 DISCOVERY_ADAPTER_COMMANDS = tuple("python3 scripts/opencode.py sources " + kind
                                    for kind in ("prfaq", "release", "zspec")) + ("punt --help",)
 
@@ -199,7 +200,12 @@ def discovery_evidence(calls, root):
     for skill in DISCOVERY_SKILLS:
         required_calls(calls, "skill", lambda args: args.get("id") == skill, skill)
     for command in DISCOVERY_COMMANDS:
-        required_calls(calls, "shell", lambda args: args.get("command") == command, command)
+        states = required_calls(calls, "shell", lambda args: args.get("command") == command, command)
+        if command == RELEASE_HELP_COMMAND:
+            for state in states:
+                require(any(part.get("type") == "text" and re.search(
+                    r"(?m)^[ \t]*Usage:[ \t]+punt[ \t]+release[ \t]+run(?:[ \t]|\r?$)", part["text"])
+                    for part in state.get("content", [])), command + ": missing release run usage")
     # Adapters may repeat per-kind discovery/help after the full sources check.
     # Those exact harmless calls are allowed; if attempted, they must also pass.
     for command in DISCOVERY_ADAPTER_COMMANDS:
@@ -646,7 +652,7 @@ def smoke(root, stages=None):
                 "READ ONLY discovery, no release/model-check/compile/install/source writes. Load skills "
                 "ethos-prfaq, ethos-punt-release and ethos-zspec. Run python3 scripts/opencode.py sources, "
                 "read the returned prfaq SKILL.md, punt-kit auto SKILL.md and release.yaml. Run "
-                "z-spec --help, z-spec doctor (availability only) and punt release run --help. "
+                f"z-spec --help, z-spec doctor (availability only) and {RELEASE_HELP_COMMAND}. "
                 "Report sources and exit results. "
                 "Do not run the release playbook or repeat user discovery questions.")
             discovery_evidence(tools(discovery), root)

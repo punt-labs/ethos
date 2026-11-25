@@ -983,11 +983,18 @@ class LiveHelperTests(unittest.TestCase):
         calls += [{"name": "shell", "state": {"status": "completed", "input": {"command": command},
                                               "metadata": {"status": "completed", "exit": 0}}}
                   for command in live.DISCOVERY_COMMANDS]
+        release_help = next(call for call in calls if call["state"]["input"].get("command") == "punt release run --help")
+        release_help["state"]["content"] = [{"type": "text", "text": "Usage: punt release run [OPTIONS] [VERSION]"}]
         calls += [self.read_tool(path) for path in paths]
         self.assertIn("z-spec --help", live.DISCOVERY_COMMANDS)
         self.assertIn("punt release run --help", live.DISCOVERY_COMMANDS)
         with patch.object(live, "sources", return_value=paths):
             live.discovery_evidence(calls, oc.ROOT)
+            for output in ("Usage: punt release [OPTIONS] [version_arg]", "See punt release run --help", ""):
+                bad_help = copy.deepcopy(release_help)
+                bad_help["state"]["content"] = [{"type": "text", "text": output}]
+                with self.subTest(release_help=output), self.assertRaisesRegex(oc.CheckError, "release run usage"):
+                    live.discovery_evidence([bad_help, *calls], oc.ROOT)
             for index in range(len(calls) - len(paths), len(calls)):
                 for content in self.invalid_read_contents():
                     changed = copy.deepcopy(calls)
