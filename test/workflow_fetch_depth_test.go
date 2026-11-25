@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -124,6 +125,30 @@ func TestWorkflowsFetchFullHistoryWhenRunningTests(t *testing.T) {
 	for _, file := range files {
 		require.Empty(t, fetchDepthViolations(t, file))
 	}
+}
+
+func TestAuditLatencyWorkflowRunsBothModes(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "test.yml"))
+	require.NoError(t, err)
+	var wf workflowFile
+	require.NoError(t, yaml.Unmarshal(data, &wf))
+	var budget, companion bool
+	for _, step := range wf.Jobs["test-suite"].Steps {
+		if !strings.Contains(step.Run, "TestRedactLiveLongSessionBudget") {
+			continue
+		}
+		flags := strings.Fields(step.Run)
+		switch {
+		case slices.Contains(flags, "ETHOS_TEST_PERF_BUDGET=1"):
+			require.NotContains(t, flags, "-race")
+			budget = true
+		case slices.Contains(flags, "-race"):
+			require.NotContains(t, flags, "ETHOS_TEST_PERF_BUDGET=1")
+			companion = true
+		}
+	}
+	require.True(t, budget, "missing uninstrumented latency budget")
+	require.True(t, companion, "missing dedicated race companion")
 }
 
 // TestFetchDepthGuardScansYamlExtension proves the guard sees a .yaml workflow:

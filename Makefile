@@ -60,7 +60,7 @@ lint: ## Lint (golangci-lint + windows vet + shellcheck + ruff + mypy)
 	@test -x $(GOLANGCI_LINT) || { echo "golangci-lint not found at $(GOLANGCI_LINT) — run 'make tools' to install $(GOLANGCI_LINT_VERSION)"; exit 1; }
 	$(GOLANGCI_LINT) run ./...
 	GOOS=windows go vet ./... # the windows build, tests included: a unix-only helper or test file must carry its build tag
-	shellcheck plugin/hooks/*.sh install.sh .githooks/* scripts/test-changed.sh scripts/test-timed.sh scripts/smoke-release.sh
+	shellcheck plugin/hooks/*.sh install.sh .githooks/* scripts/test-changed.sh scripts/test-timed.sh scripts/test-snapshot.sh scripts/smoke-release.sh
 	cd tests/e2e && uv run ruff check .
 	cd tests/e2e && uv run ruff format --check .
 	cd tests/e2e && uv run mypy src/ tests/
@@ -124,20 +124,26 @@ hooks: ## Opt in to the repository's development Git hooks
 	python3 scripts/install-dev-hooks.py
 
 test-changed: ## Run default Go tests in packages affected by staged paths
-	bash scripts/test-timed.sh pre-commit 30 bash scripts/test-changed.sh
+	@if [ -n "$$ETHOS_STAGED_PATHS" ]; then \
+		bash scripts/test-changed.sh; \
+	else \
+		.githooks/pre-commit; \
+	fi
 
 test-push: ## Run the full default suite and a fast boundary check before pushing
-	bash scripts/test-timed.sh pre-push 180 $(MAKE) test test-subprocess-fast
+	$(if $(ETHOS_TEST_PUSH_SNAPSHOT),,bash scripts/test-timed.sh pre-push 180) $(MAKE) test test-subprocess-fast
 
 test-subprocess-fast: ## Exercise dormant and unresolvable Git hook entry points
 	go test -race -count=1 -run '^TestHooks(DormantRepositoryRunsNoProbe|FailLoudWhenRevParseFails)$$' ./plugin/hooks
 
 .PHONY: test-unit test-subprocess test-performance test-live test-agent test-nightly test-release-candidate test-post-release test-quarantine test-quarantine-run
-test-unit: ## Run an in-process sample of data-handling contracts
-	go test -race -count=1 ./internal/redact
+TEST_KIND_ARGS ?= ./...
 
-test-subprocess: ## Run release smoke fixtures and the Git hook subprocess suite
-	go test -race -count=1 ./test ./plugin/hooks
+test-unit: ## Run default Go tests that do not launch a real subprocess
+	python3 scripts/test-kind.py unit -race -count=1 -timeout 30m -p $(TEST_PARALLEL) $(TEST_KIND_ARGS)
+
+test-subprocess: ## Run default Go tests that launch real local subprocesses
+	python3 scripts/test-kind.py subprocess -race -count=1 -timeout 30m -p $(TEST_PARALLEL) $(TEST_KIND_ARGS)
 
 test-performance: ## Report race-instrumented long-session redaction timing
 	go test -race -count=1 -run '^TestRedactLiveLongSessionBudget$$' -v ./internal/hook

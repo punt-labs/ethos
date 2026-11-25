@@ -38,7 +38,7 @@ jobs:
           version: v2.13.1
 
       - name: ShellCheck
-        run: shellcheck plugin/hooks/*.sh install.sh .githooks/* scripts/test-changed.sh scripts/test-timed.sh scripts/smoke-release.sh
+        run: shellcheck plugin/hooks/*.sh install.sh .githooks/* scripts/test-changed.sh scripts/test-timed.sh scripts/test-snapshot.sh scripts/smoke-release.sh
 
       - name: Validate test quarantine inventory
         run: make test-quarantine
@@ -151,6 +151,10 @@ jobs:
       - name: Audit redaction performance budget
         if: ${{ !cancelled() }}
         run: ETHOS_TEST_PERF_BUDGET=1 go test -run TestRedactLiveLongSessionBudget -count=1 ./internal/hook/
+
+      - name: Audit redaction race companion
+        if: ${{ !cancelled() }}
+        run: go test -race -count=1 -run '^TestRedactLiveLongSessionBudget$' ./internal/hook/
 
   subprocess-coverage:
     runs-on: ubuntu-latest

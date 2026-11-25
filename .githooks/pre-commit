@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-make test-changed
+bash scripts/test-timed.sh pre-commit 30 bash scripts/test-snapshot.sh staged make test-changed
