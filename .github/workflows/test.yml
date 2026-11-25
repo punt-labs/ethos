@@ -40,7 +40,7 @@ jobs:
           version: v2.13.1
 
       - name: ShellCheck
-        run: shellcheck plugin/hooks/*.sh install.sh .githooks/* scripts/test-changed.sh scripts/test-timed.sh scripts/test-snapshot.sh
+        run: shellcheck plugin/hooks/*.sh install.sh .githooks/* scripts/test-changed.sh scripts/test-timed.sh scripts/test-snapshot.sh scripts/smoke-release.sh
 
       - name: Validate test quarantine inventory
         run: make test-quarantine

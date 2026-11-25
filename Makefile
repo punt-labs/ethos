@@ -60,7 +60,7 @@ lint: ## Lint (golangci-lint + windows vet + shellcheck + ruff + mypy)
 	@test -x $(GOLANGCI_LINT) || { echo "golangci-lint not found at $(GOLANGCI_LINT) — run 'make tools' to install $(GOLANGCI_LINT_VERSION)"; exit 1; }
 	$(GOLANGCI_LINT) run ./...
 	GOOS=windows go vet ./... # the windows build, tests included: a unix-only helper or test file must carry its build tag
-	shellcheck plugin/hooks/*.sh install.sh .githooks/* scripts/test-changed.sh scripts/test-timed.sh scripts/test-snapshot.sh
+	shellcheck plugin/hooks/*.sh install.sh .githooks/* scripts/test-changed.sh scripts/test-timed.sh scripts/test-snapshot.sh scripts/smoke-release.sh
 	cd tests/e2e && uv run ruff check .
 	cd tests/e2e && uv run ruff format --check .
 	cd tests/e2e && uv run mypy src/ tests/

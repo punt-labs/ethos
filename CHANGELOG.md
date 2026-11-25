@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Opt-in Git test hooks, selectable testing tiers, and a quarantine inventory
   with owner and expiry checks. See [TESTING.md](TESTING.md).
+- Release-candidate smoke now validates the plugin manifest (`claude plugin validate`),
+  exercises the installed binary over MCP stdio (`ethos serve`) and release-critical
+  plugin hooks, and runs the behavioral suite against the staged `ETHOS_BINARY`
+  on tag pushes (PL-1582).
+- Published-artifact smoke now exercises the marketplace plugin install
+  (`ethos@punt-labs`) alongside CLI, MCP, and hooks, and delivers a verified Biff
+  wall alert on failure with a `force-published-failure` drill input (PL-1592).
 
 ### Changed
 
