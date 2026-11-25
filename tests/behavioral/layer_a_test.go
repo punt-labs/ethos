@@ -165,6 +165,7 @@ budget:
 		"      status: pass\n" +
 		"Call the mission tool with method=result, mission_id set, and the full YAML in the result argument."
 
+	before := f.snapshotIgnoredFiles(t)
 	output, err := f.SpawnAgent(t, opts)
 	t.Logf("Agent output (first 2000 chars): %.2000s", output)
 	if err != nil {
@@ -172,7 +173,7 @@ budget:
 	}
 
 	// Check: did any files outside the write set change?
-	changedFiles := f.GitDiffFiles(t, baseRef)
+	changedFiles := f.writeSetChangedFiles(t, baseRef, before)
 	t.Logf("Changed files: %v", changedFiles)
 
 	writeSet := []string{"pkg/counter/counter.go", missionResultPath(missionID)}

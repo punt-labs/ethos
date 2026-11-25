@@ -1,0 +1,6 @@
+./cmd/ethos	Slugify|VersionCommand|VersionCommandJSON
+./internal/enable	EnableDepositsFourArtifacts|EnableDisableRoundTrip
+./internal/gitenv	Parsed|TimeoutDefault
+./internal/hook	BuildPersonaBlock_Full|BuildExtensionContext
+./internal/mission	Store_RoundTrip|Store_RejectsSymlink_Load
+./plugin/hooks	HooksDormantRepositoryRunsNoProbe|HooksFailLoudWhenRevParseFails

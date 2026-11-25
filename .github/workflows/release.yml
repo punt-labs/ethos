@@ -10,14 +10,21 @@ on:
       - go.mod
       - go.sum
       - install.sh
+      - plugin/**
       - scripts/smoke-release.sh
   workflow_dispatch:
+    inputs:
+      force-published-failure:
+        description: Deliberately fail published-smoke to test post-release Biff alert delivery
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   build:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.force-published-failure) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
@@ -101,11 +108,16 @@ jobs:
       matrix:
         runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-candidate
@@ -113,11 +125,75 @@ jobs:
       - name: Install and exercise the native candidate
         env:
           RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          ETHOS_SMOKE_REQUIRE_PLUGIN: '1'
         run: sh scripts/smoke-release.sh candidate "$RELEASE_VERSION" install.sh dist
 
+  candidate-coverage:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+      - name: Measure statement coverage of the native release companion
+        run: make coverage-release-companion
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-companion-statement-coverage-${{ matrix.runner }}
+          path: .tmp/statement-coverage/release-companion.out
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
+
+  candidate-behavioral:
+    needs: [build, candidate-smoke]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'punt-labs/ethos'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-candidate
+          path: dist
+      - name: Verify staged candidate binary
+        working-directory: dist
+        run: |
+          awk '$2 == "ethos-linux-amd64"' checksums.txt | sha256sum --strict --check -
+          chmod +x ethos-linux-amd64
+      - name: Run behavioral tests against the release candidate
+        env:
+          ETHOS_BINARY: ${{ github.workspace }}/dist/ethos-linux-amd64
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ETHOS_BEHAVIORAL_JUDGE_MODEL: ${{ vars.ETHOS_BEHAVIORAL_JUDGE_MODEL || 'claude-sonnet-4-6' }}
+        run: go test -race -count=1 -tags behavioral -timeout 20m -v ./tests/behavioral/
+
   publish:
-    needs: candidate-smoke
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [candidate-smoke, candidate-behavioral]
+    if: >-
+      ${{ always() && github.event_name == 'push' &&
+          startsWith(github.ref, 'refs/tags/v') &&
+          needs.candidate-smoke.result == 'success' &&
+          (needs.candidate-behavioral.result == 'success' ||
+           needs.candidate-behavioral.result == 'skipped') }}
     permissions:
       contents: write
     runs-on: ubuntu-latest
@@ -141,19 +217,81 @@ jobs:
 
   published-smoke:
     needs: publish
+    if: >-
+      ${{ always() &&
+          ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.publish.result == 'success') ||
+           (github.event_name == 'workflow_dispatch' && inputs.force-published-failure &&
+            github.repository == 'punt-labs/ethos' && github.ref == 'refs/heads/main')) }}
     strategy:
       fail-fast: false
       matrix:
         runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 2
+    timeout-minutes: 5
     steps:
+      - name: Fail deliberately for the post-release Biff alert drill
+        if: github.event_name == 'workflow_dispatch' && inputs.force-published-failure
+        run: |
+          echo "::error::Deliberate post-release smoke failure for the Biff alert drill"
+          exit 1
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-candidate
           path: dist
-      - name: Install and exercise the published GitHub Release binary
+      - name: Install and exercise the published GitHub Release binary and marketplace plugin
+        env:
+          ETHOS_SMOKE_REQUIRE_PLUGIN: '1'
         run: sh scripts/smoke-release.sh published "${GITHUB_REF_NAME#v}" install.sh dist
+
+  notify-post-release:
+    needs: published-smoke
+    if: >-
+      ${{ always() && github.repository == 'punt-labs/ethos' &&
+          (startsWith(github.ref, 'refs/tags/v') ||
+           (github.event_name == 'workflow_dispatch' && inputs.force-published-failure &&
+            github.ref == 'refs/heads/main')) &&
+          (needs.published-smoke.result == 'failure' || needs.published-smoke.result == 'cancelled') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .punt-labs/biff
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - name: Notify the Ethos release owner
+        env:
+          BIFF_RELAY_URL: ${{ vars.BIFF_RELAY_URL }}
+          BIFF_RELAY_TOKEN: ${{ secrets.BIFF_RELAY_TOKEN }}
+          BIFF_RELAY_TLS_HANDSHAKE_FIRST: ${{ vars.BIFF_RELAY_TLS_HANDSHAKE_FIRST }}
+          ALERT_DRILL: ${{ github.event_name == 'workflow_dispatch' && inputs.force-published-failure }}
+          SMOKE_RESULT: ${{ needs.published-smoke.result }}
+        run: |
+          : "${BIFF_RELAY_TOKEN:?BIFF_RELAY_TOKEN is required to deliver post-release alerts}"
+          biff=(uvx --from punt-biff==1.24.2 biff --user github-actions --json)
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}"
+          message="Post-release smoke ${SMOKE_RESULT} on Ethos (${GITHUB_REF_NAME}) — ${run_url}"
+          if [[ "$ALERT_DRILL" == true ]]; then
+            printf 'peers:\n  orgs: []\n  repos: []\n' > .punt-labs/biff/config.local.yaml
+            current=$("${biff[@]}" wall)
+            if ! jq -e '(.status == "inactive" and has("wall") and .wall == null)
+                        or (.text | strings | startswith("DRILL: Post-release smoke "))' <<< "$current" >/dev/null; then
+              echo "::error::Post-release drill cannot replace an active non-drill wall or verify that the wall is safe to replace"
+              exit 1
+            fi
+            message="DRILL: ${message}"
+          fi
+          "${biff[@]}" wall "$message" --duration 24h
+          current=$("${biff[@]}" wall)
+          if ! jq -e --arg message "$message" '.text == $message' <<< "$current" >/dev/null; then
+            echo "::error::Biff wall readback did not match the post-release notification"
+            exit 1
+          fi

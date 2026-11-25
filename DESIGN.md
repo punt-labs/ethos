@@ -6441,6 +6441,22 @@ record to make the teardown notice loud (spool-lite creep — the same
 write-only subsystem under another name; the teardown deferral is accepted as
 unannounced and post-hoc undetectable).
 
+## DES-087: Bounded session audit appends with full verification at seal (PROPOSED)
+
+**Context.** This proposed amendment to DES-058 addresses the repository
+PostToolUse hook. PR #688 reduced work per row but did not change the growth
+with stream size.
+
+**Proposal.** Bound routine appends to the live tail and a machine-local
+timestamp floor under the existing stream lock, initially only when both
+published session directories are absent or empty. Keep full-history
+validation in readers and at pre-commit/seal before archival or publication.
+This defers some corruption and conflict detection. No change to mission
+events or to the DES-079 publication contract is proposed.
+
+See [the design](docs/design-audit-tail-validation.md) for coverage, measured
+costs, recovery rules and the provenance tradeoff.
+
 ## DES-059: `ethos enable` / `disable` — mapping the tool-enable-disable standard (SETTLED)
 
 **Status**: Settled. Design ratified 2026-07-22 (bead `ethos-ik4j`, missions
@@ -14453,3 +14469,24 @@ a failing advisory test command does not block.
 back into generated files. Blocking defaults break deliberately red edit
 states. Trusting the edited worktree's config lets an edit change which
 commands the session executes.
+
+## DES-086: Safe-by-default handoff gate admission (PROPOSED)
+
+**Context.** PL-1627 reports repeated full-suite gates and destructive
+host load when replies from workers and reviewers share a checkout. DES-085
+defines check policy, but does not bound automatic machine load.
+
+**Proposal.** Keep project-defined checks and the existing read-only skip.
+Classify positively attributed non-workers at dispatch, key terminal results
+by verified checkout inputs and the resolved execution plan, for both passes
+and failures. Make concurrent requests reuse the owner's result. Require
+binary-owned host admission and resource limits; unclassified commands use
+the heavy profile. Admission, execution, cleanup and feedback share one
+deadline below the harness timeout. Report deferral separately from pass
+or failure.
+Preserve old hook transport and the kill switch. Emit visible hook output
+without blocking re-entry. No implementation is approved by this entry.
+
+See [Safe-by-default SubagentStop handoff gates](docs/design-safe-handoff-gates.md)
+for the measured spike, safety defaults, rejected alternatives and
+acceptance criteria.

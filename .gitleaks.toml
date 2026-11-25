@@ -1,0 +1,31 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic key literals in redaction tests"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['(?:^|/)internal/redact/round2_test\.go$']
+regexes = ['^(?:wJalrXUtnFEMI/K7MDENG|abcdef0123456789abcdef)$']
+
+[[allowlists]]
+description = "Synthetic token in the audit quarantine fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['(?:^|/)internal/hook/audit_redact_writers_test\.go$']
+regexes = ['^ghp_abcdefghij1234567890$']
+
+[[allowlists]]
+description = "Synthetic curl headers in audit and redaction tests"
+targetRules = ["curl-auth-header"]
+condition = "AND"
+paths = ['(?:^|/)internal/(?:hook/audit_guard_test|redact/round2_test)\.go$']
+regexTarget = "match"
+regexes = ['''^(?:curl", ")?curl -H '(?:Authorization: Bearer abcdefghijklmnop|X-API-Key: abcdef0123456789abcdef)'\s*$''']
+
+[[allowlists]]
+description = "Idempotency UUID in the API design example"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['(?:^|/)(?:internal/seed/)?sidecar/talents/api-design\.md$']
+regexes = ['^a1b2c3d4-e5f6-7890-abcd-ef1234567890$']

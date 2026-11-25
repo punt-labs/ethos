@@ -11,6 +11,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Opt-in Git test hooks, selectable testing tiers, and a quarantine inventory
   with owner and expiry checks. See [TESTING.md](TESTING.md).
+- Release-candidate smoke now validates the plugin manifest (`claude plugin validate`),
+  exercises the installed binary over MCP stdio (`ethos serve`) and release-critical
+  plugin hooks, and runs the behavioral suite against the staged `ETHOS_BINARY`
+  on tag pushes (PL-1582).
+- Published-artifact smoke now exercises the marketplace plugin install
+  (`ethos@punt-labs`) alongside CLI, MCP, and hooks, and delivers a verified Biff
+  wall alert on failure with a `force-published-failure` drill input (PL-1592).
+
+### Changed
+
+- Development Git hooks test the staged index or pushed commit in isolated
+  worktrees. Pre-commit includes reverse dependents of affected packages.
+- The Go unit and subprocess selectors split mixed packages, and CI runs an
+  audit redaction race check separately from its latency measurement.
+- Subagent handoff resolves repeated audited edit paths only once per
+  attribution class, reducing stop latency in long editing sessions.
+
+### Fixed
+
+- Nightly write-set checks detect changed ignored files outside Ethos runtime
+  paths. Nightly failure and cancellation notifications do not replace a
+  newer Nightly alert already on the Biff wall.
+- The Nightly behavioral judge requests a schema-constrained verdict and
+  rejects ambiguous, refused, or truncated responses.
+- The Nightly reviewer check distinguishes code examples in reports from
+  prohibited file changes.
 
 ## [5.2.2] - 2026-11-24
 

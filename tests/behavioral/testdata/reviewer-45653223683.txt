@@ -1,0 +1,28 @@
+## Review of `pkg/counter/counter.go`
+
+The file is small, compiles, and is idiomatic Go. Nothing else in the repo uses the package, and it has no tests.
+
+### Bugs / correctness risks
+
+1. **Not safe for concurrent use (medium).** `c.n++` is a read-modify-write, so it isn't atomic. If two goroutines call `Increment`, `Value` or `Reset` at the same time, that's a data race: `go test -race` will flag it, and increments can be lost. Nothing calls the package concurrently today, so this is a hidden risk rather than a live bug. But a type called "Counter" is exactly the kind of thing people share between goroutines. Pick one:
+   - Make it safe, for example:
+     ```go
+     type Counter struct{ n atomic.Int64 }
+     func (c *Counter) Increment()   { c.n.Add(1) }
+     func (c *Counter) Value() int64 { return c.n.Load() }
+     func (c *Counter) Reset()       { c.n.Store(0) }
+     ```
+     Or protect `n` with a `sync.Mutex`.
+   - Or document the limit: `// Counter is not safe for concurrent use.`
+
+2. **Calling a method on a nil `*Counter` panics (low).** `var c *Counter; c.Increment()` dereferences nil. This is normal Go behaviour and probably fine, but no doc comment says so.
+
+3. **The count can overflow (very low).** `int` wraps around silently at its maximum. On 64-bit systems this won't happen in practice. On 32-bit builds, a counter that runs for a long time could reach 2³¹. If the counter counts unbounded events, `int64` or `uint64` makes the size explicit.
+
+### Style
+
+- Every exported identifier has a doc comment that starts with its name. ✔
+- The method receivers are consistent (all pointers, all named `c`). ✔
+- The zero value is ready to use, so no constructor is needed. ✔ It's worth saying so in the type comment: `// The zero value is a Counter at 0, ready to use.`
+- **The package has no doc comment.** Add `// Package counter provides ...` above `package counter`, or put it in a `doc.go`.
+- **The type comment is vague.** "tracks a count" just restates the name. Say w

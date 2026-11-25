@@ -19,6 +19,11 @@ ROSTER = dict.fromkeys(
 )
 ROSTER.update(bwk="bifrost/openai/gpt-6.1-sol#high", qa="bifrost/openai/gpt-6.1-sol#high",
               researcher="bifrost/openai/gpt-5.6-terra#medium")
+NIGHTLY_BUILD = ASTRA.removeprefix("bifrost/")
+NIGHTLY_ROSTER = {name: selector.removeprefix("bifrost/") for name, selector in ROSTER.items()}
+NIGHTLY_PROVIDERS = {"openai": {"models": {
+    "gpt-6-astra": {"settings": {"reasoningEffort": "high"}}
+}}}
 # Documented V2.2.5 built-ins, not a claim about future OpenCode releases.
 NON_GO = {"mix", "oxfmt", "prettier", "biome", "zig", "clang-format", "ktlint", "ruff", "air", "uv", "rubocop",
           "standardrb", "htmlbeautifier", "dart", "ocamlformat", "terraform", "latexindent", "gleam",
@@ -166,23 +171,24 @@ def role_permissions(name):
                     permission("subagent", effect="deny")]
 
 
-def check(root=ROOT):
+def check(root=ROOT, *, nightly=False):
+    build, roster = (NIGHTLY_BUILD, NIGHTLY_ROSTER) if nightly else (ASTRA, ROSTER)
     config = load_json((root / "opencode.json").read_text())
     require(set(config) == {"$schema", "model", "default_agent", "providers", "instructions",
                             "agents", "commands", "permissions", "lsp", "formatter", "mcp"},
             "unexpected/missing root config keys")
     require(config["$schema"] == "https://opencode.ai/config.json", "missing published schema")
-    require(config["model"] == ASTRA.split("#")[0] and config["default_agent"] == "build",
-            "default leader must be Bifrost Astra/build")
+    require(config["model"] == build.split("#")[0] and config["default_agent"] == "build",
+            "default leader differs from the pinned Astra/build route")
     # Sol limits are conservative project budgets, not claimed gateway maxima.
     # Credentials, endpoint and Responses package come from the existing provider.
-    require(config["providers"] == {"bifrost": {"models": {
+    providers = NIGHTLY_PROVIDERS if nightly else {"bifrost": {"models": {
         "openai/gpt-6-astra": {"settings": {"reasoningEffort": "high"}},
         "openai/gpt-6.1-sol": {"name": "openai/gpt-6.1-sol",
                               "limit": {"context": 200000, "output": 32000},
-                              "variants": [{"id": "high", "settings": {"reasoningEffort": "high"}}]}}}},
-        "Bifrost model-only overrides/default reasoning differ")
-    require(config["agents"] == {"build": {"model": ASTRA}}, "unexpected agent override")
+                              "variants": [{"id": "high", "settings": {"reasoningEffort": "high"}}]}}}}
+    require(config["providers"] == providers, "model-only overrides/default reasoning differ")
+    require(config["agents"] == {"build": {"model": build}}, "unexpected agent override")
     require(config["instructions"] == ["docs/opencode-workflow.md"], "keep native instructions focused")
     require((root / config["instructions"][0]).is_file(), "missing workflow instructions")
     require(not list((root / ".opencode").glob("opencode.json*")), "duplicate project config source")
@@ -219,12 +225,12 @@ def check(root=ROOT):
             "Context7 must use the environment-reference Bearer header")
 
     files = list((root / ".opencode/agents").glob("*.md"))
-    require({p.stem for p in files} == set(ROSTER), "specialist roster differs")
+    require({p.stem for p in files} == set(roster), "specialist roster differs")
     for path in files:
         info, body = frontmatter(path)
         require(set(info) == {"description", "mode", "model", "permissions"},
                 f"{path.stem}: use compact native V2 agent fields, no name/variant/steps")
-        require(info["mode"] == "subagent" and info["model"] == ROSTER[path.stem],
+        require(info["mode"] == "subagent" and info["model"] == roster[path.stem],
                 f"{path.stem}: wrong mode/model/variant")
         require(info["description"], f"{path.stem}: missing description")
         validate_rules(info["permissions"])
@@ -265,7 +271,7 @@ def check(root=ROOT):
         commands.append((name, info, body))
     for name, info, body in commands:
         require(set(info) == {"description", "agent", "model"} and info["agent"] == "build"
-                and info["model"] == ASTRA, "command must pin build/Astra high")
+                and info["model"] == build, "command must pin build/Astra high")
         require(isinstance(body, str) and body.strip() and info["description"], "empty command prompt/description")
         adapter = {"punt:auto": "ethos-punt-release", "opencode-check.md": "ethos-opencode-check",
                    "prfaq.md": "ethos-prfaq", "zspec.md": "ethos-zspec", "review.md": "ethos-qodo-review"}[name]
@@ -290,6 +296,24 @@ def check(root=ROOT):
             require(all(line.rstrip() == line for line in text.splitlines()),
                     f"{path.name}: trailing whitespace")
     return config
+
+
+def prepare_nightly(root):
+    """Switch model pins in the disposable Actions checkout before starting OpenCode."""
+    config = check(root)
+    config["model"] = NIGHTLY_BUILD.split("#")[0]
+    config["providers"] = NIGHTLY_PROVIDERS
+    config["agents"]["build"]["model"] = NIGHTLY_BUILD
+    config["commands"]["punt:auto"]["model"] = NIGHTLY_BUILD
+    (root / "opencode.json").write_text(json.dumps(config, indent=2) + "\n")
+    for name, selector in NIGHTLY_ROSTER.items():
+        path = root / f".opencode/agents/{name}.md"
+        before, metadata, body = path.read_text().split("---\n", 2)
+        path.write_text("---\n".join((before, metadata.replace(ROSTER[name], selector), body)))
+    for path in (root / ".opencode/commands").glob("*.md"):
+        before, metadata, body = path.read_text().split("---\n", 2)
+        path.write_text("---\n".join((before, metadata.replace(ASTRA, NIGHTLY_BUILD), body)))
+    check(root, nightly=True)
 
 
 def canonical_checkout(root):
@@ -328,14 +352,14 @@ def model_ref(selector):
     return dict(providerID=provider, id=model, **({"variant": variant} if separator else {}))
 
 
-def result(info, messages, child, parent, task, round_number, author, expected_model=None):
+def result(info, messages, child, parent, task, round_number, author, expected_model=None, *, roster=ROSTER):
     require(info.get("id") == child and info.get("parentID") == parent and info.get("agent") == author,
             "result session/parent/author identity mismatch")
     require(info.get("outcome") == "succeeded", "result session did not succeed")
     require(round_number > 0 and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]*", task),
             "invalid task ID or round")
     require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", author), "invalid result author ID")
-    pinned_model = ROSTER.get(author)
+    pinned_model = roster.get(author)
     require(not pinned_model or expected_model in (None, pinned_model),
             "explicit --model cannot override a configured author's pinned model")
     expected_model = pinned_model or expected_model
@@ -377,7 +401,9 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("check", "doctor"):
         sub.add_parser(name)
+    sub.add_parser("prepare-nightly")
     smoke_parser = sub.add_parser("smoke")
+    smoke_parser.add_argument("--nightly", action="store_true", help="Verify the hosted OpenAI roster")
     smoke_parser.add_argument("--stage", action="append", choices=SMOKE_STAGES,
                               help="Run only selected stages (repeatable); default: all stages")
     source = sub.add_parser("sources")
@@ -395,6 +421,8 @@ def main():
     elif args.command == "check":
         check()
         print("OpenCode offline configuration and Python syntax/whitespace checks passed")
+    elif args.command == "prepare-nightly":
+        prepare_nightly(ROOT)
     else:
         # A script entry point and imported module must share exception identity.
         sys.modules.setdefault("opencode", sys.modules[__name__])
@@ -410,6 +438,8 @@ def main():
             print(f"validated {args.task} round {args.round} author {args.author} -> {output}")
         elif args.command == "doctor":
             doctor(ROOT)
+        elif args.nightly:
+            smoke(ROOT, args.stage, nightly=True)
         else:
             smoke(ROOT, args.stage)
 
