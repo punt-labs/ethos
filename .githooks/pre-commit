@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-bash scripts/test-timed.sh pre-commit 30 bash scripts/test-snapshot.sh staged make test-changed
+bash scripts/test-timed.sh pre-commit 30 bash -c '
+  make secret-scan-staged && bash scripts/test-snapshot.sh staged make test-changed
+'

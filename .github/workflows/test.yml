@@ -12,6 +12,41 @@ permissions:
   contents: read
 
 jobs:
+  secret-scan:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+      - name: Scan introduced Git commits for secrets
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            BASE_SHA=$(git rev-parse HEAD^)
+          fi
+          make secret-scan-history GITLEAKS_LOG_OPTS="$BASE_SHA..HEAD"
+
+  legacy-corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+      - name: Regenerate and validate the legacy corpus
+        run: make test-legacy-corpus
+
   test-suite:
     runs-on: ubuntu-latest
     # A PR can need three race runs: merge result, head, and merge base.
@@ -210,18 +245,19 @@ jobs:
           retention-days: 7
 
   test:
-    needs: [test-suite, installed-smoke]
+    needs: [test-suite, installed-smoke, legacy-corpus]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - name: Require the test suite and both installed smoke legs
+      - name: Require the test suite, both installed smoke legs and the legacy corpus
         env:
           SUITE_RESULT: ${{ needs.test-suite.result }}
           INSTALLED_RESULT: ${{ needs.installed-smoke.result }}
+          CORPUS_RESULT: ${{ needs.legacy-corpus.result }}
         run: |
-          printf 'Test suite: %s; installed smoke: %s\n' "$SUITE_RESULT" "$INSTALLED_RESULT"
-          test "$SUITE_RESULT" = success && test "$INSTALLED_RESULT" = success
+          printf 'Test suite: %s; installed smoke: %s; legacy corpus: %s\n' "$SUITE_RESULT" "$INSTALLED_RESULT" "$CORPUS_RESULT"
+          test "$SUITE_RESULT" = success && test "$INSTALLED_RESULT" = success && test "$CORPUS_RESULT" = success
 
   verify-tools:
     # Exercises `make tools` against the REAL golangci-lint release -- no
