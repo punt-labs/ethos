@@ -12,6 +12,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/enable"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,7 +21,7 @@ import (
 func buildValidateContent(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "validate-content")
-	cmd := exec.Command("go", "build", "-o", bin, ".")
+	cmd := exec.Command("go", testhelpers.CoverBuild("-o", bin, ".")...)
 	out, err := cmd.CombinedOutput()
 	require.NoErrorf(t, err, "building validate-content: %s", out)
 	return bin
@@ -70,6 +71,7 @@ func runValidateContent(t *testing.T, bin, repoRoot, ethosRoot, globalRoot strin
 	t.Helper()
 	cmd := exec.Command(bin, "-ethos-root", ethosRoot, "-global-root", globalRoot)
 	cmd.Dir = repoRoot
+	cmd.Env = testhelpers.CoverEnv(nil)
 	out, runErr := cmd.CombinedOutput()
 	return string(out), runErr
 }
@@ -97,6 +99,7 @@ func TestValidateContent_ExplicitGlobalRootWithRelativeHome(t *testing.T) {
 
 	cmd := exec.Command(bin, "-ethos-root", ethosRoot)
 	cmd.Dir = repoRoot
+	cmd.Env = testhelpers.CoverEnv(nil)
 	output, err := cmd.CombinedOutput()
 	require.Error(t, err)
 	require.Contains(t, string(output), "home directory must be absolute")

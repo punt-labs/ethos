@@ -16,4 +16,4 @@ claude_invocation:
 expect:
   max_bytes: 500000
   no_secret_patterns: true
-smoke: false
+smoke: true

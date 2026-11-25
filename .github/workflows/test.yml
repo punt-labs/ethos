@@ -14,16 +14,16 @@ permissions:
 jobs:
   test-suite:
     runs-on: ubuntu-latest
-    # The race suite's wall time on one runner is over 30 minutes now that
-    # cmd/ethos and internal/mission each run past 10; the per-package
-    # -timeout below is 30m, so the job ceiling sits above the sum.
-    timeout-minutes: 60
+    # Each revision gets the same race suite; the package run alone can
+    # take over 30 minutes on one runner.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           # plugin/hooks builds old binaries (93c9f82, v4.8.0) with git archive
           # to prove the shims block an old ethos. A depth-1 clone has neither.
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
         with:
           go-version-file: go.mod
@@ -40,7 +40,7 @@ jobs:
           version: v2.13.1
 
       - name: ShellCheck
-        run: shellcheck plugin/hooks/*.sh install.sh .githooks/* scripts/test-changed.sh scripts/test-timed.sh
+        run: shellcheck plugin/hooks/*.sh install.sh .githooks/* scripts/test-changed.sh scripts/test-timed.sh scripts/smoke-release.sh
 
       - name: Validate test quarantine inventory
         run: make test-quarantine
@@ -89,23 +89,25 @@ jobs:
           uname -sr
           strace --version
 
-      - name: Test
-        run: make test
+      - name: Test and compare package statement coverage to the merge base
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            : "${PR_BASE:?pull request base SHA is required}"
+            make coverage-check COVERAGE_BASE="$PR_BASE"
+          elif [ "$GITHUB_REF" = refs/heads/main ]; then
+            make coverage-check COVERAGE_BASE=HEAD^
+          else
+            make test
+          fi
 
-      - name: Upload coverage profile (source for make coverage-baseline-from-ci)
-        if: always()
+      - name: Upload package statement coverage profile
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage-out
           path: coverage.out
           retention-days: 7
-
-      - name: Coverage gate (per-package baseline)
-        # The enforcing gate: no -skip-os-mismatch here, so a baseline that is
-        # not linux fails this job instead of being skipped. make coverage-check
-        # (local make check) passes the flag and prints SKIP on another OS,
-        # because per-package coverage differs per OS.
-        run: go run ./cmd/coverage-check -profile coverage.out -baseline coverage-baseline.txt
 
       - name: Validate content
         run: go run ./cmd/validate-content
@@ -137,6 +139,29 @@ jobs:
       - name: Audit redaction performance budget
         if: ${{ !cancelled() }}
         run: ETHOS_TEST_PERF_BUDGET=1 go test -run TestRedactLiveLongSessionBudget -count=1 ./internal/hook/
+
+  subprocess-coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+      - name: Report statement coverage of Go subprocess suites
+        run: make coverage-subprocess
+      - name: Upload subprocess statement coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: subprocess-statement-coverage
+          path: .tmp/statement-coverage/subprocess-*.out
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
 
   installed-smoke:
     name: installed smoke (${{ matrix.os }})
@@ -330,7 +355,7 @@ jobs:
 
   e2e-smoke:
     # L4 (Wire Observability) smoke: real `claude --print` against a mocked LiteLLM upstream.
-    # Runs the fast (single) smoke scenario on every push/PR. Zero Anthropic
+    # Runs the fast smoke scenarios on every push/PR. Zero Anthropic
     # tokens consumed; no ANTHROPIC_API_KEY needed. Deliberately lists no
     # scenario names — dropping a new tests/e2e/scenarios/*.yaml file never
     # requires a workflow edit. See tests/e2e/README.md.
@@ -361,8 +386,17 @@ jobs:
       - name: Sync tests/e2e
         run: uv sync --project tests/e2e
 
-      - name: Run L4 E2E smoke scenario
+      - name: Run L4 E2E smoke scenarios
         run: make test-e2e-smoke
+
+      - name: Upload wire smoke statement coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: wire-smoke-statement-coverage
+          path: .tmp/statement-coverage/wire-smoke.out
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
 
       # Belt-and-braces with conftest.py's own pytest_sessionfinish redaction
       # hook: a hard-killed pytest (timeout, OOM, SIGKILL) never reaches that
@@ -414,6 +448,15 @@ jobs:
 
       - name: Run L4 E2E full sweep
         run: make test-e2e
+
+      - name: Upload full wire statement coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: wire-full-statement-coverage
+          path: .tmp/statement-coverage/wire-full.out
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
 
       # Belt-and-braces with conftest.py's own pytest_sessionfinish redaction
       # hook: a hard-killed pytest (timeout, OOM, SIGKILL) never reaches that

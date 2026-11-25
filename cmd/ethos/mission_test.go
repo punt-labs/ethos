@@ -36,6 +36,7 @@ var ethosBinary string
 // runtime os.Exit error paths in `runMissionCreate` (the in-process
 // captureStdout pattern would crash on os.Exit).
 func TestMain(m *testing.M) {
+	testhelpers.EnableInheritedCoverage()
 	testhelpers.MustIsolateGit() // no inherited GIT_DIR; temp dirs stop at the temp root
 	// This suite normally runs inside a real Claude Code session, where
 	// CLAUDE_PID and CLAUDECODE are themselves set. DES-074 makes their
@@ -64,7 +65,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	bin := filepath.Join(dir, "ethos")
-	cmd := exec.Command("go", "build", "-o", bin, ".")
+	cmd := exec.Command("go", testhelpers.CoverBuild("-o", bin, ".")...)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "go build for cmd/ethos tests failed: %v\n", err)

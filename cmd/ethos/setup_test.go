@@ -538,13 +538,13 @@ func TestSetup_NoTTY_NoFile(t *testing.T) {
 	// Run the binary with stdin from /dev/null (not a TTY).
 	cmd := exec.Command(ethosBinary, "setup")
 	cmd.Dir = repo
-	cmd.Env = []string{
+	cmd.Env = testhelpers.CoverEnv([]string{
 		"HOME=" + home,
 		"USER=test-user",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_CONFIG_SYSTEM=/dev/null",
 		"PATH=" + os.Getenv("PATH"),
-	}
+	})
 	cmd.Stdin = strings.NewReader("")
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err, "expected non-zero exit")

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -31,7 +32,7 @@ func TestFilesystemReflectionShapes(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
-	build := exec.CommandContext(ctx, "go", "build", "-race", "-o", binary, "./cmd/ethos")
+	build := exec.CommandContext(ctx, "go", testhelpers.CoverBuild("-race", "-o", binary, "./cmd/ethos")...)
 	build.Dir = source
 	out, err := build.CombinedOutput()
 	require.NoError(t, err, "build writer: %s", out)
@@ -215,7 +216,7 @@ func (f *filesystemFixture) run(t *testing.T, program string, args ...string) ([
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, program, args...)
-	cmd.Dir, cmd.Env = f.repo, f.env
+	cmd.Dir, cmd.Env = f.repo, testhelpers.CoverEnv(f.env)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
