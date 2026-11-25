@@ -88,6 +88,28 @@ jobs:
           BIFROST_BASE_URL: ${{ vars.BIFROST_BASE_URL }}
           CONTEXT7_API_KEY: ${{ secrets.CONTEXT7_API_KEY }}
         run: bash scripts/ci-opencode.sh smoke
+      - name: Prepare publishable smoke receipts
+        if: always()
+        run: |
+          shopt -s nullglob
+          destination="$RUNNER_TEMP/opencode-receipts"
+          for receipt in .tmp/opencode/smoke-*/receipt.json; do
+            mkdir -p "$destination"
+            run_dir=${receipt%/receipt.json}
+            jq '{
+              status, stage, scope, requested_stages, completed_stages,
+              sessions: [.sessions[] | select(test("^ses_[A-Za-z0-9]+$"))],
+              checks: [.checks[] | del(.parent, .child)]
+            }' "$receipt" >"$destination/${run_dir##*/}.json"
+          done
+      - name: Upload OpenCode smoke receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: opencode-smoke-receipts
+          path: ${{ runner.temp }}/opencode-receipts/*.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   notify:
     needs: [behavioral, opencode-live]
