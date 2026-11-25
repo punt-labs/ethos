@@ -18,7 +18,8 @@ import (
 // No splitting, rejoining, renaming keys or handwritten allowlist repairs are
 // permitted in this harness: delimiter/key drift must affect hook decisions.
 func TestVerifierEnvironmentComposition(t *testing.T) {
-	home := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home-alias")
+	require.NoError(t, os.Symlink(t.TempDir(), home))
 	t.Setenv("HOME", home)
 	repo := stageRepoRoot(t)
 	const missionID = "m-2026-09-08-804"
@@ -26,7 +27,8 @@ func TestVerifierEnvironmentComposition(t *testing.T) {
 	store := mission.NewStore(filepath.Join(home, ".punt-labs", "ethos"))
 	c, err := store.Load(missionID)
 	require.NoError(t, err)
-	c.ExtractInto = []string{"extract-one/", "extract-two/"}
+	c.WriteSet = append(c.WriteSet, "write-dir/**")
+	c.ExtractInto = []string{"extract-one/", "extract-two/", "extract-link/"}
 	require.NoError(t, store.Update(c))
 	c, err = store.Load(missionID)
 	require.NoError(t, err)
@@ -34,18 +36,42 @@ func TestVerifierEnvironmentComposition(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, filepath.IsAbs(contractPath), "contract entry must exercise an absolute store path")
 	require.FileExists(t, contractPath)
+	physicalContract, err := filepath.EvalSymlinks(contractPath)
+	require.NoError(t, err)
+	require.NotEqual(t, contractPath, physicalContract, "the allowlist must contain the alias spelling")
+	physicalRepo, err := filepath.EvalSymlinks(repo)
+	require.NoError(t, err)
 	for _, path := range []string{"src/first.go", "src/second.go", "extract-one/existing.go", "extract-two/existing.go"} {
 		abs := filepath.Join(repo, filepath.FromSlash(path))
 		require.NoError(t, os.MkdirAll(filepath.Dir(abs), 0o700))
 		require.NoError(t, os.WriteFile(abs, []byte("package fixture\n"), 0o600))
 	}
+	alias := filepath.Join(t.TempDir(), "checkout-alias")
+	require.NoError(t, os.Symlink(repo, alias))
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "existing.go"), nil, 0o600))
+	require.NoError(t, os.Mkdir(filepath.Join(repo, "write-dir"), 0o700))
+	require.NoError(t, os.Mkdir(filepath.Join(repo, "write-dir", "versioned"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "write-dir", "versioned", "existing.go"), nil, 0o600))
+	require.NoError(t, os.Symlink("versioned", filepath.Join(repo, "write-dir", "current")))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "src", "unlisted.go"), nil, 0o600))
+	require.NoError(t, os.Symlink(filepath.Join(repo, "src"), filepath.Join(repo, "write-dir", "other")))
+	require.NoError(t, os.Symlink(outside, filepath.Join(repo, "write-dir", "escape")))
+	require.NoError(t, os.Mkdir(filepath.Join(repo, "extract-one", "versioned"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "extract-one", "versioned", "existing.go"), nil, 0o600))
+	require.NoError(t, os.Symlink("versioned", filepath.Join(repo, "extract-one", "current")))
+	require.NoError(t, os.Symlink(outside, filepath.Join(repo, "extract-link")))
+	require.NoError(t, os.Symlink(filepath.Join(outside, "missing.go"), filepath.Join(repo, "extract-one", "dangling.go")))
+	require.NoError(t, os.Symlink(filepath.Join(repo, "src"), filepath.Join(repo, "undeclared")))
+
+	t.Chdir(t.TempDir())
 
 	// Clear ambient verifier state first. A producer key mutation must not
 	// inherit a working value from the operator or another test.
 	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
 	t.Setenv("ETHOS_VERIFIER_EXTRACT_INTO", "")
 	t.Setenv("MISSION_ID", "")
-	t.Setenv("ETHOS_REPO_ROOT", repo)
+	t.Setenv("ETHOS_REPO_ROOT", alias)
 	env := buildVerifierAllowlistEnv([]verifierMission{{Contract: c}}, store)
 	require.NotEmpty(t, env)
 	for key, value := range env {
@@ -69,6 +95,21 @@ func TestVerifierEnvironmentComposition(t *testing.T) {
 		{"deny sibling of declared file", "Write", filepath.Join(repo, "src", "third.go"), "deny"},
 		{"deny outside extract directories", "Edit", filepath.Join(repo, "elsewhere", "new.go"), "deny"},
 		{"read undeclared existing file", "Read", filepath.Join(repo, "extract-one", "existing.go"), ""},
+		{"write physical contract from aliased allowlist entry", "Write", physicalContract, ""},
+		{"edit physical checkout from aliased root", "Edit", filepath.Join(physicalRepo, "src", "first.go"), ""},
+		{"create in physical checkout from aliased root", "Write", filepath.Join(physicalRepo, "extract-one", "physical.go"), ""},
+		{"write through checkout alias", "Write", filepath.Join(alias, "src", "first.go"), ""},
+		{"create through checkout alias with missing parents", "Write", filepath.Join(alias, "extract-one", "nested", "new.go"), ""},
+		{"deny existing extract file through alias", "Write", filepath.Join(alias, "extract-one", "existing.go"), "deny"},
+		{"edit through in-scope symlink", "Edit", filepath.Join(repo, "write-dir", "current", "existing.go"), ""},
+		{"edit through in-scope symlink and checkout alias", "Edit", filepath.Join(alias, "write-dir", "current", "existing.go"), ""},
+		{"create through in-scope extract symlink", "Write", filepath.Join(alias, "extract-one", "current", "new.go"), ""},
+		{"deny existing file through in-scope extract symlink", "Write", filepath.Join(alias, "extract-one", "current", "existing.go"), "deny"},
+		{"deny write-set symlink to undeclared in-checkout path", "Edit", filepath.Join(repo, "write-dir", "other", "unlisted.go"), "deny"},
+		{"deny write-set symlink escape", "Edit", filepath.Join(repo, "write-dir", "escape", "existing.go"), "deny"},
+		{"deny extract directory symlink escape", "Write", filepath.Join(repo, "extract-link", "new.go"), "deny"},
+		{"deny dangling extract symlink", "Write", filepath.Join(repo, "extract-one", "dangling.go"), "deny"},
+		{"deny undeclared symlink inside checkout", "Write", filepath.Join(repo, "undeclared", "first.go"), "deny"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
