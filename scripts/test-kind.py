@@ -2,7 +2,6 @@
 
 import os
 import re
-import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -14,7 +13,12 @@ def main() -> None:
     if kind == "exec":
         run_package(script.parent.parent, *go_args)
         return
-    runner = shlex.join(["python3", str(script), "exec", kind])
+    os.environ["ETHOS_TEST_KIND_SCRIPT"] = str(script)
+    runner = (
+        "python3 -c 'import os, runpy; "
+        'runpy.run_path(os.environ.pop("ETHOS_TEST_KIND_SCRIPT"), run_name="__main__")'
+        f"' exec {kind}"
+    )
     os.execvp("go", ["go", "test", f"-exec={runner}", *go_args])
 
 
