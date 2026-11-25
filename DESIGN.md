@@ -6441,6 +6441,22 @@ record to make the teardown notice loud (spool-lite creep — the same
 write-only subsystem under another name; the teardown deferral is accepted as
 unannounced and post-hoc undetectable).
 
+## DES-087: Bounded session audit appends with full verification at seal (PROPOSED)
+
+**Context.** This proposed amendment to DES-058 addresses the repository
+PostToolUse hook. PR #688 reduced work per row but did not change the growth
+with stream size.
+
+**Proposal.** Bound routine appends to the live tail and a machine-local
+timestamp floor under the existing stream lock, initially only when both
+published session directories are absent or empty. Keep full-history
+validation in readers and at pre-commit/seal before archival or publication.
+This defers some corruption and conflict detection. No change to mission
+events or to the DES-079 publication contract is proposed.
+
+See [the design](docs/design-audit-tail-validation.md) for coverage, measured
+costs, recovery rules and the provenance tradeoff.
+
 ## DES-059: `ethos enable` / `disable` — mapping the tool-enable-disable standard (SETTLED)
 
 **Status**: Settled. Design ratified 2026-07-22 (bead `ethos-ik4j`, missions
