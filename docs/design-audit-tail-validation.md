@@ -134,6 +134,20 @@ can reuse work only with the existing byte verification, not the append floor.
 Recompute the floor from verified evidence before re-enabling the fast path
 after repair. Do not seal or publish candidates whose evidence was not verified.
 
+Full publication currently releases the stream lock after the union check,
+then reacquires it to prepare publication from a fresh archive scan. A
+cooperating writer can add a chunk between those phases. Before selecting
+publication candidates, repeat the full union check under the reacquired
+stream lock and prepare only the exact eligible bytes from that verified
+view. Do not rescan into a broader candidate set afterward. Bind the
+prepared paths to their verified content and check the blobs in the
+candidate index against that content before installing the actual index;
+a changed file must not be staged just because its path matches. Keep the
+current all-stream publication failure behavior and index-lock ordering.
+Test an overlapping chunk introduced between the two phases and a prepared
+file changed before staging; conflicting or unverified bytes must not
+enter the index.
+
 Retain the existing failure distinction: the default blame-mode pre-commit
 path reports archival errors without blocking unrelated source commits;
 manual seal returns an error, and required publication failures still block.
