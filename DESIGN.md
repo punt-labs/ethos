@@ -14465,7 +14465,9 @@ Classify positively attributed non-workers at dispatch, key terminal results
 by verified checkout inputs and the resolved execution plan, for both passes
 and failures. Make concurrent requests reuse the owner's result. Require
 binary-owned host admission and resource limits; unclassified commands use
-the heavy profile. Report deferral separately from pass or failure.
+the heavy profile. Admission, execution, cleanup and feedback share one
+deadline below the harness timeout. Report deferral separately from pass
+or failure.
 Preserve old hook transport and the kill switch. Emit visible hook output
 without blocking re-entry. No implementation is approved by this entry.
 

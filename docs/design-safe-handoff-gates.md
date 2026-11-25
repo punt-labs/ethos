@@ -72,8 +72,28 @@ a normal single-user host. A managed multi-user machine needs a host
 coordinator; separate home-directory locks are not machine-wide across UIDs.
 Do not hold a roster or audit lock while waiting or running a check.
 
-Use a total 10-second admission budget for waiting on a running owner, waiting
-for a free slot or waiting for load. Sample one-minute host load immediately
+Use one end-to-end deadline for SubagentStop. Today the wrapper has a
+1,800-second harness limit and the binary separately has a 1,800-second
+handoff cap. The two limits must not renew each other. Set the internal
+deadline before the harness limit, accounting for wrapper input and startup.
+Start the clock at wrapper entry when a compatible wrapper supplies its
+start time; reserve at least 5 seconds before the harness cutoff for
+scheduling and output delivery. When an older wrapper supplies no timing
+metadata, default to a shorter binary budget (proposed: 29 minutes from
+binary entry under the existing 30-minute hook timeout), leaving headroom
+for its bounded stdin read and startup.
+
+Key preparation, admission, all invocations, process-tree cleanup and
+feedback spend from that same deadline. Reserve the final 10 seconds of the
+internal budget for cleanup and feedback; do not start an invocation if
+that reserve would be consumed. Cap each command by its configured timeout
+and the remaining execution time. If cleanup cannot finish before feedback
+is due, retain the slot under coordinator ownership and report the
+interrupted outcome before the harness cutoff, never a pass.
+
+Within the execution portion of that deadline, use a single wait budget of
+at most 10 seconds for a running owner, a free slot or load to drop. Sample
+one-minute host load immediately
 before dispatch and poll at most once a second while waiting. Default limit:
 40, with an operator setting to lower it. Observe that load is a lagging
 signal, not a parallelism limit. A cached result can be used at high load
@@ -175,8 +195,10 @@ explicit project gate. A later mission-result gate must not infer that a
 stop allowed on re-entry was a verified pass.
 
 Keep scheduling in the binary. No new wrapper flags, stdin behavior or
-generated SubagentStop shim are required; older plugins can invoke the new
-binary with the existing command. A new plugin against an old binary cannot
+generated SubagentStop shim are required. A newer wrapper can pass timing
+metadata via an environment variable that older binaries ignore. Older
+plugins can invoke the new binary with the existing command and use the
+conservative deadline fallback. A new plugin against an old binary cannot
 enforce these limits; doctor/rollout must distinguish that state rather than
 promise protection. If a later shim depends on a new binary capability, use
 an explicit probe and keep the old path and kill switch intact.
