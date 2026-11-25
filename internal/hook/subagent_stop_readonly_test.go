@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/seed"
 	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/stretchr/testify/require"
 )
@@ -28,10 +29,15 @@ func TestHandoffReadOnlyStop(t *testing.T) {
 		global  bool
 		before  bool
 		hide    string
+		review  bool
 		runs    bool
 	}{
 		{name: "read-only", runs: false},
 		{name: "read-only beside another agent's write", audit: []auditEntry{auditWrite("other", "dirty.go")}, runs: false},
+		{name: "reviewer beside a worker changing the tree", review: true, act: func(t *testing.T, root string) {
+			writeFile(t, filepath.Join(root, "dirty.go"), "worker change\n")
+		}, audit: []auditEntry{auditWrite("other", "dirty.go")}},
+		{name: "reviewer who edits still gates", review: true, audit: []auditEntry{auditWrite("sub", "dirty.go")}, runs: true},
 		{name: "write with unchanged checkout", audit: []auditEntry{auditWrite("sub", "dirty.go")}, runs: true},
 		{name: "edit with unchanged checkout", audit: []auditEntry{{Tool: "Edit", AgentID: "sub", ToolInput: map[string]any{"file_path": "<repo>/dirty.go"}, PathFormat: auditPathFormat}}, runs: true},
 		{name: "bash edits a clean file", act: func(t *testing.T, root string) { writeFile(t, filepath.Join(root, "clean.go"), "package changed\n") }, runs: true},
@@ -102,13 +108,20 @@ func TestHandoffReadOnlyStop(t *testing.T) {
 
 			ss := session.NewStore(t.TempDir())
 			require.NoError(t, ss.Create("ro", session.Participant{AgentID: "human"}, session.Participant{AgentID: "main"}, "", ""))
-			start, err := json.Marshal(map[string]any{"session_id": "ro", "agent_id": "sub", "agent_type": "worker"})
+			agentType := "worker"
+			if tc.review {
+				agentType = "code-reviewer"
+				reviewer, err := seed.Agents.ReadFile("sidecar/agents/code-reviewer.md")
+				require.NoError(t, err)
+				writeFile(t, filepath.Join(root, ".claude", "agents", "code-reviewer.md"), string(reviewer))
+			}
+			start, err := json.Marshal(map[string]any{"session_id": "ro", "agent_id": "sub", "agent_type": agentType})
 			require.NoError(t, err)
 			if tc.noStart {
 				require.NoError(t, ss.Join("ro", session.Participant{AgentID: "sub", AgentType: "worker"}))
 			} else {
 				_, err = captureStdout(t, func() error {
-					return HandleSubagentStartWithDeps(bytes.NewReader(start), SubagentStartDeps{Identities: identity.NewStore(t.TempDir()), Sessions: ss})
+					return HandleSubagentStartWithDeps(bytes.NewReader(start), SubagentStartDeps{Identities: identity.NewStore(t.TempDir()), Sessions: ss, RepoRoot: root})
 				})
 				require.NoError(t, err)
 			}

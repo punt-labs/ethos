@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,14 +9,17 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/process"
+	"github.com/punt-labs/ethos/v4/internal/seed"
 	"github.com/punt-labs/ethos/v4/internal/session"
 )
 
@@ -199,6 +203,11 @@ func HandleSubagentStartWithDepsContext(ctx context.Context, r io.Reader, deps S
 		AgentType: agentType,
 	}
 	p.CheckoutState = subagentStartState(input)
+	if len(verifierMissions) > 0 {
+		p.HandoffNonWorker = verifierMissions[0].Contract.Worker != agentType
+	} else if declaredMissionID == "" && !refused {
+		p.HandoffNonWorker = seededHandoffReviewer(deps.RepoRoot, agentType)
+	}
 
 	if joinErr := deps.Sessions.Join(sessionID, p); joinErr != nil {
 		fmt.Fprintf(os.Stderr, "ethos: failed to join session %s: %v\n", sessionID, joinErr)
@@ -292,6 +301,19 @@ func HandleSubagentStartWithDepsContext(ctx context.Context, r io.Reader, deps S
 	result.HookSpecificOutput.AdditionalContext = strings.Join(sections, "\n\n")
 	result.SystemMessage = diagnostic
 	return json.NewEncoder(os.Stdout).Encode(result)
+}
+
+func seededHandoffReviewer(checkout, agent string) bool {
+	if checkout == "" || attribute.ValidateSlug(agent) != nil {
+		return false
+	}
+	name := agent + ".md"
+	embedded, err := seed.Agents.ReadFile("sidecar/agents/" + name)
+	if err != nil {
+		return false
+	}
+	deployed, err := os.ReadFile(filepath.Join(checkout, ".claude", "agents", name))
+	return err == nil && bytes.Equal(deployed, embedded)
 }
 
 // buildVerifierIsolationBlock renders the additionalContext injected

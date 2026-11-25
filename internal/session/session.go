@@ -14,7 +14,8 @@ type Participant struct {
 	// subagent started, so its stop can skip handoff checks if it changed
 	// nothing. Every join replaces it, so a failed fingerprint never reuses
 	// an earlier one.
-	CheckoutState string `yaml:"checkout_state,omitempty" json:"checkout_state,omitempty"`
+	CheckoutState    string `yaml:"checkout_state,omitempty" json:"checkout_state,omitempty"`
+	HandoffNonWorker bool   `yaml:"handoff_non_worker,omitempty" json:"handoff_non_worker,omitempty"`
 }
 
 // Roster is the session-scoped list of all participants.

@@ -240,6 +240,7 @@ func joinParticipant(roster *Roster, key string, p Participant) {
 			existing.Ext = p.Ext
 		}
 		existing.CheckoutState = p.CheckoutState
+		existing.HandoffNonWorker = p.HandoffNonWorker
 		return
 	}
 	p.AgentID = key

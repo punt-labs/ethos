@@ -86,7 +86,7 @@ func startedParticipant(ss *session.Store, sessionID, agentID string) session.Pa
 // unattributed since it joined, and neither the checkout nor its handoff
 // policy changed. Bash edits change the fingerprint.
 func readOnlyStop(ctx context.Context, checkout, agent, sessionID string, start session.Participant) bool {
-	if start.CheckoutState == "" {
+	if start.CheckoutState == "" && !start.HandoffNonWorker {
 		return false
 	}
 	logger := diagnostic.FromContext(ctx)
@@ -114,6 +114,10 @@ func readOnlyStop(ctx context.Context, checkout, agent, sessionID string, start 
 		if err != nil || !ts.Before(joined) {
 			return false
 		}
+	}
+	if start.HandoffNonWorker {
+		logger.Info("handoff skipped for a non-worker without attributed edits")
+		return true
 	}
 	current, err := handoffState(checkout, agent)
 	if err != nil {
