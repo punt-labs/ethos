@@ -126,8 +126,12 @@ Exhaustion produces a visible deferral, not an unkeyed full-suite launch.
 Reuse a fingerprint computed for the same decision instead of doing three
 unconditional full scans as the spike can on a miss.
 
-For reusable green results, run against an immutable materialized input
-snapshot, or require an equivalent proof of snapshot consistency. A
+For either a reusable pass or a reusable failure, run against an immutable
+materialized input snapshot whose verified digest matches the selected
+key, or require equivalent proof of snapshot consistency. A mismatched
+or unverified run is indeterminate: never cache it as a failure or reuse
+it to block a restored tree. Reuse a terminal result only after matching
+the current key to its recorded snapshot proof. A
 before-and-after hash on a live checkout can catch many races, but misses
 a change followed by a revert, and does not prove what a running command
 read. Locking Ethos requests does not lock human or Bash edits. Start with
