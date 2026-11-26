@@ -149,9 +149,15 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		}
 		return "", errors.New(reason)
 	}
-	var exit *exec.ExitError
-	if err != nil && (!errors.As(err, &exit) || exit.ExitCode() < 0) {
-		return "", errors.New("snapshot check did not complete")
+	if err != nil {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() < 0 {
+			return "", errors.New("snapshot check did not complete")
+		}
+		switch code := exit.ExitCode(); code {
+		case 128 + int(unix.SIGHUP), 128 + int(unix.SIGINT), 128 + int(unix.SIGKILL), 128 + int(unix.SIGTERM):
+			return "", fmt.Errorf("check exited %d (likely killed or interrupted); not cached", code)
+		}
 	}
 	if err == nil && (!check.failOnOutput || len(stdout.data) == 0) {
 		diagnostic.LogHookCheck(ctx, checkout, checkout, "handoff", check.name, "completed", time.Since(start))

@@ -199,6 +199,8 @@ Use explicit outcomes:
 | Failed for the key | Reuse the redacted result without rerunning. Respect advisory/block policy; on `stop_hook_active` emit a visible notice without blocking re-entry. |
 | Deferred or indeterminate | Do not record pass or fail. Report the reason and what can be retried. A required gate blocks the initial stop; advisory deferrals and re-entry get a visible notice without blocking. |
 
+Shell exits 129, 130, 137 and 143 are treated as likely interruptions: defer visibly, never cache the outcome, and allow the next stop to retry.
+
 The current plugin wrapper redirects stderr to the hook log. Send advisory
 and re-entry feedback on stdout as a single Claude Code hook JSON response
 with a top-level `systemMessage`, exit zero, and omit `decision` for

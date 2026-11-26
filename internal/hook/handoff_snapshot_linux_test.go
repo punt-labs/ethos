@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -373,6 +374,31 @@ func TestHandoffSandboxReportsHighExitStatuses(t *testing.T) {
 			require.Contains(t, failure, "gate: exit status "+code)
 			require.Contains(t, failure, "\ngate-stdout\n")
 			require.Contains(t, failure, "\ngate-stderr")
+		})
+	}
+}
+
+func TestHandoffSnapshotRetriesInterruptedExits(t *testing.T) {
+	for _, code := range []int{137, 129, 130, 143} {
+		t.Run(fmt.Sprint(code), func(t *testing.T) {
+			root, _ := postEditFixture(t)
+			t.Setenv("HOME", t.TempDir())
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+			checkPolicy(t, root, "project", fmt.Sprintf("  - name: snapshot-check\n    stage: handoff\n    files: all\n    run: [/bin/sh, -c, 'exit %d']\n    snapshot: {profile: linux-shell-v1, inputs: [README], epoch: v1}\n", code))
+			var logs bytes.Buffer
+			ctx := diagnostic.WithLogger(context.Background(), slog.New(slog.NewTextHandler(&logs, nil)))
+			for range 2 {
+				invocation, _ := diagnostic.WithHookInvocation(ctx)
+				feedback := RunStageChecks(invocation, root, "worker", "handoff")
+				skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+				require.Contains(t, feedback.Blocking, fmt.Sprintf("check exited %d (likely killed or interrupted); not cached", code))
+				require.Equal(t, feedback.Blocking, feedback.Notice)
+				slots, err := filepath.Glob(filepath.Join(root, ".punt-labs", "local", "ethos", "handoff-v1", "*", "*.json"))
+				require.NoError(t, err)
+				require.Empty(t, slots)
+			}
+			require.Equal(t, 2, strings.Count(logs.String(), "outcome=launched"))
+			require.NotContains(t, logs.String(), "outcome=reused")
 		})
 	}
 }
