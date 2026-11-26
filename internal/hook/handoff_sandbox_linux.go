@@ -316,12 +316,13 @@ func worktreeSandboxPath(checkout, value string) string {
 	return value
 }
 
-func gatePlanInputsPresent(snapshot string, argv []string) bool {
+func gatePlanInputsPresent(snapshot string, argv, checkoutScratch []string) bool {
 	checkout, err := os.OpenRoot(snapshot)
 	if err != nil {
 		return false
 	}
 	defer checkout.Close()
+operands:
 	for _, arg := range argv {
 		if arg != gateRoot && !strings.HasPrefix(arg, gateRoot+"/") {
 			continue
@@ -329,6 +330,13 @@ func gatePlanInputsPresent(snapshot string, argv []string) bool {
 		rel := strings.TrimPrefix(arg, gateRoot+"/")
 		if arg == gateRoot {
 			rel = "."
+		}
+		if filepath.Clean(rel) == rel {
+			for _, scratch := range checkoutScratch {
+				if insideGatePath(scratch, rel) {
+					continue operands
+				}
+			}
 		}
 		if _, err := checkout.Lstat(rel); err != nil {
 			return false
@@ -432,7 +440,9 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 		return unix.ENOTDIR
 	}
 	env := sandboxEnvironment
+	var checkoutScratch []string
 	if plan.Worktree != nil {
+		checkoutScratch = plan.Worktree.CheckoutScratch
 		if plan.Worktree.RuntimeDir != "" {
 			phase = "mount verified runtime bundle"
 			if err := mountGateReadOnly(plan.Worktree.RuntimeDir, filepath.Join(root, linuxHandoffRoots().runtime)); err != nil {
@@ -440,7 +450,7 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 			}
 		}
 		phase = "mount private worktree scratch"
-		if err := mountHandoffWorktreeScratch(root, checkout, plan.Worktree.CheckoutScratch); err != nil {
+		if err := mountHandoffWorktreeScratch(root, checkout, checkoutScratch); err != nil {
 			if errors.Is(err, errHandoffScratchShadowsInput) {
 				phase = errHandoffScratchShadowsInput.Error()
 			}
@@ -463,7 +473,7 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 		env = plan.Worktree.Environment
 	}
 	phase = handoffMaterializePhase
-	if !gatePlanInputsPresent(checkout, argv) {
+	if !gatePlanInputsPresent(checkout, argv, checkoutScratch) {
 		return errors.New("snapshot inputs did not match the invocation")
 	}
 	if err := unix.Mount("", checkout, "", unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV, ""); err != nil {
