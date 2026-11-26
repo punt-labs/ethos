@@ -234,7 +234,7 @@ func TestHandoffMaterializesDeclaredRegularFiles(t *testing.T) {
 	src, err := os.OpenRoot(root)
 	require.NoError(t, err)
 	defer src.Close()
-	_, err = copyGateInput(ctx, sha256.New(), src, "", "pkg/gate", 1)
+	_, err = copyGateInput(ctx, sha256.New(), src, "", "pkg/gate", 1, false)
 	require.ErrorContains(t, err, "within budget")
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
@@ -360,7 +360,7 @@ func TestHandoffWorktreeSandboxKeepsSocketTMPDIRShortAndPrivate(t *testing.T) {
 	writeFile(t, filepath.Join(ambient, "ambient-only"), "not a sandbox input")
 	writeFile(t, filepath.Join(live, "README"), "snapshot input\n")
 	inputs := []string{"README"}
-	proof, err := digestGateInputs(context.Background(), live, "", inputs)
+	proof, err := digestGateInputsWithMode(context.Background(), live, "", inputs, true)
 	require.NoError(t, err)
 	failure, err := executeHandoffSnapshot(context.Background(), sandbox, live, proof, inputs, editCheck{
 		name: "socket", cwd: gateRoot, timeout: 5 * time.Second,
@@ -396,7 +396,7 @@ func TestHandoffWorktreeSandboxUsesInvokingIdentity(t *testing.T) {
 	live := t.TempDir()
 	writeFile(t, filepath.Join(live, "README"), "snapshot input\n")
 	inputs := []string{"README"}
-	proof, err := digestGateInputs(context.Background(), live, "", inputs)
+	proof, err := digestGateInputsWithMode(context.Background(), live, "", inputs, true)
 	require.NoError(t, err)
 	failure, err := executeHandoffSnapshot(context.Background(), t.TempDir(), live, proof, inputs, editCheck{
 		name: "identity", cwd: gateRoot, timeout: 5 * time.Second,
@@ -424,7 +424,7 @@ func TestHandoffWorktreeSandboxExpandsLogicalPathPrefixes(t *testing.T) {
 	writeFile(t, filepath.Join(live, "README"), "snapshot input\n")
 	writeFile(t, filepath.Join(live, "sub", "input"), "snapshot input\n")
 	inputs := []string{"README", "sub/input"}
-	proof, err := digestGateInputs(context.Background(), live, "", inputs)
+	proof, err := digestGateInputsWithMode(context.Background(), live, "", inputs, true)
 	require.NoError(t, err)
 	failure, err := executeHandoffSnapshot(context.Background(), t.TempDir(), live, proof, inputs, editCheck{
 		name: "paths", cwd: gateRoot, timeout: 5 * time.Second,
@@ -468,7 +468,7 @@ func TestHandoffWorktreeSandboxMountsPrivateCheckoutScratch(t *testing.T) {
 	writeFile(t, filepath.Join(live, "README"), "snapshot input\n")
 	writeFile(t, filepath.Join(live, ".venv", "ambient-only"), "not a snapshot input\n")
 	inputs := []string{"README"}
-	proof, err := digestGateInputs(context.Background(), live, "", inputs)
+	proof, err := digestGateInputsWithMode(context.Background(), live, "", inputs, true)
 	require.NoError(t, err)
 	policy := &checkset.Check{WorktreeSnapshot: &checkset.WorktreeSnapshot{
 		Scratch: checkset.SnapshotScratch{Checkout: []string{".venv", ".pytest_cache", ".tmp/api-site"}},
@@ -492,7 +492,7 @@ test ! -w .`},
 	require.NoDirExists(t, filepath.Join(live, ".tmp"))
 
 	inputs = append(inputs, ".venv/ambient-only")
-	proof, err = digestGateInputs(context.Background(), live, "", inputs)
+	proof, err = digestGateInputsWithMode(context.Background(), live, "", inputs, true)
 	require.NoError(t, err)
 	_, err = executeHandoffSnapshot(context.Background(), t.TempDir(), live, proof, inputs, editCheck{
 		name: "conflict", cwd: gateRoot, timeout: 5 * time.Second, policy: policy,
@@ -633,7 +633,7 @@ func TestHandoffWorktreeHasPrivatePTY(t *testing.T) {
 	live := t.TempDir()
 	writeFile(t, filepath.Join(live, "README"), "snapshot input\n")
 	inputs := []string{"README"}
-	proof, err := digestGateInputs(context.Background(), live, "", inputs)
+	proof, err := digestGateInputsWithMode(context.Background(), live, "", inputs, true)
 	require.NoError(t, err)
 	failure, err := executeHandoffSnapshot(context.Background(), t.TempDir(), live, proof, inputs, editCheck{
 		name: "pty", cwd: gateRoot, timeout: 5 * time.Second,
