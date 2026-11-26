@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/checkset"
@@ -61,6 +62,95 @@ func TestFetchHandoffRuntimesSelectsPinnedPlatform(t *testing.T) {
 	paths, err := FetchHandoffRuntimes(ctx, loc, "worker")
 	require.NoError(t, err)
 	require.Equal(t, []string{path}, paths)
+
+	local := filepath.Join(home, "local.tar.gz")
+	_, err = InstallHandoffRuntimeFile(ctx, loc, "bad/agent", local)
+	require.ErrorContains(t, err, "slug")
+	_, err = InstallHandoffRuntimeFile(ctx, loc, "worker", local)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = InstallHandoffRuntimeFile(ctx, loc, "worker", home)
+	require.ErrorContains(t, err, "requires a regular runtime archive")
+	writeFile(t, local, "wrong")
+	_, err = InstallHandoffRuntimeFile(ctx, loc, "worker", local)
+	require.ErrorContains(t, err, digest)
+	require.ErrorContains(t, err, fmt.Sprintf("%x", sha256.Sum256([]byte("wrong"))))
+	writeFile(t, local, archive)
+	require.NoError(t, os.Remove(path))
+	paths, err = InstallHandoffRuntimeFile(ctx, loc, "worker", local)
+	require.NoError(t, err)
+	require.Equal(t, []string{path}, paths)
+	other := strings.Replace(selected, digest, fmt.Sprintf("%x", sha256.Sum256([]byte("other"))), 1)
+	writeFile(t, sidecar, "checks:\n  first:\n"+selected+"  second:\n"+other)
+	_, err = InstallHandoffRuntimeFile(ctx, loc, "worker", local)
+	require.ErrorContains(t, err, "single distinct runtime digest")
+}
+
+type runtimeRoundTrip func(*http.Request) (*http.Response, error)
+
+func (f runtimeRoundTrip) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestHandoffRuntimeFetchGitHubRelease(t *testing.T) {
+	const (
+		archive = "published runtime bytes"
+		browser = "https://github.com/example/project/releases/download/test%2Fv1/demo.tar.gz"
+		release = "https://api.github.com/repos/example/project/releases/tags/test%2Fv1"
+		asset   = "https://api.github.com/repos/example/project/releases/assets/42"
+		foreign = "https://foreign.api.github.com/asset"
+	)
+	for _, tc := range []struct{ name, gh, github, cli, want string }{
+		{"GH_TOKEN first", "gh-example", "github-example", "cli-example", "gh-example"},
+		{"GITHUB_TOKEN next", "", "github-example", "cli-example", "github-example"},
+		{"gh fallback", "", "", "cli-example", "cli-example"},
+		{"public without token", "", "", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GH_TOKEN", tc.gh)
+			t.Setenv("GITHUB_TOKEN", tc.github)
+			bin := t.TempDir()
+			t.Setenv("PATH", bin)
+			if tc.cli != "" {
+				postEditTool(t, bin, "gh", "[ \"$*\" = 'auth token --hostname github.com' ] || exit 1\nprintf '%s\\n' "+tc.cli+"\n")
+			}
+			var visited []string
+			client := handoffRuntimeHTTPClient()
+			client.Transport = runtimeRoundTrip(func(req *http.Request) (*http.Response, error) {
+				url := req.URL.String()
+				visited = append(visited, url)
+				h := make(http.Header)
+				status, body := http.StatusOK, archive
+				switch url {
+				case release:
+					require.Equal(t, "Bearer "+tc.want, req.Header.Get("Authorization"))
+					require.Equal(t, "application/vnd.github+json", req.Header.Get("Accept"))
+					body = `{"assets":[{"name":"other.tar.gz","url":"https://example.invalid/other"},{"name":"demo.tar.gz","url":"` + asset + `"}]}`
+				case asset:
+					require.Equal(t, "Bearer "+tc.want, req.Header.Get("Authorization"))
+					require.Equal(t, "application/octet-stream", req.Header.Get("Accept"))
+					status, body = http.StatusFound, ""
+					h.Set("Location", foreign)
+				case foreign, browser:
+					require.Empty(t, req.Header.Get("Authorization"))
+				default:
+					t.Fatalf("unexpected runtime request: %s", url)
+				}
+				return &http.Response{StatusCode: status, Header: h, Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+			})
+			bundle := newHandoffRuntime(t.TempDir(), checkset.SnapshotPlatform{
+				Bundle: "demo", URL: browser, SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(archive))),
+			}, "")
+			require.NoError(t, bundle.fetch(context.Background(), client))
+			if tc.want == "" {
+				require.Equal(t, []string{browser}, visited)
+			} else {
+				require.Equal(t, []string{release, asset, foreign}, visited)
+			}
+			bytes, err := os.ReadFile(bundle.archive)
+			require.NoError(t, err)
+			require.Equal(t, archive, string(bytes))
+		})
+	}
 }
 
 func TestHandoffRuntimeFetchOnlyPublishesCompleteVerifiedBytes(t *testing.T) {

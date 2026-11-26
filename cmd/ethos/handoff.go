@@ -10,7 +10,7 @@ import (
 
 func init() {
 	handoff := &cobra.Command{Use: "handoff", Short: "Manage handoff gate dependencies", GroupID: "admin"}
-	var agent string
+	var agent, localFile string
 	fetch := &cobra.Command{
 		Use:   "fetch-runtime",
 		Short: "Install the current platform's pinned handoff runtime archives",
@@ -19,7 +19,14 @@ func init() {
 			if _, err := requireCheckout(cmd.ErrOrStderr(), "handoff fetch-runtime"); err != nil {
 				return err
 			}
-			installed, err := hook.FetchHandoffRuntimes(cmd.Context(), currentRoots().Located, agent)
+			loc := currentRoots().Located
+			var installed []string
+			var err error
+			if cmd.Flags().Changed("file") {
+				installed, err = hook.InstallHandoffRuntimeFile(cmd.Context(), loc, agent, localFile)
+			} else {
+				installed, err = hook.FetchHandoffRuntimes(cmd.Context(), loc, agent)
+			}
 			if err != nil {
 				return err
 			}
@@ -36,6 +43,7 @@ func init() {
 		},
 	}
 	fetch.Flags().StringVar(&agent, "agent", "", "Select the handoff policy for this agent instead of the project default")
+	fetch.Flags().StringVar(&localFile, "file", "", "Install this local archive without downloading")
 	handoff.AddCommand(fetch)
 	rootCmd.AddCommand(handoff)
 }
