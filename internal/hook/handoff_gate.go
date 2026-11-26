@@ -56,11 +56,12 @@ type gateResult struct {
 }
 
 type handoffSystemPlan struct {
-	Mounts      []handoffSystemMount
-	Inputs      []handoffSystemInput
-	Passwd      string
-	Group       string
-	Fingerprint string
+	Mounts       []handoffSystemMount
+	Inputs       []handoffSystemInput
+	Passwd       string
+	Group        string
+	DeveloperDir string
+	Fingerprint  string
 }
 
 type handoffWorktreePlan struct {
@@ -78,6 +79,8 @@ type handoffSystemInput struct {
 	Path, Tool, Digest string
 	Directory          bool
 }
+
+var errHandoffXcodeUntrusted = errors.New("xcode developer dir untrusted in darwin snapshot")
 
 func runHandoffGate(ctx context.Context, root, agent string, files []string, check checkset.Check, policy []checkset.Check) StageFeedback {
 	manualRoot := root
@@ -101,15 +104,22 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		return StageFeedback{}
 	}
 	start := time.Now()
+	var isolation []string
+	if runtime.GOOS == "darwin" && check.WorktreeSnapshot != nil && check.WorktreeSnapshot.Network == "loopback" {
+		isolation = []string{"residual (host localhost services reachable, shared port space)"}
+	}
 	feedback := func(message string) StageFeedback {
 		if check.OnFail == "advisory" {
 			return StageFeedback{Advisory: message}
 		}
 		return StageFeedback{Blocking: message}
 	}
-	deferGate := func(reason string) StageFeedback {
+	deferGate := func(reason string, noticeOnly ...bool) StageFeedback {
 		diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "deferred", time.Since(start))
 		message := fmt.Sprintf("handoff checks deferred (%s): %s. Run the explicit project gate: %s", check.Name, reason, handoffManualCommand(manualRoot, files, manualCheck))
+		if len(noticeOnly) > 0 && noticeOnly[0] {
+			return StageFeedback{Advisory: message}
+		}
 		f := feedback(message)
 		if f.Blocking != "" {
 			f.Notice = message
@@ -199,9 +209,9 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	if err != nil {
 		return deferGate(err.Error())
 	}
-	system, err := prepareHandoffSystem(ctx, root, check.WorktreeSnapshot)
+	system, err := prepareHandoffSystem(ctx, root, check.WorktreeSnapshot, rawArgs...)
 	if err != nil {
-		return deferGate(err.Error())
+		return deferGate(err.Error(), errors.Is(err, errHandoffXcodeUntrusted))
 	}
 	gitView, err := captureHandoffGit(ctx, root, check.WorktreeSnapshot)
 	if err != nil {
@@ -256,7 +266,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		if err != nil || currentState != state || currentProof != proof {
 			return "checkout changed " + when
 		}
-		currentSystem, err := prepareHandoffSystem(ctx, root, check.WorktreeSnapshot)
+		currentSystem, err := prepareHandoffSystem(ctx, root, check.WorktreeSnapshot, rawArgs...)
 		if err != nil || currentSystem.Fingerprint != system.Fingerprint {
 			return "system inputs changed " + when
 		}
@@ -308,7 +318,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 						return nil
 					}
 				}
-				diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "reused", time.Since(start))
+				diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "reused", time.Since(start), isolation...)
 				result = feedback(saved.Failure)
 				return nil
 			}
@@ -385,7 +395,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 				}
 				failure, err := executeHandoffSnapshot(ctx, checkScratch, root, proof, check.Snapshot.Inputs, invocation, prepared)
 				if err != nil {
-					result = deferGate(err.Error())
+					result = deferGate(err.Error(), errors.Is(err, errHandoffXcodeUntrusted))
 					return nil
 				}
 				if failure != "" {
@@ -409,6 +419,13 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 				diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "cache_write_failed", time.Since(start))
 			} else {
 				terminal = true
+			}
+			if len(isolation) != 0 {
+				outcome := "completed"
+				if failure != "" {
+					outcome = "failed"
+				}
+				diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, outcome, time.Since(start), isolation...)
 			}
 			result = feedback(failure)
 			return nil
@@ -455,8 +472,18 @@ func removeSnapshotScratch(scratch string) error {
 
 func unsupportedWorktreeField(profile *checkset.WorktreeSnapshot) string {
 	switch {
+	case profile.Runtime != nil && runtime.GOOS == "darwin":
+		return "runtime"
+	case runtime.GOOS != "linux" && len(profile.Scratch.Seed) != 0:
+		return "scratch.seed"
 	case runtime.GOOS != "linux" && len(profile.Scratch.Files) != 0:
 		return "scratch.files"
+	case profile.Prehydrate != nil && runtime.GOOS != "linux":
+		return "prehydrate"
+	case profile.Git != nil && runtime.GOOS == "darwin":
+		return "git"
+	case runtime.GOOS != "linux" && len(profile.Data) != 0:
+		return "data"
 	default:
 		return ""
 	}
@@ -790,6 +817,9 @@ func worktreeSnapshotInputs(ctx context.Context, root string) ([]string, error) 
 	var inputs []string
 	seen := map[string]bool{}
 	for _, name := range strings.Split(string(out), "\x00") {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if name == "" || seen[name] {
 			continue
 		}

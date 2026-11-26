@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package hook
 
@@ -31,7 +31,7 @@ func handoffSandboxIdentity(string) (string, error) {
 	return "", errHandoffSandboxUnavailable
 }
 
-func prepareHandoffSystem(context.Context, string, *checkset.WorktreeSnapshot) (handoffSystemPlan, error) {
+func prepareHandoffSystem(context.Context, string, *checkset.WorktreeSnapshot, ...string) (handoffSystemPlan, error) {
 	return handoffSystemPlan{}, nil
 }
 
