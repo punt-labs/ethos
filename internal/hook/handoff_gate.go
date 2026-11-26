@@ -384,14 +384,7 @@ func handoffManualCommand(root string, files []string, check checkset.Check) str
 	if check.Snapshot != nil {
 		planRoot = gateRoot
 	}
-	word := func(s string) string {
-		if check.Snapshot != nil || check.WorktreeSnapshot != nil {
-			if s == gateRoot {
-				s = root
-			} else if rel, ok := strings.CutPrefix(s, gateRoot+"/"); ok && filepath.IsLocal(rel) {
-				s = filepath.Join(root, rel)
-			}
-		}
+	quote := func(s string) string {
 		if home != "" && filepath.IsAbs(s) {
 			if rel, err := filepath.Rel(home, s); err == nil && filepath.IsLocal(rel) {
 				return `"$HOME"/` + audit.ShellQuote(rel)
@@ -399,22 +392,37 @@ func handoffManualCommand(root string, files []string, check checkset.Check) str
 		}
 		return audit.ShellQuote(s)
 	}
+	snapshotWord := func(s string) string {
+		if s == gateRoot {
+			s = root
+		} else if rel, ok := strings.CutPrefix(s, gateRoot+"/"); ok && filepath.IsLocal(rel) {
+			s = filepath.Join(root, rel)
+		}
+		return quote(s)
+	}
+	pathWord := quote
+	if check.Snapshot != nil {
+		pathWord = snapshotWord
+	}
 	literalWord := func(arg string) string {
 		if check.Snapshot != nil || !strings.Contains(arg, "{root}") {
-			return word(arg)
+			if check.Snapshot != nil || check.WorktreeSnapshot != nil {
+				return snapshotWord(arg)
+			}
+			return quote(arg)
 		}
 		parts := strings.Split(arg, "{root}")
 		for i, part := range parts {
 			parts[i] = audit.ShellQuote(part)
 		}
-		return strings.Join(parts, word(root))
+		return strings.Join(parts, quote(root))
 	}
 	var commands []string
-	for _, invocation := range stageInvocationsRendered(planRoot, files, check, true, word, literalWord) {
+	for _, invocation := range stageInvocationsRendered(planRoot, files, check, true, pathWord, literalWord) {
 		if len(invocation.argv) == 0 {
 			continue
 		}
-		commands = append(commands, "(cd "+word(invocation.cwd)+" && "+strings.Join(invocation.argv, " ")+")")
+		commands = append(commands, "(cd "+pathWord(invocation.cwd)+" && "+strings.Join(invocation.argv, " ")+")")
 	}
 	return strings.Join(commands, " && ")
 }

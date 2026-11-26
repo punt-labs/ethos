@@ -707,6 +707,39 @@ func TestHandoffWorktreeDeferralMapsLiteralCheckoutPath(t *testing.T) {
 	require.Equal(t, "live gate\n", string(out))
 }
 
+func TestHandoffWorktreeDeferralKeepsLiveRootUnderCheckout(t *testing.T) {
+	live := t.TempDir()
+	root := gateRoot + "/project"
+	writeFile(t, filepath.Join(live, "project/gate.sh"), `set -eu
+test "$PWD" = /checkout/project/nested
+test "$1" = /checkout/project
+test "$2" = /checkout/project/nested
+test "$3" = /checkout/project/nested/report.txt
+test "$4" = --input=/checkout/project/input
+`)
+	writeFile(t, filepath.Join(live, "project/nested/report.txt"), "report\n")
+	check := checkset.Check{
+		Name: "manual", Stage: "handoff", Files: checkset.Patterns{Globs: []string{"**"}}, Cwd: "file_dir",
+		Run:              []string{"/bin/sh", "/checkout/gate.sh", "{root}", "{package_dir}", "{files}", "--input={root}/input"},
+		WorktreeSnapshot: &checkset.WorktreeSnapshot{Requires: []string{"mach_lookup"}},
+	}
+	ctx := context.Background()
+	feedback := runHandoffGate(ctx, root, "worker", []string{"nested/report.txt"}, check, nil)
+	_, manual, found := strings.Cut(feedback.Notice, "Run the explicit project gate: ")
+	require.True(t, found, feedback.Notice)
+	inputs := []string{"project/gate.sh", "project/nested/report.txt"}
+	proof, err := digestGateInputsWithMode(ctx, live, "", inputs, true)
+	require.NoError(t, err)
+	failure, err := executeHandoffSnapshot(ctx, t.TempDir(), live, proof, inputs, editCheck{
+		name: "manual-replay", cwd: gateRoot, timeout: 5 * time.Second,
+		policy: &checkset.Check{WorktreeSnapshot: &checkset.WorktreeSnapshot{}},
+		argv:   []string{"/bin/sh", "-c", manual},
+	})
+	skipIfHandoffSandboxUnavailable(t, err)
+	require.NoError(t, err)
+	require.Empty(t, failure)
+}
+
 func TestHandoffWorktreeDeferralPrintsSplicedRootAfterInputSelection(t *testing.T) {
 	root, _ := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())
