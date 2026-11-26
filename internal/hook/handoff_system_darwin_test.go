@@ -84,6 +84,62 @@ func allowDarwinSystemFixtureRoot(t *testing.T, dir string) {
 	t.Cleanup(func() { darwinSystemRoots = roots })
 }
 
+func TestDarwinSystemToolSkipsRejectedPATHHits(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	outside := filepath.Join(dir, "outside")
+	allowed := filepath.Join(dir, "allowed")
+	allowDarwinSystemFixtureRoot(t, allowed)
+	for _, bin := range []string{outside, allowed} {
+		require.NoError(t, os.Mkdir(bin, 0o700))
+	}
+	outsideTool := filepath.Join(outside, "true")
+	allowedTool := filepath.Join(allowed, "true")
+	writeFile(t, outsideTool, "#!/bin/sh\nexit 42\n")
+	require.NoError(t, os.Chmod(outsideTool, 0o700))
+	require.NoError(t, os.Symlink(outsideTool, allowedTool))
+	checkout := t.TempDir()
+	profile := &checkset.WorktreeSnapshot{
+		Path: []string{outside, allowed},
+		System: checkset.SnapshotSystem{
+			SnapshotSystemInputs: checkset.SnapshotSystemInputs{Tools: []string{"true"}},
+		},
+	}
+	ctx := t.Context()
+	plan, err := prepareHandoffSystem(ctx, checkout, profile)
+	require.NoError(t, err)
+	require.Contains(t, plan.Inputs, handoffSystemInput{
+		Path: "/usr/bin/true", Tool: "true", Digest: planDigest(t, ctx, "/usr/bin/true"),
+	})
+	proof, err := digestGateInputs(ctx, checkout, "", nil)
+	require.NoError(t, err)
+	result, err := executeHandoffSnapshot(ctx, "", checkout, proof, nil, editCheck{
+		name: "path-fallback", argv: []string{"true"},
+		policy: &checkset.Check{WorktreeSnapshot: profile},
+	}, handoffWorktreePlan{system: plan})
+	require.NoError(t, err)
+	require.Empty(t, result)
+
+	profile.Isolation = checkset.IsolationLiveVerified
+	plan, err = prepareHandoffSystem(ctx, checkout, profile)
+	require.NoError(t, err)
+	result, err = executeHandoffLive(ctx, "", checkout, nil, editCheck{
+		name: "path-fallback-live", argv: []string{"true"},
+		policy: &checkset.Check{WorktreeSnapshot: profile},
+	}, handoffWorktreePlan{system: plan})
+	require.NoError(t, err)
+	require.Empty(t, result)
+
+	rejected := filepath.Join(outside, "ethos-rejected-tool")
+	require.NoError(t, os.Rename(outsideTool, rejected))
+	profile.Isolation = ""
+	profile.System.Tools = []string{"ethos-rejected-tool"}
+	plan, err = prepareHandoffSystem(ctx, checkout, profile)
+	require.ErrorContains(t, err, rejected+" is outside supported Darwin system roots")
+	require.Empty(t, plan.Inputs)
+	require.Empty(t, plan.Mounts)
+}
+
 func TestDarwinHandoffWorktreeSystemInputs(t *testing.T) {
 	user, err := os.UserHomeDir()
 	require.NoError(t, err)
