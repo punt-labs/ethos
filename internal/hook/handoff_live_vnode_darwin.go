@@ -142,7 +142,15 @@ func (g *darwinLiveVnodes) add(ctx context.Context, path string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	fd, err := unix.Open(path, unix.O_EVTONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	var before unix.Stat_t
+	if err := unix.Lstat(path, &before); err != nil {
+		return err
+	}
+	mode := unix.O_NOFOLLOW
+	if before.Mode&unix.S_IFMT == unix.S_IFLNK {
+		mode = unix.O_SYMLINK
+	}
+	fd, err := unix.Open(path, unix.O_EVTONLY|unix.O_CLOEXEC|mode, 0)
 	if err != nil {
 		return err
 	}
@@ -161,7 +169,9 @@ func (g *darwinLiveVnodes) add(ctx context.Context, path string) error {
 		return err
 	}
 	kind := node.stat.Mode & unix.S_IFMT
-	if kind != unix.S_IFDIR && kind != unix.S_IFREG || node.stat.Ino != current.Ino || node.stat.Dev != current.Dev {
+	if kind != unix.S_IFDIR && kind != unix.S_IFREG && kind != unix.S_IFLNK ||
+		node.stat.Ino != before.Ino || node.stat.Dev != before.Dev ||
+		node.stat.Ino != current.Ino || node.stat.Dev != current.Dev {
 		return errors.New("vnode path cannot be verified")
 	}
 	g.nodes[fd] = node
