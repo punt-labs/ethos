@@ -85,7 +85,8 @@ func TestHandoffWorktreePrivateVarTmp(t *testing.T) {
 	marker := filepath.Join(private, "file")
 	const emptyVarTmp = `set -eu
 test -d /var/tmp
-test -z "$(ls -A /var/tmp)"
+contents=$(ls -A /var/tmp)
+test -z "$contents"
 `
 	root, run := handoffMetadataFixture(t, emptyVarTmp+fmt.Sprintf(`mkdir -p %q
 echo marker > %q
