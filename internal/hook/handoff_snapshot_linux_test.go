@@ -690,6 +690,23 @@ exec go test -race .
 	require.NoFileExists(t, marker)
 }
 
+func TestHandoffWorktreeDeferralMapsLiteralCheckoutPath(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "gate.sh"), "printf 'live gate\\n'\n")
+	check := checkset.Check{
+		Name: "manual", Stage: "handoff", Files: checkset.Patterns{All: true}, Cwd: "root",
+		Run:              []string{"/bin/sh", "/checkout/gate.sh"},
+		WorktreeSnapshot: &checkset.WorktreeSnapshot{Requires: []string{"mach_lookup"}},
+	}
+	feedback := runHandoffGate(context.Background(), root, "worker", nil, check, nil)
+	require.Contains(t, feedback.Notice, "mach_lookup unavailable")
+	_, manual, found := strings.Cut(feedback.Notice, "Run the explicit project gate: ")
+	require.True(t, found, feedback.Notice)
+	out, err := exec.Command("/bin/sh", "-c", manual).CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	require.Equal(t, "live gate\n", string(out))
+}
+
 func TestHandoffWorktreeDeferralPrintsSplicedRootAfterInputSelection(t *testing.T) {
 	root, _ := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())

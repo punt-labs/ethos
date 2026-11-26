@@ -385,7 +385,7 @@ func handoffManualCommand(root string, files []string, check checkset.Check) str
 		planRoot = gateRoot
 	}
 	word := func(s string) string {
-		if check.Snapshot != nil {
+		if check.Snapshot != nil || check.WorktreeSnapshot != nil {
 			if s == gateRoot {
 				s = root
 			} else if rel, ok := strings.CutPrefix(s, gateRoot+"/"); ok && filepath.IsLocal(rel) {
