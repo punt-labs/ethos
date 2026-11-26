@@ -37,7 +37,7 @@ const gateRecordBytes = 512 << 10
 var errHandoffScratchShadowsInput = errors.New("checkout scratch shadows snapshot content")
 
 var handoffRunnerBuild = sync.OnceValues(func() (string, error) {
-	f, err := os.Open("/proc/self/exe")
+	f, err := openHandoffRunnerExecutable()
 	if err != nil {
 		return "", err
 	}

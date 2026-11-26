@@ -20,6 +20,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDarwinHandoffRunnerExecutable(t *testing.T) {
+	file, err := openHandoffRunnerExecutable()
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+
+	replacement, err := os.CreateTemp(t.TempDir(), "runner")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = replacement.Close() })
+	require.ErrorContains(t, checkDarwinRunnerExecutable(replacement), "no longer matches the running image")
+}
+
 func TestDarwinHandoffLoopbackVerdict(t *testing.T) {
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	require.NoError(t, err)
