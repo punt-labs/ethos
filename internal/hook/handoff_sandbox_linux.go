@@ -130,6 +130,7 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 	defer cancel()
 	plan := handoffSandboxManifest{Inputs: inputs}
 	argv := check.argv
+	cwd := check.cwd
 	if check.policy != nil && check.policy.WorktreeSnapshot != nil {
 		profile := check.policy.WorktreeSnapshot
 		roots := linuxHandoffRoots()
@@ -142,6 +143,10 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 			return "", err
 		}
 		argv = roots.expandArgs(argv)
+		for i := 1; i < len(argv); i++ {
+			argv[i] = worktreeSandboxPath(checkout, argv[i])
+		}
+		cwd = worktreeSandboxPath(checkout, cwd)
 		env = append(env, "ETHOS_HANDOFF_CHECKOUT_NAME="+filepath.Base(checkout))
 		plan.Worktree = &handoffSandboxWorktree{Environment: env, CheckoutScratch: profile.Scratch.Checkout}
 	}
@@ -149,7 +154,7 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 	if err != nil {
 		return "", errors.New("cannot encode the snapshot input manifest")
 	}
-	cmd := exec.CommandContext(ctx, self, append([]string{handoffSandboxArg, scratch, checkout, check.cwd, proof, string(manifest)}, argv...)...)
+	cmd := exec.CommandContext(ctx, self, append([]string{handoffSandboxArg, scratch, checkout, cwd, proof, string(manifest)}, argv...)...)
 	cmd.Env = slices.Clone(sandboxEnvironment)
 	if dir := os.Getenv("GOCOVERDIR"); filepath.IsAbs(dir) {
 		cmd.Env = append(cmd.Env, "GOCOVERDIR="+dir)
@@ -213,6 +218,35 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 	return fmt.Sprintf("%s: %s\ncommand: %s\n%s", check.name, detail, strings.Join(check.argv, " "), strings.Join(lines[max(0, len(lines)-40):], "\n")), nil
 }
 
+func worktreeSandboxPath(checkout, value string) string {
+	if filepath.IsAbs(value) {
+		if rel, err := filepath.Rel(checkout, value); err == nil && filepath.IsLocal(rel) {
+			return filepath.Join(gateRoot, rel)
+		}
+	}
+	return value
+}
+
+func resolveWorktreeExecutable(name string, env []string) (string, error) {
+	if strings.ContainsRune(name, '/') {
+		return name, nil
+	}
+	for _, value := range env {
+		path, ok := strings.CutPrefix(value, "PATH=")
+		if !ok {
+			continue
+		}
+		for _, dir := range filepath.SplitList(path) {
+			candidate := filepath.Join(dir, name)
+			if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() && unix.Access(candidate, unix.X_OK) == nil {
+				return candidate, nil
+			}
+		}
+		break
+	}
+	return "", unix.ENOENT
+}
+
 func insideGatePath(root, path string) bool {
 	rel, err := filepath.Rel(root, path)
 	return err == nil && filepath.IsLocal(rel)
@@ -233,7 +267,9 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 			err = &handoffSetupError{phase: phase, cause: err}
 		}
 	}()
-	if len(argv) == 0 || argv[0] != "/bin/sh" || !insideGatePath(gateRoot, cwd) {
+	var plan handoffSandboxManifest
+	if len(argv) == 0 || argv[0] == "" || !insideGatePath(gateRoot, cwd) ||
+		json.Unmarshal([]byte(manifest), &plan) != nil || (plan.Worktree == nil && argv[0] != "/bin/sh") {
 		return errors.New("invalid sandbox plan")
 	}
 	phase = "make mount propagation private"
@@ -250,10 +286,6 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 		return err
 	}
 	if err := unix.Mount("tmpfs", checkout, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0700,size=256m"); err != nil {
-		return err
-	}
-	var plan handoffSandboxManifest
-	if err := json.Unmarshal([]byte(manifest), &plan); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), gateInputTime)
@@ -345,10 +377,17 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 		return err
 	}
 	phase = "start sandbox command"
+	executable := argv[0]
+	if plan.Worktree != nil {
+		executable, err = resolveWorktreeExecutable(argv[0], env)
+		if err != nil {
+			return err
+		}
+	}
 	if _, err := io.WriteString(status, handoffSandboxReady); err != nil {
 		return err
 	}
-	return unix.Exec(argv[0], argv, env)
+	return unix.Exec(executable, argv, env)
 }
 
 func mountGateReadOnly(source, target string) error {
