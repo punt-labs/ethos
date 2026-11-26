@@ -137,15 +137,17 @@ and add files in its private copy without changing the published tree.
 
 ### Replay
 
-This replay requires the unpublished prototype changes. Building the
-base revision alone does not enable snapshot build-cache reuse.
+This replay requires the throwaway prototype branch
+`devin/1795676128-build-cache-prototype` at `864d201` (based on `8c89c4c`;
+not for merge). Building `8c89c4c` or main alone does not enable
+snapshot build-cache reuse.
 
 1. Use disposable checkouts of Points #38 at `ffa4d06` and Cryptd #131
    at `e0db489`. Install each sidecar's pinned Linux amd64 archive with
    `ethos handoff fetch-runtime`, or use `fetch-runtime --file <archive>`
    for the digest-matching Cryptd archive.
 2. Add the opt-in to the existing sidecar check. In the local Ethos
-   prototype worktree, run `mkdir -p .tmp/opencode` and
+   checkout of `864d201`, run `mkdir -p .tmp/opencode` and
    `go build -o .tmp/opencode/ethos-build-cache ./cmd/ethos`. With an
    empty build-cache scope, invoke the binary by absolute path with
    `hook subagent-stop` from the consumer checkout. Use a payload with
