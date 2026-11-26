@@ -143,7 +143,7 @@ var writerRegistry = map[string]writerEntry{
 	"internal/hook.probeDarwinHandoff":        exempt("writes fixed self-test fixture bytes in a private temporary directory; no record content"),
 	"internal/hook.writeDarwinHandoffProfile": exempt("writes a private per-run sandbox policy consumed as executable configuration, not as a persisted record"),
 	"internal/hook.writeGateResult":           checkpoint("LeakRule"),
-	"internal/hook.handoffSystemMemo.save":     checkpoint("LeakRule"),
+	"internal/hook.handoffSystemMemo.save":    checkpoint("LeakRule"),
 	"internal/hook.handoffRenames":            exempt("copies Git index bytes to a private temporary candidate; no record payload is authored or published, and redacting binary index bytes would corrupt them"),
 	"internal/layout.CreateLocalTemp":         exempt("creates an empty 0600 staging file beneath the canonical local root; takes no payload and writes no content; record-writing callers retain their redaction and final-guard obligations"),
 	"internal/hook.openEnvFile":               exempt("opens Claude Code's session-local CLAUDE_ENV_FILE solely to append the static export GIT_OPTIONAL_LOCKS=0 line; never publishes a repository record"),
