@@ -319,9 +319,11 @@ func fingerprintHandoffSystemFile(ctx context.Context, path string, flags int, b
 		return "", errors.New("system input is not a regular file")
 	}
 	var key handoffMemoKey
+	var memoPath string
 	if memo != nil {
 		key = handoffMemoIdentity(info)
-		if digest, ok := memo.get(path, key); ok {
+		memoPath = handoffMemoPathKey(path)
+		if digest, ok := memo.get(memoPath, key); ok {
 			return digest, nil
 		}
 	}
@@ -335,7 +337,7 @@ func fingerprintHandoffSystemFile(ctx context.Context, path string, flags int, b
 		if err != nil || handoffMemoIdentity(final) != key {
 			return "", errors.New("system input changed while hashing")
 		}
-		memo.put(path, handoffMemoRecord{Key: key, Digest: digest})
+		memo.put(memoPath, handoffMemoRecord{Key: key, Digest: digest})
 	}
 	return digest, nil
 }

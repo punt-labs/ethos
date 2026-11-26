@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/punt-labs/ethos/v4/internal/layout"
+	"github.com/punt-labs/ethos/v4/internal/redact"
 	"golang.org/x/sys/unix"
 )
 
@@ -41,8 +43,12 @@ func loadHandoffSystemMemo(path string) *handoffSystemMemo {
 	if err != nil {
 		return nil
 	}
+	return readHandoffSystemMemo(filepath.Join(root, "handoff-linuxbrew-memo-experiment", "v2.json"))
+}
+
+func readHandoffSystemMemo(path string) *handoffSystemMemo {
 	memo := &handoffSystemMemo{
-		path: filepath.Join(root, "handoff-linuxbrew-memo-experiment", "v1.json"),
+		path: path,
 		next: make(map[string]handoffMemoRecord),
 	}
 	fd, err := unix.Open(memo.path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
@@ -69,6 +75,11 @@ func handoffMemoIdentity(info fs.FileInfo) handoffMemoKey {
 	stat := info.Sys().(*syscall.Stat_t)
 	return handoffMemoKey{Dev: uint64(stat.Dev), Inode: uint64(stat.Ino), Size: stat.Size,
 		Mtime: stat.Mtim.Nano(), Ctime: stat.Ctim.Nano()}
+}
+
+func handoffMemoPathKey(path string) string {
+	digest := sha256.Sum256([]byte(path))
+	return hex.EncodeToString(digest[:])
 }
 
 func (m *handoffSystemMemo) get(path string, key handoffMemoKey) (string, bool) {
@@ -106,11 +117,15 @@ func (m *handoffSystemMemo) save() {
 	if err != nil || len(data) > memoExperimentLimit {
 		return
 	}
+	home, err := os.UserHomeDir()
+	if err != nil || redact.LeakRule(string(data), home) != "" {
+		return
+	}
 	dir := filepath.Dir(m.path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
 	}
-	f, err := os.CreateTemp(dir, "memo-")
+	f, err := os.CreateTemp(dir, layout.DotTempPattern("memo"))
 	if err != nil {
 		return
 	}
