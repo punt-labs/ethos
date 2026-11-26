@@ -15,6 +15,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// HandoffStageBudget leaves time for hook feedback before the wrapper expires.
+const HandoffStageBudget = 29 * time.Minute
+
 type Set struct {
 	Name        string  `yaml:"name" json:"name"`
 	Description string  `yaml:"description,omitempty" json:"description,omitempty"`
@@ -37,7 +40,14 @@ type Check struct {
 	FailOnOutput bool              `yaml:"fail_on_output,omitempty" json:"fail_on_output,omitempty"`
 	Timeout      string            `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 	Cwd          string            `yaml:"cwd,omitempty" json:"cwd,omitempty"`
+	Snapshot     *Snapshot         `yaml:"snapshot,omitempty" json:"snapshot,omitempty"`
 	fields       map[string]bool
+}
+
+type Snapshot struct {
+	Profile string  `yaml:"profile" json:"profile"`
+	Inputs  Strings `yaml:"inputs" json:"inputs"`
+	Epoch   string  `yaml:"epoch" json:"epoch"`
 }
 
 func (c *Check) UnmarshalYAML(node *yaml.Node) error {
@@ -83,6 +93,22 @@ func (c *Check) UnmarshalYAML(node *yaml.Node) error {
 			}
 		}
 		fields[key] = true
+	}
+	if s := values["snapshot"]; s.Kind != 0 {
+		if s.Kind != yaml.MappingNode {
+			return fmt.Errorf("snapshot must be a mapping")
+		}
+		for i := 0; i < len(s.Content); i += 2 {
+			switch s.Content[i].Value {
+			case "inputs":
+			case "profile", "epoch":
+				if s.Content[i+1].ShortTag() != "!!str" {
+					return fmt.Errorf("snapshot %s must be a string", s.Content[i].Value)
+				}
+			default:
+				return fmt.Errorf("unknown snapshot field %q", s.Content[i].Value)
+			}
+		}
 	}
 	if err := node.Decode((*wire)(c)); err != nil {
 		return err
@@ -240,6 +266,27 @@ func (c *Check) validate() error {
 	if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
 		return fmt.Errorf("run must be a non-empty argv")
 	}
+	if s := c.Snapshot; s != nil {
+		if c.Stage != "handoff" || s.Profile != "linux-shell-v1" || argv[0] != "/bin/sh" {
+			return fmt.Errorf("snapshot profile must be linux-shell-v1 with run starting with /bin/sh at handoff")
+		}
+		if strings.TrimSpace(s.Epoch) == "" || len(s.Epoch) > 128 || len(s.Inputs) == 0 {
+			return fmt.Errorf("snapshot requires an epoch (at most 128 bytes) and input paths")
+		}
+		for _, input := range s.Inputs {
+			if input == "." || path.Clean(input) != input || strings.ContainsAny(input, "\\:*?[]{}\x00") || strings.HasPrefix(input, "/") {
+				return fmt.Errorf("snapshot inputs must be literal checkout-relative file paths")
+			}
+			for _, part := range strings.Split(input, "/") {
+				if part == ".." || part == ".git" || part == ".tmp" || part == "" {
+					return fmt.Errorf("invalid snapshot input path %q", input)
+				}
+			}
+			if strings.HasPrefix(input+"/", ".punt-labs/local/") || strings.HasPrefix(input+"/", ".punt-labs/ethos/sessions/") {
+				return fmt.Errorf("snapshot inputs cannot include local Ethos state")
+			}
+		}
+	}
 	for _, arg := range argv {
 		if !strings.ContainsAny(arg, "{}") {
 			continue
@@ -276,6 +323,9 @@ func (c *Check) validate() error {
 	cap := map[string]time.Duration{"edit": time.Minute, "commit": 15 * time.Minute, "handoff": 30 * time.Minute}[c.Stage]
 	if err != nil || duration <= 0 || duration > cap {
 		return fmt.Errorf("timeout %q must be a positive duration within the %s %s stage cap", c.Timeout, c.Stage, cap)
+	}
+	if c.Stage == "handoff" && duration > HandoffStageBudget {
+		c.Timeout = HandoffStageBudget.String()
 	}
 	c.Exclude = append(c.Exclude, ".tmp/**", ".punt-labs/local/**")
 	return nil

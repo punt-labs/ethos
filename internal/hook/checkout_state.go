@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -64,7 +65,23 @@ func handoffState(checkout, agent string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(append(append(policy, 0), state...))
+	var inputs []string
+	for _, check := range checks {
+		if check.Snapshot != nil {
+			inputs = append(inputs, check.Snapshot.Inputs...)
+		}
+	}
+	key := append(append(policy, 0), state...)
+	if len(inputs) != 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), gateInputTime)
+		defer cancel()
+		proof, err := digestGateInputs(ctx, checkout, "", inputs)
+		if err != nil {
+			return "", err
+		}
+		key = append(append(key, 0), proof...)
+	}
+	sum := sha256.Sum256(key)
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
@@ -145,20 +162,72 @@ func sessionAuditEntries(checkout, sessionID string) ([]auditEntry, error) {
 // Ethos's own machine-local session and audit files are excluded: hooks
 // write them on every tool call, read-only ones included.
 func checkoutState(checkout string) (string, error) {
-	out, err := gitenv.Output(checkout, "git", "--no-optional-locks", "status", "--porcelain=v2", "-z", "--branch", "--no-ahead-behind", "--untracked-files=all", "--ignore-submodules=none",
+	return checkoutStateBudgeted(checkout, nil)
+}
+
+type gateHashBudget struct {
+	ctx       context.Context
+	dst       io.Writer
+	remaining int64
+}
+
+func (b *gateHashBudget) Write(p []byte) (int, error) {
+	if err := b.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if int64(len(p)) > b.remaining {
+		b.remaining = -1
+		return 0, errors.New("handoff fingerprint exceeds byte budget")
+	}
+	n, err := b.dst.Write(p)
+	b.remaining -= int64(n)
+	return n, err
+}
+
+func checkoutStateWithBudget(ctx context.Context, checkout string) (string, error) {
+	return checkoutStateBudgeted(checkout, &gateHashBudget{ctx: ctx, remaining: gateBytes})
+}
+
+func fingerprintGit(checkout string, budget *gateHashBudget, args ...string) ([]byte, error) {
+	if budget == nil {
+		return gitenv.Output(checkout, "git", args...)
+	}
+	deadline, ok := budget.ctx.Deadline()
+	if !ok || budget.ctx.Err() != nil || !time.Now().Before(deadline) {
+		return nil, context.DeadlineExceeded
+	}
+	var out bytes.Buffer
+	bounded := &gateHashBudget{ctx: budget.ctx, dst: &out, remaining: min(budget.remaining, 8<<20)}
+	_, err := gitenv.Run(gitenv.Spec{Git: "git", Dir: checkout, Args: args, Env: gitenv.Parsed(), Stdout: bounded, Limit: time.Until(deadline)})
+	budget.remaining -= int64(out.Len())
+	if bounded.remaining < 0 {
+		return nil, errors.New("git fingerprint output exceeds byte budget")
+	}
+	return out.Bytes(), err
+}
+
+func checkoutStateBudgeted(checkout string, budget *gateHashBudget) (string, error) {
+	out, err := fingerprintGit(checkout, budget, "--no-optional-locks", "status", "--porcelain=v2", "-z", "--branch", "--no-ahead-behind", "--untracked-files=all", "--ignore-submodules=none",
 		"--", ":(top)", ":(top,exclude).punt-labs/local", ":(top,exclude).punt-labs/ethos/sessions")
 	if err != nil {
 		return "", fmt.Errorf("git status: %w", err)
 	}
 	h := sha256.New()
-	fmt.Fprintf(h, "%s\x00", checkout)
+	var writer io.Writer = h
+	if budget != nil {
+		old := budget.dst
+		budget.dst = h
+		defer func() { budget.dst = old }()
+		writer = budget
+	}
+	fmt.Fprintf(writer, "%s\x00", checkout)
 	records := strings.Split(string(out), "\x00")
 	for i := 0; i < len(records); i++ {
 		record := records[i]
 		if record == "" || strings.HasPrefix(record, "# ") && !strings.HasPrefix(record, "# branch.oid ") {
 			continue
 		}
-		fmt.Fprintf(h, "%s\x00", record)
+		fmt.Fprintf(writer, "%s\x00", record)
 		var path string
 		switch record[0] {
 		case '#':
@@ -171,7 +240,7 @@ func checkoutState(checkout string) (string, error) {
 			if i == len(records) || records[i] == "" {
 				return "", fmt.Errorf("git status: rename without source %q", record)
 			}
-			fmt.Fprintf(h, "%s\x00", records[i])
+			fmt.Fprintf(writer, "%s\x00", records[i])
 		case 'u':
 			path = statusPath(record, 11)
 		case '?':
@@ -182,20 +251,23 @@ func checkoutState(checkout string) (string, error) {
 		if path == "" {
 			return "", fmt.Errorf("git status: malformed record %q", record)
 		}
-		if err := hashWorktreePath(h, filepath.Join(checkout, filepath.FromSlash(path))); err != nil {
+		if err := hashWorktreePath(writer, filepath.Join(checkout, filepath.FromSlash(path)), budget); err != nil {
 			return "", err
 		}
 	}
-	if err := hashHiddenPaths(h, checkout); err != nil {
+	if err := hashHiddenPaths(writer, checkout, budget); err != nil {
 		return "", err
+	}
+	if budget != nil && (budget.remaining < 0 || budget.ctx.Err() != nil) {
+		return "", errors.New("handoff fingerprint exceeded its budget")
 	}
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // hashHiddenPaths hashes tracked files marked assume-unchanged or
 // skip-worktree, whose edits git status does not report.
-func hashHiddenPaths(h io.Writer, checkout string) error {
-	out, err := gitenv.Output(checkout, "git", "--no-optional-locks", "ls-files", "-v", "-z",
+func hashHiddenPaths(h io.Writer, checkout string, budget *gateHashBudget) error {
+	out, err := fingerprintGit(checkout, budget, "--no-optional-locks", "ls-files", "-v", "-z",
 		"--", ":(top)", ":(top,exclude).punt-labs/local", ":(top,exclude).punt-labs/ethos/sessions")
 	if err != nil {
 		return fmt.Errorf("git ls-files: %w", err)
@@ -210,7 +282,7 @@ func hashHiddenPaths(h io.Writer, checkout string) error {
 		}
 		path := record[2:]
 		fmt.Fprintf(h, "hidden %c %s\x00", tag, path)
-		if err := hashWorktreePath(h, filepath.Join(checkout, filepath.FromSlash(path))); err != nil {
+		if err := hashWorktreePath(h, filepath.Join(checkout, filepath.FromSlash(path)), budget); err != nil {
 			return err
 		}
 	}
@@ -225,7 +297,10 @@ func statusPath(record string, fields int) string {
 	return parts[fields-1]
 }
 
-func hashWorktreePath(h io.Writer, path string) error {
+func hashWorktreePath(h io.Writer, path string, budget *gateHashBudget) error {
+	if budget != nil && budget.ctx.Err() != nil {
+		return budget.ctx.Err()
+	}
 	info, err := os.Lstat(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		_, err = io.WriteString(h, "absent\x00")
@@ -257,7 +332,7 @@ func hashWorktreePath(h io.Writer, path string) error {
 			fmt.Fprintf(h, "dir\x00")
 			return nil
 		}
-		state, err := checkoutState(path)
+		state, err := checkoutStateBudgeted(path, budget)
 		if err != nil {
 			return err
 		}

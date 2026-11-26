@@ -64,11 +64,13 @@ func TestWorktreeCheckPolicy(t *testing.T) {
 			require.NoError(t, ss.Create("policy", session.Participant{AgentID: "human"}, session.Participant{AgentID: "sub"}, "", ""))
 			var out, stderr bytes.Buffer
 			require.NoError(t, HandleSubagentStopWithIO(context.Background(), strings.NewReader(`{"session_id":"policy","agent_id":"sub"}`), ss, &out, &stderr))
-			require.Empty(t, out.String())
-			assert.Contains(t, stderr.String(), tc.want+"-handoff")
+			require.Empty(t, stderr.String())
+			assert.Contains(t, out.String(), `"systemMessage"`)
+			assert.Contains(t, out.String(), tc.want+"-handoff")
+			assert.NotContains(t, out.String(), `"decision"`)
 			data, err := os.ReadFile(log)
 			require.NoError(t, err)
-			require.Equal(t, strings.Repeat(worktree+"\n", 4), string(data))
+			require.Equal(t, strings.Repeat(worktree+"\n", 3), string(data))
 		})
 	}
 }

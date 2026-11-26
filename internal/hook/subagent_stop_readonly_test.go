@@ -16,6 +16,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestHandoffReadOnlyStopWithSnapshot(t *testing.T) {
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	checkPolicy(t, root, "project", "  - name: snapshot-check\n    stage: handoff\n    files: all\n    run: [/bin/sh, -c, 'exit 1']\n    snapshot: {profile: linux-shell-v1, inputs: [README], epoch: v1}\n")
+	ss := session.NewStore(t.TempDir())
+	require.NoError(t, ss.Create("snapshot", session.Participant{AgentID: "human"}, session.Participant{AgentID: "main"}, "", ""))
+	payload := []byte(`{"session_id":"snapshot","agent_id":"sub","agent_type":"worker"}`)
+	_, err := captureStdout(t, func() error {
+		return HandleSubagentStartWithDeps(bytes.NewReader(payload), SubagentStartDeps{Identities: identity.NewStore(t.TempDir()), Sessions: ss})
+	})
+	require.NoError(t, err)
+	var out, stderr bytes.Buffer
+	require.NoError(t, HandleSubagentStopWithIO(context.Background(), bytes.NewReader(payload), ss, &out, &stderr))
+	require.Empty(t, out.String())
+}
+
 // TestHandoffReadOnlyStop proves a subagent stop skips handoff checks only
 // when the agent made no Write/Edit call and the checkout is unchanged since
 // SubagentStart; any Bash-style change still runs the `files: all` gate.
@@ -134,12 +151,12 @@ func TestHandoffReadOnlyStop(t *testing.T) {
 			roster, err = ss.Load("ro")
 			require.NoError(t, err)
 			require.Nil(t, roster.FindParticipant("sub"))
+			require.NoFileExists(t, marker)
 			if tc.runs {
-				require.FileExists(t, marker)
 				require.Contains(t, out.String(), `"decision":"block"`)
+				require.Contains(t, out.String(), "handoff checks deferred")
 				return
 			}
-			require.NoFileExists(t, marker)
 			require.Empty(t, out.String())
 			require.Empty(t, stderr.String())
 		})

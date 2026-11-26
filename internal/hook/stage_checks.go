@@ -18,6 +18,7 @@ import (
 type StageFeedback struct {
 	Advisory string
 	Blocking string
+	Notice   string
 }
 
 // RunStageChecks runs configured commit or handoff checks, without marker defaults.
@@ -38,7 +39,7 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 	}
 	cap := 15 * time.Minute
 	if stage == "handoff" {
-		cap = 30 * time.Minute
+		cap = checkset.HandoffStageBudget
 	} else if stage != "commit" {
 		return StageFeedback{Blocking: "checks: unsupported stage " + stage}
 	}
@@ -79,7 +80,7 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 		}
 		return StageFeedback{Blocking: editRedact(stage + " files: " + err.Error())}
 	}
-	var advisory, blocking []string
+	var advisory, blocking, notices []string
 	roots := make([]string, 0, len(filesByRoot))
 	for root := range filesByRoot {
 		roots = append(roots, root)
@@ -110,6 +111,19 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 			}
 		}
 		for _, check := range rootChecks {
+			if stage == "handoff" {
+				result := runHandoffGate(ctx, root, agent, filesByRoot[root], check, rootChecks)
+				if result.Advisory != "" {
+					advisory = append(advisory, result.Advisory)
+				}
+				if result.Blocking != "" {
+					blocking = append(blocking, result.Blocking)
+				}
+				if result.Notice != "" {
+					notices = append(notices, result.Notice)
+				}
+				continue
+			}
 			for _, invocation := range stageInvocations(root, filesByRoot[root], check) {
 				invocation.env = env
 				if failure := runLoggedCheck(ctx, root, stage, invocation); failure != "" {
@@ -122,7 +136,7 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 			}
 		}
 	}
-	return StageFeedback{Advisory: editRedact(strings.Join(advisory, "\n\n")), Blocking: editRedact(strings.Join(blocking, "\n\n"))}
+	return StageFeedback{Advisory: editRedact(strings.Join(advisory, "\n\n")), Blocking: editRedact(strings.Join(blocking, "\n\n")), Notice: editRedact(strings.Join(notices, "\n\n"))}
 }
 
 func handoffPolicySelected(checkout, agent string) bool {
@@ -222,9 +236,13 @@ func stageFiles(root, stage string) ([]string, error) {
 }
 
 func stageInvocations(root string, files []string, check checkset.Check) []editCheck {
+	return stageInvocationsAt(root, files, check, false)
+}
+
+func stageInvocationsAt(root string, files []string, check checkset.Check, snapshot bool) []editCheck {
 	var matched []string
 	for _, file := range files {
-		if check.Matches(filepath.ToSlash(file)) {
+		if (!snapshot || filepath.IsLocal(file)) && check.Matches(filepath.ToSlash(file)) {
 			matched = append(matched, filepath.Join(root, file))
 		}
 	}
@@ -278,7 +296,12 @@ func stageInvocations(root string, files []string, check checkset.Check) []editC
 			case "{files}":
 				argv = append(argv, group...)
 			case "{package_dir}":
-				argv = append(argv, packages...)
+				for _, pkg := range packages {
+					if snapshot {
+						pkg = filepath.Join(root, pkg)
+					}
+					argv = append(argv, pkg)
+				}
 			case "{root}":
 				argv = append(argv, root)
 			default:

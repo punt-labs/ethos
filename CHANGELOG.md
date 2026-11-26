@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Subagent handoff reuses verified results for explicitly declared Linux
+  snapshot checks and coalesces concurrent requests for the same inputs.
+  Other handoff checks defer visibly and name the project command to run.
 - Development Git hooks test the staged index or pushed commit in isolated
   worktrees. Pre-commit includes reverse dependents of affected packages.
 - The Go unit and subprocess selectors split mixed packages, and CI runs an

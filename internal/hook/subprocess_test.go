@@ -5,6 +5,7 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -687,6 +688,32 @@ func TestSubprocess_AuditLog(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
+	runHandoffSandbox(func(dir string) error {
+		if testing.CoverMode() == "" {
+			return nil
+		}
+		os.Args = os.Args[:1]
+		flag.Parse()
+		if err := flag.Set("test.run", "^$"); err != nil {
+			return err
+		}
+		if err := flag.Set("test.gocoverdir", dir); err != nil {
+			return err
+		}
+		r, w, err := os.Pipe()
+		if err != nil {
+			return err
+		}
+		defer r.Close()
+		defer w.Close()
+		stdout := os.Stdout
+		os.Stdout = w
+		defer func() { os.Stdout = stdout }()
+		if m.Run() != 0 {
+			return fmt.Errorf("cannot collect sandbox child coverage")
+		}
+		return nil
+	})
 	testhelpers.EnableInheritedCoverage()
 	testhelpers.MustIsolateGit() // no inherited GIT_DIR; temp dirs stop at the temp root
 	// This suite normally runs inside a real Claude Code session, where

@@ -29,7 +29,7 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 	}
 	input, err := readHookInput(ctx, r)
 	if err != nil {
-		stopFeedback(out, errOut, StageFeedback{Blocking: "subagent-stop: " + err.Error()}, false)
+		stopFeedback(out, StageFeedback{Blocking: "subagent-stop: " + err.Error()}, false)
 		return nil
 	}
 
@@ -51,7 +51,7 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 	active, _ := input["stop_hook_active"].(bool)
 	checkout, err := hookCheckout(ctx)
 	if err != nil {
-		stopFeedback(out, errOut, StageFeedback{Blocking: "handoff scope: " + err.Error()}, active)
+		stopFeedback(out, StageFeedback{Blocking: "handoff scope: " + err.Error()}, active)
 		return nil
 	}
 	if readOnlyStop(ctx, checkout, agent, sessionID, start) {
@@ -61,23 +61,36 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 	feedback := runStageRootChecks(ctx, checkout, agent, "handoff", func() (map[string][]string, error) {
 		return handoffFilesWithAdvice(checkout, sessionID, agentID, func(note string) { notes = append(notes, note) })
 	})
-	feedback.Advisory = strings.TrimSpace(strings.Join(append(notes, feedback.Advisory), "\n"))
-	stopFeedback(out, errOut, feedback, active)
+	if len(notes) != 0 && handoffPolicySelected(checkout, agent) {
+		fmt.Fprintln(errOut, editRedact(strings.Join(notes, "\n")))
+	}
+	stopFeedback(out, feedback, active)
 	return nil
 }
 
-func stopFeedback(out, errOut io.Writer, feedback StageFeedback, active bool) {
-	if feedback.Advisory != "" {
-		fmt.Fprintln(errOut, editRedact(feedback.Advisory))
+func stopFeedback(out io.Writer, feedback StageFeedback, active bool) {
+	response := map[string]string{}
+	notice := feedback.Advisory
+	if feedback.Blocking != "" {
+		if active {
+			if notice == "" {
+				notice = feedback.Blocking
+			} else {
+				notice += "\n" + feedback.Blocking
+			}
+		} else {
+			response["decision"] = "block"
+			response["reason"] = editRedact(feedback.Blocking)
+			notice = strings.TrimSpace(notice + "\n" + feedback.Notice)
+		}
 	}
-	if feedback.Blocking == "" {
+	if notice != "" {
+		response["systemMessage"] = editRedact(notice)
+	}
+	if len(response) == 0 {
 		return
 	}
-	if active {
-		fmt.Fprintln(errOut, editRedact(feedback.Blocking))
-		return
-	}
-	_ = json.NewEncoder(out).Encode(map[string]string{"decision": "block", "reason": editRedact(feedback.Blocking)})
+	_ = json.NewEncoder(out).Encode(response)
 }
 
 func handoffFiles(checkout, sessionID, agentID string) (map[string][]string, error) {

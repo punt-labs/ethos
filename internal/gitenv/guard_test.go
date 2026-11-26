@@ -73,6 +73,9 @@ var allowedProcessUses = map[string][]string{
 	// Marker-selected edit tools, not git; bounded and run with gitenv.Parsed.
 	"internal/hook/post_edit.go": {"exec.CommandContext(<expr>)", "(*exec.Cmd).Run"},
 
+	// Re-exec Ethos in Linux namespaces, then replace it with the isolated shell.
+	"internal/hook/handoff_sandbox_linux.go": {"exec.CommandContext(self)", "(*exec.Cmd).Start", "unix.Exec"},
+
 	// Not git.
 	"cmd/ethos/ui.go":        {`exec.Command("open")`, `exec.Command("xdg-open")`, "(*exec.Cmd).Start", "(*exec.Cmd).Start"}, // opens the browser
 	"cmd/ethos/attribute.go": {"exec.Command(editor)", "(*exec.Cmd).Run"},                                                    // $EDITOR

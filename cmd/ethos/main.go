@@ -90,6 +90,7 @@ func firstWord(args []string) int {
 }
 
 func main() {
+	hook.RunHandoffSandbox()
 	startLogging()
 	err := unknownGroupCommand(os.Args[1:])
 	if err == nil {

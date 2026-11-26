@@ -85,6 +85,9 @@ func reflectFields(t reflect.Type, overlays map[string]Overlay) []Field {
 			f.List = true
 			elem = elem.Elem()
 		}
+		if elem.Kind() == reflect.Pointer {
+			elem = elem.Elem()
+		}
 		if elem.Kind() == reflect.Struct {
 			f.Fields = reflectFields(elem, ov.Fields)
 		}

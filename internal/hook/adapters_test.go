@@ -173,11 +173,16 @@ func TestAdapterProbeFeedback(t *testing.T) {
 					}
 				} else {
 					feedback := runStageChecks(context.Background(), root, "", stage, func() ([]string, error) { return []string{"edited.go"}, nil })
+					want := "Makefile"
+					if stage == "handoff" {
+						want = "no declared snapshot profile. Run the explicit project gate: (cd "
+						require.Contains(t, feedback.Blocking+feedback.Advisory, " && make check)")
+					}
 					if mode == "block" {
-						require.Contains(t, feedback.Blocking, "Makefile")
+						require.Contains(t, feedback.Blocking, want)
 						require.Empty(t, feedback.Advisory)
 					} else {
-						require.Contains(t, feedback.Advisory, "Makefile")
+						require.Contains(t, feedback.Advisory, want)
 						require.Empty(t, feedback.Blocking)
 					}
 				}

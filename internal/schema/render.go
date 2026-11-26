@@ -71,8 +71,33 @@ func (e Entity) JSONSchema() map[string]any {
 		timeout := items["properties"].(map[string]any)["timeout"].(map[string]any)
 		timeout["allOf"] = []any{map[string]any{"pattern": "[1-9]"}}
 		adapterSchema(items)
+		snapshotSchema(items)
 	}
 	return obj
+}
+
+func snapshotSchema(items map[string]any) {
+	snapshot := items["properties"].(map[string]any)["snapshot"].(map[string]any)
+	fields := snapshot["properties"].(map[string]any)
+	inputs := fields["inputs"].(map[string]any)
+	inputs["minItems"] = 1
+	input := inputs["items"].(map[string]any)
+	input["pattern"] = `^[^/\\:*?\[\]{}\x00]+(/[^/\\:*?\[\]{}\x00]+)*$`
+	input["not"] = map[string]any{"pattern": `(^|/)[.](\.?|git|tmp)(/|$)|^[.]punt-labs/(local|ethos/sessions)(/|$)`}
+	epoch := fields["epoch"].(map[string]any)
+	epoch["minLength"] = 1
+	epoch["maxLength"] = 128
+	epoch["pattern"] = `\S`
+	items["allOf"] = []any{map[string]any{
+		"if": map[string]any{"required": []string{"snapshot"}},
+		"then": map[string]any{
+			"required": []string{"run"},
+			"properties": map[string]any{
+				"stage": map[string]any{"const": "handoff"},
+				"run":   map[string]any{"prefixItems": []any{map[string]any{"const": "/bin/sh"}}},
+			},
+		},
+	}}
 }
 
 func adapterSchema(items map[string]any) {

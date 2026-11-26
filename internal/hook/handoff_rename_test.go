@@ -107,9 +107,14 @@ func TestHandoffRenamedFiles(t *testing.T) {
 				require.NoError(t, ss.Create("rename", session.Participant{AgentID: "human"}, session.Participant{AgentID: "sub"}, "", ""))
 				var out, stderr bytes.Buffer
 				require.NoError(t, HandleSubagentStopWithIO(context.Background(), strings.NewReader(`{"session_id":"rename","agent_id":"sub"}`), ss, &out, &stderr))
-				require.Empty(t, out.String())
+				require.Contains(t, out.String(), "handoff checks deferred (all)")
 				if kind == "lookup failure" {
 					require.Contains(t, stderr.String(), "handoff rename lookup")
+					require.NoError(t, os.Remove(filepath.Join(store, ".punt-labs/ethos.yaml")))
+					var quietOut, quietErr bytes.Buffer
+					require.NoError(t, HandleSubagentStopWithIO(context.Background(), strings.NewReader(`{"session_id":"rename","agent_id":"sub"}`), ss, &quietOut, &quietErr))
+					require.Empty(t, quietOut.String())
+					require.Empty(t, quietErr.String())
 				} else if kind == "modified mv" || strings.Contains(kind, "similar target") {
 					require.Contains(t, stderr.String(), "non-exact")
 				} else if kind == "candidate budget" {
@@ -118,13 +123,15 @@ func TestHandoffRenamedFiles(t *testing.T) {
 					require.Empty(t, stderr.String())
 				}
 				if kind == "delete" || kind == "unattributed delete" || kind == "lookup failure" || kind == "target owned by other agent" || kind == "modified mv" || strings.Contains(kind, "similar target") || kind == "candidate budget" {
-					require.NoFileExists(t, log)
+					require.NotContains(t, out.String(), "handoff checks deferred (glob)")
 				} else {
-					data, err := os.ReadFile(log)
+					require.Contains(t, out.String(), "handoff checks deferred (glob)")
+					files, err := handoffFiles(root, "rename", "sub")
 					require.NoError(t, err)
-					require.Equal(t, filepath.Join(root, target)+"\x00", string(data))
+					require.Contains(t, files[root], target)
 				}
-				require.FileExists(t, all)
+				require.NoFileExists(t, log)
+				require.NoFileExists(t, all)
 				after, err := os.ReadFile(indexPath)
 				require.NoError(t, err)
 				require.Equal(t, before, after, "real index must remain byte-identical")
