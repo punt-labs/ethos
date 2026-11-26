@@ -93,6 +93,9 @@ and add files in its private copy without changing the published tree.
 
 ### Replay
 
+This replay requires the unpublished prototype changes. Building the
+base revision alone does not enable snapshot build-cache reuse.
+
 1. Use disposable checkouts of Points #38 at `ffa4d06` and Cryptd #131
    at `e0db489`. Install each sidecar's pinned Linux amd64 archive with
    `ethos handoff fetch-runtime`, or use `fetch-runtime --file <archive>`
