@@ -308,7 +308,7 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), gateInputTime)
-	digest, err := digestGateInputs(ctx, live, checkout, plan.Inputs)
+	digest, err := digestGateInputsWithMode(ctx, live, checkout, plan.Inputs, plan.Worktree != nil)
 	cancel()
 	if err != nil || digest != proof {
 		return errors.New("snapshot inputs did not match the key or invocation")

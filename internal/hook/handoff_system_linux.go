@@ -11,9 +11,11 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/checkset"
@@ -37,6 +39,11 @@ func prepareHandoffSystem(ctx context.Context, checkout string, profile *checkse
 	}
 	ctx, cancel := context.WithTimeout(ctx, gateInputTime)
 	defer cancel()
+	var err error
+	plan.Passwd, plan.Group, err = handoffAccountFiles()
+	if err != nil {
+		return plan, err
+	}
 	for _, dir := range slices.Concat(sandboxRuntime, worktreeSystemRuntime) {
 		source, err := filepath.EvalSymlinks(dir)
 		if errors.Is(err, os.ErrNotExist) {
@@ -48,12 +55,18 @@ func prepareHandoffSystem(ctx context.Context, checkout string, profile *checkse
 		plan.Mounts = append(plan.Mounts, handoffSystemMount{Source: source, Target: dir, Directory: true})
 	}
 	platform := profile.System.Platforms[runtime.GOOS+"-"+runtime.GOARCH]
+	files := slices.Concat(profile.System.Files, platform.Files)
+	if _, err := os.Stat("/etc/os-release"); err == nil {
+		files = append(files, "/etc/os-release")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return plan, errors.New("cannot inspect system input /etc/os-release")
+	}
 	for _, group := range []struct {
 		paths []string
 		dir   bool
 	}{
 		{slices.Concat(profile.System.Dirs, platform.Dirs), true},
-		{slices.Concat(profile.System.Files, platform.Files), false},
+		{files, false},
 	} {
 		slices.Sort(group.paths)
 		for _, path := range slices.Compact(group.paths) {
@@ -107,11 +120,26 @@ func prepareHandoffSystem(ctx context.Context, checkout string, profile *checkse
 		plan.Inputs = append(plan.Inputs, input)
 	}
 	h := sha256.New()
-	if err := json.NewEncoder(h).Encode([]any{"worktree-system-v1", plan.Mounts, plan.Inputs}); err != nil {
+	if err := json.NewEncoder(h).Encode([]any{"worktree-system-v1", plan.Mounts, plan.Inputs, plan.Passwd, plan.Group}); err != nil {
 		return plan, err
 	}
 	plan.Fingerprint = hex.EncodeToString(h.Sum(nil))
 	return plan, nil
+}
+
+func handoffAccountFiles() (string, string, error) {
+	uid, gid := strconv.Itoa(os.Geteuid()), strconv.Itoa(os.Getegid())
+	u, err := user.LookupId(uid)
+	if err != nil || u.Username == "" || strings.ContainsAny(u.Username, ":\n\r\x00") {
+		return "", "", errors.New("cannot resolve the invoking user's name for the snapshot")
+	}
+	g, err := user.LookupGroupId(gid)
+	if err != nil || g.Name == "" || strings.ContainsAny(g.Name, ":\n\r\x00") {
+		return "", "", errors.New("cannot resolve the invoking group's name for the snapshot")
+	}
+	home := filepath.Join(linuxHandoffRoots().scratch, "home")
+	return fmt.Sprintf("%s:x:%s:%s::%s:/bin/sh\n", u.Username, uid, gid, home),
+		fmt.Sprintf("%s:x:%s:\n", g.Name, gid), nil
 }
 
 func pathsOverlap(a, b string) bool {
@@ -119,7 +147,7 @@ func pathsOverlap(a, b string) bool {
 }
 
 func safeHandoffSystemPath(path, checkout string) bool {
-	for _, blocked := range []string{checkout, gateRoot, "/scratch", "/runtime", "/tmp", "/dev", "/proc", "/sys", "/.old-root"} {
+	for _, blocked := range []string{checkout, gateRoot, "/scratch", "/runtime", "/tmp", "/dev", "/proc", "/sys", "/.old-root", "/etc/passwd", "/etc/group"} {
 		if pathsOverlap(path, blocked) {
 			return false
 		}
@@ -203,6 +231,16 @@ func fingerprintHandoffSystemInput(ctx context.Context, path string, directory b
 }
 
 func mountHandoffSystem(root string, plan handoffSystemPlan) error {
+	etc := filepath.Join(root, "etc")
+	if err := os.Mkdir(etc, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(etc, "passwd"), []byte(plan.Passwd), 0o444); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(etc, "group"), []byte(plan.Group), 0o444); err != nil {
+		return err
+	}
 	host, err := os.OpenRoot("/")
 	if err != nil {
 		return err

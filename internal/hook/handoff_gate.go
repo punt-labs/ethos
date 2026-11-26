@@ -42,6 +42,8 @@ type gateResult struct {
 type handoffSystemPlan struct {
 	Mounts      []handoffSystemMount
 	Inputs      []handoffSystemInput
+	Passwd      string
+	Group       string
 	Fingerprint string
 }
 
@@ -144,7 +146,8 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	}
 
 	inputCtx, cancel := context.WithTimeout(ctx, gateInputTime)
-	state, proof, err := handoffGateInputs(inputCtx, root, check.Snapshot.Inputs)
+	preserveMode := check.WorktreeSnapshot != nil
+	state, proof, err := handoffGateInputs(inputCtx, root, check.Snapshot.Inputs, preserveMode)
 	cancel()
 	if err != nil {
 		return deferGate("cannot verify declared snapshot inputs within the key budget")
@@ -178,7 +181,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	verifyCurrent := func(when string) string {
 		verify, cancel := context.WithTimeout(ctx, gateInputTime)
 		defer cancel()
-		currentState, currentProof, err := handoffGateInputs(verify, root, check.Snapshot.Inputs)
+		currentState, currentProof, err := handoffGateInputs(verify, root, check.Snapshot.Inputs, preserveMode)
 		if err != nil || currentState != state || currentProof != proof {
 			return "checkout changed " + when
 		}
@@ -426,16 +429,20 @@ func gatePlanInputsPresent(snapshot string, argv []string) bool {
 	return true
 }
 
-func handoffGateInputs(ctx context.Context, root string, inputs []string) (string, string, error) {
+func handoffGateInputs(ctx context.Context, root string, inputs []string, preserveMode bool) (string, string, error) {
 	state, err := checkoutStateWithBudget(ctx, root)
 	if err != nil {
 		return "", "", err
 	}
-	proof, err := digestGateInputs(ctx, root, "", inputs)
+	proof, err := digestGateInputsWithMode(ctx, root, "", inputs, preserveMode)
 	return state, proof, err
 }
 
 func digestGateInputs(ctx context.Context, root, dest string, inputs []string) (string, error) {
+	return digestGateInputsWithMode(ctx, root, dest, inputs, false)
+}
+
+func digestGateInputsWithMode(ctx context.Context, root, dest string, inputs []string, preserveMode bool) (string, error) {
 	src, err := os.OpenRoot(root)
 	if err != nil {
 		return "", err
@@ -450,7 +457,7 @@ func digestGateInputs(ctx context.Context, root, dest string, inputs []string) (
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		n, err := copyGateInput(ctx, h, src, dest, input, budget)
+		n, err := copyGateInput(ctx, h, src, dest, input, budget, preserveMode)
 		if err != nil {
 			return "", err
 		}
@@ -462,7 +469,7 @@ func digestGateInputs(ctx context.Context, root, dest string, inputs []string) (
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func copyGateInput(ctx context.Context, h io.Writer, src *os.Root, dest, input string, budget int) (int, error) {
+func copyGateInput(ctx context.Context, h io.Writer, src *os.Root, dest, input string, budget int, preserveMode bool) (int, error) {
 	f, err := openGateInput(src, input)
 	if err != nil {
 		return 0, err
@@ -476,6 +483,9 @@ func copyGateInput(ctx context.Context, h io.Writer, src *os.Root, dest, input s
 		return 0, errors.New("snapshot input is not a regular file within budget")
 	}
 	mode := info.Mode().Perm()&0o100 | 0o400
+	if preserveMode {
+		mode = info.Mode().Perm()
+	}
 	_, _ = fmt.Fprintf(h, "%s\x00%d\x00%d\x00", input, mode, info.Size())
 	output := &gateHashBudget{ctx: ctx, dst: h, remaining: int64(budget)}
 	var target *os.File
@@ -492,6 +502,9 @@ func copyGateInput(ctx context.Context, h io.Writer, src *os.Root, dest, input s
 	}
 	n, err := io.Copy(output, io.LimitReader(f, info.Size()+1))
 	if target != nil {
+		if err == nil && preserveMode {
+			err = target.Chmod(mode)
+		}
 		err = errors.Join(err, target.Close())
 	}
 	if err == nil && n != info.Size() {
