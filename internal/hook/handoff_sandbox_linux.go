@@ -28,7 +28,6 @@ const handoffSandboxReady = "ready\n"
 var sandboxRuntime = []string{"/bin", "/lib", "/lib64", "/usr/bin", "/usr/lib", "/usr/lib64"}
 
 const sandboxPATH = "/usr/bin:/bin"
-const worktreeSandboxPATH = "/usr/local/bin:/usr/bin:/bin"
 
 var sandboxEnvironment = []string{"PATH=" + sandboxPATH, "LC_ALL=C", "TZ=UTC", "HOME=/nonexistent"}
 
@@ -211,11 +210,6 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 	diagnostic.LogHookCheck(ctx, checkout, checkout, "handoff", check.name, "failed", time.Since(start))
 	lines := strings.Split(strings.TrimRight(string(bytes.Join([][]byte{stdout.data, stderr.data}, []byte("\n"))), "\n"), "\n")
 	return fmt.Sprintf("%s: %s\ncommand: %s\n%s", check.name, detail, strings.Join(check.argv, " "), strings.Join(lines[max(0, len(lines)-40):], "\n")), nil
-}
-
-func insideGatePath(root, path string) bool {
-	rel, err := filepath.Rel(root, path)
-	return err == nil && filepath.IsLocal(rel)
 }
 
 type handoffSetupError struct {

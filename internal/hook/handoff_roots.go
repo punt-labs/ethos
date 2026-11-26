@@ -14,6 +14,13 @@ type handoffRoots struct {
 	checkout, runtime, scratch, temp string
 }
 
+const worktreeSandboxPATH = "/usr/local/bin:/usr/bin:/bin"
+
+func insideGatePath(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && filepath.IsLocal(rel)
+}
+
 func (roots handoffRoots) replacer() *strings.Replacer {
 	return strings.NewReplacer("{root}", roots.checkout, "{runtime}", roots.runtime, "{scratch}", roots.scratch)
 }
