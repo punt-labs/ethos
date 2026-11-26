@@ -156,10 +156,6 @@ func TestHandoffWorktreeDefersUnimplementedFields(t *testing.T) {
 		{"prehydrate", "prehydrate: {run: [sh, seed.sh]}"},
 		{"git", "git: {}"},
 		{"network", "network: loopback"},
-		{"system.tools", "system: {tools: [sh]}"},
-		{"system.files", "system: {files: [/etc/os-release]}"},
-		{"system.dirs", "system: {dirs: [/usr/share]}"},
-		{"system.platforms", fmt.Sprintf("system: {platforms: {%s-%s: {tools: [sh]}}}", runtime.GOOS, runtime.GOARCH)},
 		{"data", "data: [{name: fixture, url: 'https://example.com/data', max_age_hours: 1, mount: fixture}]"},
 	} {
 		t.Run(tc.field, func(t *testing.T) {

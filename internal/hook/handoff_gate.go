@@ -39,6 +39,22 @@ type gateResult struct {
 	Pending bool `json:",omitempty"`
 }
 
+type handoffSystemPlan struct {
+	Mounts      []handoffSystemMount
+	Inputs      []handoffSystemInput
+	Fingerprint string
+}
+
+type handoffSystemMount struct {
+	Source, Target string
+	Directory      bool
+}
+
+type handoffSystemInput struct {
+	Path, Tool, Digest string
+	Directory          bool
+}
+
 func runHandoffGate(ctx context.Context, root, agent string, files []string, check checkset.Check, policy []checkset.Check) StageFeedback {
 	manualRoot := root
 	if check.WorktreeSnapshot != nil {
@@ -133,6 +149,10 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	if err != nil {
 		return deferGate("cannot verify declared snapshot inputs within the key budget")
 	}
+	system, err := prepareHandoffSystem(ctx, root, check.WorktreeSnapshot)
+	if err != nil {
+		return deferGate(err.Error())
+	}
 	h := sha256.New()
 	enc := json.NewEncoder(h)
 	if err := enc.Encode([]string{"handoff-v1", root, identity, state, proof}); err != nil {
@@ -143,6 +163,11 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	}
 	if err := enc.Encode(check); err != nil {
 		return deferGate("cannot encode the selected check")
+	}
+	if system.Fingerprint != "" {
+		if err := enc.Encode(system.Fingerprint); err != nil {
+			return deferGate("cannot encode the handoff system inputs")
+		}
 	}
 	for _, invocation := range plan {
 		if err := enc.Encode([]any{invocation.argv, invocation.cwd}); err != nil {
@@ -156,6 +181,10 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		currentState, currentProof, err := handoffGateInputs(verify, root, check.Snapshot.Inputs)
 		if err != nil || currentState != state || currentProof != proof {
 			return "checkout changed " + when
+		}
+		currentSystem, err := prepareHandoffSystem(ctx, root, check.WorktreeSnapshot)
+		if err != nil || currentSystem.Fingerprint != system.Fingerprint {
+			return "system inputs changed " + when
 		}
 		currentPolicy, _, err := configuredStageChecks(root, agent, "handoff")
 		if err != nil || !reflect.DeepEqual(policy, currentPolicy) {
@@ -230,7 +259,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 						return nil
 					}
 				}
-				failure, err := executeHandoffSnapshot(ctx, checkScratch, root, proof, check.Snapshot.Inputs, invocation)
+				failure, err := executeHandoffSnapshot(ctx, checkScratch, root, proof, check.Snapshot.Inputs, invocation, system)
 				if err != nil {
 					result = deferGate(err.Error())
 					return nil
@@ -288,14 +317,6 @@ func unsupportedWorktreeField(profile *checkset.WorktreeSnapshot) string {
 		return "git"
 	case profile.Network != "":
 		return "network"
-	case len(profile.System.Tools) != 0:
-		return "system.tools"
-	case len(profile.System.Files) != 0:
-		return "system.files"
-	case len(profile.System.Dirs) != 0:
-		return "system.dirs"
-	case len(profile.System.Platforms) != 0:
-		return "system.platforms"
 	case len(profile.Data) != 0:
 		return "data"
 	default:

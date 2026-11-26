@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -542,6 +543,112 @@ func TestHandoffWorktreeRunsDirectCommands(t *testing.T) {
 			require.NotContains(t, feedback.Blocking, "deferred")
 		})
 	}
+}
+
+func TestHandoffWorktreeSystemRunsCgoRace(t *testing.T) {
+	for _, tool := range []string{"go", "gcc", "awk"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skip(err)
+		}
+	}
+	goroot := runtime.GOROOT()
+	if !filepath.IsAbs(goroot) {
+		t.Skip("absolute Go toolchain required")
+	}
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("TMPDIR", "/var/tmp")
+	host := t.TempDir()
+	hostFile := filepath.Join(host, "file")
+	hostDir := filepath.Join(host, "dir")
+	writeFile(t, hostFile, "host-file\n")
+	writeFile(t, filepath.Join(hostDir, "marker"), "host-dir\n")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	checkPolicy(t, root, "project", "  - name: cgo-race\n    stage: handoff\n    files: all\n    timeout: 3m\n    run: [sh, gate.sh]\n")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml"), fmt.Sprintf(`checks:
+  cgo-race:
+    profile: linux-worktree-v1
+    epoch: cgo-race
+    sources: {mode: worktree}
+    path: [%q]
+    env: {CGO_ENABLED: "1", GOPROXY: "off", GOTOOLCHAIN: "local", GOMAXPROCS: "4"}
+    system:
+      files: [%q]
+      platforms:
+        %s-%s: {dirs: [%q, %q], tools: [go, gcc, awk]}
+`, filepath.Join(goroot, "bin"), hostFile, runtime.GOOS, runtime.GOARCH, goroot, hostDir))
+	writeFile(t, filepath.Join(root, "go.mod"), "module example.com/proof\n\ngo 1.23\n")
+	writeFile(t, filepath.Join(root, "cgo.go"), "package proof\n// #include <stdint.h>\nimport \"C\"\nfunc size() int { return int(C.sizeof_uint64_t) }\n")
+	writeFile(t, filepath.Join(root, "cgo_test.go"), "package proof\nimport \"testing\"\nfunc TestSize(t *testing.T) { if size() != 8 { t.Fatal(size()) } }\n")
+	marker := filepath.Join("/dev/shm", filepath.Base(host)+"-cgo")
+	writeFile(t, filepath.Join(root, "gate.sh"), fmt.Sprintf(`set -eu
+test "$(awk 'NR == 1' %q)" = host-file
+grep -qx host-dir %q
+if (echo write > %q) || (touch %q); then exit 31; fi
+test ! -e %q
+echo sandbox > %q
+grep -qx sandbox %q
+exec go test -race .
+`, hostFile, filepath.Join(hostDir, "marker"), hostFile, filepath.Join(hostDir, "new"), marker, marker, marker))
+	feedback := RunStageChecks(context.Background(), root, "worker", "handoff")
+	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+	require.Empty(t, feedback.Blocking)
+	require.NoFileExists(t, filepath.Join(hostDir, "new"))
+	require.NoFileExists(t, marker)
+}
+
+func TestHandoffWorktreeSystemFileChangeInvalidatesResult(t *testing.T) {
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("TMPDIR", "/var/tmp")
+	file := filepath.Join(t.TempDir(), "status")
+	writeFile(t, file, "good\n")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	checkPolicy(t, root, "project", "  - name: system-file\n    stage: handoff\n    files: all\n    run: [sh, gate.sh]\n")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml"), fmt.Sprintf(`checks:
+  system-file:
+    profile: linux-worktree-v1
+    epoch: system-file-proof
+    sources: {mode: worktree}
+    system: {files: [%q]}
+`, file))
+	writeFile(t, filepath.Join(root, "gate.sh"), fmt.Sprintf("grep -qx good %q || (echo system-file-changed >&2; exit 42)\n", file))
+	run := func() StageFeedback { return RunStageChecks(context.Background(), root, "worker", "handoff") }
+	feedback := run()
+	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+	require.Empty(t, feedback.Blocking)
+	info, err := os.Stat(file)
+	require.NoError(t, err)
+	writeFile(t, file, "fail\n")
+	require.NoError(t, os.Chtimes(file, info.ModTime(), info.ModTime()))
+	feedback = run()
+	require.Contains(t, feedback.Blocking, "exit status 42")
+	require.Contains(t, feedback.Blocking, "system-file-changed")
+}
+
+func TestHandoffWorktreeHasPrivatePTY(t *testing.T) {
+	if _, err := os.Stat("/usr/bin/python3"); err != nil {
+		t.Skip(err)
+	}
+	live := t.TempDir()
+	writeFile(t, filepath.Join(live, "README"), "snapshot input\n")
+	inputs := []string{"README"}
+	proof, err := digestGateInputs(context.Background(), live, "", inputs)
+	require.NoError(t, err)
+	failure, err := executeHandoffSnapshot(context.Background(), t.TempDir(), live, proof, inputs, editCheck{
+		name: "pty", cwd: gateRoot, timeout: 5 * time.Second,
+		policy: &checkset.Check{WorktreeSnapshot: &checkset.WorktreeSnapshot{}},
+		argv: []string{"/usr/bin/python3", "-c", `import os
+assert not (set(os.listdir("/dev/pts")) - {"ptmx"})
+master, slave = os.openpty()
+assert os.ttyname(slave) == "/dev/pts/0"
+os.write(slave, b"private")
+assert os.read(master, 7) == b"private"
+`},
+	})
+	skipIfHandoffSandboxUnavailable(t, err)
+	require.NoError(t, err)
+	require.Empty(t, failure)
 }
 
 func skipIfHandoffSandboxUnavailable(t *testing.T, err error) {
