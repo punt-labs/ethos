@@ -350,14 +350,12 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		}
 	}
 	if err == nil && (!check.failOnOutput || len(stdout.data) == 0) {
-		diagnostic.LogHookCheck(ctx, checkout, checkout, "handoff", check.name, "completed", time.Since(start))
 		return "", nil
 	}
 	detail := "non-empty formatting output"
 	if err != nil {
 		detail = err.Error()
 	}
-	diagnostic.LogHookCheck(ctx, checkout, checkout, "handoff", check.name, "failed", time.Since(start))
 	output := string(bytes.Join([][]byte{stdout.data, stderr.data}, []byte("\n")))
 	if plan.Worktree != nil {
 		output = sandboxHomePath.ReplaceAllString(output, "${1}$$HOME${2}")

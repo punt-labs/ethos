@@ -121,6 +121,9 @@ func LogHookCheck(ctx context.Context, checkout, cwd, stage, name, outcome strin
 		if len(isolation) != 0 {
 			attrs = append(attrs, "isolation", isolation[0])
 		}
+		if len(isolation) > 1 {
+			attrs = append(attrs, "isolation_residual", isolation[1])
+		}
 		if cwd == "" {
 			cwd = checkout
 		}

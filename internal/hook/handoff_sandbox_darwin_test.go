@@ -51,7 +51,7 @@ func TestDarwinHandoffLoopbackVerdict(t *testing.T) {
 	}
 	require.Contains(t, logs.String(), `outcome=completed`)
 	require.Contains(t, logs.String(), `outcome=reused`)
-	require.Equal(t, 2, strings.Count(logs.String(), `isolation="residual (host localhost services reachable, shared port space)"`))
+	require.Equal(t, 2, strings.Count(logs.String(), `isolation=snapshot isolation_residual="residual (host localhost services reachable, shared port space)"`))
 }
 
 func TestDarwinHandoffSnapshotIsolation(t *testing.T) {

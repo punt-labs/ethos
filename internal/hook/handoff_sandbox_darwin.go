@@ -455,7 +455,7 @@ func runDarwinHandoffPlan(ctx context.Context, checkout, proof string, inputs []
 	if err != nil {
 		return "", err
 	}
-	return runDarwinHandoffCheck(ctx, profile, checkout, cwd, env, argv, check, loopback)
+	return runDarwinHandoffCheck(ctx, profile, checkout, cwd, env, argv, check)
 }
 
 func darwinHandoffScratch(checkout string) (string, error) {
@@ -473,7 +473,7 @@ func darwinHandoffScratch(checkout string) (string, error) {
 	return systemTemp, nil
 }
 
-func runDarwinHandoffCheck(ctx context.Context, profile, checkout, cwd string, env, argv []string, check editCheck, loopback bool) (string, error) {
+func runDarwinHandoffCheck(ctx context.Context, profile, checkout, cwd string, env, argv []string, check editCheck) (string, error) {
 	start := time.Now()
 	read, write, err := os.Pipe()
 	if err != nil {
@@ -521,17 +521,11 @@ func runDarwinHandoffCheck(ctx context.Context, profile, checkout, cwd string, e
 		}
 	}
 	if err == nil && (!check.failOnOutput || len(stdout.data) == 0) {
-		if !loopback {
-			diagnostic.LogHookCheck(ctx, checkout, checkout, "handoff", check.name, "completed", time.Since(start))
-		}
 		return "", nil
 	}
 	detail := "non-empty formatting output"
 	if err != nil {
 		detail = err.Error()
-	}
-	if !loopback {
-		diagnostic.LogHookCheck(ctx, checkout, checkout, "handoff", check.name, "failed", time.Since(start))
 	}
 	return fmt.Sprintf("%s: %s\n%s", check.name, detail, bytes.Join([][]byte{stdout.data, stderr.data}, []byte("\n"))), nil
 }

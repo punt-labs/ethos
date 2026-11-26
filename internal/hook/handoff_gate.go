@@ -49,10 +49,11 @@ var handoffRunnerBuild = sync.OnceValues(func() (string, error) {
 })
 
 type gateResult struct {
-	Key     string
-	Proof   string
-	Failure string
-	Pending bool `json:",omitempty"`
+	Key       string
+	Proof     string
+	Isolation string
+	Failure   string
+	Pending   bool `json:",omitempty"`
 }
 
 type handoffSystemPlan struct {
@@ -104,9 +105,13 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		return StageFeedback{}
 	}
 	start := time.Now()
-	var isolation []string
+	mode := checkset.IsolationSnapshot
+	if check.WorktreeSnapshot != nil && check.WorktreeSnapshot.Isolation != "" {
+		mode = check.WorktreeSnapshot.Isolation
+	}
+	isolation := []string{mode}
 	if runtime.GOOS == "darwin" && check.WorktreeSnapshot != nil && check.WorktreeSnapshot.Network == "loopback" {
-		isolation = []string{"residual (host localhost services reachable, shared port space)"}
+		isolation = append(isolation, "residual (host localhost services reachable, shared port space)")
 	}
 	feedback := func(message string) StageFeedback {
 		if check.OnFail == "advisory" {
@@ -115,7 +120,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		return StageFeedback{Blocking: message}
 	}
 	deferGate := func(reason string, noticeOnly ...bool) StageFeedback {
-		diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "deferred", time.Since(start))
+		diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "deferred", time.Since(start), mode)
 		message := fmt.Sprintf("handoff checks deferred (%s): %s. Run the explicit project gate: %s", check.Name, reason, handoffManualCommand(manualRoot, files, manualCheck))
 		if len(noticeOnly) > 0 && noticeOnly[0] {
 			return StageFeedback{Advisory: message}
@@ -129,10 +134,16 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	if check.InvalidSnapshotSidecar {
 		return deferGate("invalid snapshot sidecar")
 	}
+	if mode == checkset.IsolationLiveVerified {
+		if runtime.GOOS == "darwin" {
+			return deferGate("live-verified FSEvents cutoff unverified in darwin", true)
+		}
+		return deferGate("live-verified unavailable in "+runtime.GOOS+" snapshot", true)
+	}
 	var bundle handoffRuntime
 	if check.WorktreeSnapshot != nil {
-		if runtime.GOOS == "linux" && slices.Contains(check.WorktreeSnapshot.Requires, "mach_lookup") {
-			return deferGate("mach_lookup unavailable in linux snapshot")
+		if reason := unavailableSnapshotCapability(runtime.GOOS, check.WorktreeSnapshot.Requires); reason != "" {
+			return deferGate(reason)
 		}
 		var err error
 		bundle, err = prepareHandoffRuntime(ctx, check.WorktreeSnapshot, agent)
@@ -219,7 +230,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	}
 	h := sha256.New()
 	enc := json.NewEncoder(h)
-	if err := enc.Encode([]string{"handoff-v1", runnerBuild, root, identity, state, proof}); err != nil {
+	if err := enc.Encode([]string{"handoff-v1", runnerBuild, root, identity, state, proof, mode}); err != nil {
 		return deferGate("cannot encode the handoff key")
 	}
 	if err := enc.Encode(policy); err != nil {
@@ -311,7 +322,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 			}
 			// Holding the exclusive lease proves no prior owner still holds
 			// it. An orphaned pending record is neither a pass nor a failure.
-			if saved, ok := readGateResult(slot); ok && saved.Key == key && saved.Proof == proof && !saved.Pending {
+			if saved, ok := readGateResult(slot); ok && saved.Key == key && saved.Proof == proof && saved.Isolation == mode && !saved.Pending {
 				if !waited {
 					if reason := verifyData(); reason != "" {
 						result = deferGate(reason)
@@ -373,7 +384,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 					return nil
 				}
 			}
-			if err := writeGateResult(loc, slot, gateResult{Key: key, Proof: proof, Pending: true}); err != nil {
+			if err := writeGateResult(loc, slot, gateResult{Key: key, Proof: proof, Isolation: mode, Pending: true}); err != nil {
 				result = deferGate("cannot publish the handoff lease intent")
 				return nil
 			}
@@ -415,18 +426,16 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 				return nil
 			}
 			failure := editRedact(strings.Join(failures, "\n\n"))
-			if err := writeGateResult(loc, slot, gateResult{Key: key, Proof: proof, Failure: failure}); err != nil {
+			if err := writeGateResult(loc, slot, gateResult{Key: key, Proof: proof, Isolation: mode, Failure: failure}); err != nil {
 				diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "cache_write_failed", time.Since(start))
 			} else {
 				terminal = true
 			}
-			if len(isolation) != 0 {
-				outcome := "completed"
-				if failure != "" {
-					outcome = "failed"
-				}
-				diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, outcome, time.Since(start), isolation...)
+			outcome := "completed"
+			if failure != "" {
+				outcome = "failed"
 			}
+			diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, outcome, time.Since(start), isolation...)
 			result = feedback(failure)
 			return nil
 		})
@@ -593,6 +602,15 @@ func retainHandoffResults(pin *os.File, slot string, waited bool, now time.Time)
 		return nil
 	})
 	return !busy || hasSlot || count < gateRecordsPerStripe, err
+}
+
+func unavailableSnapshotCapability(goos string, required []string) string {
+	for _, capability := range required {
+		if goos == "darwin" || (goos == "linux" && capability == "mach_lookup") {
+			return capability + " unavailable in " + goos + " snapshot"
+		}
+	}
+	return ""
 }
 
 func handoffGateInputs(ctx context.Context, root string, inputs []string, preserveMode bool, scratchFiles ...string) (string, string, error) {
