@@ -46,9 +46,9 @@ func TestHandoffWithoutRepositoryOrChecks(t *testing.T) {
 			require.Equal(t, StageFeedback{}, RunStageChecks(context.Background(), root, "", "handoff"))
 			if !repository {
 				called := false
-				feedback := runStageRootChecks(context.Background(), root, "", "handoff", func() (map[string][]string, error) {
+				feedback := runStageRootChecks(context.Background(), root, "", "handoff", func() (stageScope, error) {
 					called = true
-					return nil, nil
+					return stageScope{}, nil
 				})
 				require.Equal(t, StageFeedback{}, feedback)
 				require.False(t, called, "non-Git handoffs cannot have repository checks and must not discover files")

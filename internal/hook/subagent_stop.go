@@ -59,8 +59,14 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 		return nil
 	}
 	var notes []string
-	feedback := runStageRootChecks(ctx, checkout, agent, "handoff", func() (map[string][]string, error) {
-		return handoffFilesWithAdvice(checkout, sessionID, agentID, func(note string) { notes = append(notes, note) })
+	feedback := runStageRootChecks(ctx, checkout, agent, "handoff", func() (stageScope, error) {
+		files, err := handoffFilesWithAdvice(checkout, sessionID, agentID, func(note string) { notes = append(notes, note) })
+		if err == nil && len(notes) != 0 {
+			if _, ok := files[checkout]; !ok {
+				files[checkout] = nil
+			}
+		}
+		return stageScope{filesByRoot: files, auditGap: len(notes) != 0}, err
 	})
 	if len(notes) != 0 && handoffPolicySelected(checkout, agent) {
 		fmt.Fprintln(errOut, editRedact(strings.Join(notes, "\n")))
