@@ -82,7 +82,7 @@ func prepareHandoffSystem(ctx context.Context, checkout string, profile *checkse
 				return plan, fmt.Errorf("cannot safely resolve system input %s", path)
 			}
 			source, err := filepath.EvalSymlinks(path)
-			if err != nil || !safeHandoffSystemPath(source, checkout) {
+			if err != nil || !safeHandoffSystemSource(path, source, checkout, group.dir) {
 				return plan, fmt.Errorf("cannot safely resolve system input %s", path)
 			}
 			input := handoffSystemInput{Path: path, Directory: group.dir}
@@ -166,6 +166,15 @@ func safeHandoffSystemPath(path, checkout string) bool {
 	return slices.ContainsFunc(worktreeSystemRoots, func(root string) bool {
 		return insideGatePath(root, path)
 	})
+}
+
+func safeHandoffSystemSource(path, source, checkout string, directory bool) bool {
+	if safeHandoffSystemPath(source, checkout) {
+		return true
+	}
+	return !directory && path == "/etc/os-release" &&
+		source != "/nix/store" && insideGatePath("/nix/store", source) &&
+		!pathsOverlap(source, checkout)
 }
 
 func handoffSystemCovers(mounts []handoffSystemMount, path string) bool {

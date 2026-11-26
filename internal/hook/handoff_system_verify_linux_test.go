@@ -114,6 +114,16 @@ func TestHandoffSystemRefusesPrivateSidecarPaths(t *testing.T) {
 	require.True(t, safeHandoffSystemPath("/usr/bin/sh", "/checkout-fixture"))
 }
 
+func TestHandoffSystemAllowsNixOSReleaseTargetOnly(t *testing.T) {
+	const source = "/nix/store/hash-etc-os-release/os-release"
+	require.True(t, safeHandoffSystemSource("/etc/os-release", source, "/checkout-fixture", false))
+	require.False(t, safeHandoffSystemSource("/etc/os-release", source, "/checkout-fixture", true))
+	require.False(t, safeHandoffSystemSource("/usr/share/other", source, "/checkout-fixture", false))
+	require.False(t, safeHandoffSystemSource("/etc/os-release", source, "/nix/store/hash-etc-os-release", false))
+	require.False(t, safeHandoffSystemSource("/etc/os-release", "/nix/store-other/os-release", "/checkout-fixture", false))
+	require.False(t, safeHandoffSystemPath(source, "/checkout-fixture"))
+}
+
 func TestMountHandoffSystemRejectsOccupiedTargets(t *testing.T) {
 	t.Run("existing accounts directory", func(t *testing.T) {
 		root := t.TempDir()
