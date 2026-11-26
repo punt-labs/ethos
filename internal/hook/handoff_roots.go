@@ -37,17 +37,20 @@ func (roots handoffRoots) environment(platform checkset.SnapshotPlatform, defaul
 		defaultPath = strings.Join(paths, string(filepath.ListSeparator))
 	}
 	env := []string{
-		"PATH=" + defaultPath, "LC_ALL=C", "TZ=UTC",
+		"PATH=" + defaultPath, "TZ=UTC",
 		"HOME=" + filepath.Join(roots.scratch, "home"), "TMPDIR=" + roots.temp,
 		"ETHOS_HANDOFF_ROOT=" + roots.checkout,
 		"ETHOS_HANDOFF_RUNTIME=" + roots.runtime,
 		"ETHOS_HANDOFF_SCRATCH=" + roots.scratch,
 	}
+	if _, ok := platform.Env["LANG"]; !ok {
+		env = append(env, "LANG=C")
+	}
 	replace := roots.replacer()
 	var extra []string
 	for key, value := range platform.Env {
 		switch key {
-		case "PATH", "HOME", "TMPDIR", "LC_ALL", "TZ", "GOCOVERDIR":
+		case "PATH", "HOME", "TMPDIR", "TZ", "GOCOVERDIR":
 			return nil, errors.New("snapshot runtime environment overrides a runner variable")
 		}
 		if key == "" || strings.HasPrefix(key, "ETHOS_HANDOFF_") || strings.ContainsAny(key, "=\x00") || strings.ContainsRune(value, 0) {
