@@ -355,7 +355,7 @@ type buildCacheUsage struct {
 	used   time.Time
 }
 
-func (c *handoffBuildCache) withBudget(ctx context.Context, incoming int64, install func() error) error {
+func (c *handoffBuildCache) withBudget(ctx context.Context, incoming int64, installCache func() error) error {
 	budget, _, err := lockBuildCache(ctx, filepath.Join(c.stateRoot(), "budget.lock"), unix.LOCK_EX, true)
 	if err != nil {
 		return err
@@ -427,7 +427,7 @@ func (c *handoffBuildCache) withBudget(ctx context.Context, incoming int64, inst
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return install()
+	return installCache()
 }
 
 func (c *handoffBuildCache) promoteCache(ctx context.Context, private string) error {
