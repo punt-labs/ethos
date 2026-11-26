@@ -28,7 +28,6 @@ const handoffSandboxReady = "ready\n"
 var sandboxRuntime = []string{"/bin", "/lib", "/lib64", "/usr/bin", "/usr/lib", "/usr/lib64"}
 
 const sandboxPATH = "/usr/bin:/bin"
-const worktreeSandboxPATH = "/usr/local/bin:/usr/bin:/bin"
 
 var sandboxEnvironment = []string{"PATH=" + sandboxPATH, "LC_ALL=C", "TZ=UTC", "HOME=/nonexistent"}
 
@@ -245,11 +244,6 @@ func resolveWorktreeExecutable(name string, env []string) (string, error) {
 		break
 	}
 	return "", unix.ENOENT
-}
-
-func insideGatePath(root, path string) bool {
-	rel, err := filepath.Rel(root, path)
-	return err == nil && filepath.IsLocal(rel)
 }
 
 type handoffSetupError struct {
