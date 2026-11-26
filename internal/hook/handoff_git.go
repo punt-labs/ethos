@@ -85,14 +85,27 @@ func digestLiveGitRefs(budget *gateHashBudget, dir string, entries []string) err
 	}
 	defer root.Close()
 	for _, entry := range entries {
-		err := fs.WalkDir(root.FS(), entry, func(path string, d fs.DirEntry, err error) error {
+		info, err := root.Lstat(entry)
+		if errors.Is(err, fs.ErrNotExist) && entry != "HEAD" {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			if err := digestLiveGitRefSymlink(budget, root, entry); err != nil {
+				return err
+			}
+			continue
+		}
+		err = fs.WalkDir(root.FS(), entry, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
-				if path == entry && entry != "HEAD" && errors.Is(err, fs.ErrNotExist) {
-					return nil
-				}
 				return err
 			}
 			mode := d.Type()
+			if mode&fs.ModeSymlink != 0 {
+				return digestLiveGitRefSymlink(budget, root, path)
+			}
 			if d.IsDir() {
 				_, err := fmt.Fprintf(budget, "%q\x00dir\x00", path)
 				return err
@@ -112,6 +125,24 @@ func digestLiveGitRefs(budget *gateHashBudget, dir string, entries []string) err
 		}
 	}
 	return nil
+}
+
+func digestLiveGitRefSymlink(budget *gateHashBudget, root *os.Root, path string) error {
+	link, err := root.Readlink(path)
+	if err != nil {
+		return err
+	}
+	target := link
+	if filepath.IsAbs(target) {
+		target, err = filepath.Rel(root.Name(), target)
+	} else {
+		target = filepath.Join(filepath.Dir(path), target)
+	}
+	if err != nil || path == "refs" || hasHandoffLinkBacktrack(link) || !strings.HasPrefix(target, "refs/") {
+		return fmt.Errorf("Git ref symlink leaves keyed metadata at %q", path)
+	}
+	_, err = fmt.Fprintf(budget, "%q\x00symlink\x00%d\x00%s", path, len(link), link)
+	return err
 }
 
 func captureHandoffGit(ctx context.Context, checkout string, profile *checkset.WorktreeSnapshot) (handoffGitView, error) {
