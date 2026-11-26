@@ -29,31 +29,51 @@ func NewLayeredStoreWithBundle(repo, bundle, global string, repoOnly bool) *Laye
 }
 
 func (s *LayeredStore) Load(slug string) (*Set, error) {
-	if err := attribute.ValidateSlug(slug); err != nil {
+	set, _, err := s.load(slug)
+	return set, err
+}
+
+func (s *LayeredStore) LoadForHandoff(slug string) (*Set, error) {
+	set, root, err := s.load(slug)
+	if err != nil {
 		return nil, err
+	}
+	if err := loadSnapshotSidecar(root, slug, set); err != nil {
+		for i := range set.Checks {
+			if set.Checks[i].Stage == "handoff" {
+				set.Checks[i].InvalidSnapshotSidecar = true
+			}
+		}
+	}
+	return set, nil
+}
+
+func (s *LayeredStore) load(slug string) (*Set, string, error) {
+	if err := attribute.ValidateSlug(slug); err != nil {
+		return nil, "", err
 	}
 	for _, root := range s.roots {
 		file := filepath.Join(root, "checks", slug+".yaml")
 		data, err := os.ReadFile(file)
 		if errors.Is(err, os.ErrNotExist) {
 			if _, linkErr := os.Lstat(file); linkErr == nil {
-				return nil, fmt.Errorf("reading check set %s: %w", file, err)
+				return nil, "", fmt.Errorf("reading check set %s: %w", file, err)
 			}
 			continue
 		}
 		if err != nil {
-			return nil, fmt.Errorf("reading check set %s: %w", file, err)
+			return nil, "", fmt.Errorf("reading check set %s: %w", file, err)
 		}
 		set, err := Decode(data)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", file, err)
+			return nil, "", fmt.Errorf("%s: %w", file, err)
 		}
 		if set.Name != slug {
-			return nil, fmt.Errorf("check set %s: name %q must match filename", file, set.Name)
+			return nil, "", fmt.Errorf("check set %s: name %q must match filename", file, set.Name)
 		}
-		return set, nil
+		return set, root, nil
 	}
-	return nil, fmt.Errorf("check set %q not found: %w", slug, os.ErrNotExist)
+	return nil, "", fmt.Errorf("check set %q not found: %w", slug, os.ErrNotExist)
 }
 
 func (s *LayeredStore) List() ([]string, error) {

@@ -120,7 +120,11 @@ func configuredStageChecks(checkout, agent, stage string) ([]checkset.Check, boo
 	if project {
 		sets = checkset.NewLayeredStoreWithBundle(projectRepo, bundleRoot, global, repoOnly)
 	}
-	set, err := sets.Load(ref)
+	load := sets.Load
+	if stage == "handoff" {
+		load = sets.LoadForHandoff
+	}
+	set, err := load(ref)
 	if err != nil {
 		return nil, true, err
 	}
