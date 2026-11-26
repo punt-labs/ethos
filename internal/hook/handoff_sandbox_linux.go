@@ -334,6 +334,8 @@ operands:
 			return false
 		}
 		if worktree != nil {
+			// Without prehydrate, checkout scratch starts empty. A non-program
+			// scratch operand is an output or a profile error that fails deterministically.
 			for _, scratch := range worktree.CheckoutScratch {
 				if len(worktree.Prehydrate) != 0 && insideGatePath(scratch, rel) ||
 					i != 0 && i != script && insideGatePath(scratch, path.Dir(rel)) {
