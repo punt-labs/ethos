@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -110,6 +111,38 @@ func TestHandoffInvalidSnapshotSidecarPreservesBasePolicy(t *testing.T) {
 	require.True(t, selected)
 	require.Len(t, checks, 1)
 	require.Equal(t, "commit-gate", checks[0].Name)
+}
+
+func TestHandoffSnapshotRuntimeDefersWithoutVerifiedArchive(t *testing.T) {
+	root, _ := postEditFixture(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	checkPolicy(t, root, "project", "  - name: full-gate\n    stage: handoff\n    files: all\n    adapter: make\n    target: check\n")
+	digest := strings.Repeat("1", 64)
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml"), fmt.Sprintf(`checks:
+  full-gate:
+    profile: linux-worktree-v1
+    epoch: test
+    sources: {mode: worktree}
+    runtime:
+      platforms:
+        %s-%s:
+          bundle: project-test
+          sha256: "%s"
+          url: https://example.com/project-test.tar.gz
+`, runtime.GOOS, runtime.GOARCH, digest))
+	run := func() StageFeedback {
+		return RunStageChecks(context.Background(), root, "worker", "handoff")
+	}
+	feedback := run()
+	require.Contains(t, feedback.Blocking, "runtime-missing")
+	require.Contains(t, feedback.Blocking, "https://example.com/project-test.tar.gz")
+	require.Contains(t, feedback.Notice, "make check")
+	writeFile(t, filepath.Join(home, ".punt-labs/ethos/runtimes", digest+".tar.gz"), "unverified archive")
+	feedback = run()
+	require.Contains(t, feedback.Blocking, "runtime-digest-mismatch")
+	require.Contains(t, feedback.Notice, "make check")
 }
 
 func TestHandoffChecks(t *testing.T) {
