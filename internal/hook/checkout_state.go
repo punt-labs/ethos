@@ -57,6 +57,11 @@ func handoffState(checkout, agent string) (string, error) {
 	if err != nil || len(checks) == 0 {
 		return "", err
 	}
+	for _, check := range checks {
+		if check.InvalidSnapshotSidecar || check.WorktreeSnapshot != nil {
+			return "", errors.New("cannot fingerprint a worktree snapshot sidecar")
+		}
+	}
 	policy, err := json.Marshal(checks)
 	if err != nil {
 		return "", err

@@ -92,6 +92,26 @@ func TestStageFileSelection(t *testing.T) {
 	require.Equal(t, []string{"unstaged.go"}, files)
 }
 
+func TestHandoffInvalidSnapshotSidecarPreservesBasePolicy(t *testing.T) {
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	checkPolicy(t, root, "project", "  - name: full-gate\n    stage: handoff\n    files: all\n    adapter: make\n    target: check\n    on_fail: advisory\n"+
+		"  - name: commit-gate\n    stage: commit\n    files: all\n    run: [/bin/true]\n")
+	writeFile(t, filepath.Join(root, ".punt-labs", "ethos", "checks", "snapshots", "project.yaml"), "checks: {full-gate: {unknown: true}}\n")
+	got := RunStageChecks(context.Background(), root, "worker", "handoff")
+	require.Empty(t, got.Blocking)
+	require.Contains(t, got.Advisory, "invalid snapshot sidecar")
+	require.Contains(t, got.Advisory, "make check")
+	_, err := handoffState(root, "worker")
+	require.Error(t, err)
+	checks, selected, err := configuredStageChecks(root, "worker", "commit")
+	require.NoError(t, err)
+	require.True(t, selected)
+	require.Len(t, checks, 1)
+	require.Equal(t, "commit-gate", checks[0].Name)
+}
+
 func TestHandoffChecks(t *testing.T) {
 	for _, tc := range []struct {
 		name, mode             string
