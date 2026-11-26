@@ -871,10 +871,26 @@ func verifyLiveSymlink(src *os.Root, input string, inputs []string) error {
 	}
 	target := filepath.Join(filepath.Dir(input), link)
 	_, keyed := slices.BinarySearch(inputs, target)
-	if filepath.IsAbs(link) || filepath.Clean(link) != link || !filepath.IsLocal(target) || !keyed {
+	if filepath.IsAbs(link) || hasHandoffLinkBacktrack(link) || !filepath.IsLocal(target) || !keyed {
 		return errors.New("symlink target is outside the keyed inputs")
 	}
 	return nil
+}
+
+func hasHandoffLinkBacktrack(link string) bool {
+	var seenPath bool
+	for part := range strings.SplitSeq(link, string(filepath.Separator)) {
+		switch part {
+		case "", ".":
+		case "..":
+			if seenPath {
+				return true
+			}
+		default:
+			seenPath = true
+		}
+	}
+	return false
 }
 
 func copyGateInput(ctx context.Context, h io.Writer, src *os.Root, dest, input string, budget int, preserveMode bool) (int, error) {

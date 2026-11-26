@@ -19,6 +19,18 @@ func TestDarwinHandoffLiveDefersUnkeyedSymlink(t *testing.T) {
 	require.Contains(t, result.Advisory, "symlink target is outside the keyed inputs", "%+v", result)
 }
 
+func TestDarwinHandoffLiveNormalizesKeyedSymlink(t *testing.T) {
+	root := approvedDarwinLiveGate(t, `[/bin/sh, -c, 'test "$(cat gate-input)" = pass']`, "")
+	writeFile(t, filepath.Join(root, "config.txt"), "pass")
+	require.NoError(t, os.Symlink("./config.txt", filepath.Join(root, "gate-input")))
+	stageGit(t, root, "add", "config.txt", "gate-input")
+	ctx, _ := diagnostic.WithHookInvocation(t.Context())
+	require.Equal(t, StageFeedback{}, RunStageChecks(ctx, root, "worker", "handoff"))
+	writeFile(t, filepath.Join(root, "config.txt"), "fail")
+	ctx, _ = diagnostic.WithHookInvocation(t.Context())
+	require.Contains(t, RunStageChecks(ctx, root, "worker", "handoff").Blocking, "exit status 1")
+}
+
 func TestDarwinHandoffLiveApprovalHintUsesValidSelector(t *testing.T) {
 	root := approvedDarwinLiveGate(t, "[/usr/bin/true]", "")
 	policy, err := ResolveHandoffLiveRevocation(root, "project")
