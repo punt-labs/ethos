@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -119,7 +120,6 @@ func HandleSessionStartContext(ctx context.Context, r io.Reader, deps SessionSta
 	}
 
 	sessionID, _ := input["session_id"].(string)
-	exportSessionEnv()
 	// The repository is located once (resolve.Roots) and everything below reads
 	// that answer. A store that cannot be read — a dangling symlink in
 	// .punt-labs/ethos, an unreadable config, an unreadable .git — means this
@@ -216,6 +216,9 @@ func HandleSessionStartContext(ctx context.Context, r io.Reader, deps SessionSta
 	// only after the human greeting (retired repo). See runAgentPipeline.
 	var pipelineErr error
 	if storeFailure == nil {
+		if repoEnabled(loc.Checkout) {
+			exportSessionEnv()
+		}
 		pipelineErr = runAgentPipeline(loc, store, deps, repoRoot)
 	}
 
@@ -348,7 +351,20 @@ func runAgentPipeline(loc resolve.Located, store identity.IdentityStore, deps Se
 	return nil
 }
 
-const gitOptionalLocksExport = "export GIT_OPTIONAL_LOCKS=0\n"
+const (
+	gitOptionalLocksExport = "export GIT_OPTIONAL_LOCKS=0\n"
+	enabledMarkerRel       = ".punt-labs/ethos/enabled"
+)
+
+// repoEnabled reports whether checkout carries the regular ethos enablement
+// marker written by `ethos enable` and removed by `ethos disable`.
+func repoEnabled(checkout string) bool {
+	if checkout == "" {
+		return false
+	}
+	fi, err := os.Lstat(filepath.Join(checkout, enabledMarkerRel))
+	return err == nil && fi.Mode().IsRegular()
+}
 
 // exportSessionEnv persists GIT_OPTIONAL_LOCKS=0 to Claude Code's
 // CLAUDE_ENV_FILE when set, so Bash commands in the session inherit it even in

@@ -98,6 +98,21 @@ func TestExportSessionEnv(t *testing.T) {
 	})
 }
 
+func TestRepoEnabledMarker(t *testing.T) {
+	dir := t.TempDir()
+	assert.False(t, repoEnabled(""), "empty checkout is not enabled")
+	assert.False(t, repoEnabled(dir), "repo without marker is not enabled")
+
+	marker := filepath.Join(dir, enabledMarkerRel)
+	require.NoError(t, os.MkdirAll(filepath.Dir(marker), 0o755))
+	require.NoError(t, os.WriteFile(marker, nil, 0o644))
+	assert.True(t, repoEnabled(dir), "repo with regular marker is enabled")
+
+	// After ethos disable removes the marker, SessionStart must not export.
+	require.NoError(t, os.Remove(marker))
+	assert.False(t, repoEnabled(dir), "disabled repo must not be treated as enabled")
+}
+
 func TestBuildWorkingContext_DoesNotRefreshIndex(t *testing.T) {
 	dir := t.TempDir()
 	initGitRepo(t, dir)
