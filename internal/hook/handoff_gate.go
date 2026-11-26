@@ -651,7 +651,8 @@ func writeGateResult(p layout.Policy, path string, result gateResult) error {
 func worktreeSnapshotInputs(ctx context.Context, root string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, gateInputTime)
 	defer cancel()
-	out, err := handoffGitOutput(ctx, root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	out, err := handoffGitOutput(ctx, root, "ls-files", "-z", "--cached", "--others", "--exclude-standard",
+		"--", ":(top)", ":(top,exclude).punt-labs/local", ":(top,exclude).punt-labs/ethos/sessions")
 	if err != nil {
 		return nil, err
 	}
