@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -26,6 +27,7 @@ type SalvageResult struct {
 func ReadStreamWithSalvage(p layout.Policy, s Stream, guard LineGuard) (StreamData, error) {
 	var gaps []Gap
 	var floor int64
+	redactions := map[int64][]recoveryRedaction{}
 	load := func(path string, last int64) ([]Line, error) {
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -47,9 +49,28 @@ func ReadStreamWithSalvage(p layout.Policy, s Stream, guard LineGuard) (StreamDa
 			gaps = append(gaps, Gap{Chunk: cn.Stem(), First: r.lo, Last: r.hi})
 		}
 		floor = max(floor, r.verifiedLast)
+		for ts, redaction := range r.redactions {
+			redactions[ts] = append(redactions[ts], redaction)
+		}
 		return r.keep, nil
 	}
-	data, err := readStreamWithChunkLoader(p, s, CanonicalPayload, load)
+	liveOriginals := map[int64][]byte{}
+	reconcileLive := func(ts int64, payload []byte) ([]byte, error) {
+		if len(redactions[ts]) == 0 {
+			return payload, nil
+		}
+		if prior, ok := liveOriginals[ts]; ok && !bytes.Equal(prior, payload) {
+			return nil, fmt.Errorf("audit identity conflict: session %q ts %d has divergent payloads in %s", s.Session, ts, s.LivePath(p))
+		}
+		liveOriginals[ts] = payload
+		for _, redaction := range redactions[ts] {
+			if bytes.Equal(redaction.original, payload) {
+				return redaction.guarded, nil
+			}
+		}
+		return payload, nil
+	}
+	data, err := readStreamWithChunkLoader(p, s, CanonicalPayload, load, reconcileLive)
 	if err != nil {
 		return StreamData{}, err
 	}
