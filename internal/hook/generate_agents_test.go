@@ -1725,67 +1725,99 @@ func TestDeriveAntiResponsibilities_MissingTarget(t *testing.T) {
 	assert.NotContains(t, content, "ghost")
 }
 
-// TestDeriveAntiResponsibilities_UnsupportedEdgeType verifies that a
-// non-reports_to edge from the agent's role is warned about and
-// skipped, not silently dropped.
-//
-// Post-ethos-2z2: team.Store.Load calls ValidateStructural, which
-// rejects any collaboration type not in validCollabTypes. So the
-// only way a non-reports_to edge reaches the generator is if it is
-// a valid-but-deferred type — collaborates_with or delegates_to.
-// Those are semantic-level "not handled by MVP" decisions, not
-// structural errors, and deriveAntiResponsibilities warns on them
-// and continues. The fixture uses collaborates_with specifically to
-// exercise the valid-but-deferred path; a typo'd type like
-// "report_to" would be rejected at Load time and could never reach
-// this test.
-func TestDeriveAntiResponsibilities_UnsupportedEdgeType(t *testing.T) {
-	root, _, _, _ := setupTestRepo(t)
-	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+// TestGenerateAgentFiles_ValidUnrenderedEdgeTypesAreQuiet: a team that
+// declares collaborates_with or delegates_to edges is valid
+// (team.ValidateStructural accepts both types). The generator renders
+// neither type into agent prose, and it prints nothing about them: the
+// team's author has nothing to correct. The loop covers every member of
+// team.CollaborationTypes other than reports_to, so a type added there
+// is tested here without an edit.
+func TestGenerateAgentFiles_ValidUnrenderedEdgeTypesAreQuiet(t *testing.T) {
+	tested := 0
+	for _, edgeType := range team.CollaborationTypes {
+		if edgeType == "reports_to" {
+			continue
+		}
+		tested++
+		t.Run(edgeType, func(t *testing.T) {
+			root, _, _, _ := setupTestRepo(t)
+			ethosDir := filepath.Join(root, ".punt-labs", "ethos")
 
-	writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
-		"name":         "engineering",
-		"repositories": []string{"punt-labs/ethos"},
-		"members": []map[string]string{
-			{"identity": "claude", "role": "coo"},
-			{"identity": "bwk", "role": "go-specialist"},
-		},
-		"collaborations": []map[string]string{
-			{"from": "go-specialist", "to": "coo", "type": "collaborates_with"},
-		},
-	})
-	writeYAML(t, filepath.Join(ethosDir, "roles", "coo.yaml"), map[string]interface{}{
-		"name":             "coo",
-		"responsibilities": []string{"release management"},
-	})
+			writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
+				"name":         "engineering",
+				"repositories": []string{"punt-labs/ethos"},
+				"members": []map[string]string{
+					{"identity": "claude", "role": "coo"},
+					{"identity": "bwk", "role": "go-specialist"},
+				},
+				"collaborations": []map[string]string{
+					{"from": "go-specialist", "to": "coo", "type": edgeType},
+				},
+			})
+			writeYAML(t, filepath.Join(ethosDir, "roles", "coo.yaml"), map[string]interface{}{
+				"name":             "coo",
+				"responsibilities": []string{"release management"},
+			})
 
-	ids := identity.NewLayeredStore(
-		identity.NewStore(ethosDir),
-		identity.NewStore(ethosDir),
-	)
-	teams := team.NewLayeredStore(ethosDir, ethosDir)
-	roles := role.NewLayeredStore(ethosDir, ethosDir)
+			ids := identity.NewLayeredStore(
+				identity.NewStore(ethosDir),
+				identity.NewStore(ethosDir),
+			)
+			teams := team.NewLayeredStore(ethosDir, ethosDir)
+			roles := role.NewLayeredStore(ethosDir, ethosDir)
 
+			stderr := captureStderr(t, func() {
+				err := GenerateAgentFiles(root, ids, teams, roles)
+				require.NoError(t, err)
+			})
+
+			assert.NotContains(t, stderr, "unsupported edge")
+			assert.NotContains(t, stderr, edgeType)
+
+			data, readErr := os.ReadFile(filepath.Join(root, ".claude", "agents", "bwk.md"))
+			require.NoError(t, readErr)
+			content := string(data)
+
+			// No reports_to edges contributed → no section.
+			assert.NotContains(t, content, "## What You Don't Do")
+			assert.NotContains(t, content, "These are not yours:")
+		})
+	}
+	require.Equal(t, 2, tested, "expected collaborates_with and delegates_to; update this test's premise if the set changed")
+}
+
+// TestDeriveEdges_UnknownEdgeTypeStillWarns: team.Store.Load rejects a
+// collaboration type outside team.CollaborationTypes, so an unknown type
+// cannot reach the generator through the load path. Calling both walks
+// directly with a hand-built edge is the only way to reach the branch
+// that reports one; it must name the From role, the To role and the type,
+// and must contribute nothing.
+func TestDeriveEdges_UnknownEdgeTypeStillWarns(t *testing.T) {
+	_, ids, _, roles := setupTestRepo(t)
+
+	members := []team.Member{
+		{Identity: "claude", Role: "coo"},
+		{Identity: "bwk", Role: "go-specialist"},
+	}
+	collabs := []team.Collaboration{
+		{From: "go-specialist", To: "coo", Type: "manages"},
+	}
+
+	var anti []antiResponsibility
 	stderr := captureStderr(t, func() {
-		err := GenerateAgentFiles(root, ids, teams, roles)
-		require.NoError(t, err)
+		anti = deriveAntiResponsibilities("go-specialist", collabs, roles)
 	})
+	assert.Contains(t, stderr,
+		`ethos: generate-agents: anti-responsibilities: unsupported edge from "go-specialist" to "coo" with type "manages"`)
+	assert.Empty(t, anti)
 
-	// The warning must name the From role, the To role, and the
-	// offending type so a user grepping stderr can locate the exact
-	// edge in the YAML without scanning every outgoing edge from From.
-	assert.Contains(t, stderr, "unsupported edge")
-	assert.Contains(t, stderr, "collaborates_with")
-	assert.Contains(t, stderr, `"go-specialist"`)
-	assert.Contains(t, stderr, `"coo"`)
-
-	data, readErr := os.ReadFile(filepath.Join(root, ".claude", "agents", "bwk.md"))
-	require.NoError(t, readErr)
-	content := string(data)
-
-	// No reports_to edges contributed → no section.
-	assert.NotContains(t, content, "## What You Don't Do")
-	assert.NotContains(t, content, "These are not yours:")
+	var targets []reportsToTarget
+	stderr = captureStderr(t, func() {
+		targets = deriveReportsToTargets("go-specialist", members, collabs, ids)
+	})
+	assert.Contains(t, stderr,
+		`ethos: generate-agents: reports-to: unsupported edge from "go-specialist" to "coo" with type "manages"`)
+	assert.Empty(t, targets)
 }
 
 // TestDeriveAntiResponsibilities_Normalization exercises the whitespace

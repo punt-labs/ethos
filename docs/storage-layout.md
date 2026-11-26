@@ -82,6 +82,7 @@ Paths in the first column are relative to S unless C is explicit.
 | Team bundles in the repository | `.punt-labs/ethos-bundles/**` | Source |
 | Submodule registration | `.gitmodules` (written by `team add-bundle`) | Source |
 | Vendor manifest | `.punt-labs/ethos/.vendor.yaml` | Source |
+| Project check sets | `.punt-labs/ethos/checks/<slug>.yaml` (read by `internal/checkset/store.go`, written by `ethos vendor`); a file in a subdirectory of `checks/` is not classified | Source |
 | Git hook files | hook files under an in-tree `core.hooksPath` | Source |
 | Older layouts | record-tree locks (`missions/**/*.lock`, `missions.jsonl.lock`, `identities/*.yaml.lock`), `missions/*/log.jsonl`, `log-*.quarantine`, `*.corrupt*`, `sessions/*/audit.jsonl`, `.punt-labs/ethos/config.yaml`, singular `reflection-intent.yaml` | The automatic storage upgrade converts or deletes them (steps 1-15); nothing reads them afterward. `missions/*/artifacts/**` is agent-owned and never touched |
 | New worker artifacts | `.punt-labs/local/ethos/artifacts/missions/<id>/delegations/<d>/`, the value pre-tool-use exports as `MISSION_ARTIFACTS_DIR` (`internal/mission/delegation.go`, `internal/hook/pretooluse_dispatch.go`) | Agent-owned, not automatically exported or redacted |
