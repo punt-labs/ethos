@@ -2,6 +2,9 @@ package hook
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -61,6 +64,30 @@ func TestHandoffSystemDirectoryProofIncludesFileContents(t *testing.T) {
 	changed, err := fingerprintHandoffSystemInput(ctx, dir, true)
 	require.NoError(t, err)
 	require.NotEqual(t, initial, changed)
+}
+
+func TestHandoffSystemDirectoryProofKeepsWalkOrderAcrossBatches(t *testing.T) {
+	dir := t.TempDir()
+	total := handoffSystemProofBatchSize + 1
+	for i := total - 1; i >= 0; i-- {
+		name := fmt.Sprintf("input-%04d", i)
+		writeFile(t, filepath.Join(dir, name), name)
+	}
+	h := sha256.New()
+	enc := json.NewEncoder(h)
+	info, err := os.Stat(dir)
+	require.NoError(t, err)
+	require.NoError(t, enc.Encode([]any{"", info.Size(), info.ModTime().UnixNano(), info.Mode(), "", ""}))
+	for i := range total {
+		name := fmt.Sprintf("input-%04d", i)
+		info, err := os.Stat(filepath.Join(dir, name))
+		require.NoError(t, err)
+		digest := fmt.Sprintf("%x", sha256.Sum256([]byte(name)))
+		require.NoError(t, enc.Encode([]any{"/" + name, info.Size(), info.ModTime().UnixNano(), info.Mode(), "", digest}))
+	}
+	got, err := fingerprintHandoffSystemInput(context.Background(), dir, true)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("%x", h.Sum(nil)), got)
 }
 
 func TestHandoffSystemRejectsUncoveredToolsAndSpecialInputs(t *testing.T) {

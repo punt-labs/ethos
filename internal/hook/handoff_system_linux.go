@@ -17,6 +17,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/checkset"
@@ -26,6 +28,9 @@ import (
 var worktreeSystemRuntime = []string{"/usr/include", "/usr/share", "/usr/libexec", "/etc/alternatives"}
 
 const handoffSystemProofTime = 5 * time.Second
+const handoffSystemReadBuffer = 32 * 1024
+const handoffSystemProofBatchSize = 256
+const handoffSystemProofWorkers = 4
 
 var worktreeSystemRoots = []string{
 	"/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32",
@@ -198,56 +203,100 @@ func handoffSystemSourceCovers(mounts []handoffSystemMount, path string) bool {
 }
 
 func fingerprintHandoffSystemInput(ctx context.Context, path string, directory bool) (string, error) {
+	if !directory {
+		return fingerprintHandoffSystemFile(ctx, path, 0, make([]byte, handoffSystemReadBuffer))
+	}
+	path, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return "", errors.New("system input is not a directory")
+	}
 	h := sha256.New()
-	if directory {
-		path, err := filepath.EvalSymlinks(path)
+	enc := json.NewEncoder(h)
+	batch := make([]handoffSystemProofEntry, 0, handoffSystemProofBatchSize)
+	buffers := make([][handoffSystemReadBuffer]byte, min(runtime.GOMAXPROCS(0), handoffSystemProofWorkers))
+	err = filepath.WalkDir(path, func(name string, entry fs.DirEntry, err error) error {
 		if err != nil {
-			return "", err
+			return err
 		}
-		info, err := os.Stat(path)
-		if err != nil || !info.IsDir() {
-			return "", errors.New("system input is not a directory")
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		enc := json.NewEncoder(h)
-		err = filepath.WalkDir(path, func(name string, entry fs.DirEntry, err error) error {
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		item := handoffSystemProofEntry{path: name, info: info}
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			item.link, err = os.Readlink(name)
 			if err != nil {
 				return err
 			}
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			info, err := entry.Info()
-			if err != nil {
-				return err
-			}
-			var link, digest string
-			switch {
-			case info.Mode()&os.ModeSymlink != 0:
-				link, err = os.Readlink(name)
-				if err != nil {
-					return err
-				}
-			case info.Mode().IsRegular():
-				digest, err = fingerprintHandoffSystemFile(ctx, name, unix.O_NOFOLLOW)
-				if err != nil {
-					return err
-				}
-			case info.IsDir():
-			default:
-				return errors.New("special file in system input directory")
-			}
-			return enc.Encode([]any{strings.TrimPrefix(name, path), info.Size(), info.ModTime().UnixNano(), info.Mode(), link, digest})
-		})
-		if err != nil {
-			return "", err
+		case info.Mode().IsRegular(), info.IsDir():
+		default:
+			return errors.New("special file in system input directory")
 		}
-	} else {
-		return fingerprintHandoffSystemFile(ctx, path, 0)
+		batch = append(batch, item)
+		if len(batch) == cap(batch) {
+			err := writeHandoffSystemProofBatch(ctx, enc, path, batch, buffers)
+			batch = batch[:0]
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if err := writeHandoffSystemProofBatch(ctx, enc, path, batch, buffers); err != nil {
+		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func fingerprintHandoffSystemFile(ctx context.Context, path string, flags int) (string, error) {
+type handoffSystemProofEntry struct {
+	path   string
+	info   fs.FileInfo
+	link   string
+	digest string
+	err    error
+}
+
+func writeHandoffSystemProofBatch(ctx context.Context, enc *json.Encoder, root string, batch []handoffSystemProofEntry, buffers [][handoffSystemReadBuffer]byte) error {
+	var workers sync.WaitGroup
+	var next atomic.Int32
+	for i := range min(len(buffers), len(batch)) {
+		workers.Go(func() {
+			for index := int(next.Add(1)) - 1; index < len(batch); index = int(next.Add(1)) - 1 {
+				if ctx.Err() != nil {
+					return
+				}
+				entry := &batch[index]
+				if entry.info.Mode().IsRegular() {
+					entry.digest, entry.err = fingerprintHandoffSystemFile(ctx, entry.path, unix.O_NOFOLLOW, buffers[i][:])
+				}
+			}
+		})
+	}
+	workers.Wait()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for _, entry := range batch {
+		if entry.err != nil {
+			return entry.err
+		}
+		if err := enc.Encode([]any{strings.TrimPrefix(entry.path, root), entry.info.Size(), entry.info.ModTime().UnixNano(), entry.info.Mode(), entry.link, entry.digest}); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
+}
+
+func fingerprintHandoffSystemFile(ctx context.Context, path string, flags int, buffer []byte) (string, error) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|flags, 0)
 	if err != nil {
 		return "", err
@@ -259,7 +308,7 @@ func fingerprintHandoffSystemFile(ctx context.Context, path string, flags int) (
 		return "", errors.New("system input is not a regular file")
 	}
 	h := sha256.New()
-	if _, err := io.Copy(&gateHashBudget{ctx: ctx, dst: h, remaining: math.MaxInt64}, f); err != nil {
+	if _, err := io.CopyBuffer(&gateHashBudget{ctx: ctx, dst: h, remaining: math.MaxInt64}, struct{ io.Reader }{f}, buffer); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
