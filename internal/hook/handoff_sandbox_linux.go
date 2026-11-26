@@ -25,7 +25,24 @@ const handoffSandboxArg = "--ethos-handoff-sandbox-v1"
 const handoffSandboxReady = "ready\n"
 
 var sandboxRuntime = []string{"/bin", "/lib", "/lib64", "/usr/bin", "/usr/lib", "/usr/lib64"}
-var sandboxEnvironment = []string{"PATH=/usr/bin:/bin", "LC_ALL=C", "TZ=UTC", "HOME=/nonexistent"}
+
+const sandboxPATH = "/usr/bin:/bin"
+
+var sandboxEnvironment = []string{"PATH=" + sandboxPATH, "LC_ALL=C", "TZ=UTC", "HOME=/nonexistent"}
+
+func linuxHandoffRoots() handoffRoots {
+	return handoffRoots{checkout: gateRoot, runtime: "/runtime", scratch: "/scratch", temp: "/tmp"}
+}
+
+type handoffSandboxManifest struct {
+	Inputs   []string
+	Worktree *handoffSandboxWorktree
+}
+
+type handoffSandboxWorktree struct {
+	Environment     []string
+	CheckoutScratch []string
+}
 
 // RunHandoffSandbox dispatches the private namespace child before CLI setup.
 func RunHandoffSandbox() {
@@ -109,11 +126,23 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, check.timeout)
 	defer cancel()
-	manifest, err := json.Marshal(inputs)
+	plan := handoffSandboxManifest{Inputs: inputs}
+	argv := check.argv
+	if check.policy != nil && check.policy.WorktreeSnapshot != nil {
+		profile := check.policy.WorktreeSnapshot
+		roots := linuxHandoffRoots()
+		env, err := roots.environment(profile.Runtime.Platforms[runtime.GOOS+"-"+runtime.GOARCH], sandboxPATH)
+		if err != nil {
+			return "", err
+		}
+		argv = roots.expandArgs(argv)
+		plan.Worktree = &handoffSandboxWorktree{Environment: env, CheckoutScratch: profile.Scratch.Checkout}
+	}
+	manifest, err := json.Marshal(plan)
 	if err != nil {
 		return "", errors.New("cannot encode the snapshot input manifest")
 	}
-	cmd := exec.CommandContext(ctx, self, append([]string{handoffSandboxArg, scratch, checkout, check.cwd, proof, string(manifest)}, check.argv...)...)
+	cmd := exec.CommandContext(ctx, self, append([]string{handoffSandboxArg, scratch, checkout, check.cwd, proof, string(manifest)}, argv...)...)
 	cmd.Env = slices.Clone(sandboxEnvironment)
 	if dir := os.Getenv("GOCOVERDIR"); filepath.IsAbs(dir) {
 		cmd.Env = append(cmd.Env, "GOCOVERDIR="+dir)
@@ -192,7 +221,7 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 			err = &handoffSetupError{phase: phase, cause: err}
 		}
 	}()
-	if argv[0] != "/bin/sh" || !insideGatePath(gateRoot, cwd) {
+	if len(argv) == 0 || argv[0] != "/bin/sh" || !insideGatePath(gateRoot, cwd) {
 		return errors.New("invalid sandbox plan")
 	}
 	phase = "make mount propagation private"
@@ -211,12 +240,12 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 	if err := unix.Mount("tmpfs", checkout, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0700,size=256m"); err != nil {
 		return err
 	}
-	var inputs []string
-	if err := json.Unmarshal([]byte(manifest), &inputs); err != nil {
+	var plan handoffSandboxManifest
+	if err := json.Unmarshal([]byte(manifest), &plan); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), gateInputTime)
-	digest, err := digestGateInputs(ctx, live, checkout, inputs)
+	digest, err := digestGateInputs(ctx, live, checkout, plan.Inputs)
 	cancel()
 	if err != nil || digest != proof {
 		return errors.New("snapshot inputs did not match the key or invocation")
@@ -228,6 +257,17 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 	}
 	if !info.IsDir() {
 		return unix.ENOTDIR
+	}
+	env := sandboxEnvironment
+	if plan.Worktree != nil {
+		phase = "mount private worktree scratch"
+		if err := mountHandoffWorktreeScratch(root, checkout, plan.Worktree.CheckoutScratch); err != nil {
+			if errors.Is(err, errHandoffScratchShadowsInput) {
+				phase = errHandoffScratchShadowsInput.Error()
+			}
+			return err
+		}
+		env = plan.Worktree.Environment
 	}
 	phase = "materialize snapshot inputs"
 	if !gatePlanInputsPresent(checkout, argv) {
@@ -290,7 +330,7 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 	if _, err := io.WriteString(status, handoffSandboxReady); err != nil {
 		return err
 	}
-	return unix.Exec(argv[0], argv, sandboxEnvironment)
+	return unix.Exec(argv[0], argv, env)
 }
 
 func mountGateReadOnly(source, target string) error {

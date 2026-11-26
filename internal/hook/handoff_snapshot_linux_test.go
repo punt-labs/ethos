@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -346,6 +347,120 @@ func TestHandoffSandboxReportsMissingSnapshotCwd(t *testing.T) {
 	})
 	skipIfHandoffSandboxUnavailable(t, err)
 	require.ErrorContains(t, err, "check cwd missing from snapshot")
+}
+
+func TestHandoffWorktreeSandboxKeepsSocketTMPDIRShortAndPrivate(t *testing.T) {
+	if _, err := os.Stat("/usr/bin/python3"); err != nil {
+		t.Skip("test requires system python3")
+	}
+	live, sandbox, ambient := t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), strings.Repeat("deep", 30))
+	require.NoError(t, os.MkdirAll(ambient, 0o700))
+	t.Setenv("TMPDIR", ambient)
+	writeFile(t, filepath.Join(ambient, "ambient-only"), "not a sandbox input")
+	writeFile(t, filepath.Join(live, "README"), "snapshot input\n")
+	inputs := []string{"README"}
+	proof, err := digestGateInputs(context.Background(), live, "", inputs)
+	require.NoError(t, err)
+	failure, err := executeHandoffSnapshot(context.Background(), sandbox, live, proof, inputs, editCheck{
+		name: "socket", cwd: gateRoot, timeout: 5 * time.Second,
+		policy: &checkset.Check{WorktreeSnapshot: &checkset.WorktreeSnapshot{}},
+		argv: []string{"/bin/sh", "-c", `/usr/bin/python3 - <<'PY'
+import os
+import socket
+
+tmp = os.environ["TMPDIR"]
+assert tmp == "/tmp"
+assert not os.listdir(tmp)
+assert not os.listdir(os.environ["HOME"])
+assert not os.path.exists(os.environ["HOME"] + "/ambient-only")
+sock = socket.socket(socket.AF_UNIX)
+sock.bind(os.path.join(tmp, "s" * 40))
+with open(tmp + "/disk-marker", "w") as marker:
+    marker.write("private")
+PY`},
+	})
+	skipIfHandoffSandboxUnavailable(t, err)
+	require.NoError(t, err)
+	require.Empty(t, failure)
+	marker, err := os.ReadFile(filepath.Join(sandbox, "tmp", "disk-marker"))
+	require.NoError(t, err)
+	require.Equal(t, "private", string(marker))
+	require.NoFileExists(t, filepath.Join(ambient, "disk-marker"))
+}
+
+func TestHandoffWorktreeSandboxExpandsLogicalPathPrefixes(t *testing.T) {
+	live := t.TempDir()
+	writeFile(t, filepath.Join(live, "README"), "snapshot input\n")
+	writeFile(t, filepath.Join(live, "sub", "input"), "snapshot input\n")
+	inputs := []string{"README", "sub/input"}
+	proof, err := digestGateInputs(context.Background(), live, "", inputs)
+	require.NoError(t, err)
+	failure, err := executeHandoffSnapshot(context.Background(), t.TempDir(), live, proof, inputs, editCheck{
+		name: "paths", cwd: gateRoot, timeout: 5 * time.Second,
+		policy: &checkset.Check{WorktreeSnapshot: &checkset.WorktreeSnapshot{
+			Runtime: checkset.SnapshotRuntime{Platforms: map[string]checkset.SnapshotPlatform{
+				runtime.GOOS + "-" + runtime.GOARCH: {
+					Path: []string{"{runtime}/bin", "/usr/bin", "/bin"},
+					Env: map[string]string{
+						"RUFF_CACHE_DIR": "{scratch}/ruff-cache",
+						"MYPY_CACHE_DIR": "{scratch}/mypy-cache",
+					},
+				},
+			}},
+		}},
+		argv: []string{"/bin/sh", "-c", `test "$#" = 3 &&
+test "$1" = "/scratch/socket test" &&
+test "$2" = "/runtime/bin" &&
+test "$3" = "/checkout/sub" &&
+test "$RUFF_CACHE_DIR" = "/scratch/ruff-cache" &&
+test "$MYPY_CACHE_DIR" = "/scratch/mypy-cache" &&
+test "$PATH" = "/runtime/bin:/usr/bin:/bin" &&
+test "$ETHOS_HANDOFF_ROOT" = "/checkout" &&
+test "$ETHOS_HANDOFF_RUNTIME" = "/runtime" &&
+test "$ETHOS_HANDOFF_SCRATCH" = "/scratch"`,
+			"paths", "{scratch}/socket test", "{runtime}/bin", "{root}/sub"},
+	})
+	skipIfHandoffSandboxUnavailable(t, err)
+	require.NoError(t, err)
+	require.Empty(t, failure)
+}
+
+func TestHandoffWorktreeSandboxMountsPrivateCheckoutScratch(t *testing.T) {
+	live := t.TempDir()
+	writeFile(t, filepath.Join(live, "README"), "snapshot input\n")
+	writeFile(t, filepath.Join(live, ".venv", "ambient-only"), "not a snapshot input\n")
+	inputs := []string{"README"}
+	proof, err := digestGateInputs(context.Background(), live, "", inputs)
+	require.NoError(t, err)
+	policy := &checkset.Check{WorktreeSnapshot: &checkset.WorktreeSnapshot{
+		Scratch: checkset.SnapshotScratch{Checkout: []string{".venv", ".pytest_cache", ".tmp/api-site"}},
+	}}
+	failure, err := executeHandoffSnapshot(context.Background(), t.TempDir(), live, proof, inputs, editCheck{
+		name: "writable-dirs", cwd: gateRoot, timeout: 5 * time.Second, policy: policy,
+		argv: []string{"/bin/sh", "-ec", `test ! -e .venv/ambient-only
+for dir in .venv .pytest_cache .tmp/api-site; do
+  test -d "$dir"
+  touch "$dir/created"
+done
+test ! -w README
+test ! -w .tmp
+test ! -w .`},
+	})
+	skipIfHandoffSandboxUnavailable(t, err)
+	require.NoError(t, err)
+	require.Empty(t, failure)
+	require.NoFileExists(t, filepath.Join(live, ".venv", "created"))
+	require.NoDirExists(t, filepath.Join(live, ".pytest_cache"))
+	require.NoDirExists(t, filepath.Join(live, ".tmp"))
+
+	inputs = append(inputs, ".venv/ambient-only")
+	proof, err = digestGateInputs(context.Background(), live, "", inputs)
+	require.NoError(t, err)
+	_, err = executeHandoffSnapshot(context.Background(), t.TempDir(), live, proof, inputs, editCheck{
+		name: "conflict", cwd: gateRoot, timeout: 5 * time.Second, policy: policy,
+		argv: []string{"/bin/sh", "-c", "exit 0"},
+	})
+	require.ErrorContains(t, err, "checkout scratch shadows snapshot content")
 }
 
 func skipIfHandoffSandboxUnavailable(t *testing.T, err error) {
