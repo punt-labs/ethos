@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Declare a Linux amd64 snapshot profile and offline runtime for the existing
   handoff `make check` gate.
 
+- Declared handoff gates on macOS run in a private Darwin snapshot by default.
+  Projects that need the live checkout can opt in with
+  `isolation: live-verified`. Operators can authorize or revoke that mode with
+  `ethos handoff approve-live <slug>` and `ethos handoff revoke-live <slug>`.
+  On Darwin, gates that declare `scratch.seed`, `scratch.files`, `prehydrate`,
+  or `data` still defer and print the project command to run.
+
 ### Fixed
 
 - Verifier writes accept macOS checkout path aliases such as `/var` without
