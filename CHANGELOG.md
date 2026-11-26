@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Verifier writes accept macOS checkout path aliases such as `/var` without
   allowing symlinks to redirect writes outside the declared paths.
+- `ethos doctor` no longer reports a project check set
+  (`.punt-labs/ethos/checks/<slug>.yaml`) as an unclassified file.
+- Agent generation no longer prints an "unsupported edge" line for each
+  `collaborates_with` or `delegates_to` edge of a team. Both types are valid;
+  they are not rendered into agent files.
 
 ## [5.2.3] - 2026-11-25
 

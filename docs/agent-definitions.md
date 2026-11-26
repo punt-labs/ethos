@@ -192,8 +192,9 @@ Scope limits in the current MVP:
 
 - Only the `reports_to` edge type contributes anti-responsibilities.
   `collaborates_with` and `delegates_to` edges from the agent's role
-  produce a stderr warning and no bullets. Their semantics (peer,
-  downward) deserve different phrasing and are deferred to future beads.
+  are valid and are skipped without output: they produce no bullets and
+  no stderr line. Their semantics (peer, downward) need different
+  phrasing, which the generator does not have.
 - No schema change: `Role` has no `anti_responsibilities` field. The
   derivation reads the team graph and the target roles' own
   `responsibilities` lists.

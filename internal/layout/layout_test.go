@@ -115,6 +115,10 @@ func TestClassify(t *testing.T) {
 		{".punt-labs/ethos.yaml", layout.Source, true},
 		{".gitmodules", layout.Source, true},
 		{".claude/agents/bwk.md", layout.Source, true},
+		// A project check set, the one shape checkset.LayeredStore reads.
+		{".punt-labs/ethos/checks/beadle-go.yaml", layout.Source, true},
+		{".punt-labs/ethos/checks/notes.md", 0, false},
+		{".punt-labs/ethos/checks/nested/beadle-go.yaml", 0, false},
 		{".punt-labs/ethos/missions/m-1.contract.yaml", layout.Blame, true},
 		{".punt-labs/ethos/missions-closed/m-2026-10-24-001.result.yaml", layout.Blame, true},
 		{".punt-labs/ethos/missions-closed/m-2026-10-24-001.contract.yaml", layout.Blame, true},

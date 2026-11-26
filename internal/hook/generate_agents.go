@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -351,13 +352,9 @@ func normalizeResponsibility(s string) string {
 // normalized: embedded newlines collapse to spaces, surrounding
 // whitespace is trimmed, and strings empty after normalization are
 // dropped with a stderr warning. Targets whose role fails to load are
-// also skipped with a warning. Non-reports_to edges from roleName are
-// warned about and skipped — post-ethos-2z2 this branch only fires for
-// collaborates_with and delegates_to, which are valid types at the
-// structural level but are a semantic-level "not handled by the MVP"
-// decision. Typo'd types (e.g. "report_to") and truly unknown types
-// are rejected at Load time by team.ValidateStructural, so they
-// cannot reach this function. Returns nil if roleName has no outgoing
+// also skipped with a warning. Only reports_to edges contribute; every
+// other edge from roleName is skipped (see warnUnknownEdgeType for which
+// of those are reported). Returns nil if roleName has no outgoing
 // reports_to edges or every target contributes zero bullets.
 func deriveAntiResponsibilities(roleName string, collabs []team.Collaboration, roles *role.LayeredStore) []antiResponsibility {
 	var out []antiResponsibility
@@ -365,18 +362,8 @@ func deriveAntiResponsibilities(roleName string, collabs []team.Collaboration, r
 		if c.From != roleName {
 			continue
 		}
-		// Post-ethos-2z2 invariant: c.Type is one of
-		// {reports_to, collaborates_with, delegates_to}. Anything
-		// else would have been rejected at Load time by
-		// team.ValidateStructural. This branch handles the two
-		// known-but-deferred types by warning the user that the
-		// edge is valid-but-unhandled, so a fixture with a valid
-		// collaborates_with edge from roleName still produces a
-		// visible signal instead of silent drop.
 		if c.Type != "reports_to" {
-			fmt.Fprintf(os.Stderr,
-				"ethos: generate-agents: anti-responsibilities: unsupported edge from %q to %q with type %q (expected \"reports_to\") — skipping\n",
-				c.From, c.To, c.Type)
+			warnUnknownEdgeType("anti-responsibilities", c)
 			continue
 		}
 		target, err := roles.Load(c.To)
@@ -401,6 +388,23 @@ func deriveAntiResponsibilities(roleName string, collabs []team.Collaboration, r
 	return out
 }
 
+// warnUnknownEdgeType reports, on stderr, a skipped edge whose type is not
+// a member of team.CollaborationTypes. The members other than reports_to
+// (collaborates_with, delegates_to) are valid types the generator does not
+// render into agent prose; a team that declares them is correct, so they
+// are skipped without a line. team.ValidateStructural rejects any other
+// type when a team is loaded, so the line is printed only for a
+// collaboration built without that check. walk names the caller in the
+// message.
+func warnUnknownEdgeType(walk string, c team.Collaboration) {
+	if slices.Contains(team.CollaborationTypes, c.Type) {
+		return
+	}
+	fmt.Fprintf(os.Stderr,
+		"ethos: generate-agents: %s: unsupported edge from %q to %q with type %q (expected one of %s) — skipping\n",
+		walk, c.From, c.To, c.Type, strings.Join(team.CollaborationTypes, ", "))
+}
+
 // reportsToTarget is one resolved occupant of a role that roleName's
 // outgoing reports_to edge points to.
 type reportsToTarget struct {
@@ -412,7 +416,7 @@ type reportsToTarget struct {
 // from roleName and returns, in walk order, the occupying identity of
 // each outgoing reports_to edge's target role. Same walk as
 // deriveAntiResponsibilities (c.From == roleName, c.Type ==
-// "reports_to", same warn-and-skip on any other edge type) — only the
+// "reports_to", same skip of any other edge type) — only the
 // resolution step differs: this resolves the target role's occupying
 // IDENTITY through members, not the target role's Responsibilities
 // through roles.
@@ -448,9 +452,7 @@ func deriveReportsToTargetsReader(roleName string, members []team.Member, collab
 			continue
 		}
 		if c.Type != "reports_to" {
-			fmt.Fprintf(os.Stderr,
-				"ethos: generate-agents: reports-to: unsupported edge from %q to %q with type %q (expected \"reports_to\") — skipping\n",
-				c.From, c.To, c.Type)
+			warnUnknownEdgeType("reports-to", c)
 			continue
 		}
 		// Collect every member occupying c.To — multiple identities
