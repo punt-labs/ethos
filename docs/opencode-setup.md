@@ -110,11 +110,12 @@ python3 -B scripts/opencode.py prepare-nightly
 
 Supply `OPENAI_API_KEY` (with access to `gpt-6-astra`, `gpt-6.1-sol`, and
 `gpt-5.6-terra`) and the required MCP environment through your approved secret
-flow. Start OpenCode with that environment; a running service does not inherit
-new credentials.
+flow. Restart OpenCode from that same environment: `opencode service start`
+reuses an already-running service, which won't inherit new credentials.
+Coordinate the restart first if others are using that service.
 
 ```bash
-opencode service start
+opencode service restart
 make doctor-opencode OPENCODE_PROFILE=direct-openai
 make smoke-opencode-discovery OPENCODE_PROFILE=direct-openai
 ```
