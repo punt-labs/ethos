@@ -14,6 +14,76 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDarwinHandoffSystemPathAllowlist(t *testing.T) {
+	const checkout = "/opt/homebrew/Cellar/checkout"
+	for _, path := range []string{
+		"/opt/homebrew/bin/jq", "/usr/bin/xcode-select", "/Library/Developer/CommandLineTools/usr/bin/make",
+		"/Applications/Xcode.app/Contents/Developer", "/Applications/Xcode-26.6.app/Contents/Info.plist",
+		"/System/Library/CoreServices/SystemVersion.plist", darwinDeveloperSelector,
+	} {
+		t.Run(path, func(t *testing.T) {
+			require.True(t, safeDarwinSystemPath(path, checkout))
+		})
+	}
+	for _, path := range []string{
+		"/Users/example/.ssh/id_ed25519", "/System/Volumes/Data/Users/example/.ssh/id_ed25519",
+		"/usrx/bin/tool", "/usr/local/bin/tool", "/usr", "/opt/homebrew-evil/bin/tool",
+		"/Applications/Xcode.app.backup/Contents/Developer", "/Applications/Other.app/Contents/Developer",
+		"/Applications/support/Xcode.app/Contents/Developer", "/opt/homebrew/Cellar",
+		"/opt/homebrew/Cellar/checkout/key", "/opt/homebrew/Cellar/CHECKOUT/key",
+	} {
+		t.Run(path, func(t *testing.T) {
+			require.False(t, safeDarwinSystemPath(path, checkout))
+		})
+	}
+}
+
+func TestDarwinLiveRefusesDeclaredSSHKey(t *testing.T) {
+	checkout, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	key := filepath.Join(dir, ".ssh", "id_ed25519")
+	writeFile(t, key, "synthetic test data")
+	profile := &checkset.WorktreeSnapshot{
+		Isolation: checkset.IsolationLiveVerified,
+		System:    checkset.SnapshotSystem{SnapshotSystemInputs: checkset.SnapshotSystemInputs{Files: []string{key}}},
+	}
+	plan, err := prepareHandoffSystem(t.Context(), checkout, profile)
+	require.ErrorContains(t, err, "outside supported Darwin system roots")
+	require.Empty(t, plan.Inputs)
+	require.Empty(t, plan.Mounts)
+}
+
+func TestDarwinHandoffSystemInputRejectsSymlinkAcrossRoots(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	approved := filepath.Join(dir, "approved")
+	outside := filepath.Join(dir, "outside")
+	allowDarwinSystemFixtureRoot(t, approved)
+	for _, root := range []string{approved, outside} {
+		writeFile(t, filepath.Join(root, "input"), "synthetic test data")
+	}
+	for _, pair := range [][2]string{{approved, outside}, {outside, approved}} {
+		path := filepath.Join(pair[0], "link")
+		require.NoError(t, os.Symlink(filepath.Join(pair[1], "input"), path))
+		for _, snapshot := range []bool{false, true} {
+			var plan handoffSystemPlan
+			_, err := addDarwinSystemInput(t.Context(), &plan, filepath.Join(dir, "checkout"), path, "", false, snapshot)
+			require.ErrorContains(t, err, "outside supported Darwin system roots")
+			require.Empty(t, plan.Inputs)
+			require.Empty(t, plan.Mounts)
+		}
+	}
+}
+
+func allowDarwinSystemFixtureRoot(t *testing.T, dir string) {
+	t.Helper()
+	roots := darwinSystemRoots
+	darwinSystemRoots = append([]string{dir}, roots...)
+	t.Cleanup(func() { darwinSystemRoots = roots })
+}
+
 func TestDarwinHandoffWorktreeSystemInputs(t *testing.T) {
 	user, err := os.UserHomeDir()
 	require.NoError(t, err)
@@ -103,6 +173,7 @@ func TestDarwinLiveUsesDeclaredToolPath(t *testing.T) {
 	bin, err := os.MkdirTemp(home, "ethos-live-tools-")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(bin) })
+	allowDarwinSystemFixtureRoot(t, bin)
 	const tool = "ethos-fixture-tool"
 	install := func(binary string) {
 		t.Helper()
@@ -168,6 +239,7 @@ func TestDarwinLiveKeysSelectedDeveloperDirectory(t *testing.T) {
 	dir, err := os.MkdirTemp(home, "ethos-live-xcode-")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	allowDarwinSystemFixtureRoot(t, dir)
 	app := filepath.Join(dir, "Xcode.app")
 	contents := filepath.Join(app, "Contents")
 	developer := filepath.Join(contents, "Developer")

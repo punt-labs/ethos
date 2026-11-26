@@ -27,6 +27,12 @@ import (
 const darwinDeveloperSelector = "/private/var/select/developer_dir"
 const darwinCLT = "/Library/Developer/CommandLineTools"
 
+var darwinSystemRoots = []string{
+	"/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/lib", "/usr/libexec", "/usr/share",
+	"/System/Library", "/System/Volumes/Preboot/Cryptexes/OS", "/Library/Apple/usr", darwinCLT,
+	"/private/var/db/timezone",
+}
+
 func darwinXcodeTool(path string) bool {
 	switch path {
 	case "/usr/bin/xcode-select", "/usr/bin/xcrun", "/usr/bin/xcodebuild":
@@ -153,15 +159,15 @@ func addDarwinLiveDeveloper(ctx context.Context, plan *handoffSystemPlan, checko
 	if strings.HasSuffix(developer, ".app") {
 		developer = filepath.Join(developer, "Contents", "Developer")
 	}
-	if !filepath.IsAbs(developer) || filepath.Clean(developer) != developer {
-		return errors.New("invalid DEVELOPER_DIR")
+	if !safeDarwinSystemPath(developer, checkout) {
+		return errors.New("DEVELOPER_DIR is outside supported Darwin system roots")
 	}
 	developer, err := filepath.EvalSymlinks(developer)
 	if err != nil {
 		return err
 	}
 	if !safeDarwinSystemPath(developer, checkout) {
-		return errors.New("developer directory overlaps a reserved path")
+		return errors.New("resolved developer directory is outside supported Darwin system roots")
 	}
 	info, err := os.Stat(developer)
 	if err != nil || !info.IsDir() {
@@ -248,12 +254,18 @@ func darwinSystemTool(name string, env []string) string {
 }
 
 func addDarwinSystemInput(ctx context.Context, plan *handoffSystemPlan, checkout, path, tool string, directory, restrictRoots bool) (string, error) {
+	allowed := func(path string) bool {
+		return safeDarwinSystemPath(path, checkout) && (!restrictRoots || darwinSnapshotSystemPath(path))
+	}
+	if !allowed(path) {
+		return "", fmt.Errorf("system input %s is outside supported Darwin system roots", path)
+	}
 	source, err := filepath.EvalSymlinks(path)
-	if err != nil || !safeDarwinSystemPath(path, checkout) || !safeDarwinSystemPath(source, checkout) {
+	if err != nil {
 		return "", fmt.Errorf("cannot safely resolve system input %s", path)
 	}
-	if restrictRoots && (!darwinSnapshotSystemPath(path) || !darwinSnapshotSystemPath(source)) {
-		return "", fmt.Errorf("system input %s is outside supported Darwin system roots", path)
+	if !allowed(source) {
+		return "", fmt.Errorf("resolved system input %s is outside supported Darwin system roots", path)
 	}
 	digest, err := fingerprintDarwinSystemInput(ctx, source, directory)
 	if err != nil {
@@ -265,18 +277,12 @@ func addDarwinSystemInput(ctx context.Context, plan *handoffSystemPlan, checkout
 }
 
 func darwinSnapshotSystemPath(path string) bool {
-	for _, root := range []string{"/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/lib", "/usr/libexec", "/usr/share",
-		"/System/Library", "/System/Volumes/Preboot/Cryptexes/OS", "/Library/Apple/usr", darwinCLT,
-		"/private/var/db/timezone"} {
-		if darwinPathWithin(root, path) {
-			return true
-		}
+	if slices.ContainsFunc(darwinSystemRoots, func(root string) bool { return insideGatePath(root, path) }) {
+		return true
 	}
-	for _, prefix := range []string{"/opt/homebrew", "/usr/local", "/opt/local"} {
-		for _, dir := range []string{"bin", "sbin", "lib", "libexec", "include", "share", "opt", "Cellar", "Frameworks"} {
-			if darwinPathWithin(filepath.Join(prefix, dir), path) {
-				return true
-			}
+	for _, dir := range []string{"bin", "sbin", "lib", "libexec", "include", "share", "opt", "Cellar", "Frameworks"} {
+		if insideGatePath(filepath.Join("/opt/homebrew", dir), path) {
+			return true
 		}
 	}
 	return false
@@ -287,12 +293,20 @@ func safeDarwinSystemPath(path, checkout string) bool {
 		return false
 	}
 	for _, blocked := range []string{checkout, gateRoot, "/scratch", "/runtime", "/tmp", "/private/tmp", "/dev", "/private/dev"} {
-		if darwinPathWithin(strings.ToLower(blocked), strings.ToLower(path)) ||
-			darwinPathWithin(strings.ToLower(path), strings.ToLower(blocked)) {
+		if blocked != "" && (darwinPathWithin(blocked, path) || darwinPathWithin(path, blocked)) {
 			return false
 		}
 	}
-	return true
+	if path == darwinDeveloperSelector || insideGatePath("/opt/homebrew", path) ||
+		slices.ContainsFunc(darwinSystemRoots, func(root string) bool { return insideGatePath(root, path) }) {
+		return true
+	}
+	rel, err := filepath.Rel("/Applications", path)
+	if err != nil || !filepath.IsLocal(rel) {
+		return false
+	}
+	bundle, _, _ := strings.Cut(rel, string(filepath.Separator))
+	return strings.HasPrefix(bundle, "Xcode") && strings.HasSuffix(bundle, ".app")
 }
 
 func fingerprintDarwinSystemInput(ctx context.Context, path string, directory bool) (string, error) {
@@ -366,7 +380,7 @@ func addDarwinXcode(ctx context.Context, plan *handoffSystemPlan, checkout strin
 		return errors.New("expected a root-owned Xcode selector symlink")
 	}
 	developer, err := os.Readlink(darwinDeveloperSelector)
-	if err != nil || developer == "" || darwinTrustedToolchain(developer) != developer {
+	if err != nil || !safeDarwinSystemPath(developer, checkout) || darwinTrustedToolchain(developer) != developer {
 		return errors.New("cannot resolve trusted Xcode developer directory")
 	}
 	dir := developer
