@@ -13,8 +13,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Subagent handoff no longer runs storage repair before checks, which could
   rewrite a consumer's tracked `.gitignore`.
-- Ethos sets `GIT_OPTIONAL_LOCKS=0` for Claude Code agent Git commands so
-  read-only operations do not refresh the index on disk.
 
 ## [5.2.3] - 2026-11-25
 

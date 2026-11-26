@@ -80,11 +80,3 @@ var disableRules = map[string][]string{
 	"allow": PermissionRules["allow"],
 	"ask":   slices.Concat(PermissionRules["ask"], legacyPermissionRules["ask"]),
 }
-
-// EnvDefaults are the environment variables owned by ethos enable in
-// .claude/settings.json. GIT_OPTIONAL_LOCKS=0 prevents background git status
-// and git diff calls in agent sessions from taking .git/index.lock, which
-// otherwise causes spurious deferrals in live-verified handoff gates (DES-086).
-var EnvDefaults = map[string]string{
-	"GIT_OPTIONAL_LOCKS": "0",
-}

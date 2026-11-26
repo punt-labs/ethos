@@ -1,12 +1,11 @@
-// Package claudesettings adds and removes fixed permission rules by tier and
-// default environment variables in a repo's .claude/settings.json (punt-kit
-// permissions.md §6, tool-enable-disable §2.8). It never touches
-// ~/.claude/settings.json.
+// Package claudesettings adds and removes fixed permission rules by tier in a
+// repo's .claude/settings.json (punt-kit permissions.md §6,
+// tool-enable-disable §2.8). It never touches ~/.claude/settings.json.
 //
 // Each read-modify-write holds the repository's shared-local settings lock and
 // stages its replacement in the shared-local temp dir (DES-079), so no lock or
-// temp file is left in the checkout. Every key, permission entry, and env
-// variable outside the owned set is kept, in its original order.
+// temp file is left in the checkout. Every key and permission entry outside the
+// owned rules is kept, in its original order.
 package claudesettings
 
 import (
@@ -16,7 +15,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -31,12 +29,6 @@ var ErrRefused = errors.New("refusing to edit .claude/settings.json")
 // Preflight verifies that the settings target can accept rules without writing
 // it. Enable uses this before changing any other repository state.
 func Preflight(repoRoot string, rules map[string][]string) error {
-	return PreflightWithEnv(repoRoot, rules, nil)
-}
-
-// PreflightWithEnv verifies that the settings target can accept rules and env
-// defaults without writing it.
-func PreflightWithEnv(repoRoot string, rules map[string][]string, env map[string]string) error {
 	if err := refuseUnsafe(repoRoot); err != nil {
 		return err
 	}
@@ -45,7 +37,7 @@ func PreflightWithEnv(repoRoot string, rules map[string][]string, env map[string
 	if err != nil {
 		return err
 	}
-	if _, _, _, err := apply(data, rules, env, true); err != nil {
+	if _, _, err := apply(data, rules, true); err != nil {
 		return fmt.Errorf("%w: %s: %v", ErrRefused, path, err)
 	}
 	return nil
@@ -54,75 +46,54 @@ func PreflightWithEnv(repoRoot string, rules map[string][]string, env map[string
 // Register appends each rule to its permissions tier, creating the file when
 // absent, and returns the rules it added.
 func Register(repoRoot string, rules map[string][]string, p layout.Policy) ([]string, error) {
-	added, _, err := update(repoRoot, rules, nil, p, true)
-	return added, err
-}
-
-// RegisterWithEnv appends each rule to its permissions tier and sets each
-// absent env default in one atomic write, creating the file when absent.
-// Existing env entries are preserved so user overrides are never clobbered.
-func RegisterWithEnv(repoRoot string, rules map[string][]string, env map[string]string, p layout.Policy) ([]string, []string, error) {
-	return update(repoRoot, rules, env, p, true)
+	return update(repoRoot, rules, p, true)
 }
 
 // Deregister removes every rule from its permissions tier and returns the rules
 // it removed. A repo with no settings file is left as it is.
 func Deregister(repoRoot string, rules map[string][]string, p layout.Policy) ([]string, error) {
-	removed, _, err := DeregisterWithEnv(repoRoot, rules, nil, p)
-	return removed, err
-}
-
-// DeregisterWithEnv removes every rule from its permissions tier and every env
-// entry whose value still matches the owned default, in one atomic write. A
-// repo with no settings file is left as it is.
-//
-// Like permissions, env defaults follow a stateless ownership contract with no
-// sidecar provenance file: DeregisterWithEnv removes an owned key whenever its
-// value equals the owned default, even if the repository already had that exact
-// value before RegisterWithEnv ran. Any non-default value (e.g. "1") is kept.
-func DeregisterWithEnv(repoRoot string, rules map[string][]string, env map[string]string, p layout.Policy) ([]string, []string, error) {
 	if _, err := os.Lstat(settingsPath(repoRoot)); errors.Is(err, fs.ErrNotExist) {
-		return nil, nil, nil
+		return nil, nil
 	}
-	return update(repoRoot, rules, env, p, false)
+	return update(repoRoot, rules, p, false)
 }
 
 func settingsPath(repoRoot string) string {
 	return filepath.Join(repoRoot, ".claude", "settings.json")
 }
 
-func update(repoRoot string, rules map[string][]string, env map[string]string, p layout.Policy, grant bool) ([]string, []string, error) {
+func update(repoRoot string, rules map[string][]string, p layout.Policy, grant bool) ([]string, error) {
 	if err := refuseUnsafe(repoRoot); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	path := settingsPath(repoRoot)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, nil, fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
+		return nil, fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
 	}
 	lockPath, err := p.LockPath("claudesettings", path)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if err := layout.EnsureLocalDir(p, filepath.Dir(lockPath)); err != nil {
-		return nil, nil, fmt.Errorf("creating lock dir %s: %w", filepath.Dir(lockPath), err)
+		return nil, fmt.Errorf("creating lock dir %s: %w", filepath.Dir(lockPath), err)
 	}
-	var changedRules, changedEnv []string
+	var changed []string
 	err = withLock(lockPath, func() error {
 		data, mode, err := read(path)
 		if err != nil {
 			return err
 		}
-		out, cr, ce, err := apply(data, rules, env, grant)
+		out, c, err := apply(data, rules, grant)
 		if err != nil {
 			return fmt.Errorf("%w: %s: %v", ErrRefused, path, err)
 		}
-		changedRules, changedEnv = cr, ce
-		if len(cr) == 0 && len(ce) == 0 {
+		changed = c
+		if len(c) == 0 {
 			return confirmUnchanged(p, path, data)
 		}
 		return writeAtomic(p, path, out, mode)
 	})
-	return changedRules, changedEnv, err
+	return changed, err
 }
 
 func refuseUnsafe(repoRoot string) error {
@@ -162,111 +133,71 @@ func read(path string) ([]byte, os.FileMode, error) {
 	return data, fi.Mode().Perm(), nil
 }
 
-// apply returns the new file content, the rules added (grant) or removed, and
-// the env entries set (grant) or removed.
-func apply(data []byte, rules map[string][]string, env map[string]string, grant bool) ([]byte, []string, []string, error) {
+// apply returns the new file content and the rules added (grant) or removed.
+func apply(data []byte, rules map[string][]string, grant bool) ([]byte, []string, error) {
 	if !utf8.Valid(data) {
-		return nil, nil, nil, errors.New("not valid UTF-8")
+		return nil, nil, errors.New("not valid UTF-8")
 	}
 	root, err := parseObject(data)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
-	var changedRules []string
-	if len(rules) > 0 {
-		perms, err := parseObject(root.get("permissions"))
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("permissions: %w", err)
+	perms, err := parseObject(root.get("permissions"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("permissions: %w", err)
+	}
+	var changed []string
+	for _, tier := range []string{"allow", "ask"} {
+		owned := rules[tier]
+		if len(owned) == 0 {
+			continue
 		}
-		for _, tier := range []string{"allow", "ask"} {
-			owned := rules[tier]
-			if len(owned) == 0 {
-				continue
-			}
-			var existing []string
-			if raw := perms.get(tier); raw != nil {
-				if err := json.Unmarshal(raw, &existing); err != nil || existing == nil {
-					return nil, nil, nil, fmt.Errorf("permissions.%s is not a list of strings", tier)
-				}
-			}
-			var tierChanged []string
-			for _, rule := range owned {
-				if slices.Contains(existing, rule) != grant {
-					tierChanged = append(tierChanged, rule)
-				}
-			}
-			if len(tierChanged) == 0 {
-				continue
-			}
-			changedRules = append(changedRules, tierChanged...)
-			if grant {
-				existing = append(existing, tierChanged...)
-			} else {
-				existing = slices.DeleteFunc(existing, func(r string) bool {
-					return slices.Contains(owned, r)
-				})
-			}
-			if existing == nil {
-				existing = []string{}
-			}
-			if err := perms.set(tier, existing); err != nil {
-				return nil, nil, nil, err
+		var existing []string
+		if raw := perms.get(tier); raw != nil {
+			if err := json.Unmarshal(raw, &existing); err != nil || existing == nil {
+				return nil, nil, fmt.Errorf("permissions.%s is not a list of strings", tier)
 			}
 		}
-		if len(changedRules) > 0 {
-			if err := root.set("permissions", perms); err != nil {
-				return nil, nil, nil, err
+		var tierChanged []string
+		for _, rule := range owned {
+			if slices.Contains(existing, rule) != grant {
+				tierChanged = append(tierChanged, rule)
 			}
+		}
+		if len(tierChanged) == 0 {
+			continue
+		}
+		changed = append(changed, tierChanged...)
+		if grant {
+			existing = append(existing, tierChanged...)
+		} else {
+			existing = slices.DeleteFunc(existing, func(r string) bool {
+				return slices.Contains(owned, r)
+			})
+		}
+		if existing == nil {
+			existing = []string{}
+		}
+		if err := perms.set(tier, existing); err != nil {
+			return nil, nil, err
 		}
 	}
-	var changedEnv []string
-	if len(env) > 0 {
-		envObj, err := parseObject(root.get("env"))
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("env: %w", err)
-		}
-		for _, k := range slices.Sorted(maps.Keys(env)) {
-			want := env[k]
-			raw := envObj.get(k)
-			var existing *string
-			if raw != nil {
-				if err := json.Unmarshal(raw, &existing); err != nil || existing == nil {
-					return nil, nil, nil, fmt.Errorf("env.%s is not a string", k)
-				}
-			}
-			if grant {
-				if raw == nil {
-					if err := envObj.set(k, want); err != nil {
-						return nil, nil, nil, err
-					}
-					changedEnv = append(changedEnv, k+"="+want)
-				}
-			} else if existing != nil && *existing == want {
-				envObj.delete(k)
-				changedEnv = append(changedEnv, k+"="+want)
-			}
-		}
-		if len(changedEnv) > 0 {
-			if !grant && len(envObj) == 0 {
-				root.delete("env")
-			} else if err := root.set("env", envObj); err != nil {
-				return nil, nil, nil, err
-			}
-		}
+	if len(changed) == 0 {
+		return nil, nil, nil
 	}
-	if len(changedRules) == 0 && len(changedEnv) == 0 {
-		return nil, nil, nil, nil
+	if err := root.set("permissions", perms); err != nil {
+		return nil, nil, err
 	}
 	compact, err := marshal(root)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	var out bytes.Buffer
 	if err := json.Indent(&out, compact, "", "  "); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	out.WriteByte('\n')
-	return out.Bytes(), changedRules, changedEnv, nil
+	return out.Bytes(), changed, nil
 }
 
 type member struct {
@@ -333,12 +264,6 @@ func (o *object) set(key string, v any) error {
 	}
 	*o = append(*o, member{key: key, value: raw})
 	return nil
-}
-
-func (o *object) delete(key string) {
-	*o = slices.DeleteFunc(*o, func(m member) bool {
-		return m.key == key
-	})
 }
 
 // MarshalJSON writes the members in order.

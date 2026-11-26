@@ -543,15 +543,8 @@ Running `ethos enable` is the user's consent to use ethos in this repo
 (punt-kit `permissions.md` §6). It adds `Bash(ethos:*)`,
 `mcp__plugin_ethos_self__*`, and `Skill(ethos:*)` to `permissions.allow`.
 Exact rules in `permissions.ask` keep state-changing CLI groups, MCP tools, and
-skills prompt-gated even though the broad allow also matches. It also sets
-`env.GIT_OPTIONAL_LOCKS` to `"0"` when absent so background `git status` and
-`git diff` calls in agent sessions do not take `.git/index.lock` (DES-086);
-an existing value set by the repository is preserved. `disable` removes
-exactly the current allow and ask values and removes `env.GIT_OPTIONAL_LOCKS`
-only when its value is still `"0"` (dropping an empty `env` object); like the
-owned permission rules, this is stateless (no provenance sidecar), so a
-pre-existing `"0"` is also removed on `disable` while any non-default override
-(such as `"1"`) is preserved.
+skills prompt-gated even though the broad allow also matches. `disable` removes
+exactly the current allow and ask values.
 `~/.claude/settings.json` is never edited, and no `ethos-dev` rule is granted:
 the dev plugin only exists in a maintainer's checkout.
 

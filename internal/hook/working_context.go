@@ -115,9 +115,8 @@ func currentBranch(checkout string) (string, error) {
 func uncommittedChanges(checkout string) (int, []string, error) {
 	// runGit does not trim: porcelain lines start with two status chars
 	// (e.g. " M") and TrimSpace would strip the leading space, corrupting the
-	// parse. --no-optional-locks keeps SessionStart from taking .git/index.lock
-	// and spuriously deferring concurrent live-verified handoff gates (DES-086).
-	raw, err := runGit(checkout, "--no-optional-locks", "status", "--porcelain")
+	// parse.
+	raw, err := runGit(checkout, "status", "--porcelain")
 	if err != nil {
 		return 0, nil, err
 	}
