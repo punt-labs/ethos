@@ -29,7 +29,9 @@ const handoffSystemProofTime = 5 * time.Second
 
 var worktreeSystemRoots = []string{
 	"/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32",
+	"/home/linuxbrew/.linuxbrew",
 	"/etc/alternatives", "/etc/os-release", "/etc/ssl/certs", "/etc/ssl/openssl.cnf", "/etc/ca-certificates",
+	"/etc/texmf", "/var/lib/texmf",
 }
 
 func worktreeSandboxEnvironment(profile *checkset.WorktreeSnapshot) ([]string, error) {

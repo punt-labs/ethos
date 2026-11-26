@@ -114,6 +114,33 @@ func TestHandoffSystemRefusesPrivateSidecarPaths(t *testing.T) {
 	require.True(t, safeHandoffSystemPath("/usr/bin/sh", "/checkout-fixture"))
 }
 
+func TestHandoffSystemAllowsOnlyFixedLinuxbrewPrefix(t *testing.T) {
+	const prefix = "/home/linuxbrew/.linuxbrew"
+	const checkout = "/checkout-fixture"
+	require.True(t, safeHandoffSystemPath(prefix, checkout))
+	require.True(t, safeHandoffSystemPath(prefix+"/bin/brew", checkout))
+	require.True(t, safeHandoffSystemSource(prefix+"/bin/brew", prefix+"/Homebrew/bin/brew", checkout, false))
+	require.False(t, safeHandoffSystemPath(prefix, prefix+"/Homebrew"))
+	require.False(t, safeHandoffSystemSource(prefix+"/bin/brew", "/home/linuxbrew/private", checkout, false))
+	for _, path := range []string{"/home/linuxbrew", "/home/linuxbrew/.ssh", prefix + "-other/bin/brew", "/home/ubuntu/.linuxbrew"} {
+		require.False(t, safeHandoffSystemPath(path, checkout), path)
+	}
+}
+
+func TestHandoffSystemAllowsOnlyFixedTeXRoots(t *testing.T) {
+	const checkout = "/checkout-fixture"
+	for _, root := range []string{"/etc/texmf", "/var/lib/texmf"} {
+		t.Run(root, func(t *testing.T) {
+			require.True(t, safeHandoffSystemPath(root, checkout))
+			require.True(t, safeHandoffSystemSource(root, root, checkout, true))
+			require.True(t, safeHandoffSystemPath(root+"/web2c", checkout))
+			require.False(t, safeHandoffSystemPath(root+"-other", checkout))
+		})
+	}
+	require.False(t, safeHandoffSystemPath("/var/lib", checkout))
+	require.False(t, safeHandoffSystemPath("/var/lib/private", checkout))
+}
+
 func TestHandoffSystemAllowsNixOSReleaseTargetOnly(t *testing.T) {
 	const source = "/nix/store/hash-etc-os-release/os-release"
 	require.True(t, safeHandoffSystemSource("/etc/os-release", source, "/checkout-fixture", false))
