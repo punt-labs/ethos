@@ -33,6 +33,17 @@ func TestHandoffSnapshotCapabilityAvailability(t *testing.T) {
 	require.Equal(t, "mach_lookup unavailable in linux snapshot", unavailableSnapshotCapability("linux", []string{"pty", "mach_lookup"}))
 }
 
+func TestHandoffScratchSeedAvailability(t *testing.T) {
+	profile := &checkset.WorktreeSnapshot{
+		Scratch: checkset.SnapshotScratch{Seed: map[string]string{"data": "{root}/data"}},
+	}
+	if runtime.GOOS == "darwin" {
+		require.Equal(t, "scratch.seed", unsupportedWorktreeField(profile))
+	} else {
+		require.Empty(t, unsupportedWorktreeField(profile))
+	}
+}
+
 func TestHandoffLiveVerifiedDefersWithoutAdmission(t *testing.T) {
 	var logs bytes.Buffer
 	ctx := diagnostic.WithLogger(context.Background(), slog.New(slog.NewTextHandler(&logs, nil)))
