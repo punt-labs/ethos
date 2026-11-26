@@ -53,7 +53,16 @@ func TestDarwinLiveVnodeGuard(t *testing.T) {
 			if name == "clean" {
 				require.NoError(t, guard.drain())
 			} else {
-				require.Error(t, guard.drain())
+				veto := guard.drain()
+				require.ErrorContains(t, veto, "vnode note")
+				switch name {
+				case "write", "revert", "chmod":
+					require.ErrorContains(t, veto, source)
+				case "transient source":
+					require.ErrorContains(t, veto, root+`"`)
+				case "nested transient source":
+					require.ErrorContains(t, veto, filepath.Dir(source)+`"`)
+				}
 			}
 		})
 	}
@@ -67,6 +76,7 @@ func TestDarwinLiveVnodeFDBudget(t *testing.T) {
 	git := filepath.Join(root, ".git")
 	_, err = armDarwinLiveVnodes(context.Background(), root, darwinLiveGit{local: git, common: git}, []string{"nested/source"}, 4)
 	require.ErrorContains(t, err, "fd budget")
+	require.ErrorContains(t, err, git)
 }
 
 func TestDarwinLiveVnodeAtimeException(t *testing.T) {

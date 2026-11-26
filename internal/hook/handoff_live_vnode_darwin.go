@@ -40,7 +40,7 @@ func armDarwinLiveVnodes(ctx context.Context, root string, git darwinLiveGit, in
 	}
 	const reserve = 32
 	if limit.Cur <= uint64(len(open)+reserve) {
-		return nil, errors.New("live-verified vnode fd budget exceeded")
+		return nil, fmt.Errorf("live-verified vnode fd budget exceeded before watching %q", root)
 	}
 	budget = int(min(limit.Cur-uint64(len(open)+reserve), uint64(max(0, budget))))
 	paths, err := darwinLiveVnodePaths(ctx, root, git, inputs, budget)
@@ -56,7 +56,7 @@ func armDarwinLiveVnodes(ctx context.Context, root string, git darwinLiveGit, in
 	for _, path := range paths {
 		if err := guard.add(ctx, path); err != nil {
 			guard.close()
-			return nil, fmt.Errorf("live-verified cannot arm vnode guard: %w", err)
+			return nil, fmt.Errorf("live-verified cannot arm vnode guard for %q: %w", path, err)
 		}
 	}
 	return guard, nil
@@ -71,7 +71,7 @@ func darwinLiveVnodePaths(ctx context.Context, root string, git darwinLiveGit, i
 		for ; !paths[path]; path = filepath.Dir(path) {
 			paths[path] = true
 			if len(paths) >= budget {
-				return errors.New("live-verified vnode fd budget exceeded")
+				return fmt.Errorf("live-verified vnode fd budget exceeded at %q", path)
 			}
 			if path == boundary {
 				break
@@ -81,7 +81,7 @@ func darwinLiveVnodePaths(ctx context.Context, root string, git darwinLiveGit, i
 	}
 	for _, input := range inputs {
 		if !filepath.IsLocal(input) {
-			return nil, errors.New("live-verified vnode input is outside checkout")
+			return nil, fmt.Errorf("live-verified vnode input %q is outside checkout %q", input, root)
 		}
 		if err := add(filepath.Join(root, input), root); err != nil {
 			return nil, err
@@ -99,7 +99,7 @@ func darwinLiveVnodePaths(ctx context.Context, root string, git darwinLiveGit, i
 	}
 	for _, dir := range []string{git.local, git.common} {
 		if _, err := os.Lstat(filepath.Join(dir, "reftable")); !errors.Is(err, os.ErrNotExist) {
-			return nil, errors.New("live-verified vnode guard cannot cover Git metadata layout")
+			return nil, fmt.Errorf("live-verified vnode guard cannot cover Git metadata layout at %q", filepath.Join(dir, "reftable"))
 		}
 	}
 	type watchPath struct{ path, boundary string }
@@ -176,8 +176,11 @@ func (g *darwinLiveVnodes) drain() error {
 	}
 	for _, event := range events[:n] {
 		node, ok := g.nodes[int(event.Ident)]
-		if !ok || event.Filter != unix.EVFILT_VNODE || event.Flags&(unix.EV_ERROR|unix.EV_EOF) != 0 {
-			return errors.New("live-verified vnode coverage uncertain")
+		if !ok {
+			return fmt.Errorf("live-verified vnode coverage uncertain: no watched path for fd %d", event.Ident)
+		}
+		if event.Filter != unix.EVFILT_VNODE || event.Flags&(unix.EV_ERROR|unix.EV_EOF) != 0 {
+			return fmt.Errorf("live-verified vnode coverage uncertain at %q: event flags %#x", node.path, event.Flags)
 		}
 		if event.Fflags == unix.NOTE_ATTRIB {
 			var now unix.Stat_t
@@ -185,7 +188,7 @@ func (g *darwinLiveVnodes) drain() error {
 				continue
 			}
 		}
-		return fmt.Errorf("live-verified vetoed by vnode note %#x", event.Fflags)
+		return fmt.Errorf("live-verified vetoed by vnode note %#x at %q", event.Fflags, node.path)
 	}
 	return nil
 }

@@ -87,7 +87,8 @@ type darwinLiveEvents struct {
 	mu                sync.Mutex
 	last              uint64
 	cutoff            chan struct{}
-	paths             map[string]bool
+	seen              map[string]bool
+	paths             []string
 	err               error
 }
 
@@ -154,7 +155,7 @@ func armDarwinLiveEvents(root string, git darwinLiveGit) (*darwinLiveEvents, err
 	if err != nil {
 		return nil, err
 	}
-	e := &darwinLiveEvents{root: root, git: git, dir: dir, api: api, marker: filepath.Join(dir, "opening"), cutoff: make(chan struct{}), paths: make(map[string]bool)}
+	e := &darwinLiveEvents{root: root, git: git, dir: dir, api: api, marker: filepath.Join(dir, "opening"), cutoff: make(chan struct{}), seen: make(map[string]bool)}
 	if err := e.start(); err != nil {
 		e.close()
 		return nil, err
@@ -224,8 +225,11 @@ func receiveLiveEvents(stream, _ uintptr, count uintptr, paths **byte, flags *ui
 	e := value.(*darwinLiveEvents)
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.err != nil {
+		return
+	}
 	if count > 65536 || paths == nil || flags == nil || ids == nil {
-		e.err = errors.New("invalid FSEvents callback")
+		e.err = fmt.Errorf("invalid FSEvents callback for %q", e.root)
 		return
 	}
 	flagList := unsafe.Slice(flags, int(count))
@@ -234,38 +238,69 @@ func receiveLiveEvents(stream, _ uintptr, count uintptr, paths **byte, flags *ui
 		if e.marker == "" {
 			break
 		}
-		const lostCoverage = 0x2f // MustScanSubDirs, UserDropped, KernelDropped, EventIdsWrapped, RootChanged.
-		if flagList[i]&lostCoverage != 0 || p == nil || idList[i] < e.last {
-			e.err = errors.New("FSEvents coverage lost or unordered")
-			continue
+		path, err := darwinLiveEventPath(p)
+		if err != nil {
+			e.err = fmt.Errorf("FSEvents event %d for %q: %w", idList[i], e.root, err)
+			return
+		}
+		if loss := darwinFSEventsLossFlags(flagList[i]); loss != "" {
+			e.err = fmt.Errorf("FSEvents loss flag %s (%#x) at %q", loss, flagList[i], path)
+			return
+		}
+		if idList[i] < e.last {
+			e.err = fmt.Errorf("FSEvents non-monotonic ID %d after %d at %q", idList[i], e.last, path)
+			return
 		}
 		e.last = idList[i]
-		n := 0
-		for n < 4096 && *(*byte)(unsafe.Add(unsafe.Pointer(p), n)) != 0 {
-			n++
-		}
-		if n == 4096 {
-			e.err = errors.New("unrecognized FSEvents path")
-			continue
-		}
-		path := string(unsafe.Slice(p, n))
 		if path == e.marker {
 			close(e.cutoff)
 			if path == filepath.Join(e.dir, "opening") {
-				clear(e.paths)
+				clear(e.seen)
+				e.paths = e.paths[:0]
 				e.marker = filepath.Join(e.dir, "closing")
 				e.cutoff = make(chan struct{})
 			} else {
 				e.marker = ""
 			}
-		} else if sentinels := filepath.Dir(e.dir); !strings.HasPrefix(path, sentinels+"/") && path != sentinels {
+		} else if sentinels := filepath.Dir(e.dir); !e.seen[path] && !darwinLiveContains(sentinels, path) {
 			if len(e.paths) >= 8192 {
-				e.err = errors.New("FSEvents path budget exceeded")
-				continue
+				e.err = fmt.Errorf("FSEvents path budget exceeded at %q", path)
+				return
 			}
-			e.paths[path] = true
+			e.seen[path] = true
+			e.paths = append(e.paths, path)
 		}
 	}
+}
+
+func darwinLiveEventPath(p *byte) (string, error) {
+	if p == nil {
+		return "", errors.New("missing FSEvents path")
+	}
+	n := 0
+	for n < 4096 && *(*byte)(unsafe.Add(unsafe.Pointer(p), n)) != 0 {
+		n++
+	}
+	if n == 0 || n == 4096 {
+		return "", errors.New("unrecognized FSEvents path")
+	}
+	return string(unsafe.Slice(p, n)), nil
+}
+
+func darwinFSEventsLossFlags(flags uint32) string {
+	var names []string
+	for _, flag := range []struct {
+		bit  uint32
+		name string
+	}{
+		{0x01, "MustScanSubDirs"}, {0x02, "UserDropped"}, {0x04, "KernelDropped"},
+		{0x08, "EventIdsWrapped"}, {0x20, "RootChanged"},
+	} {
+		if flags&flag.bit != 0 {
+			names = append(names, flag.name)
+		}
+	}
+	return strings.Join(names, "|")
 }
 
 func (e *darwinLiveEvents) barrier(ctx context.Context, name string) error {
@@ -275,8 +310,9 @@ func (e *darwinLiveEvents) barrier(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(e.dir, name), nil, 0o600); err != nil {
-		return err
+	path := filepath.Join(e.dir, name)
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		return fmt.Errorf("cannot write FSEvents %s sentinel at %q: %w", name, path, err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
@@ -286,7 +322,15 @@ func (e *darwinLiveEvents) barrier(ctx context.Context, name string) error {
 		defer e.mu.Unlock()
 		return e.err
 	case <-ctx.Done():
-		return fmt.Errorf("FSEvents %s sentinel not observed: %w", name, ctx.Err())
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if e.err != nil {
+			return e.err
+		}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("FSEvents %s sentinel timeout at %q", name, path)
+		}
+		return fmt.Errorf("FSEvents %s sentinel wait interrupted at %q: %w", name, path, ctx.Err())
 	}
 }
 
@@ -300,25 +344,24 @@ func (e *darwinLiveEvents) finish(ctx context.Context, inputs []string) error {
 	}
 	git := filepath.Join(e.root, ".git")
 	e.mu.Lock()
-	paths := make([]string, 0, len(e.paths))
-	for path := range e.paths {
-		paths = append(paths, path)
-	}
+	paths := slices.Clone(e.paths)
 	e.mu.Unlock()
-	slices.Sort(paths)
 	var nonKeyed []string
+	var veto error
 	for _, path := range paths {
 		if keyed[path] || path == git || darwinLiveContains(e.git.local, path) || darwinLiveContains(e.git.common, path) {
-			return fmt.Errorf("FSEvents observed a change at %q", path)
+			veto = fmt.Errorf("FSEvents observed a change at %q", path)
+			break
 		}
 		rel, err := filepath.Rel(e.root, path)
 		if err != nil || !filepath.IsLocal(rel) || rel == "." {
-			return errors.New("FSEvents reported an unclassifiable checkout path")
+			veto = fmt.Errorf("FSEvents reported an unclassifiable checkout path %q", path)
+			break
 		}
 		nonKeyed = append(nonKeyed, rel)
 	}
 	if len(nonKeyed) == 0 {
-		return nil
+		return veto
 	}
 	ctx, cancel := context.WithTimeout(ctx, gateInputTime)
 	defer cancel()
@@ -327,7 +370,7 @@ func (e *darwinLiveEvents) finish(ctx context.Context, inputs []string) error {
 	err := runHandoffGit(ctx, e.root, input, &gateHashBudget{ctx: ctx, dst: &ignored, remaining: 8 << 20}, "check-ignore", "--no-index", "-z", "--stdin")
 	var exit *exec.ExitError
 	if err != nil && (!errors.As(err, &exit) || exit.ExitCode() != 1) {
-		return errors.New("FSEvents could not classify changes to unkeyed paths")
+		return fmt.Errorf("FSEvents could not classify changes to unkeyed paths starting at %q", nonKeyed[0])
 	}
 	ignoredPaths := make(map[string]bool, len(nonKeyed))
 	for _, path := range strings.Split(ignored.String(), "\x00") {
@@ -338,7 +381,7 @@ func (e *darwinLiveEvents) finish(ctx context.Context, inputs []string) error {
 			return fmt.Errorf("FSEvents observed a change at %q", path)
 		}
 	}
-	return nil
+	return veto
 }
 
 type darwinHandoffLive struct {

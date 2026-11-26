@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"path/filepath"
@@ -235,12 +236,19 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	if preserveMode {
 		scratchFiles = check.WorktreeSnapshot.Scratch.Files
 	}
-	state, proof, err := handoffGateInputs(inputCtx, root, check.Snapshot.Inputs, preserveMode, scratchFiles...)
+	var opening map[string][sha256.Size]byte
+	if live {
+		opening = make(map[string][sha256.Size]byte, len(check.Snapshot.Inputs))
+	}
+	state, proof, err := handoffGateInputs(inputCtx, root, check.Snapshot.Inputs, preserveMode, opening, scratchFiles...)
 	cancel()
 	if errors.Is(err, errHandoffScratchShadowsInput) {
 		return deferGate(err.Error())
 	}
 	if err != nil {
+		if live {
+			return deferGate(fmt.Sprintf("cannot establish opening live-verified key at %q: %v", root, err), true)
+		}
 		return deferGate("cannot verify declared snapshot inputs within the key budget")
 	}
 	data, err := selectHandoffData(ctx, loc, check.WorktreeSnapshot, agent)
@@ -304,30 +312,72 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	verifyCurrent := func(when string) string {
 		verify, cancel := context.WithTimeout(ctx, gateInputTime)
 		defer cancel()
+		reason := func(cause, path string) string {
+			if live {
+				return fmt.Sprintf("%s %s at %q", cause, when, path)
+			}
+			return cause + " " + when
+		}
+		var closing map[string][sha256.Size]byte
 		if live {
 			if approval.approval() != grant {
 				return unapproved
 			}
 			inputs, err := worktreeSnapshotInputs(verify, root)
-			if err != nil || !slices.Equal(inputs, check.Snapshot.Inputs) {
-				return "checkout input set changed " + when
+			if err != nil {
+				return reason("cannot verify checkout input set", root)
 			}
+			if !slices.Equal(inputs, check.Snapshot.Inputs) {
+				if path := changedHandoffInput(check.Snapshot.Inputs, inputs); path != "" {
+					return reason("checkout input set changed", path)
+				}
+				return reason("checkout input ordering changed", root)
+			}
+			closing = make(map[string][sha256.Size]byte, len(inputs))
 		}
-		currentState, currentProof, err := handoffGateInputs(verify, root, check.Snapshot.Inputs, preserveMode, scratchFiles...)
-		if err != nil || currentState != state || currentProof != proof {
-			return "checkout changed " + when
+		currentState, currentProof, err := handoffGateInputs(verify, root, check.Snapshot.Inputs, preserveMode, closing, scratchFiles...)
+		if err != nil {
+			if live {
+				var inputErr *os.PathError
+				if errors.As(err, &inputErr) {
+					return reason("cannot verify checkout key", inputErr.Path)
+				}
+				return reason("cannot verify checkout key", root)
+			}
+			return reason("checkout changed", root)
+		}
+		if currentState != state || currentProof != proof {
+			for _, path := range check.Snapshot.Inputs {
+				if opening[path] != closing[path] {
+					return reason("checkout changed (key mismatch)", path)
+				}
+			}
+			if live {
+				return reason("checkout changed (Git state key mismatch)", root)
+			}
+			return reason("checkout changed", root)
 		}
 		currentSystem, err := prepareHandoffSystem(ctx, root, check.WorktreeSnapshot, rawArgs...)
 		if err != nil || currentSystem.Fingerprint != system.Fingerprint {
-			return "system inputs changed " + when
+			path := system.DeveloperDir
+			if path == "" {
+				path = root
+			}
+			for i, input := range system.Inputs {
+				if i >= len(currentSystem.Inputs) || input != currentSystem.Inputs[i] {
+					path = input.Path
+					break
+				}
+			}
+			return reason("system inputs changed", path)
 		}
 		currentGit, err := captureHandoffGit(ctx, root, check.WorktreeSnapshot)
 		if err != nil || currentGit.fingerprint != gitView.fingerprint {
-			return "Git view changed " + when
+			return reason("Git view changed", root)
 		}
 		currentPolicy, _, err := configuredStageChecks(root, agent, "handoff")
 		if err != nil || !reflect.DeepEqual(policy, currentPolicy) {
-			return "handoff policy changed " + when
+			return reason("handoff policy changed", root)
 		}
 		return verifyData()
 	}
@@ -681,7 +731,25 @@ func unavailableSnapshotCapability(goos string, required []string) string {
 	return ""
 }
 
-func handoffGateInputs(ctx context.Context, root string, inputs []string, preserveMode bool, scratchFiles ...string) (string, string, error) {
+func changedHandoffInput(before, after []string) string {
+	before, after = slices.Clone(before), slices.Clone(after)
+	slices.Sort(before)
+	slices.Sort(after)
+	for i := range min(len(before), len(after)) {
+		if before[i] != after[i] {
+			return min(before[i], after[i])
+		}
+	}
+	if len(before) < len(after) {
+		return after[len(before)]
+	}
+	if len(after) < len(before) {
+		return before[len(after)]
+	}
+	return ""
+}
+
+func handoffGateInputs(ctx context.Context, root string, inputs []string, preserveMode bool, fingerprints map[string][sha256.Size]byte, scratchFiles ...string) (string, string, error) {
 	if len(scratchFiles) > 0 {
 		args := []string{"ls-files", "--cached", "-z", "--"}
 		for _, file := range scratchFiles {
@@ -699,7 +767,7 @@ func handoffGateInputs(ctx context.Context, root string, inputs []string, preser
 	if err != nil {
 		return "", "", err
 	}
-	proof, err := digestGateInputsWithMode(ctx, root, "", inputs, preserveMode)
+	proof, err := digestGateInputPaths(ctx, root, "", inputs, preserveMode, fingerprints)
 	if err != nil {
 		return "", "", err
 	}
@@ -723,6 +791,10 @@ func digestGateInputs(ctx context.Context, root, dest string, inputs []string) (
 }
 
 func digestGateInputsWithMode(ctx context.Context, root, dest string, inputs []string, preserveMode bool) (string, error) {
+	return digestGateInputPaths(ctx, root, dest, inputs, preserveMode, nil)
+}
+
+func digestGateInputPaths(ctx context.Context, root, dest string, inputs []string, preserveMode bool, fingerprints map[string][sha256.Size]byte) (string, error) {
 	src, err := os.OpenRoot(root)
 	if err != nil {
 		return "", err
@@ -737,9 +809,21 @@ func digestGateInputsWithMode(ctx context.Context, root, dest string, inputs []s
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		n, err := copyGateInput(ctx, h, src, dest, input, budget, preserveMode)
+		var dst io.Writer = h
+		var part hash.Hash
+		if fingerprints != nil {
+			part = sha256.New()
+			dst = io.MultiWriter(h, part)
+		}
+		n, err := copyGateInput(ctx, dst, src, dest, input, budget, preserveMode)
 		if err != nil {
+			if fingerprints != nil {
+				return "", &os.PathError{Op: "fingerprint", Path: input, Err: err}
+			}
 			return "", err
+		}
+		if fingerprints != nil {
+			fingerprints[input] = [sha256.Size]byte(part.Sum(nil))
 		}
 		budget -= n
 	}

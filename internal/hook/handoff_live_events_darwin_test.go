@@ -6,9 +6,47 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"unsafe"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestDarwinLiveFSEventsVetoDiagnostics(t *testing.T) {
+	const path = "/checkout/ignored/DerivedData/log.xcresult"
+	for _, test := range []struct {
+		name string
+		flag uint32
+		id   uint64
+		want string
+	}{
+		{"dropped", 0x2, 12, "FSEvents loss flag UserDropped"},
+		{"descending ignored path", 0, 10, "FSEvents non-monotonic ID 10 after 11"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			e := &darwinLiveEvents{marker: "/sentinel", last: 11}
+			const stream uintptr = 1
+			liveEventStreams.Store(stream, e)
+			t.Cleanup(func() { liveEventStreams.Delete(stream) })
+			first := append([]byte(path), 0)
+			next := append([]byte("/checkout/another"), 0)
+			paths := []*byte{unsafe.SliceData(first), unsafe.SliceData(next)}
+			flags := []uint32{test.flag, 4}
+			ids := []uint64{test.id, 13}
+			receiveLiveEvents(stream, 0, 2, &paths[0], &flags[0], &ids[0])
+			require.ErrorContains(t, e.err, test.want)
+			require.ErrorContains(t, e.err, path)
+		})
+	}
+}
+
+func TestDarwinLiveFSEventsSentinelDiagnostic(t *testing.T) {
+	e := &darwinLiveEvents{dir: t.TempDir(), cutoff: make(chan struct{})}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err := e.barrier(ctx, "closing")
+	require.ErrorContains(t, err, "FSEvents closing sentinel wait interrupted")
+	require.ErrorContains(t, err, filepath.Join(e.dir, "closing"))
+}
 
 func TestDarwinLiveSentinelCutoff(t *testing.T) {
 	for _, mutate := range []bool{false, true} {
@@ -115,4 +153,7 @@ func TestDarwinLiveGateApprovalAndVerdict(t *testing.T) {
 	require.Equal(t, "ran\nran\n", string(content))
 	writeFile(t, filepath.Join(root, "input"), "fail\n")
 	require.Contains(t, run().Blocking, "exit status 1")
+	writeFile(t, filepath.Join(root, "gate.sh"), "printf 'changed\\n' > input\n")
+	result := run()
+	require.Contains(t, result.Advisory, `checkout changed (key mismatch) during the live-verified check at "input"`)
 }

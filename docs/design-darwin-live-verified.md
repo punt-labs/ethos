@@ -147,7 +147,18 @@ clean gate passed 10/10 with no deferral; the transient root Swift probe
 deferred 20/20 on kqueue alone. The first run on a fresh checkout still
 deferred on a root write. Quarry rejected `xcodegen --use-cache` because
 it could preserve an independently edited `project.pbxproj`. These are
-consumer probe results, not real-hook parity.
+consumer probe results. In subsequent real-hook runs at Ethos `772a20f`,
+the clean gate passed, SwiftFormat and XCTest breaks blocked, and a
+mid-run edit deferred (one launch each).
+
+Build output such as Xcode DerivedData must go outside the checkout,
+for example into runner scratch. With DerivedData inside the checkout,
+Quarry deferred on FSEvents ordering; an independent observer recorded
+131 descending event IDs, all under Git-ignored DerivedData
+`.xcresult` paths, with no loss flags. Ordering and loss checks apply
+before filtering any path, including ignored paths. A stream that loses
+coverage or reports a descending ID defers; the diagnostic names the
+failure and the first event path.
 
 Keep the index veto strict. In the
 [optional-lock and index burst probes](https://github.com/punt-labs/quarry-menubar/tree/5d94f8305a1c21362e2a06689e89692f08278dae/docs/ethos-live-evidence),
