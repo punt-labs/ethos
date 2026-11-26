@@ -221,7 +221,20 @@ The Linux worktree profile is declared in
 `.punt-labs/ethos/checks/snapshots/<check-set>.yaml` beside the selected
 check set. There is no separate `handoff-worktree.yaml` to install.
 
-A handoff check can opt into the Linux snapshot runner, for example:
+For a selected check set named `project`, define a handoff check such as
+`verify-manifest` in `.punt-labs/ethos/checks/project.yaml`. Configure it in
+`.punt-labs/ethos/checks/snapshots/project.yaml`:
+
+```yaml
+checks:
+  verify-manifest:
+    profile: linux-worktree-v1
+    epoch: v1
+    sources: {mode: worktree}
+```
+
+The worktree profile selects Git-visible checkout files. The older inline
+`linux-shell-v1` profile instead lists its inputs:
 
 ```yaml
 - name: verify-manifest
