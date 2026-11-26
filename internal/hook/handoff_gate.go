@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -48,8 +47,9 @@ type handoffSystemPlan struct {
 }
 
 type handoffWorktreePlan struct {
-	system handoffSystemPlan
-	gitDir string
+	system     handoffSystemPlan
+	gitDir     string
+	runtimeDir string
 }
 
 type handoffSystemMount struct {
@@ -101,8 +101,11 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	if check.InvalidSnapshotSidecar {
 		return deferGate("invalid snapshot sidecar")
 	}
+	var bundle handoffRuntime
 	if check.WorktreeSnapshot != nil {
-		if err := validateHandoffRuntime(ctx, check.WorktreeSnapshot); err != nil {
+		var err error
+		bundle, err = prepareHandoffRuntime(ctx, check.WorktreeSnapshot, agent)
+		if err != nil {
 			return deferGate(err.Error())
 		}
 		if field := unsupportedWorktreeField(check.WorktreeSnapshot); field != "" {
@@ -261,6 +264,13 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 			}
 			defer func() { _ = os.RemoveAll(scratch) }()
 			prepared := handoffWorktreePlan{system: system}
+			if bundle.archive != "" {
+				prepared.runtimeDir = filepath.Join(scratch, "runtime-snapshot")
+				if err := bundle.extract(ctx, prepared.runtimeDir); err != nil {
+					result = deferGate(err.Error())
+					return nil
+				}
+			}
 			if gitView.fingerprint != "" {
 				prepared.gitDir = filepath.Join(scratch, "git-view")
 				if err := gitView.materialize(ctx, root, prepared.gitDir); err != nil {
@@ -334,8 +344,6 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 
 func unsupportedWorktreeField(profile *checkset.WorktreeSnapshot) string {
 	switch {
-	case profile.Runtime != nil:
-		return "runtime"
 	case len(profile.Scratch.Seed) != 0:
 		return "scratch.seed"
 	case len(profile.Scratch.Files) != 0:
@@ -591,8 +599,9 @@ func writeGateResult(p layout.Policy, path string, result gateResult) error {
 // worktreeSnapshotInputs lists the files a worktree profile snapshots: tracked
 // and untracked files that Git does not ignore and that exist on disk.
 func worktreeSnapshotInputs(ctx context.Context, root string) ([]string, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
-	out, err := cmd.Output()
+	ctx, cancel := context.WithTimeout(ctx, gateInputTime)
+	defer cancel()
+	out, err := handoffGitOutput(ctx, root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
 	if err != nil {
 		return nil, err
 	}

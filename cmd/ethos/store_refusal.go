@@ -66,6 +66,7 @@ var storeUses = map[string]storeUse{
 	"ethos writing-style": storeGlobalOnly,
 	"ethos provenance":    storeGlobalOnly,
 	"ethos checks":        storeGlobalOnly, "ethos checks schema": storeGlobalOnly,
+	"ethos handoff": storeGlobalOnly, "ethos handoff fetch-runtime": storeRefuses,
 
 	"ethos version": storeGlobalOnly, "ethos completion": storeGlobalOnly,
 	"ethos uninstall": storeGlobalOnly, "ethos identity schema": storeGlobalOnly,

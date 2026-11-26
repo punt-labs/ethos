@@ -139,10 +139,12 @@ func TestHandoffSnapshotRuntimeDefersWithoutVerifiedArchive(t *testing.T) {
 	feedback := run()
 	require.Contains(t, feedback.Blocking, "runtime-missing")
 	require.Contains(t, feedback.Blocking, "https://example.com/project-test.tar.gz")
+	require.Contains(t, feedback.Notice, "ethos handoff fetch-runtime")
 	require.Contains(t, feedback.Notice, "make check")
 	writeFile(t, filepath.Join(home, ".punt-labs/ethos/runtimes", digest+".tar.gz"), "unverified archive")
 	feedback = run()
 	require.Contains(t, feedback.Blocking, "runtime-digest-mismatch")
+	require.Contains(t, feedback.Notice, "ethos handoff fetch-runtime")
 	require.Contains(t, feedback.Notice, "make check")
 }
 
@@ -150,7 +152,6 @@ func TestHandoffWorktreeDefersUnimplementedFields(t *testing.T) {
 	const archive = "fixture bundle"
 	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(archive)))
 	for _, tc := range []struct{ field, yaml string }{
-		{"runtime", fmt.Sprintf("runtime: {platforms: {%s-%s: {bundle: demo, sha256: %q}}}", runtime.GOOS, runtime.GOARCH, digest)},
 		{"scratch.seed", "scratch: {seed: {cache: cache}}"},
 		{"scratch.files", "scratch: {files: [output.tmp]}"},
 		{"prehydrate", "prehydrate: {run: [sh, seed.sh]}"},

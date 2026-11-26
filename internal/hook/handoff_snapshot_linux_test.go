@@ -426,7 +426,8 @@ func TestHandoffWorktreeSandboxExpandsLogicalPathPrefixes(t *testing.T) {
 	inputs := []string{"README", "sub/input"}
 	proof, err := digestGateInputsWithMode(context.Background(), live, "", inputs, true)
 	require.NoError(t, err)
-	failure, err := executeHandoffSnapshot(context.Background(), t.TempDir(), live, proof, inputs, editCheck{
+	ctx := context.Background()
+	invocation := editCheck{
 		name: "paths", cwd: gateRoot, timeout: 5 * time.Second,
 		policy: &checkset.Check{WorktreeSnapshot: &checkset.WorktreeSnapshot{
 			Path: []string{"{scratch}/bin"},
@@ -457,7 +458,11 @@ test "$ETHOS_HANDOFF_SCRATCH" = "/scratch" &&
 test "$HOME" = "$ETHOS_HANDOFF_SCRATCH/home" &&
 test "$ETHOS_HANDOFF_CHECKOUT_NAME" = "$4"`,
 			"paths", "{scratch}/socket test", "{runtime}/bin", "{root}/sub", filepath.Base(live)},
-	})
+	}
+	system, err := prepareHandoffSystem(ctx, live, invocation.policy.WorktreeSnapshot)
+	require.NoError(t, err)
+	failure, err := executeHandoffSnapshot(ctx, t.TempDir(), live, proof, inputs, invocation,
+		handoffWorktreePlan{system: system, runtimeDir: t.TempDir()})
 	skipIfHandoffSandboxUnavailable(t, err)
 	require.NoError(t, err)
 	require.Empty(t, failure)
@@ -551,14 +556,15 @@ func TestHandoffWorktreeSystemRunsCgoRace(t *testing.T) {
 			t.Skip(err)
 		}
 	}
-	goroot := runtime.GOROOT()
+	out, err := exec.Command("go", "env", "GOROOT").Output()
+	require.NoError(t, err)
+	goroot := strings.TrimSpace(string(out))
 	if !filepath.IsAbs(goroot) {
 		t.Skip("absolute Go toolchain required")
 	}
 	root, _ := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("TMPDIR", "/var/tmp")
-	host := t.TempDir()
+	host := handoffSystemFixtureDir(t)
 	hostFile := filepath.Join(host, "file")
 	hostDir := filepath.Join(host, "dir")
 	writeFile(t, hostFile, "host-file\n")
@@ -600,8 +606,7 @@ exec go test -race .
 func TestHandoffWorktreeSystemFileChangeInvalidatesResult(t *testing.T) {
 	root, _ := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("TMPDIR", "/var/tmp")
-	file := filepath.Join(t.TempDir(), "status")
+	file := filepath.Join(handoffSystemFixtureDir(t), "status")
 	writeFile(t, file, "good\n")
 	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
 	checkPolicy(t, root, "project", "  - name: system-file\n    stage: handoff\n    files: all\n    run: [sh, gate.sh]\n")
@@ -624,6 +629,14 @@ func TestHandoffWorktreeSystemFileChangeInvalidatesResult(t *testing.T) {
 	feedback = run()
 	require.Contains(t, feedback.Blocking, "exit status 42")
 	require.Contains(t, feedback.Blocking, "system-file-changed")
+}
+
+func handoffSystemFixtureDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/var/tmp", "ethos-system-")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
+	return dir
 }
 
 func TestHandoffWorktreeHasPrivatePTY(t *testing.T) {

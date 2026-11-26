@@ -17,6 +17,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 type handoffGitView struct {
@@ -141,7 +142,7 @@ func readHandoffGitFile(ctx context.Context, path string) ([]byte, error) {
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() {
-		return nil, errors.New("Git metadata is not a regular file")
+		return nil, errors.New("git metadata is not a regular file")
 	}
 	var out bytes.Buffer
 	_, err = io.Copy(&gateHashBudget{ctx: ctx, dst: &out, remaining: 8 << 20}, f)
@@ -195,7 +196,7 @@ func (v handoffGitView) addRefs(data []byte, git *checkset.SnapshotGit, oidLen i
 			}
 			ref, exists := all[name]
 			if !exists {
-				return nil, fmt.Errorf("Git view ref %s is missing", name)
+				return nil, fmt.Errorf("git view ref %s is missing", name)
 			}
 			value := ref.oid
 			if ref.target != "" {
@@ -277,7 +278,12 @@ func (v handoffGitView) materialize(ctx context.Context, checkout, dest string) 
 	if len(v.objects) == 0 {
 		return nil
 	}
-	pack, err := os.CreateTemp(dest, "pack-*.pack")
+	stage, err := os.MkdirTemp(dest, layout.ScratchDirPattern("pack"))
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stage)
+	pack, err := os.Create(filepath.Join(stage, "snapshot.pack"))
 	if err != nil {
 		return err
 	}
