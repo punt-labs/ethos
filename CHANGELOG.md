@@ -13,7 +13,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when overlay events or the final overlay contents show undeclared changes.
 - Declare a Linux amd64 snapshot profile and offline runtime for the existing
   handoff `make check` gate.
-
 - Declared handoff gates on macOS run in a private Darwin snapshot by default.
   Projects that need the live checkout can opt in with
   `isolation: live-verified`. Operators can authorize or revoke that mode with

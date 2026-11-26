@@ -10,8 +10,6 @@ import (
 	"strings"
 )
 
-var errHandoffScratchShadowsInput = errors.New("checkout scratch shadows snapshot content")
-
 func handoffScratchTargets(checkout string, paths []string) ([]string, error) {
 	var targets []string
 	for _, relative := range paths {

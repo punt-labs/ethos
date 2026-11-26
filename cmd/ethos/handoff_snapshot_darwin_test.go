@@ -36,6 +36,8 @@ func TestHandoffSnapshotLaunchVerdicts(t *testing.T) {
 		{"perl-unicode", `[/bin/sh, -c, 'test "$PERL_UNICODE" = D']`, "", "", "completed", "    env: {PERL_UNICODE: D}\n", 1},
 		{"data-deferred", "[/bin/sh, -c, 'exit 97']", "", "worktree profile field data not supported by this runner yet", "deferred",
 			"    data: [{name: fixture, url: 'https://example.com/data', max_age_hours: 1, mount: fixture}]\n", 0},
+		{"scratch-files-deferred", "[/bin/sh, -c, 'exit 97']", "", "worktree profile field scratch.files not supported by this runner yet", "deferred",
+			"    scratch: {files: [output.tmp]}\n", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, home := t.TempDir(), t.TempDir()
