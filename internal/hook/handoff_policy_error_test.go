@@ -51,8 +51,8 @@ func TestHandoffFileFailurePolicySelection(t *testing.T) {
 				writeFile(t, filepath.Join(policyRoot, ".punt-labs/ethos.yaml"), "checks: project\n")
 				checkPolicy(t, policyRoot, "project", "  - name: probe\n    stage: "+tc.stage+"\n    files: all\n    run: [probe]\n")
 			}
-			feedback := runStageRootChecks(context.Background(), root, "", "handoff", func() (stageScope, error) {
-				return stageScope{}, errors.New("audit unavailable")
+			feedback := runStageRootChecks(context.Background(), root, "", "handoff", func() (map[string][]string, error) {
+				return nil, errors.New("audit unavailable")
 			})
 			if tc.stage == "handoff" {
 				require.Contains(t, feedback.Blocking, "audit unavailable")
