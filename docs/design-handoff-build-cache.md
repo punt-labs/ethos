@@ -63,16 +63,17 @@ within that repository; skip active locks. There is no cross-repository
 inventory or machine-wide budget: total usage depends on the budgets
 of the repositories using the cache. Use `cache clear` to reclaim a
 repository's cache space, or remove its local store after stopping all
-processes using it. Clearing
-or evicting a namespace must also invalidate verdicts that could have
+processes using it.
+
+Clearing or evicting a namespace must invalidate verdicts that could have
 used it. Store a generation for each namespace outside the removable
 cache tree, alongside a stable namespace lock that also survives
 deletion. Keep artifacts at
 `S/.punt-labs/local/ethos/handoff-cache/<runtime-digest>/g<N>/<name>`,
 and seed the private copy only from the current generation's directory.
-A missing directory means a cold cache. Under
-the lock, `cache clear` persists a new, never-reused generation before
-attempting to delete non-current directories. Each cache preparation
+A missing directory means a cold cache. Under the lock, both
+`cache clear` and eviction persist a new, never-reused generation
+before attempting to delete non-current directories. Each cache preparation
 also attempts this cleanup under the same lock, before mounting the
 private copy. Deletion is best-effort: a crash after the bump leaves old
 artifacts on disk but makes them ineligible for reuse, and any remaining
