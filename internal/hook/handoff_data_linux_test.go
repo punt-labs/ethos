@@ -146,6 +146,9 @@ func TestHandoffDataDeferralRefreshesCheckoutOutsideHome(t *testing.T) {
 	require.Equal(t, main, primary.Checkout)
 	_, err = HandoffDataCheckout(loc, "linked:unregistered")
 	require.ErrorContains(t, err, "is not registered")
+	loc.CheckoutErr = errors.New("checkout unavailable")
+	_, err = HandoffDataCheckout(loc, ref)
+	require.ErrorIs(t, err, loc.CheckoutErr)
 }
 
 func TestHandoffWorktreeDataMountAndReuse(t *testing.T) {

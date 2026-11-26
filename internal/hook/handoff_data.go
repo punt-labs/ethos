@@ -82,6 +82,9 @@ func HandoffDataCheckout(loc resolve.Located, ref string) (resolve.Located, erro
 	if ref == "" {
 		return loc, nil
 	}
+	if err := loc.Err(); err != nil {
+		return resolve.Located{}, err
+	}
 	list, err := gitenv.Output(loc.Checkout, "git", "worktree", "list", "--porcelain", "-z")
 	if err != nil {
 		return resolve.Located{}, errors.New("cannot list the repository worktrees for refresh-data")
