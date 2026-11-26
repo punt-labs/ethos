@@ -450,19 +450,6 @@ func retainHandoffResults(pin *os.File, slot string, waited bool, now time.Time)
 	return !busy || hasSlot || count < gateRecordsPerStripe, err
 }
 
-func gatePlanInputsPresent(snapshot string, argv []string) bool {
-	for _, arg := range argv {
-		if arg != gateRoot && !strings.HasPrefix(arg, gateRoot+"/") {
-			continue
-		}
-		rel := strings.TrimPrefix(arg, gateRoot)
-		if _, err := os.Stat(filepath.Join(snapshot, rel)); err != nil {
-			return false
-		}
-	}
-	return true
-}
-
 func handoffGateInputs(ctx context.Context, root string, inputs []string, preserveMode bool) (string, string, error) {
 	state, err := checkoutStateWithBudget(ctx, root)
 	if err != nil {
