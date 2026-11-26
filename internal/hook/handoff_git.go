@@ -51,6 +51,17 @@ func handoffGitOutput(ctx context.Context, checkout string, args ...string) ([]b
 	return out.Bytes(), err
 }
 
+func captureLiveHandoffRefs(ctx context.Context, checkout string) (handoffGitView, error) {
+	ctx, cancel := context.WithTimeout(ctx, gateInputTime)
+	defer cancel()
+	refs, err := handoffGitOutput(ctx, checkout, "for-each-ref", "--sort=refname", "--format=%(objectname) %(refname) %(symref)")
+	if err != nil {
+		return handoffGitView{}, errors.New("cannot capture live-verified Git refs")
+	}
+	digest := sha256.Sum256(refs)
+	return handoffGitView{fingerprint: hex.EncodeToString(digest[:])}, nil
+}
+
 func captureHandoffGit(ctx context.Context, checkout string, profile *checkset.WorktreeSnapshot) (handoffGitView, error) {
 	if profile == nil || profile.Git == nil {
 		return handoffGitView{}, nil

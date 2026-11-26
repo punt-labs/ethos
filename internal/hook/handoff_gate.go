@@ -267,7 +267,13 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	}
 	verdictDetails.DeveloperFingerprint = system.DeveloperFingerprint
 	baseDetails.DeveloperFingerprint = system.DeveloperFingerprint
-	gitView, err := captureHandoffGit(ctx, root, check.WorktreeSnapshot)
+	captureGit := func(ctx context.Context) (handoffGitView, error) {
+		if live {
+			return captureLiveHandoffRefs(ctx, root)
+		}
+		return captureHandoffGit(ctx, root, check.WorktreeSnapshot)
+	}
+	gitView, err := captureGit(ctx)
 	if err != nil {
 		return deferGate(err.Error())
 	}
@@ -379,7 +385,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 			}
 			return reason("system inputs changed", path)
 		}
-		currentGit, err := captureHandoffGit(ctx, root, check.WorktreeSnapshot)
+		currentGit, err := captureGit(ctx)
 		if err != nil || currentGit.fingerprint != gitView.fingerprint {
 			return reason("Git view changed", root)
 		}
