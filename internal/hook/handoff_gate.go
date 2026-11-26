@@ -82,6 +82,9 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		if err := validateHandoffRuntime(ctx, check.WorktreeSnapshot); err != nil {
 			return deferGate(err.Error())
 		}
+		if field := unsupportedWorktreeField(check.WorktreeSnapshot); field != "" {
+			return deferGate("worktree profile field " + field + " not supported by this runner yet")
+		}
 		if !handoffSandboxSupported() {
 			return deferGate("snapshot isolation unavailable on this host")
 		}
@@ -269,6 +272,35 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		}
 	}
 	return deferGate("interrupted while waiting for the handoff lease")
+}
+
+func unsupportedWorktreeField(profile *checkset.WorktreeSnapshot) string {
+	switch {
+	case profile.Runtime != nil:
+		return "runtime"
+	case len(profile.Scratch.Seed) != 0:
+		return "scratch.seed"
+	case len(profile.Scratch.Files) != 0:
+		return "scratch.files"
+	case profile.Prehydrate != nil:
+		return "prehydrate"
+	case profile.Git != nil:
+		return "git"
+	case profile.Network != "":
+		return "network"
+	case len(profile.System.Tools) != 0:
+		return "system.tools"
+	case len(profile.System.Files) != 0:
+		return "system.files"
+	case len(profile.System.Dirs) != 0:
+		return "system.dirs"
+	case len(profile.System.Platforms) != 0:
+		return "system.platforms"
+	case len(profile.Data) != 0:
+		return "data"
+	default:
+		return ""
+	}
 }
 
 func handoffManualCommand(root string, files []string, check checkset.Check) string {

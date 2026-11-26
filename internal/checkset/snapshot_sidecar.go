@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -68,6 +69,7 @@ type SnapshotPlatform struct {
 type SnapshotScratch struct {
 	Checkout []string          `yaml:"checkout,omitempty" json:"checkout,omitempty"`
 	Seed     map[string]string `yaml:"seed,omitempty" json:"seed,omitempty"`
+	Files    []string          `yaml:"files,omitempty" json:"files,omitempty"`
 }
 
 type SnapshotGit struct {
@@ -152,6 +154,11 @@ func (s WorktreeSnapshot) validate() error {
 	}
 	if s.Network != "" && s.Network != "loopback" {
 		return errors.New("snapshot network must be loopback or omitted")
+	}
+	for _, file := range s.Scratch.Files {
+		if !isSnapshotDataPath(file) || slices.Contains(strings.Split(file, "/"), ".git") {
+			return errors.New("snapshot scratch files must be checkout-relative and outside .git")
+		}
 	}
 	if err := s.System.SnapshotSystemInputs.validate(); err != nil {
 		return err
