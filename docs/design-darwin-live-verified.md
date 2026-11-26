@@ -15,8 +15,9 @@ it does not claim that the runner or its guard implementation has shipped.
 Keep the check YAML unchanged so v5.2.3 can read it. The per-check entry
 in the snapshot sidecar at `.punt-labs/ethos/checks/snapshots/<slug>.yaml`
 has a top-level `isolation` field next to `profile`. Use the existing
-worktree profile value `linux-worktree-v1`: the new field, not another
-profile name, selects the isolation mode. The allowed values are
+worktree profile value `linux-worktree-v1`: it is the sidecar schema
+version, not a host name, and is used on both Linux and Darwin. The new
+field, not another profile name, selects the mode. The allowed values are
 `snapshot` (the default) and `live-verified`; any other value is a
 validation error. The resolved mode is part of the key, cache record,
 and verdict log. A Linux runner seeing `live-verified` visibly defers;
