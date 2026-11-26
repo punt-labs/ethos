@@ -248,6 +248,19 @@ func worktreeSandboxPath(checkout, value string) string {
 	return value
 }
 
+func gatePlanInputsPresent(snapshot string, argv []string) bool {
+	for _, arg := range argv {
+		if arg != gateRoot && !strings.HasPrefix(arg, gateRoot+"/") {
+			continue
+		}
+		rel := strings.TrimPrefix(arg, gateRoot)
+		if _, err := os.Stat(filepath.Join(snapshot, rel)); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 func resolveWorktreeExecutable(name string, env []string) (string, error) {
 	if strings.ContainsRune(name, '/') {
 		return name, nil

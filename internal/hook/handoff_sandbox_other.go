@@ -10,14 +10,16 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/checkset"
 )
 
+var errHandoffSandboxUnavailable = errors.New("snapshot isolation unavailable on this host")
+
 func handoffSandboxSupported() bool { return false }
 
 func pinHandoffStripe(context.Context, string) (*os.File, bool, error) {
-	return nil, false, errors.New("snapshot isolation unavailable on this host")
+	return nil, false, errHandoffSandboxUnavailable
 }
 
 func withUnpinnedStripe(*os.File, func() error) (bool, error) {
-	return false, errors.New("snapshot isolation unavailable on this host")
+	return false, errHandoffSandboxUnavailable
 }
 
 // RunHandoffSandbox does not dispatch a child on unsupported hosts.
@@ -26,7 +28,7 @@ func RunHandoffSandbox() {}
 func runHandoffSandbox(func(string) error) {}
 
 func handoffSandboxIdentity(string) (string, error) {
-	return "", errors.New("snapshot isolation unavailable on this host")
+	return "", errHandoffSandboxUnavailable
 }
 
 func prepareHandoffSystem(context.Context, string, *checkset.WorktreeSnapshot) (handoffSystemPlan, error) {
@@ -34,5 +36,5 @@ func prepareHandoffSystem(context.Context, string, *checkset.WorktreeSnapshot) (
 }
 
 func executeHandoffSnapshot(_ context.Context, _, _, _ string, _ []string, _ editCheck, _ ...handoffWorktreePlan) (string, error) {
-	return "", errors.New("snapshot isolation unavailable on this host")
+	return "", errHandoffSandboxUnavailable
 }
