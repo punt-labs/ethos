@@ -31,11 +31,11 @@ install_nightly() {
 
   fetch_sibling prfaq 85fa8e3b009c2fecfb9859ace7d8bb0bca0ce708
   fetch_sibling z-spec dc3fec3d94ba7d6706b2626f38f447dcc6e7c5e7
-  fetch_sibling punt-kit 8af110f87d61895beb0bc6a129da5cfe0c3ad613
+  fetch_sibling punt-kit 0c901753e73eab5b340ea01d3b584adfe86988f6
   fetch_sibling beadle 02c64874215a1cbd9c091d38093e0478de237f6b
 
   uv python install "$UV_PYTHON"
-  uv tool install 'punt-kit==0.19.0'
+  uv tool install 'punt-kit==0.20.0'
   uv tool install 'punt-vox==5.1.0'
   uv tool install 'punt-lux[display]==0.33.1'
   uv tool install 'punt-quarry==3.9.1'
