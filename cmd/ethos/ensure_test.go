@@ -61,7 +61,8 @@ func topLevel(cmd *cobra.Command) string {
 }
 
 // Every command passes the repair gate except the four that never read
-// storage. The walk is over the cobra tree, so a command added later is
+// storage and subagent-stop, which cannot repair the checkout before handoff.
+// The walk is over the cobra tree, so a command added later is
 // covered or this test fails (DES-084 Wiring). Two properties per leaf: the
 // gate decides to run or not for the command (through the root hook), and
 // the hook that cobra actually runs for the leaf is root's — a subcommand
@@ -84,7 +85,8 @@ func TestEveryCommandPassesEnsure(t *testing.T) {
 			// A refusal is allowed; reaching the gate first is the property.
 			_ = establishRoots(c, nil)
 			called := *n > before
-			if exempt[topLevel(c)] || c.CommandPath() == "ethos hook post-edit" || c.CommandPath() == "ethos hook stdin-watchdog" {
+			path := c.CommandPath()
+			if exempt[topLevel(c)] || path == "ethos hook post-edit" || path == "ethos hook stdin-watchdog" || path == "ethos hook subagent-stop" {
 				assert.False(t, called, "%s must not pass Ensure", c.CommandPath())
 			} else {
 				assert.True(t, called, "%s does not pass Ensure", c.CommandPath())
@@ -162,9 +164,10 @@ func TestOnlyDoctorRepairsUnbounded(t *testing.T) {
 			b0, u0 := *bounded, *unbounded
 			_ = establishRoots(c, nil)
 			cmdRoots.Store(nil)
-			if c.CommandPath() == "ethos hook post-edit" || c.CommandPath() == "ethos hook stdin-watchdog" {
-				assert.Equal(t, b0, *bounded, "%s reads no storage", c.CommandPath())
-				assert.Equal(t, u0, *unbounded, "%s reads no storage", c.CommandPath())
+			path := c.CommandPath()
+			if path == "ethos hook post-edit" || path == "ethos hook stdin-watchdog" || path == "ethos hook subagent-stop" {
+				assert.Equal(t, b0, *bounded, "%s must not run storage repair", path)
+				assert.Equal(t, u0, *unbounded, "%s must not run storage repair", path)
 			} else if c.CommandPath() == "ethos doctor" {
 				assert.Equal(t, u0+1, *unbounded, "doctor must reach the unbounded gate")
 				assert.Equal(t, b0, *bounded, "doctor must not reach the bounded gate")

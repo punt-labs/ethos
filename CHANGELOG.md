@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Subagent handoff no longer runs storage repair before checks, which could
+  rewrite tracked files in the checkout.
+
 ## [5.2.3] - 2026-11-25
 
 ### Added

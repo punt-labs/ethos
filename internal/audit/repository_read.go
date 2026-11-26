@@ -33,6 +33,10 @@ func ReadStream(p layout.Policy, s Stream) (StreamData, error) {
 }
 
 func readStreamCanonical(p layout.Policy, s Stream, canonicalize func([]byte) ([]byte, error)) (StreamData, error) {
+	return readStreamWithChunkLoader(p, s, canonicalize, ReadChunkVerified)
+}
+
+func readStreamWithChunkLoader(p layout.Policy, s Stream, canonicalize func([]byte) ([]byte, error), loadChunk func(string, int64) ([]Line, error)) (StreamData, error) {
 	path := s.LivePath(p)
 	var livePayloads [][]byte
 	loadLive := func(_ layout.Policy, _ Stream) ([]Line, error) {
@@ -59,7 +63,7 @@ func readStreamCanonical(p layout.Policy, s Stream, canonicalize func([]byte) ([
 			return payload, nil
 		})
 	}
-	return readStream(p, s, ReadChunkVerified, loadLive, merge)
+	return readStream(p, s, loadChunk, loadLive, merge)
 }
 
 func readStream(p layout.Policy, s Stream, loadChunk func(string, int64) ([]Line, error), loadLive func(layout.Policy, Stream) ([]Line, error), merge func([]Line) ([]Line, error)) (StreamData, error) {

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -97,9 +98,19 @@ func handoffFilesWithAdvice(checkout, sessionID, agentID string, advice func(str
 	if err != nil {
 		return nil, err
 	}
-	entries, err := readSessionAuditWithPolicy(policy, sessionID)
+	stream := audit.Stream{Namespace: audit.SessionNS, Session: sessionID}
+	data, err := audit.ReadStreamWithSalvage(policy, stream, LiveLineGuard(policy, stream.Namespace))
 	if err != nil {
 		return nil, err
+	}
+	entries, err := decodeSessionStream(data)
+	if err != nil {
+		return nil, err
+	}
+	if advice != nil {
+		for _, gap := range data.Gaps {
+			advice(fmt.Sprintf("ethos: handoff audit gap in %s (%s through %s)", gap.Chunk, audit.FormatLineTS(gap.First), audit.FormatLineTS(gap.Last)))
+		}
 	}
 	type auditPath struct {
 		file string

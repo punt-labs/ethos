@@ -20,6 +20,44 @@ type SalvageResult struct {
 	Replacement string         // path of the replacement chunk, "" when no line survived
 }
 
+// ReadStreamWithSalvage reconstructs a stream without changing its sources.
+// Only damaged content in named sealed chunks is recoverable. Lost ranges
+// are returned as gaps without writing markers. Other read failures remain errors.
+func ReadStreamWithSalvage(p layout.Policy, s Stream, guard LineGuard) (StreamData, error) {
+	var gaps []Gap
+	var floor int64
+	load := func(path string, last int64) ([]Line, error) {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, &ChunkReadError{Path: path, Err: err}
+		}
+		lines, err := decodeChunkVerified(raw, path, last)
+		if err == nil {
+			return lines, nil
+		}
+		cn, kind := Classify(filepath.Base(path), s.Namespace)
+		if kind != KindValid {
+			return nil, err
+		}
+		r, recoverErr := recoverLines(p, s, raw, cn, path, guard)
+		if recoverErr != nil {
+			return nil, errors.Join(err, recoverErr)
+		}
+		if r.lost {
+			gaps = append(gaps, Gap{Chunk: cn.Stem(), First: r.lo, Last: r.hi})
+		}
+		floor = max(floor, r.verifiedLast)
+		return r.keep, nil
+	}
+	data, err := readStreamWithChunkLoader(p, s, CanonicalPayload, load)
+	if err != nil {
+		return StreamData{}, err
+	}
+	data.Gaps = append(data.Gaps, gaps...)
+	data.Floor = max(data.Floor, floor)
+	return data, nil
+}
+
 // SalvageChunk repairs a sealed chunk whose bytes no longer decode (a torn
 // write, a hand edit that left an invalid escape). Under the stream lock held
 // by the caller it keeps every line that still decodes, adds the live lines of
