@@ -69,7 +69,7 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 		return stageScope{filesByRoot: files, auditGap: len(notes) != 0}, err
 	})
 	if len(notes) != 0 && handoffPolicySelected(checkout, agent) {
-		fmt.Fprintln(errOut, editRedact(strings.Join(notes, "\n")))
+		feedback.Advisory = strings.TrimSpace(strings.Join(append(notes, feedback.Advisory), "\n"))
 	}
 	stopFeedback(out, feedback, active)
 	return nil
