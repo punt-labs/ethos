@@ -247,3 +247,93 @@ func TestHandoffBuildCacheLockAndStateFailures(t *testing.T) {
 	_, _, err = openHandoffBuildCache(ctx, p, digest, "system", true)
 	require.ErrorIs(t, err, unix.ELOOP)
 }
+
+func TestHandoffBuildCachePreservesSeedOnInterruptedOrFailedCopy(t *testing.T) {
+	ctx := t.Context()
+	store := t.TempDir()
+	p, err := layout.NewRepository(store, store, layout.RecordBlame)
+	require.NoError(t, err)
+	cache, _, err := openHandoffBuildCache(ctx, p, fmt.Sprintf("%064x", 1), "system", true)
+	require.NoError(t, err)
+	c := cache.(*handoffBuildCache)
+	defer c.close()
+
+	private := t.TempDir()
+	require.NoError(t, c.prepare(ctx, private))
+	writeFile(t, filepath.Join(private, "nested", "seed"), "published")
+	require.NoError(t, c.promoteCache(ctx, private))
+	initialID := c.currentID()
+	published := filepath.Join(c.generationDir(), "gocache", "nested", "seed")
+
+	colliding := t.TempDir()
+	target := filepath.Join(colliding, "nested")
+	writeFile(t, target, "existing")
+	require.ErrorIs(t, c.prepare(ctx, colliding), os.ErrExist)
+	text, err := os.ReadFile(target)
+	require.NoError(t, err)
+	require.Equal(t, "existing", string(text))
+	require.ErrorIs(t, copyBuildCacheFile(published, target), os.ErrExist)
+	require.ErrorIs(t, copyBuildCacheFile(published+".missing", target), os.ErrNotExist)
+
+	replacement := t.TempDir()
+	writeFile(t, filepath.Join(replacement, "nested", "seed"), "replacement")
+	stopped, cancel := context.WithCancel(ctx)
+	cancel()
+	require.ErrorIs(t, c.promoteCache(stopped, replacement), context.Canceled)
+	require.Equal(t, initialID, c.currentID())
+	text, err = os.ReadFile(published)
+	require.NoError(t, err)
+	require.Equal(t, "published", string(text))
+
+	require.NoError(t, os.Remove(c.idFile()))
+	require.ErrorContains(t, c.promoteCache(ctx, replacement), "generation no longer matches")
+	text, err = os.ReadFile(published)
+	require.NoError(t, err)
+	require.Equal(t, "published", string(text))
+}
+
+func TestHandoffBuildCacheRejectsInvalidLocalState(t *testing.T) {
+	ctx := t.Context()
+	store, outside := t.TempDir(), t.TempDir()
+	p, err := layout.NewRepository(store, store, layout.RecordBlame)
+	require.NoError(t, err)
+	c := &handoffBuildCache{loc: p, digest: fmt.Sprintf("%064x", 1)}
+	private := t.TempDir()
+	loc := resolve.Located{Store: store, Checkout: store}
+
+	require.NoError(t, layout.EnsureLocalDir(p, p.LocalRoot()))
+	require.NoError(t, os.Symlink(outside, c.stateRoot()))
+	_, _, err = openHandoffBuildCache(ctx, p, c.digest, "system", true)
+	require.Error(t, err)
+	require.Error(t, ClearHandoffBuildCache(ctx, loc))
+	require.NoError(t, os.Remove(c.stateRoot()))
+	cache, _, err := openHandoffBuildCache(ctx, p, c.digest, "system", true)
+	require.NoError(t, err)
+	c = cache.(*handoffBuildCache)
+	defer c.close()
+	require.ErrorIs(t, c.withBudget(ctx, 0, func() error {
+		t.Fatal("must not install without the cache root")
+		return nil
+	}), os.ErrNotExist)
+
+	require.NoError(t, os.Symlink(outside, c.cacheRoot()))
+	require.Error(t, c.prepare(ctx, private))
+	require.Error(t, ClearHandoffBuildCache(ctx, loc))
+	require.NoError(t, os.Remove(c.cacheRoot()))
+	require.NoError(t, layout.EnsureLocalDir(p, c.cacheRoot()))
+	require.NoError(t, os.Symlink(outside, c.namespace()))
+	require.ErrorContains(t, c.prepare(ctx, private), "invalid handoff build cache namespace")
+	entries, err := os.ReadDir(outside)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+
+	metadata := filepath.Join(c.stateRoot(), c.digest+".json")
+	require.NoError(t, os.Truncate(metadata, 4097))
+	require.ErrorContains(t, c.clear(), "invalid cache state file")
+	writeFile(t, metadata, `{"Number":18446744073709551615,"System":"system"}`)
+	require.ErrorContains(t, c.clear(), "build cache generation exhausted")
+	require.Error(t, ClearHandoffBuildCache(ctx, resolve.Located{}))
+	stopped, cancel := context.WithCancel(ctx)
+	cancel()
+	require.ErrorIs(t, ClearHandoffBuildCache(stopped, loc), context.Canceled)
+}
