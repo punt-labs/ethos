@@ -101,6 +101,10 @@ with a new ID. Reuse the verdict only if the current ID equals the
 recorded ID, checked under the namespace lock. Manual deletion of the
 cache subtree also deletes the ID. If either the generation or its
 required ID is missing or unreadable, do not reuse the verdict.
+If cache preparation finds the current generation directory or its ID
+file missing, it starts cold and initializes the directory with a fresh
+random ID under the namespace lock. Old verdicts cannot match that ID;
+verdicts recorded with the new ID can be reused normally.
 The prototype tests private copies and pass-only write-back; the clear
 command, eviction, and generation tracking are proposed, not implemented.
 
