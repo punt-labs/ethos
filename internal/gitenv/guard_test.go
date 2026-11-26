@@ -74,7 +74,7 @@ var allowedProcessUses = map[string][]string{
 	"internal/hook/post_edit.go": {"exec.CommandContext(<expr>)", "(*exec.Cmd).Run"},
 
 	// Re-exec Ethos in Linux namespaces, then replace it with the isolated shell.
-	"internal/hook/handoff_sandbox_linux.go":  {"exec.CommandContext(self)", "(*exec.Cmd).Start", "unix.Exec"},
+	"internal/hook/handoff_sandbox_linux.go":  {"exec.CommandContext(self)", "(*exec.Cmd).Start", "exec.Cmd{}", "(*exec.Cmd).Run", "unix.Exec"},
 	"internal/hook/handoff_runtime_github.go": {`exec.CommandContext("gh")`, "(*exec.Cmd).Output"},
 
 	// Not git.

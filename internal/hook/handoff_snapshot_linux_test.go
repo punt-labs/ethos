@@ -278,8 +278,32 @@ func TestHandoffMaterializesDeclaredRegularFiles(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o500), info.Mode().Perm())
 	require.NoFileExists(t, filepath.Join(dest, "undeclared"))
-	require.True(t, gatePlanInputsPresent(dest, []string{"/bin/sh", "/checkout/pkg/gate"}))
-	require.False(t, gatePlanInputsPresent(dest, []string{"/bin/sh", "/checkout/undeclared"}))
+	require.True(t, gatePlanInputsPresent(dest, []string{"/bin/sh", "/checkout/pkg/gate"}, nil))
+	require.False(t, gatePlanInputsPresent(dest, []string{"/bin/sh", "/checkout/undeclared"}, nil))
+	prehydrate := &handoffSandboxWorktree{CheckoutScratch: []string{"build"}, Prehydrate: []string{"hydrate"}}
+	require.True(t, gatePlanInputsPresent(dest, []string{"/bin/sh", "/checkout/build/gen.sh"}, prehydrate))
+	require.False(t, gatePlanInputsPresent(dest, []string{"/bin/sh", "/checkout/build-other/gen.sh"}, prehydrate))
+	require.False(t, gatePlanInputsPresent(dest, []string{"/bin/sh", "/checkout/build/../undeclared"}, prehydrate))
+	require.False(t, gatePlanInputsPresent(dest, []string{"/bin/sh", "/checkout/../etc/os-release"}, prehydrate))
+	require.False(t, gatePlanInputsPresent(dest, []string{"/bin/sh", "/checkout/../checkout/build/gen.sh"}, prehydrate))
+	scratch := &handoffSandboxWorktree{CheckoutScratch: []string{"build"}}
+	const missing = "/checkout/build/generated"
+	for _, argv := range [][]string{
+		{missing},
+		{"/bin/sh", "--", missing},
+		{"bash", "-eo", "pipefail", missing},
+		{"python3.12", "-IX", "dev", missing},
+	} {
+		require.False(t, gatePlanInputsPresent(dest, argv, scratch), "%v", argv)
+	}
+	for _, argv := range [][]string{
+		{"touch", missing},
+		{"sh", "/checkout/pkg/gate", missing},
+		{"bash", "-ec", "true", "gate", missing},
+		{"python3", "-Im", "module", missing},
+	} {
+		require.True(t, gatePlanInputsPresent(dest, argv, scratch), "%v", argv)
+	}
 	_, err = digestGateInputs(ctx, root, "", []string{"linked/gate"})
 	require.Error(t, err)
 	_, err = digestGateInputs(ctx, root, "", []string{"pkg"})
