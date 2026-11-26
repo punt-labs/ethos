@@ -398,9 +398,11 @@ func TestHandoffWorktreeSandboxExpandsLogicalPathPrefixes(t *testing.T) {
 	failure, err := executeHandoffSnapshot(context.Background(), t.TempDir(), live, proof, inputs, editCheck{
 		name: "paths", cwd: gateRoot, timeout: 5 * time.Second,
 		policy: &checkset.Check{WorktreeSnapshot: &checkset.WorktreeSnapshot{
-			Runtime: checkset.SnapshotRuntime{Platforms: map[string]checkset.SnapshotPlatform{
+			Path: []string{"{scratch}/bin"},
+			Env:  map[string]string{"RUFF_CACHE_DIR": "{scratch}/fallback", "GOCACHE": "{scratch}/go-build"},
+			Runtime: &checkset.SnapshotRuntime{Platforms: map[string]checkset.SnapshotPlatform{
 				runtime.GOOS + "-" + runtime.GOARCH: {
-					Path: []string{"{runtime}/bin", "/usr/bin", "/bin"},
+					Path: []string{"{runtime}/bin"},
 					Env: map[string]string{
 						"LANG":           "C.UTF-8",
 						"RUFF_CACHE_DIR": "{scratch}/ruff-cache",
@@ -415,7 +417,8 @@ test "$2" = "/runtime/bin" &&
 test "$3" = "/checkout/sub" &&
 test "$RUFF_CACHE_DIR" = "/scratch/ruff-cache" &&
 test "$MYPY_CACHE_DIR" = "/scratch/mypy-cache" &&
-test "$PATH" = "/runtime/bin:/usr/bin:/bin" &&
+test "$GOCACHE" = "/scratch/go-build" &&
+test "$PATH" = "/scratch/bin:/runtime/bin:/usr/local/bin:/usr/bin:/bin" &&
 test "$(/usr/bin/locale charmap)" = "UTF-8" &&
 test "$ETHOS_HANDOFF_ROOT" = "/checkout" &&
 test "$ETHOS_HANDOFF_RUNTIME" = "/runtime" &&

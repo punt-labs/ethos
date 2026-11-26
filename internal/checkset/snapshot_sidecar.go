@@ -19,7 +19,9 @@ type WorktreeSnapshot struct {
 	Profile    string              `yaml:"profile" json:"profile"`
 	Epoch      string              `yaml:"epoch" json:"epoch"`
 	Sources    SnapshotSources     `yaml:"sources" json:"sources"`
-	Runtime    SnapshotRuntime     `yaml:"runtime" json:"runtime"`
+	Runtime    *SnapshotRuntime    `yaml:"runtime,omitempty" json:"runtime,omitempty"`
+	Path       []string            `yaml:"path,omitempty" json:"path,omitempty"`
+	Env        map[string]string   `yaml:"env,omitempty" json:"env,omitempty"`
 	System     SnapshotSystem      `yaml:"system,omitempty" json:"system,omitempty"`
 	Scratch    SnapshotScratch     `yaml:"scratch" json:"scratch"`
 	Git        *SnapshotGit        `yaml:"git,omitempty" json:"git,omitempty"`
@@ -53,7 +55,7 @@ type SnapshotScratch struct {
 }
 
 type SnapshotGit struct {
-	BaseRef string `yaml:"base_ref" json:"base_ref"`
+	BaseRef string `yaml:"base_ref,omitempty" json:"base_ref,omitempty"`
 }
 
 type SnapshotPrehydrate struct {
@@ -141,11 +143,14 @@ func (s WorktreeSnapshot) validate() error {
 			return errors.New("snapshot system tools must be executable names, not paths")
 		}
 	}
-	if s.Git != nil && !strings.HasPrefix(s.Git.BaseRef, "refs/") {
+	if s.Git != nil && s.Git.BaseRef != "" && !strings.HasPrefix(s.Git.BaseRef, "refs/") {
 		return errors.New("snapshot Git base must be a full ref")
 	}
 	if s.Prehydrate != nil && (len(s.Prehydrate.Run) == 0 || s.Prehydrate.Run[0] == "") {
 		return errors.New("snapshot prehydrate needs a command")
+	}
+	if s.Runtime == nil {
+		return nil
 	}
 	if len(s.Runtime.Platforms) == 0 {
 		return errors.New("snapshot runtime needs at least one platform")
