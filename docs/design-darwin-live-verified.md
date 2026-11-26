@@ -23,6 +23,13 @@ validation error. The resolved mode is part of the key, cache record,
 and verdict log. A Linux runner seeing `live-verified` visibly defers;
 it neither rejects the sidecar nor executes the gate in snapshot mode.
 
+As in DES-085, policy comes from the session's canonical policy store,
+not the edited checkout. Because live verification runs unsandboxed,
+only an operator-approved policy revision may opt in. A mutable sidecar
+in the worktree (including when it is also the canonical checkout) is
+not approval. If the runner cannot establish approval, visibly defer
+before launch.
+
 The runner's optional `requires` list declares `pty`, `posix_shm`,
 or `mach_lookup`; unknown entries are validation errors, and the
 declaration is keyed. For snapshot mode, Darwin visibly defers any of
@@ -50,15 +57,18 @@ uses `isolation: live-verified`, not snapshot isolation.
    through the cutoff, defer.
 2. **kqueue:** arm an independent `EVFILT_VNODE` guard for every keyed
    file and Git metadata including `HEAD`, `index`, and refs. Write,
-   extend, attrib, rename, delete and revoke events veto. Replacement
-   and unlink also veto. Ignore `NOTE_ATTRIB` only if atime changed and
+   extend, rename, delete and revoke events veto. Replacement and
+   unlink also veto. Ignore `NOTE_ATTRIB` only if atime changed and
    mode, UID, GID, size, mtime, ctime, device, inode and link count are
    unchanged. Otherwise veto, including on chmod. This avoids a false
    deferral from merely reading `.git/index`.
 3. **Descriptor budget:** reserve one fd per keyed file, plus the Git
    metadata guards (about 285 vnode fds on Quarry and 437 modeled on
-   Koch). Use a budget well under `RLIMIT_NOFILE`. Defer visibly if
-   the full set cannot be armed; never drop files to fit the budget.
+   Koch). Budget against the runner's actual soft `RLIMIT_NOFILE` with
+   headroom for existing and transient fds. For example, both sets
+   exceed a soft limit of 256 even before headroom. If the full set
+   cannot be armed within the budget, defer visibly with the required
+   count and available budget; never drop files to fit.
 
 ### Watcher evidence
 
