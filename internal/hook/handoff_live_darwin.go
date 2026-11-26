@@ -57,15 +57,12 @@ func executeHandoffLive(ctx context.Context, _, root string, inputs []string, ch
 	}
 	system := prepared.system
 	if system.DeveloperDir != "" {
-		if !trustedDarwinCLT(system.DeveloperDir) {
-			return "", errHandoffXcodeUntrusted
-		}
 		env = slices.DeleteFunc(env, func(variable string) bool {
 			return strings.HasPrefix(variable, "DEVELOPER_DIR=")
 		})
 		env = append(env, "DEVELOPER_DIR="+system.DeveloperDir)
 	}
-	if darwinXcodeTool(command) && !(darwinMakeShim(command) && system.DeveloperDir != "") && !hasDarwinDeveloperSelector(system) {
+	if darwinXcodeTool(command) && system.DeveloperDir == "" {
 		return "", errHandoffXcodeUntrusted
 	}
 	start := time.Now()

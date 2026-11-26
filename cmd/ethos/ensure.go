@@ -53,6 +53,9 @@ func exemptFromEnsure(cmd *cobra.Command) bool {
 	if cmd.CommandPath() == "ethos hook subagent-stop" {
 		return true
 	}
+	if isLiveApprovalCommand(cmd.CommandPath()) {
+		return true
+	}
 	top := cmd
 	for top.HasParent() && top.Parent().HasParent() {
 		top = top.Parent()

@@ -77,6 +77,21 @@ func (p liveApprovalPolicy) pinPath(create bool) (string, error) {
 	}
 	dir := filepath.Join(global, "live-approvals")
 	if create {
+		for parent := dir; ; parent = filepath.Dir(parent) {
+			physical, err := filepath.EvalSymlinks(parent)
+			if err == nil {
+				if p.contains(physical) {
+					return "", errors.New("live approval directory must be outside the checkout")
+				}
+				break
+			}
+			if !errors.Is(err, os.ErrNotExist) {
+				return "", err
+			}
+			if _, err := os.Lstat(parent); !errors.Is(err, os.ErrNotExist) {
+				return "", fmt.Errorf("cannot resolve live approval directory %s", parent)
+			}
+		}
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return "", err
 		}
@@ -85,7 +100,7 @@ func (p liveApprovalPolicy) pinPath(create bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if rel, err := filepath.Rel(p.checkout, physical); err != nil || filepath.IsLocal(rel) {
+	if p.contains(physical) {
 		return "", errors.New("live approval directory must be outside the checkout")
 	}
 	info, err := os.Lstat(physical)
@@ -94,6 +109,11 @@ func (p liveApprovalPolicy) pinPath(create bool) (string, error) {
 	}
 	key := sha256.Sum256([]byte(p.Repo + "\x00" + p.Slug))
 	return filepath.Join(physical, fmt.Sprintf("%x.json", key)), nil
+}
+
+func (p liveApprovalPolicy) contains(path string) bool {
+	rel, err := filepath.Rel(p.checkout, path)
+	return err != nil || filepath.IsLocal(rel)
 }
 
 func (p liveApprovalPolicy) approval() string {

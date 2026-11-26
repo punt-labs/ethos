@@ -99,6 +99,10 @@ func init() {
 	rootCmd.AddCommand(handoff)
 }
 
+func isLiveApprovalCommand(path string) bool {
+	return path == "ethos handoff approve-live" || path == "ethos handoff revoke-live"
+}
+
 func approveLiveHandoff(cmd *cobra.Command, args []string) error {
 	in, ok := cmd.InOrStdin().(*os.File)
 	if err := checkLiveApprovalTerminal(ok && isTTY(in), os.Environ()); err != nil {

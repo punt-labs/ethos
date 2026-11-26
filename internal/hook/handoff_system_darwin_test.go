@@ -97,6 +97,109 @@ shellcheck --version
 	require.Empty(t, result)
 }
 
+func TestDarwinLiveUsesDeclaredToolPath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	bin, err := os.MkdirTemp(home, "ethos-live-tools-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(bin) })
+	const tool = "ethos-fixture-tool"
+	install := func(binary string) {
+		t.Helper()
+		data, err := os.ReadFile(binary)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(bin, tool), data, 0o700))
+	}
+	install("/usr/bin/true")
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	checkout, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	profile := &checkset.WorktreeSnapshot{
+		Isolation: checkset.IsolationLiveVerified,
+		System:    checkset.SnapshotSystem{SnapshotSystemInputs: checkset.SnapshotSystemInputs{Tools: []string{tool}}},
+	}
+	ctx := t.Context()
+	_, err = prepareHandoffSystem(ctx, checkout, profile)
+	require.ErrorContains(t, err, "not available")
+	for _, source := range []string{"sidecar", "runtime platform"} {
+		t.Run(source, func(t *testing.T) {
+			install("/usr/bin/true")
+			config := *profile
+			var platform checkset.SnapshotPlatform
+			if source == "sidecar" {
+				config.Path = []string{bin}
+			} else {
+				platform.Path = []string{bin}
+				config.Runtime = &checkset.SnapshotRuntime{
+					Platforms: map[string]checkset.SnapshotPlatform{runtime.GOOS + "-" + runtime.GOARCH: platform},
+				}
+			}
+			plan, err := prepareHandoffSystem(ctx, checkout, &config)
+			require.NoError(t, err)
+			require.Contains(t, plan.Inputs, handoffSystemInput{
+				Path: filepath.Join(bin, tool), Tool: tool,
+				Digest: planDigest(t, ctx, filepath.Join(bin, tool)),
+			})
+			result, err := executeHandoffLive(ctx, "", checkout, nil, editCheck{
+				name:   "declared-tool",
+				argv:   []string{"/bin/sh", "-ec", "ethos-fixture-tool"},
+				policy: &checkset.Check{WorktreeSnapshot: &config},
+			}, handoffWorktreePlan{system: plan, runtime: handoffRuntime{platform: platform}})
+			require.NoError(t, err)
+			require.Empty(t, result)
+			install("/usr/bin/false")
+			updated, err := prepareHandoffSystem(ctx, checkout, &config)
+			require.NoError(t, err)
+			require.NotEqual(t, plan.Fingerprint, updated.Fingerprint)
+		})
+	}
+}
+
+func planDigest(t *testing.T, ctx context.Context, path string) string {
+	t.Helper()
+	digest, err := fingerprintDarwinSystemInput(ctx, path, false)
+	require.NoError(t, err)
+	return digest
+}
+
+func TestDarwinLiveKeysSelectedDeveloperDirectory(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	dir, err := os.MkdirTemp(home, "ethos-live-xcode-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	app := filepath.Join(dir, "Xcode.app")
+	contents := filepath.Join(app, "Contents")
+	developer := filepath.Join(contents, "Developer")
+	require.NoError(t, os.MkdirAll(developer, 0o700))
+	for _, name := range []string{"Info.plist", "version.plist"} {
+		writeFile(t, filepath.Join(contents, name), "first")
+	}
+	ctx := t.Context()
+	checkout, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	profile := &checkset.WorktreeSnapshot{
+		Isolation: checkset.IsolationLiveVerified,
+		Env:       map[string]string{"DEVELOPER_DIR": app},
+	}
+	plan, err := prepareHandoffSystem(ctx, checkout, profile, "/usr/bin/make")
+	require.NoError(t, err)
+	require.Equal(t, developer, plan.DeveloperDir)
+	result, err := executeHandoffLive(ctx, "", checkout, nil, editCheck{
+		name: "selected-xcode", policy: &checkset.Check{WorktreeSnapshot: profile},
+		argv: []string{"/bin/sh", "-ec", `test "$DEVELOPER_DIR" = "$1"`, "probe", developer},
+	}, handoffWorktreePlan{system: plan})
+	require.NoError(t, err)
+	require.Empty(t, result)
+	for _, name := range []string{"Info.plist", "version.plist"} {
+		writeFile(t, filepath.Join(contents, name), "other")
+		updated, err := prepareHandoffSystem(ctx, checkout, profile, "/usr/bin/make")
+		require.NoError(t, err)
+		require.NotEqual(t, plan.Fingerprint, updated.Fingerprint)
+		writeFile(t, filepath.Join(contents, name), "first")
+	}
+}
+
 func TestDarwinHandoffWorktreeAllowsTrustedXcodeContents(t *testing.T) {
 	ctx := context.Background()
 	if err := exec.CommandContext(ctx, "/usr/bin/xcodebuild", "-version").Run(); err != nil {

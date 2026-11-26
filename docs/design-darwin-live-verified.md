@@ -199,7 +199,7 @@ app and cleanup. It would not by itself solve app-hosted macOS XCTest.
 
 ## Darwin toolchain trust and residuals
 
-- For the system Make shim, select
+- In snapshot mode, for the system Make shim, select
   `DEVELOPER_DIR=/Library/Developer/CommandLineTools` only if the directory
   and all ancestors are root-owned and not group- or other-writable.
   Recheck trust before launch, key the toolchain identity, and allow
@@ -211,6 +211,15 @@ app and cleanup. It would not by itself solve app-hosted macOS XCTest.
   restored between keys is not covered by endpoint comparison alone.
 - Live-verified gates run unsandboxed: they can read unkeyed host files
   and ignored checkout inputs, such as DerivedData and local config.
+  They get the declared sidecar PATH, not the caller's PATH. Declared
+  system tools are resolved and fingerprinted on that PATH.
+  The developer directory comes from the declared `DEVELOPER_DIR` or
+  `xcode-select -p`. Key its resolved path and Xcode's `Info.plist`
+  and `version.plist` (or the CLT package receipt and SDK settings),
+  and recheck those inputs before publishing. Operator approval
+  accepts the residual of using a live Xcode under an admin-writable
+  `/Applications`: a replacement restored between samples can escape
+  this check. This does not relax snapshot trust.
   Writes to keyed paths veto rather than pass; active editing can
   cause deferrals. These limits must not be reported as snapshot
   isolation.

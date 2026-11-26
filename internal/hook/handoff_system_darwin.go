@@ -50,7 +50,8 @@ func prepareHandoffSystem(ctx context.Context, checkout string, profile *checkse
 	}
 	ctx, cancel := context.WithTimeout(ctx, gateInputTime)
 	defer cancel()
-	inputs := profile.System.Platforms[runtime.GOOS+"-"+runtime.GOARCH]
+	platformKey := runtime.GOOS + "-" + runtime.GOARCH
+	inputs := profile.System.Platforms[platformKey]
 	for _, group := range []struct {
 		paths []string
 		dir   bool
@@ -66,12 +67,21 @@ func prepareHandoffSystem(ctx context.Context, checkout string, profile *checkse
 		}
 	}
 	roots := handoffRoots{checkout: gateRoot, runtime: "/runtime", scratch: "/scratch", temp: "/scratch"}
-	env, err := roots.environment(profile, checkset.SnapshotPlatform{}, worktreeSandboxPATH)
+	var platform checkset.SnapshotPlatform
+	if profile.Runtime != nil {
+		platform = profile.Runtime.Platforms[platformKey]
+	}
+	env, err := roots.environment(profile, platform, worktreeSandboxPATH)
 	if err != nil {
 		return plan, err
 	}
 	tools := slices.Concat(profile.System.Tools, inputs.Tools)
-	if len(argv) > 0 && (argv[0] == "make" || argv[0] == "/usr/bin/make") {
+	live := profile.Isolation == checkset.IsolationLiveVerified
+	if live {
+		if err := addDarwinLiveDeveloper(ctx, &plan, checkout, env); err != nil {
+			return plan, fmt.Errorf("live-verified cannot verify the selected developer directory: %w", err)
+		}
+	} else if len(argv) > 0 && (argv[0] == "make" || argv[0] == "/usr/bin/make") {
 		path := argv[0]
 		if path == "make" {
 			path = darwinSystemTool(path, env)
@@ -94,6 +104,9 @@ func prepareHandoffSystem(ctx context.Context, checkout string, profile *checkse
 		}
 		if err := addDarwinLibraryClosure(ctx, &plan, checkout, source, source, nil, make(map[string]bool)); err != nil {
 			return plan, fmt.Errorf("cannot resolve dylibs for system tool %s: %w", tool, err)
+		}
+		if live {
+			continue
 		}
 		if darwinMakeShim(path) {
 			if err := addDarwinCLT(ctx, &plan, checkout, darwinCLT); err != nil {
@@ -119,6 +132,64 @@ func prepareHandoffSystem(ctx context.Context, checkout string, profile *checkse
 	}
 	plan.Fingerprint = hex.EncodeToString(h.Sum(nil))
 	return plan, nil
+}
+
+func addDarwinLiveDeveloper(ctx context.Context, plan *handoffSystemPlan, checkout string, env []string) error {
+	var developer string
+	for _, value := range env {
+		if dir, ok := strings.CutPrefix(value, "DEVELOPER_DIR="); ok {
+			developer = dir
+			break
+		}
+	}
+	probeEnv := []string{"PATH=/usr/bin:/bin", "LANG=C"}
+	if developer == "" {
+		out, err := darwinHandoffOutput(ctx, "/usr/bin/xcode-select", "/", probeEnv, "-p")
+		if err != nil {
+			return err
+		}
+		developer = strings.TrimSuffix(string(out), "\n")
+	}
+	if strings.HasSuffix(developer, ".app") {
+		developer = filepath.Join(developer, "Contents", "Developer")
+	}
+	if !filepath.IsAbs(developer) || filepath.Clean(developer) != developer {
+		return errors.New("invalid DEVELOPER_DIR")
+	}
+	developer, err := filepath.EvalSymlinks(developer)
+	if err != nil {
+		return err
+	}
+	if !safeDarwinSystemPath(developer, checkout) {
+		return errors.New("developer directory overlaps a reserved path")
+	}
+	info, err := os.Stat(developer)
+	if err != nil || !info.IsDir() {
+		return errors.New("developer directory is not a directory")
+	}
+	var plists []string
+	switch {
+	case developer == darwinCLT:
+		receipt, err := darwinHandoffOutput(ctx, "/usr/sbin/pkgutil", "/", probeEnv, "--pkg-info-plist", "com.apple.pkg.CLTools_Executables")
+		if err != nil {
+			return fmt.Errorf("cannot read the Command Line Tools package receipt: %w", err)
+		}
+		digest := sha256.Sum256(receipt)
+		plan.Inputs = append(plan.Inputs, handoffSystemInput{Path: developer, Tool: "clt-receipt", Digest: hex.EncodeToString(digest[:])})
+		plists = []string{filepath.Join(developer, "SDKs", "MacOSX.sdk", "SDKSettings.plist")}
+	case filepath.Base(developer) == "Developer" && filepath.Base(filepath.Dir(developer)) == "Contents":
+		contents := filepath.Dir(developer)
+		plists = []string{filepath.Join(contents, "Info.plist"), filepath.Join(contents, "version.plist")}
+	default:
+		return errors.New("unexpected developer directory layout")
+	}
+	for _, path := range plists {
+		if _, err := addDarwinSystemInput(ctx, plan, checkout, path, "live-developer", false); err != nil {
+			return err
+		}
+	}
+	plan.DeveloperDir = developer
+	return nil
 }
 
 func darwinMakeShim(path string) bool {
