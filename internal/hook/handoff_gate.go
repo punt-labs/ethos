@@ -152,6 +152,9 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		if runtime.GOOS != "darwin" {
 			return deferGate("live-verified unavailable in "+runtime.GOOS+" snapshot", true)
 		}
+		if len(check.WorktreeSnapshot.Scratch.Checkout) != 0 {
+			return deferGate("scratch.checkout is unavailable with live-verified; use {scratch} outside the checkout", true)
+		}
 		var err error
 		approval, err = newLiveApprovalPolicy(root, check.HandoffPolicySlug, check.HandoffPolicyRevision)
 		if err != nil {
