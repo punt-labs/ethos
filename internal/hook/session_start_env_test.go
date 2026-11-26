@@ -2,7 +2,9 @@ package hook
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,6 +97,46 @@ func TestExportSessionEnv(t *testing.T) {
 		data, err := os.ReadFile(target)
 		require.NoError(t, err)
 		assert.Equal(t, "keep\n", string(data))
+	})
+
+	// Claude Code sources CLAUDE_ENV_FILE as a shell preamble before each Bash
+	// tool command. Live Claude Code is not invoked in unit tests, so source the
+	// generated file in bash directly and verify both inheritance and that a
+	// subsequent git status leaves a stale .git/index untouched.
+	t.Run("sourced in bash propagates GIT_OPTIONAL_LOCKS=0 to git status", func(t *testing.T) {
+		bash, err := exec.LookPath("bash")
+		if err != nil {
+			t.Skip("bash not available")
+		}
+		dir := t.TempDir()
+		initGitRepo(t, dir)
+
+		envFile := filepath.Join(t.TempDir(), "claude-env.sh")
+		t.Setenv("CLAUDE_ENV_FILE", envFile)
+		unsetEnv(t, "GIT_OPTIONAL_LOCKS")
+		exportSessionEnv()
+
+		readme := filepath.Join(dir, "README")
+		staleTime := time.Now().Add(-5 * time.Second).Truncate(time.Second)
+		require.NoError(t, os.Chtimes(readme, staleTime, staleTime))
+
+		indexPath := filepath.Join(dir, ".git", "index")
+		indexTime := time.Now().Add(-60 * time.Second).Truncate(time.Second)
+		require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
+		beforeInfo, err := os.Stat(indexPath)
+		require.NoError(t, err)
+
+		cmd := exec.Command(bash, "-c", `. "$1" && printf '%s' "$GIT_OPTIONAL_LOCKS" && git status --porcelain`, "_", envFile)
+		cmd.Dir = dir
+		cmd.Env = gitEnv(dir)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "bash sourcing CLAUDE_ENV_FILE failed: %s", out)
+		assert.Equal(t, "0", strings.TrimSpace(string(out)))
+
+		afterInfo, err := os.Stat(indexPath)
+		require.NoError(t, err)
+		assert.Equal(t, beforeInfo.ModTime(), afterInfo.ModTime(),
+			"git status after sourcing CLAUDE_ENV_FILE must not refresh .git/index")
 	})
 }
 
