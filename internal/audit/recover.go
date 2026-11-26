@@ -15,9 +15,9 @@ import (
 // recovery is the outcome of recoverLines: the lines to install, sorted by
 // ts, and what could not be carried over.
 type recovery struct {
-	keep       []Line         // guarded lines to install, ascending ts
-	conflicts  []LiveConflict // lines refused because surviving evidence disagrees
-	redactions map[int64]recoveryRedaction
+	keep      []Line         // guarded lines to install, ascending ts
+	conflicts []LiveConflict // lines refused because surviving evidence disagrees
+	payloads  map[int64]recoveryPayload
 	// lost is true when a non-empty damaged line does not decode, a decodable
 	// line was refused for conflicting, or the recovered lines do not reach
 	// the chunk's named bounds. A line held identically by another chunk is
@@ -29,7 +29,7 @@ type recovery struct {
 	verifiedLast int64
 }
 
-type recoveryRedaction struct {
+type recoveryPayload struct {
 	original, guarded []byte
 }
 
@@ -139,18 +139,17 @@ func recoverLines(p layout.Policy, s Stream, damaged []byte, cn ChunkName, excep
 			continue
 		}
 		r.keep = append(r.keep, l)
-		if original, ok := originals[l.TS]; ok {
-			payload, err := CanonicalPayload(original)
+		original := got
+		if raw, ok := originals[l.TS]; ok {
+			original, err = CanonicalPayload(raw)
 			if err != nil {
 				return r, err
 			}
-			if !bytes.Equal(payload, got) {
-				if r.redactions == nil {
-					r.redactions = map[int64]recoveryRedaction{}
-				}
-				r.redactions[l.TS] = recoveryRedaction{original: payload, guarded: got}
-			}
 		}
+		if r.payloads == nil {
+			r.payloads = map[int64]recoveryPayload{}
+		}
+		r.payloads[l.TS] = recoveryPayload{original: original, guarded: got}
 	}
 	sort.Slice(r.keep, func(i, j int) bool { return r.keep[i].TS < r.keep[j].TS })
 	sort.Slice(r.conflicts, func(i, j int) bool { return r.conflicts[i].TS < r.conflicts[j].TS })

@@ -27,7 +27,8 @@ type SalvageResult struct {
 func ReadStreamWithSalvage(p layout.Policy, s Stream, guard LineGuard) (StreamData, error) {
 	var gaps []Gap
 	var floor int64
-	redactions := map[int64][]recoveryRedaction{}
+	recovered := map[int64]recoveryPayload{}
+	sources := map[int64]string{}
 	load := func(path string, last int64) ([]Line, error) {
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -49,24 +50,26 @@ func ReadStreamWithSalvage(p layout.Policy, s Stream, guard LineGuard) (StreamDa
 			gaps = append(gaps, Gap{Chunk: cn.Stem(), First: r.lo, Last: r.hi})
 		}
 		floor = max(floor, r.verifiedLast)
-		for ts, redaction := range r.redactions {
-			redactions[ts] = append(redactions[ts], redaction)
+		for ts, payload := range r.payloads {
+			if prior, ok := recovered[ts]; ok && !bytes.Equal(prior.original, payload.original) {
+				return nil, fmt.Errorf("audit identity conflict: session %q ts %d has divergent payloads in %s and %s", s.Session, ts, sources[ts], path)
+			}
+			recovered[ts], sources[ts] = payload, path
 		}
 		return r.keep, nil
 	}
 	liveOriginals := map[int64][]byte{}
 	reconcileLive := func(ts int64, payload []byte) ([]byte, error) {
-		if len(redactions[ts]) == 0 {
+		recovery, ok := recovered[ts]
+		if !ok || bytes.Equal(recovery.original, recovery.guarded) {
 			return payload, nil
 		}
 		if prior, ok := liveOriginals[ts]; ok && !bytes.Equal(prior, payload) {
 			return nil, fmt.Errorf("audit identity conflict: session %q ts %d has divergent payloads in %s", s.Session, ts, s.LivePath(p))
 		}
 		liveOriginals[ts] = payload
-		for _, redaction := range redactions[ts] {
-			if bytes.Equal(redaction.original, payload) {
-				return redaction.guarded, nil
-			}
+		if bytes.Equal(recovery.original, payload) {
+			return recovery.guarded, nil
 		}
 		return payload, nil
 	}
