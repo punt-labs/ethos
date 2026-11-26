@@ -132,6 +132,41 @@ test -f /runtime/data/govulndb/ID/GO-2000-0001.json
 	require.Equal(t, StageFeedback{}, pass)
 }
 
+func TestHandoffRefreshDataRejectsFailedDownloads(t *testing.T) {
+	root, _ := handoffMetadataFixture(t, "exit 97\n")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml"), `checks:
+  metadata:
+    profile: linux-worktree-v1
+    epoch: data-v1
+    sources: {mode: worktree}
+    data: [{name: fixture, url: 'https://example.com/data', max_age_hours: 1, mount: fixture}]
+`)
+	loc := handoffDataFixtureLocation(t, root)
+	policy, err := loc.Layout()
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name, want string
+		resp       *http.Response
+		err        error
+	}{
+		{name: "transport", want: `cannot fetch handoff data "fixture"`, err: io.ErrUnexpectedEOF},
+		{name: "not found", want: "HTTP 404", resp: &http.Response{StatusCode: http.StatusNotFound, Body: http.NoBody}},
+		{name: "empty body", want: "within the download budget", resp: &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &http.Client{Transport: runtimeRoundTrip(func(*http.Request) (*http.Response, error) {
+				return tc.resp, tc.err
+			})}
+			names, err := refreshHandoffData(context.Background(), loc, "", client)
+			require.ErrorContains(t, err, tc.want)
+			require.Empty(t, names)
+			records, err := filepath.Glob(filepath.Join(policy.LocalRoot(), "handoff-data-v1", "*"))
+			require.NoError(t, err)
+			require.Empty(t, records)
+		})
+	}
+}
+
 func handoffDataFixtureLocation(t *testing.T, root string) resolve.Located {
 	t.Helper()
 	store, err := resolve.StoreOf(root)
