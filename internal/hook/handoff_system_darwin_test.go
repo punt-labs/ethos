@@ -185,6 +185,7 @@ func TestDarwinLiveKeysSelectedDeveloperDirectory(t *testing.T) {
 	plan, err := prepareHandoffSystem(ctx, checkout, profile, "/usr/bin/make")
 	require.NoError(t, err)
 	require.Equal(t, developer, plan.DeveloperDir)
+	require.Regexp(t, `^[0-9a-f]{64}$`, plan.DeveloperFingerprint)
 	result, err := executeHandoffLive(ctx, "", checkout, nil, editCheck{
 		name: "selected-xcode", policy: &checkset.Check{WorktreeSnapshot: profile},
 		argv: []string{"/bin/sh", "-ec", `test "$DEVELOPER_DIR" = "$1"`, "probe", developer},
@@ -196,6 +197,7 @@ func TestDarwinLiveKeysSelectedDeveloperDirectory(t *testing.T) {
 		updated, err := prepareHandoffSystem(ctx, checkout, profile, "/usr/bin/make")
 		require.NoError(t, err)
 		require.NotEqual(t, plan.Fingerprint, updated.Fingerprint)
+		require.NotEqual(t, plan.DeveloperFingerprint, updated.DeveloperFingerprint)
 		writeFile(t, filepath.Join(contents, name), "first")
 	}
 }

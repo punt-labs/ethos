@@ -58,12 +58,13 @@ type gateResult struct {
 }
 
 type handoffSystemPlan struct {
-	Mounts       []handoffSystemMount
-	Inputs       []handoffSystemInput
-	Passwd       string
-	Group        string
-	DeveloperDir string
-	Fingerprint  string
+	Mounts               []handoffSystemMount
+	Inputs               []handoffSystemInput
+	Passwd               string
+	Group                string
+	DeveloperDir         string
+	DeveloperFingerprint string
+	Fingerprint          string
 }
 
 type handoffWorktreePlan struct {
@@ -116,9 +117,10 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	if check.WorktreeSnapshot != nil && check.WorktreeSnapshot.Isolation != "" {
 		mode = check.WorktreeSnapshot.Isolation
 	}
-	isolation := []string{mode}
+	baseDetails := diagnostic.HookCheckDetails{Isolation: mode}
+	verdictDetails := baseDetails
 	if runtime.GOOS == "darwin" && check.WorktreeSnapshot != nil && check.WorktreeSnapshot.Network == "loopback" {
-		isolation = append(isolation, "residual (host localhost services reachable, shared port space)")
+		verdictDetails.IsolationResidual = "residual (host localhost services reachable, shared port space)"
 	}
 	feedback := func(message string) StageFeedback {
 		if check.OnFail == "advisory" {
@@ -127,7 +129,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		return StageFeedback{Blocking: message}
 	}
 	deferGate := func(reason string, noticeOnly ...bool) StageFeedback {
-		diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "deferred", time.Since(start), mode)
+		diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "deferred", time.Since(start), baseDetails)
 		message := fmt.Sprintf("handoff checks deferred (%s): %s. Run the explicit project gate: %s", check.Name, reason, handoffManualCommand(manualRoot, files, manualCheck))
 		if len(noticeOnly) > 0 && noticeOnly[0] {
 			return StageFeedback{Advisory: message}
@@ -259,6 +261,8 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	if err != nil {
 		return deferGate(err.Error(), errors.Is(err, errHandoffXcodeUntrusted))
 	}
+	verdictDetails.DeveloperFingerprint = system.DeveloperFingerprint
+	baseDetails.DeveloperFingerprint = system.DeveloperFingerprint
 	gitView, err := captureHandoffGit(ctx, root, check.WorktreeSnapshot)
 	if err != nil {
 		return deferGate(err.Error())
@@ -438,11 +442,11 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 					result = deferGate(reason, true)
 					return nil
 				}
-				diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "reused", time.Since(start), isolation...)
+				diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "reused", time.Since(start), verdictDetails)
 				result = feedback(saved.Failure)
 				return nil
 			}
-			diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "miss", time.Since(start), mode)
+			diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "miss", time.Since(start), diagnostic.HookCheckDetails{Isolation: mode})
 			scratch := filepath.Join(cache, layout.TmpPath("snapshot-"+key[:3]))
 			if err := removeSnapshotScratch(scratch); err != nil {
 				result = deferGate("cannot clean up the previous snapshot: " + editRedact(err.Error()))
@@ -555,7 +559,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 			if failure != "" {
 				outcome = "failed"
 			}
-			diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, outcome, time.Since(start), isolation...)
+			diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, outcome, time.Since(start), verdictDetails)
 			result = feedback(failure)
 			return nil
 		})

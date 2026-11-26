@@ -74,7 +74,7 @@ func executeHandoffLive(ctx context.Context, _, root string, inputs []string, ch
 	if err != nil {
 		return "", fmt.Errorf("live-verified launch did not complete: %w", err)
 	}
-	diagnostic.LogHookCheck(ctx, root, cwd, "handoff", check.name, "launched", time.Since(start), checkset.IsolationLiveVerified)
+	diagnostic.LogHookCheck(ctx, root, cwd, "handoff", check.name, "launched", time.Since(start), diagnostic.HookCheckDetails{Isolation: checkset.IsolationLiveVerified})
 	err = wait()
 	if ctx.Err() != nil {
 		return "", errors.New("live-verified check timed out or was interrupted")

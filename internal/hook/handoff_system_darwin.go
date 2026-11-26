@@ -167,6 +167,7 @@ func addDarwinLiveDeveloper(ctx context.Context, plan *handoffSystemPlan, checko
 	if err != nil || !info.IsDir() {
 		return errors.New("developer directory is not a directory")
 	}
+	firstInput := len(plan.Inputs)
 	var plists []string
 	switch {
 	case developer == darwinCLT:
@@ -189,6 +190,11 @@ func addDarwinLiveDeveloper(ctx context.Context, plan *handoffSystemPlan, checko
 		}
 	}
 	plan.DeveloperDir = developer
+	h := sha256.New()
+	if err := json.NewEncoder(h).Encode([]any{developer, plan.Inputs[firstInput:]}); err != nil {
+		return err
+	}
+	plan.DeveloperFingerprint = hex.EncodeToString(h.Sum(nil))
 	return nil
 }
 

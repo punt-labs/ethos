@@ -19,9 +19,9 @@ func TestHandoffApprovalLeavesCheckoutUnchanged(t *testing.T) {
 	root, home := t.TempDir(), t.TempDir()
 	runGit(t, root, "init", "-q")
 	for name, body := range map[string]string{
-		".gitignore":                                     ".punt-labs/ethos/sessions/\n",
+		".gitignore":                                     ".punt-labs/ethos/sessions/\n.punt-labs/local/\n",
 		".punt-labs/ethos.yaml":                          "checks: project\n",
-		".punt-labs/ethos/checks/project.yaml":           "name: project\nchecks:\n  - {name: live, stage: handoff, files: all, run: [/bin/true]}\n",
+		".punt-labs/ethos/checks/project.yaml":           "name: project\nchecks:\n  - {name: live, stage: handoff, files: all, run: [/usr/bin/true]}\n",
 		".punt-labs/ethos/checks/snapshots/project.yaml": "checks:\n  live:\n    profile: linux-worktree-v1\n    isolation: live-verified\n    epoch: proof\n    sources: {mode: worktree}\n",
 	} {
 		path := filepath.Join(root, name)
@@ -64,6 +64,18 @@ func TestHandoffApprovalLeavesCheckoutUnchanged(t *testing.T) {
 	require.NoError(t, approve.Wait(), "%s", approved)
 	require.Contains(t, string(approved), "Approved project")
 	require.Equal(t, before, status(), "approval changed checkout")
+
+	stop := exec.CommandContext(ctx, ethosBinary, "hook", "subagent-stop")
+	stop.Dir, stop.Env = root, env
+	stop.Stdin = strings.NewReader(`{"session_id":"fixture","agent_id":"worker","agent_type":"implementer"}`)
+	var verdict strings.Builder
+	stop.Stdout = &verdict
+	var diagnostics strings.Builder
+	stop.Stderr = &diagnostics
+	require.NoError(t, stop.Run(), "%s", diagnostics.String())
+	require.Equal(t, before, status(), "subagent-stop changed checkout")
+	require.Empty(t, verdict.String())
+	require.Regexp(t, `stage=handoff check=live outcome=completed .*developer_fingerprint=[0-9a-f]{64}`, diagnosticLog(t, home))
 
 	revoke := exec.CommandContext(ctx, ethosBinary, "handoff", "revoke-live", "project")
 	revoke.Dir, revoke.Env = root, env
