@@ -59,6 +59,9 @@ func handoffScratchTargets(checkout string, paths []string) ([]string, error) {
 			return nil, errors.New("invalid checkout scratch path")
 		}
 		target := filepath.Join(checkout, relative)
+		if err := rejectHandoffSymlinkParents(checkout, target); err != nil {
+			return nil, err
+		}
 		for _, other := range targets {
 			if insideGatePath(target, other) || insideGatePath(other, target) {
 				return nil, errors.New("overlapping checkout scratch paths")

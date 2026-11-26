@@ -508,6 +508,27 @@ func digestGateInputsWithMode(ctx context.Context, root, dest string, inputs []s
 func copyGateInput(ctx context.Context, h io.Writer, src *os.Root, dest, input string, budget int, preserveMode bool) (int, error) {
 	f, err := openGateInput(src, input)
 	if err != nil {
+		if preserveMode {
+			if link, linkErr := src.Readlink(input); linkErr == nil {
+				if len(link) > budget {
+					return 0, errors.New("snapshot link exceeds the input budget")
+				}
+				_, _ = fmt.Fprintf(h, "%s\x00symlink\x00%d\x00%s", input, len(link), link)
+				if dest != "" {
+					path := filepath.Join(dest, input)
+					if err := rejectHandoffSymlinkParents(dest, path); err != nil {
+						return 0, err
+					}
+					if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+						return 0, err
+					}
+					if err := os.Symlink(link, path); err != nil {
+						return 0, err
+					}
+				}
+				return len(link), nil
+			}
+		}
 		return 0, err
 	}
 	defer f.Close()
@@ -527,6 +548,11 @@ func copyGateInput(ctx context.Context, h io.Writer, src *os.Root, dest, input s
 	var target *os.File
 	if dest != "" {
 		path := filepath.Join(dest, input)
+		if preserveMode {
+			if err := rejectHandoffSymlinkParents(dest, path); err != nil {
+				return 0, err
+			}
+		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return 0, err
 		}
@@ -547,6 +573,26 @@ func copyGateInput(ctx context.Context, h io.Writer, src *os.Root, dest, input s
 		err = errors.New("snapshot input changed size")
 	}
 	return int(n), err
+}
+
+func rejectHandoffSymlinkParents(root, path string) error {
+	relative, err := filepath.Rel(root, path)
+	if err != nil || relative == "." || !filepath.IsLocal(relative) {
+		return errors.New("snapshot path is outside its root")
+	}
+	for dir := filepath.Dir(path); dir != root; dir = filepath.Dir(dir) {
+		info, err := os.Lstat(dir)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			return errors.New("snapshot parent is not a directory")
+		}
+	}
+	return nil
 }
 
 func readGateResult(path string) (gateResult, bool) {

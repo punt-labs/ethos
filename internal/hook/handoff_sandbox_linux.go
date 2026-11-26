@@ -273,12 +273,20 @@ func worktreeSandboxPath(checkout, value string) string {
 }
 
 func gatePlanInputsPresent(snapshot string, argv []string) bool {
+	checkout, err := os.OpenRoot(snapshot)
+	if err != nil {
+		return false
+	}
+	defer checkout.Close()
 	for _, arg := range argv {
 		if arg != gateRoot && !strings.HasPrefix(arg, gateRoot+"/") {
 			continue
 		}
-		rel := strings.TrimPrefix(arg, gateRoot)
-		if _, err := os.Stat(filepath.Join(snapshot, rel)); err != nil {
+		rel := strings.TrimPrefix(arg, gateRoot+"/")
+		if arg == gateRoot {
+			rel = "."
+		}
+		if _, err := checkout.Lstat(rel); err != nil {
 			return false
 		}
 	}
@@ -363,7 +371,16 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 		return errors.New("snapshot inputs did not match the key")
 	}
 	phase = "check cwd missing from snapshot or is not a directory"
-	info, err := os.Stat(filepath.Join(checkout, strings.TrimPrefix(cwd, gateRoot)))
+	checkoutRoot, err := os.OpenRoot(checkout)
+	if err != nil {
+		return err
+	}
+	relCwd := strings.TrimPrefix(cwd, gateRoot+"/")
+	if cwd == gateRoot {
+		relCwd = "."
+	}
+	info, err := checkoutRoot.Stat(relCwd)
+	_ = checkoutRoot.Close()
 	if err != nil {
 		return err
 	}
