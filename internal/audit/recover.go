@@ -17,6 +17,7 @@ import (
 type recovery struct {
 	keep      []Line         // guarded lines to install, ascending ts
 	conflicts []LiveConflict // lines refused because surviving evidence disagrees
+	payloads  map[int64]recoveryPayload
 	// lost is true when a non-empty damaged line does not decode, a decodable
 	// line was refused for conflicting, or the recovered lines do not reach
 	// the chunk's named bounds. A line held identically by another chunk is
@@ -28,6 +29,10 @@ type recovery struct {
 	verifiedLast int64
 }
 
+type recoveryPayload struct {
+	original, guarded []byte
+}
+
 // recoverLines is the one recovery shared by SalvageChunk and QuarantineLocal.
 // It decodes the damaged bytes, guards every decodable line, adds the live
 // lines of the resulting range, and drops a line whose ts another chunk of the
@@ -35,10 +40,17 @@ type recovery struct {
 // another chunk holds identically is kept: it is not a conflict and not a
 // loss. except names the chunk being recovered so its own bytes are not
 // counted as "other" evidence.
-func recoverLines(p layout.Policy, s Stream, damaged []byte, cn ChunkName, except string, guard LineGuard) (recovery, error) {
+func recoverLines(p layout.Policy, s Stream, damaged []byte, cn ChunkName, except string, guard LineGuard, readOnly bool) (recovery, error) {
 	var r recovery
 	r.lo, r.hi = cn.First, cn.Last
 	byTS := map[int64]Line{}
+	originals := map[int64][]byte{}
+	keep := func(l Line, original []byte) {
+		byTS[l.TS] = l
+		if !bytes.Equal(l.Raw, original) {
+			originals[l.TS] = original
+		}
+	}
 	for _, raw := range SplitLines(damaged) {
 		var h tsHolder
 		var lineTS int64
@@ -87,7 +99,7 @@ func recoverLines(p layout.Policy, s Stream, damaged []byte, cn ChunkName, excep
 			}
 			continue
 		}
-		byTS[l.TS] = l
+		keep(l, raw)
 	}
 	live, err := ReadLiveLines(p, s)
 	if err != nil {
@@ -102,7 +114,7 @@ func recoverLines(p layout.Policy, s Stream, damaged []byte, cn ChunkName, excep
 			continue
 		}
 		if _, held := byTS[l.TS]; !held {
-			byTS[l.TS] = l
+			keep(l, raw.Raw)
 		}
 	}
 	evidence, err := chunkEvidence(p, s, except)
@@ -122,11 +134,24 @@ func recoverLines(p layout.Policy, s Stream, damaged []byte, cn ChunkName, excep
 		if l.TS > r.verifiedLast {
 			r.verifiedLast = l.TS
 		}
+		original := got
+		if raw, ok := originals[l.TS]; ok {
+			original, err = CanonicalPayload(raw)
+			if err != nil {
+				return r, err
+			}
+		}
 		if want, ok := evidence[l.TS]; ok && !bytes.Equal(want, got) {
-			r.conflicts = append(r.conflicts, LiveConflict{TS: l.TS, ArchiveDigest: digest(want), LiveDigest: digest(got)})
+			if !readOnly || !bytes.Equal(want, original) {
+				r.conflicts = append(r.conflicts, LiveConflict{TS: l.TS, ArchiveDigest: digest(want), LiveDigest: digest(got)})
+			}
 			continue
 		}
 		r.keep = append(r.keep, l)
+		if r.payloads == nil {
+			r.payloads = map[int64]recoveryPayload{}
+		}
+		r.payloads[l.TS] = recoveryPayload{original: original, guarded: got}
 	}
 	sort.Slice(r.keep, func(i, j int) bool { return r.keep[i].TS < r.keep[j].TS })
 	sort.Slice(r.conflicts, func(i, j int) bool { return r.conflicts[i].TS < r.conflicts[j].TS })

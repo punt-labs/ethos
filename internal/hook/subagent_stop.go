@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -58,33 +59,52 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 		return nil
 	}
 	var notes []string
+	var renameNotes []string
 	feedback := runStageRootChecks(ctx, checkout, agent, "handoff", func() (map[string][]string, error) {
-		return handoffFilesWithAdvice(checkout, sessionID, agentID, func(note string) { notes = append(notes, note) })
+		return handoffFilesWithAdvice(checkout, sessionID, agentID, func(note string) {
+			renameNotes = append(renameNotes, note)
+		}, func(gap audit.Gap) {
+			notes = append(notes, fmt.Sprintf("ethos: handoff audit gap in %s (%s through %s)", gap.Chunk, audit.FormatLineTS(gap.First), audit.FormatLineTS(gap.Last)))
+		})
 	})
-	feedback.Advisory = strings.TrimSpace(strings.Join(append(notes, feedback.Advisory), "\n"))
+	if len(notes)+len(renameNotes) != 0 && handoffPolicySelected(checkout, agent) {
+		if len(renameNotes) != 0 {
+			fmt.Fprintln(errOut, editRedact(strings.Join(renameNotes, "\n")))
+		}
+		if len(notes) != 0 {
+			feedback.Notice = strings.Join(notes, "\n")
+		}
+	}
 	stopFeedback(out, errOut, feedback, active)
 	return nil
 }
 
 func stopFeedback(out, errOut io.Writer, feedback StageFeedback, active bool) {
+	response := map[string]string{}
+	if feedback.Notice != "" {
+		response["systemMessage"] = editRedact(feedback.Notice)
+	}
 	if feedback.Advisory != "" {
 		fmt.Fprintln(errOut, editRedact(feedback.Advisory))
 	}
-	if feedback.Blocking == "" {
-		return
+	if feedback.Blocking != "" {
+		if active {
+			fmt.Fprintln(errOut, editRedact(feedback.Blocking))
+		} else {
+			response["decision"] = "block"
+			response["reason"] = editRedact(feedback.Blocking)
+		}
 	}
-	if active {
-		fmt.Fprintln(errOut, editRedact(feedback.Blocking))
-		return
+	if len(response) > 0 {
+		_ = json.NewEncoder(out).Encode(response)
 	}
-	_ = json.NewEncoder(out).Encode(map[string]string{"decision": "block", "reason": editRedact(feedback.Blocking)})
 }
 
 func handoffFiles(checkout, sessionID, agentID string) (map[string][]string, error) {
-	return handoffFilesWithAdvice(checkout, sessionID, agentID, nil)
+	return handoffFilesWithAdvice(checkout, sessionID, agentID, nil, nil)
 }
 
-func handoffFilesWithAdvice(checkout, sessionID, agentID string, advice func(string)) (map[string][]string, error) {
+func handoffFilesWithAdvice(checkout, sessionID, agentID string, advice func(string), reportGap func(audit.Gap)) (map[string][]string, error) {
 	store, err := resolve.StoreOf(checkout)
 	if err != nil {
 		return nil, err
@@ -97,9 +117,19 @@ func handoffFilesWithAdvice(checkout, sessionID, agentID string, advice func(str
 	if err != nil {
 		return nil, err
 	}
-	entries, err := readSessionAuditWithPolicy(policy, sessionID)
+	stream := audit.Stream{Namespace: audit.SessionNS, Session: sessionID}
+	data, err := audit.ReadStreamWithSalvage(policy, stream, LiveLineGuard(policy, stream.Namespace))
 	if err != nil {
 		return nil, err
+	}
+	entries, err := decodeSessionStream(data)
+	if err != nil {
+		return nil, err
+	}
+	if reportGap != nil {
+		for _, gap := range data.Gaps {
+			reportGap(gap)
+		}
 	}
 	type auditPath struct {
 		file string

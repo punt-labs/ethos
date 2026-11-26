@@ -111,6 +111,10 @@ func ReadChunkVerified(path string, expectedLast int64) ([]Line, error) {
 	if err != nil {
 		return nil, &ChunkReadError{Path: path, Err: err}
 	}
+	return decodeChunkVerified(data, path, expectedLast)
+}
+
+func decodeChunkVerified(data []byte, path string, expectedLast int64) ([]Line, error) {
 	lines, err := DecodeChunkStrict(data, path)
 	if err != nil {
 		return nil, err
