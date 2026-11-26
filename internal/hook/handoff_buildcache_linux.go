@@ -355,7 +355,7 @@ type buildCacheUsage struct {
 	used   time.Time
 }
 
-func (c *handoffBuildCache) withBudget(ctx context.Context, incoming int64, publish func() error) error {
+func (c *handoffBuildCache) withBudget(ctx context.Context, incoming int64, install func() error) error {
 	budget, _, err := lockBuildCache(ctx, filepath.Join(c.stateRoot(), "budget.lock"), unix.LOCK_EX, true)
 	if err != nil {
 		return err
@@ -427,10 +427,10 @@ func (c *handoffBuildCache) withBudget(ctx context.Context, incoming int64, publ
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return publish()
+	return install()
 }
 
-func (c *handoffBuildCache) publish(ctx context.Context, private string) error {
+func (c *handoffBuildCache) promoteCache(ctx context.Context, private string) error {
 	if c.currentID() == "" {
 		return errors.New("build cache generation no longer matches")
 	}

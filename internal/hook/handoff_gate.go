@@ -63,7 +63,7 @@ type snapshotBuildCache interface {
 	touch()
 	privateDir() string
 	prepare(context.Context, string) error
-	publish(context.Context, string) error
+	promoteCache(context.Context, string) error
 }
 
 var errHandoffBuildCacheFull = errors.New("handoff build cache budget exhausted")
@@ -495,7 +495,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 			if buildCache != nil && failure == "" {
 				publishStart := time.Now()
 				outcome := "build_cache_promoted"
-				if err := buildCache.publish(ctx, prepared.cacheDir); err != nil {
+				if err := buildCache.promoteCache(ctx, prepared.cacheDir); err != nil {
 					outcome = "build_cache_publish_skipped"
 				}
 				diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, outcome, time.Since(publishStart))

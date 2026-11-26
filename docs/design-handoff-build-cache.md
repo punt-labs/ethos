@@ -23,8 +23,9 @@ a gate run on a result-cache miss.
 
 The runner resolves the canonical shared repository store
 root `S` as specified in [Storage layout](storage-layout.md).
-Keep cache artifacts and their lock and generation state under
-`S/.punt-labs/local/ethos/handoff-cache/<runtime-digest>/`. A cache
+Cache artifacts live under
+`S/.punt-labs/local/ethos/handoff-cache/<runtime-digest>/`, with locks
+and generation metadata in the sibling `handoff-cache-state/`. A cache
 namespace is identified by the store root, runtime digest, and cache
 name. Linked checkouts share that namespace and its lock; distinct
 local clones and different runtime digests do not. Invalidate the build
@@ -114,6 +115,24 @@ cannot complete, do not mount those artifacts. A cache without a valid
 ID is never reused.
 
 ## Measurements
+
+The Linux implementation replay at Ethos `e977c9e` used the same
+Points and Cryptd refs below. Cold and warm stops both launched the
+gate; a separate unchanged stop confirmed verdict reuse.
+
+| Repository | Clean cold stop | Clean warm stop | Reused stop | Warm attach | Warm promotion | Persisted warm cache (logical / allocated) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Points | 64.002 s | 37.322 s | 0.838 s | 540 ms | 190 ms | 585,679,890 / 605,900,800 bytes |
+| Cryptd | 68.091 s | 22.060 s | 0.836 s | 639 ms | 245 ms | 712,186,672 / 740,745,216 bytes |
+
+Both launched snapshots matched live verdicts on clean and broken
+trees. Neither warm launch needed eviction, and the eviction loop
+logged 0 ms. A separate five-runtime hook replay measured 45–60 ms
+for the eviction loop when one inactive namespace was removed each
+time; the evicted verdict relaunched on the next stop. Reusing an
+unchanged verdict did not copy the cache or run eviction.
+
+### Prototype measurements
 
 The throwaway Linux amd64 prototype was based on Ethos `8c89c4c`.
 It used the original home-scoped layout for the benchmark:

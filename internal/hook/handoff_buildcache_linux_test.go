@@ -193,7 +193,7 @@ func TestHandoffBuildCacheRepairsUnsafeSeedWithoutFollowingLinks(t *testing.T) {
 	first := t.TempDir()
 	require.NoError(t, c.prepare(ctx, first))
 	writeFile(t, filepath.Join(first, "regular"), "fixture")
-	require.NoError(t, c.publish(ctx, first))
+	require.NoError(t, c.promoteCache(ctx, first))
 	artifacts := filepath.Join(c.generationDir(), "gocache")
 	require.NoError(t, os.Symlink(outside, filepath.Join(artifacts, "symlink")))
 	want := filepath.Join(outside, layout.TmpPath("untouched"))

@@ -157,6 +157,11 @@ var writerRegistry = map[string]writerEntry{
 	"internal/hook.mountHandoffProcAndDev":       exempt("creates empty mount targets for device files inside the private sandbox"),
 	"internal/hook.mountHandoffSystem":           exempt("writes synthetic passwd and group files and creates empty bind targets inside the private sandbox; it does not write records"),
 	"internal/hook.writeHandoffLoopbackHosts":    exempt("writes constant resolver files inside the private sandbox; it does not write records"),
+
+	"internal/hook.copyBuildCacheFile":             exempt("copies exact Go build artifacts into private cache staging; not a record"),
+	"internal/hook.handoffBuildCache.promoteCache": exempt("atomically installs opaque Go build artifacts in machine-local cache storage; not a record"),
+	"internal/hook.writeBuildCacheFile":            exempt("writes machine-local cache generations, system digests, and random generation IDs; no record payload"),
+
 	// internal/autorepair: the repair log (machine-local, global root).
 	"internal/autorepair.FileLog.Logf": checkpoint("Prose"),
 	// internal/mission: records.
