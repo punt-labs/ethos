@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -67,7 +68,14 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		if err := validateHandoffRuntime(ctx, check.WorktreeSnapshot); err != nil {
 			return deferGate(err.Error())
 		}
-		return deferGate("worktree snapshot runner unavailable")
+		if !handoffSandboxSupported() {
+			return deferGate("snapshot isolation unavailable on this host")
+		}
+		inputs, err := worktreeSnapshotInputs(ctx, root)
+		if err != nil {
+			return deferGate("cannot list the worktree snapshot inputs")
+		}
+		check.Snapshot = &checkset.Snapshot{Profile: check.WorktreeSnapshot.Profile, Inputs: inputs, Epoch: check.WorktreeSnapshot.Epoch}
 	}
 	if check.Snapshot == nil {
 		return deferGate("no declared snapshot profile")
@@ -468,4 +476,31 @@ func writeGateResult(p layout.Policy, path string, result gateResult) error {
 		return err
 	}
 	return os.Rename(f.Name(), path)
+}
+
+// worktreeSnapshotInputs lists the files a worktree profile snapshots: tracked
+// and untracked files that Git does not ignore and that exist on disk.
+func worktreeSnapshotInputs(ctx context.Context, root string) ([]string, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	var inputs []string
+	seen := map[string]bool{}
+	for _, name := range strings.Split(string(out), "\x00") {
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		info, err := os.Lstat(filepath.Join(root, name))
+		if err != nil || info.IsDir() {
+			continue
+		}
+		inputs = append(inputs, name)
+	}
+	if len(inputs) == 0 {
+		return nil, errors.New("worktree has no snapshot inputs")
+	}
+	return inputs, nil
 }

@@ -157,9 +157,14 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 	cmd.ExtraFiles = []*os.File{w}
 	cmd.WaitDelay = time.Second
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags:  unix.CLONE_NEWUSER | unix.CLONE_NEWNS | unix.CLONE_NEWPID | unix.CLONE_NEWNET | unix.CLONE_NEWIPC,
-		UidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Geteuid(), Size: 1}},
-		GidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getegid(), Size: 1}},
+		Cloneflags: unix.CLONE_NEWUSER | unix.CLONE_NEWNS | unix.CLONE_NEWPID | unix.CLONE_NEWNET | unix.CLONE_NEWIPC,
+		// The check keeps the invoking IDs: tools such as Homebrew refuse root,
+		// and suites skip permission cases when euid is 0. Setup capabilities
+		// survive the re-exec as ambient capabilities and are cleared before
+		// the check starts.
+		UidMappings: []syscall.SysProcIDMap{{ContainerID: os.Geteuid(), HostID: os.Geteuid(), Size: 1}},
+		GidMappings: []syscall.SysProcIDMap{{ContainerID: os.Getegid(), HostID: os.Getegid(), Size: 1}},
+		AmbientCaps: []uintptr{unix.CAP_SYS_ADMIN, unix.CAP_SETPCAP},
 		Pdeathsig:   unix.SIGKILL,
 	}
 	var stdout, stderr editTail
@@ -294,6 +299,12 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 			return err
 		}
 	}
+	if plan.Worktree != nil {
+		phase = "mount sandbox procfs and devices"
+		if err := mountHandoffProcAndDev(root); err != nil {
+			return err
+		}
+	}
 	oldRoot := filepath.Join(root, ".old-root")
 	phase = "pivot to sandbox root"
 	if err := os.Mkdir(oldRoot, 0o700); err != nil {
@@ -348,4 +359,38 @@ func mountGateReadOnly(source, target string) error {
 		return err
 	}
 	return unix.Mount("", target, "", unix.MS_REMOUNT|unix.MS_BIND|unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV, "")
+}
+
+var handoffDevices = []string{"/dev/null", "/dev/zero", "/dev/random", "/dev/urandom"}
+
+// mountHandoffProcAndDev gives the check a procfs for its own PID namespace
+// and only the stateless character devices.
+func mountHandoffProcAndDev(root string) error {
+	proc := filepath.Join(root, "proc")
+	if err := os.MkdirAll(proc, 0o555); err != nil {
+		return err
+	}
+	if err := unix.Mount("proc", proc, "proc", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
+		return err
+	}
+	for _, dev := range handoffDevices {
+		target := filepath.Join(root, dev)
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		if err := f.Close(); err != nil {
+			return err
+		}
+		if err := unix.Mount(dev, target, "", unix.MS_BIND, ""); err != nil {
+			return err
+		}
+		if err := unix.Mount("", target, "", unix.MS_REMOUNT|unix.MS_BIND|unix.MS_NOSUID|unix.MS_NOEXEC, ""); err != nil {
+			return err
+		}
+	}
+	return nil
 }

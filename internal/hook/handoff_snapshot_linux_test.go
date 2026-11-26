@@ -388,6 +388,36 @@ PY`},
 	require.NoFileExists(t, filepath.Join(ambient, "disk-marker"))
 }
 
+func TestHandoffWorktreeSandboxUsesInvokingIdentity(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("requires a non-root invoking UID")
+	}
+	live := t.TempDir()
+	writeFile(t, filepath.Join(live, "README"), "snapshot input\n")
+	inputs := []string{"README"}
+	proof, err := digestGateInputs(context.Background(), live, "", inputs)
+	require.NoError(t, err)
+	failure, err := executeHandoffSnapshot(context.Background(), t.TempDir(), live, proof, inputs, editCheck{
+		name: "identity", cwd: gateRoot, timeout: 5 * time.Second,
+		policy: &checkset.Check{WorktreeSnapshot: &checkset.WorktreeSnapshot{}},
+		argv: []string{"/bin/sh", "-ec", `
+printf 'uid=%s gid=%s\n' "$(id -u)" "$(id -g)"
+test "$(id -u)" = "$1"
+test "$(id -g)" = "$2"
+while read -r field value; do
+  if test "$field" = CapEff:; then
+    test "$value" = 0000000000000000
+    exit
+  fi
+done < /proc/self/status
+exit 1
+`, "identity", fmt.Sprint(os.Geteuid()), fmt.Sprint(os.Getegid())},
+	})
+	skipIfHandoffSandboxUnavailable(t, err)
+	require.NoError(t, err)
+	require.Empty(t, failure)
+}
+
 func TestHandoffWorktreeSandboxExpandsLogicalPathPrefixes(t *testing.T) {
 	live := t.TempDir()
 	writeFile(t, filepath.Join(live, "README"), "snapshot input\n")
