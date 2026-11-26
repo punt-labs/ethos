@@ -50,6 +50,60 @@ if (echo write > /etc/passwd) || (echo write > /etc/group); then exit 43; fi
 	require.Empty(t, feedback.Blocking)
 }
 
+func TestHandoffWorktreeLoginEnvironment(t *testing.T) {
+	t.Setenv("USER", "ambient-user")
+	t.Setenv("LOGNAME", "ambient-login")
+	t.Run("defaults", func(t *testing.T) {
+		_, run := handoffMetadataFixture(t, `set -eu
+test "$USER" = "$(id -un)"
+test "$LOGNAME" = "$(id -un)"
+`)
+		feedback := run()
+		skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+		require.Empty(t, feedback.Blocking)
+	})
+	t.Run("profile", func(t *testing.T) {
+		root, run := handoffMetadataFixture(t, `set -eu
+test "$USER" = "profile-user"
+test "$LOGNAME" = ""
+`)
+		path := filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml")
+		profile, err := os.ReadFile(path)
+		require.NoError(t, err)
+		writeFile(t, path, string(profile)+"    env: {USER: profile-user, LOGNAME: \"\"}\n")
+		feedback := run()
+		skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+		require.Empty(t, feedback.Blocking)
+	})
+}
+
+func TestHandoffWorktreePrivateVarTmp(t *testing.T) {
+	host, err := os.MkdirTemp("/var/tmp", "ethos-host-var-tmp-")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(host)) })
+	root, run := handoffMetadataFixture(t, `set -eu
+test -d /var/tmp
+test -z "$(ls -A /var/tmp)"
+mkdir /var/tmp/private
+echo marker > /var/tmp/private/file
+chmod 0555 /var/tmp/private
+`)
+	feedback := run()
+	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+	require.Empty(t, feedback.Blocking)
+	policy, err := handoffDataFixtureLocation(t, root).Layout()
+	require.NoError(t, err)
+	leftovers, err := filepath.Glob(filepath.Join(policy.LocalRoot(), "handoff-v1", "snapshot-*.ethos-tmp"))
+	require.NoError(t, err)
+	require.Empty(t, leftovers)
+
+	path := filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml")
+	profile, err := os.ReadFile(path)
+	require.NoError(t, err)
+	writeFile(t, path, string(profile)+"    system: {dirs: ["+host+"]}\n")
+	require.Contains(t, run().Blocking, "cannot safely resolve system input "+host)
+}
+
 func TestHandoffWorktreeCachesFailureMentioningSyntheticHome(t *testing.T) {
 	root, run := handoffMetadataFixture(t, `printf 'expected "%s/.punt-labs/beadle"\n' "$HOME"
 exit 42

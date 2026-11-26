@@ -17,7 +17,10 @@ var errHandoffScratchShadowsInput = errors.New("checkout scratch shadows snapsho
 func mountHandoffWorktreeScratch(root, checkout string, paths []string) error {
 	roots := linuxHandoffRoots()
 	scratch := filepath.Join(root, roots.scratch)
-	for _, relative := range []string{roots.temp, roots.scratch} {
+	if err := os.Mkdir(filepath.Join(root, "var"), 0o700); err != nil {
+		return err
+	}
+	for _, relative := range []string{roots.temp, roots.scratch, "/var/tmp"} {
 		dir := filepath.Join(root, relative)
 		if err := os.Mkdir(dir, 0o700); err != nil {
 			return err

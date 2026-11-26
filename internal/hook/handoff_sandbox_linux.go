@@ -166,6 +166,13 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 				return "", err
 			}
 		}
+		if login, _, ok := strings.Cut(worktree.system.Passwd, ":"); ok {
+			for _, prefix := range []string{"USER=", "LOGNAME="} {
+				if !slices.ContainsFunc(env, func(entry string) bool { return strings.HasPrefix(entry, prefix) }) {
+					env = append(env, prefix+login)
+				}
+			}
+		}
 		if profile.Git != nil && worktree.gitDir == "" {
 			return "", errors.New("git view was not prepared")
 		}
