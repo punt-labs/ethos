@@ -244,6 +244,35 @@ func TestSharedLoggingKilledHooks(t *testing.T) {
 	}
 }
 
+func TestSubagentStopLeavesCheckoutUnchanged(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	dir := filepath.Join(repo, ".punt-labs", "ethos", "checks")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".punt-labs/ethos/sessions/\n.punt-labs/local/\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos.yaml"), []byte("checks: project\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "project.yaml"), []byte(`name: project
+checks:
+  - {name: probe, stage: handoff, files: all, run: [sh, -c, 'exit 0']}
+`), 0o600))
+	runGit(t, repo, "add", "--", ".gitignore", ".punt-labs/ethos.yaml", ".punt-labs/ethos/checks/project.yaml")
+	runGit(t, repo, "commit", "-qm", "legacy checkout")
+	status := func() string {
+		t.Helper()
+		out, err := testhelpers.GitCommand("-C", repo, "--no-optional-locks", "status", "--porcelain").CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		return string(out)
+	}
+	before := status()
+	require.Empty(t, before)
+	cmd := loggingProcess(t, t.TempDir(), repo, "hook", "subagent-stop")
+	cmd.Stdin = strings.NewReader(`{"session_id":"fixture","agent_id":"worker","agent_type":"implementer"}`)
+	out, err := cmd.Output()
+	require.NoError(t, err)
+	require.Equal(t, before, status())
+	require.Contains(t, string(out), "handoff checks deferred (probe): no declared snapshot profile")
+}
+
 func TestSharedLoggingHookChecks(t *testing.T) {
 	repo := filepath.Join(t.TempDir(), "logging-project")
 	dir := filepath.Join(repo, ".punt-labs", "ethos", "checks")

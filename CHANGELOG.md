@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Subagent handoff no longer runs storage repair before checks, which could
+  rewrite tracked files in the checkout.
 - Verifier writes accept macOS checkout path aliases such as `/var` without
   allowing symlinks to redirect writes outside the declared paths.
 
