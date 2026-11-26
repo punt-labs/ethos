@@ -855,8 +855,14 @@ if mode == "loopback":
     with open("/etc/hosts") as hosts:
         assert hosts.read() == "127.0.0.1 localhost\n::1 localhost\n"
     assert socket.gethostbyname("localhost") == "127.0.0.1"
+    addresses = {entry[4][0] for entry in socket.getaddrinfo("localhost", 0, socket.AF_UNSPEC, socket.SOCK_STREAM)}
+    assert addresses == {"127.0.0.1", "::1"}, addresses
+    with open("/etc/host.conf") as host_conf:
+        assert host_conf.read() == "multi on\n"
+    assert os.stat("/etc/host.conf").st_mode & 0o777 == 0o444
 else:
     assert not os.path.exists("/etc/hosts")
+    assert not os.path.exists("/etc/host.conf")
 with open("/proc/self/status") as status:
     caps = dict(line.split(":", 1) for line in status)
     assert int(caps["CapEff"], 16) == int(caps["CapAmb"], 16) == 0
