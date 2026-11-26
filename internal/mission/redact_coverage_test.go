@@ -137,6 +137,7 @@ const (
 // being slash-separated and relative to the repository root.
 var writerRegistry = map[string]writerEntry{
 	"internal/hook.copyGateInput":             exempt("copies declared input bytes to the sandbox's private tmpfs solely for verification and execution; never publishes a record"),
+	"internal/hook.materializeGateSymlink":    exempt("recreates declared symlinks inside the private sandbox snapshot; never publishes a record"),
 	"internal/hook.pinHandoffStripe":          exempt("opens or creates an empty machine-local lock file for flock; writes no payload"),
 	"internal/hook.probeDarwinHandoff":        exempt("writes fixed self-test fixture bytes in a private temporary directory; no record content"),
 	"internal/hook.writeDarwinHandoffProfile": exempt("writes a private per-run sandbox policy consumed as executable configuration, not as a persisted record"),
