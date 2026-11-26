@@ -52,6 +52,8 @@ func subagentStartState(input map[string]any) string {
 // handoffState hashes the agent's resolved handoff checks with the checkout
 // state, so a stop skips only if neither changed. With no handoff checks it
 // returns "": there is nothing to skip.
+// Worktree sidecars require runtime and system proofs not captured here;
+// their stops go through handoff admission instead of the read-only skip.
 func handoffState(checkout, agent string) (string, error) {
 	checks, _, err := configuredStageChecks(checkout, agent, "handoff")
 	if err != nil || len(checks) == 0 {
