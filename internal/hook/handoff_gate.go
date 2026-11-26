@@ -442,7 +442,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 				result = feedback(saved.Failure)
 				return nil
 			}
-			diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "miss", time.Since(start), isolation...)
+			diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "miss", time.Since(start), mode)
 			scratch := filepath.Join(cache, layout.TmpPath("snapshot-"+key[:3]))
 			if err := removeSnapshotScratch(scratch); err != nil {
 				result = deferGate("cannot clean up the previous snapshot: " + editRedact(err.Error()))

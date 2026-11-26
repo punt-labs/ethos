@@ -15,6 +15,7 @@ import (
 	"unsafe"
 
 	"github.com/ebitengine/purego"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"golang.org/x/sys/unix"
 )
 
@@ -151,7 +152,7 @@ func armDarwinLiveEvents(root string, git darwinLiveGit) (*darwinLiveEvents, err
 	if info, err := os.Lstat(sentinels); err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
 		return nil, errors.New("live-verified sentinel directory is not private")
 	}
-	dir, err := os.MkdirTemp(sentinels, "run-")
+	dir, err := os.MkdirTemp(sentinels, layout.ScratchDirPattern("run"))
 	if err != nil {
 		return nil, err
 	}

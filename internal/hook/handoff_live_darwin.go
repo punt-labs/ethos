@@ -13,6 +13,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/punt-labs/ethos/v4/internal/diagnostic"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 func executeHandoffLive(ctx context.Context, _, root string, inputs []string, check editCheck, prepared handoffWorktreePlan) (string, error) {
@@ -26,7 +27,7 @@ func executeHandoffLive(ctx context.Context, _, root string, inputs []string, ch
 	if err != nil {
 		return "", err
 	}
-	run, err := os.MkdirTemp(base, "eh-live-")
+	run, err := os.MkdirTemp(base, layout.ScratchDirPattern("eh-live"))
 	if err != nil {
 		return "", err
 	}
@@ -78,5 +79,5 @@ func executeHandoffLive(ctx context.Context, _, root string, inputs []string, ch
 	if ctx.Err() != nil {
 		return "", errors.New("live-verified check timed out or was interrupted")
 	}
-	return darwinHandoffCommandVerdict(err, check, stdout, stderr)
+	return darwinHandoffCommandVerdict(err, check, stdout, stderr, "live-verified launch")
 }
