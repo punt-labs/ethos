@@ -63,9 +63,10 @@ it as a terminal result. The verdict log uses
    up to and including the checkout root and `.git`. Include existing
    directories where a newly created file could enter the keyed set,
    even if they contain no keyed files yet.
-   On any watched file or directory, each registered note vetoes
-   on its own: `NOTE_WRITE`, `NOTE_EXTEND`, `NOTE_LINK`, `NOTE_RENAME`,
-   `NOTE_DELETE`, and `NOTE_REVOKE`. No accompanying write is needed.
+   On every watched file and directory, register `NOTE_WRITE`,
+   `NOTE_EXTEND`, `NOTE_LINK`, `NOTE_RENAME`, `NOTE_DELETE`,
+   `NOTE_REVOKE`, and `NOTE_ATTRIB`. Each registered note vetoes
+   on its own; no accompanying write is needed.
    The only exception is `NOTE_ATTRIB` when atime changed and mode,
    UID, GID, size, mtime, ctime, device, inode and link count are
    unchanged. Otherwise veto, including on chmod. This avoids a
