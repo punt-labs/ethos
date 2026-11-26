@@ -3,13 +3,17 @@
 Run on Linux with Go, Git and Homebrew on PATH. The Tap ref must have
 the formula-style-handoff policy and any provisioned runtime it needs.
 Use --tap-ref to pin the fixture and --out to retain evidence at a fresh path.
+For a policy with runtime bundles, pass --runtime-archive for each installed
+<sha256>.tar.gz archive to copy and verify in every trial home.
 """
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import stat
 import statistics
 import subprocess
 import tempfile
@@ -34,10 +38,35 @@ def build(repo, out, label, revision):
     return binary
 
 
-def replay(out, binary, tap, tap_revision, label, trial):
+def seed_runtimes(home, archives):
+    if not archives:
+        return
+    store = home / ".punt-labs/ethos/runtimes"
+    store.mkdir(parents=True, mode=0o700)
+    for archive in archives:
+        match = re.fullmatch(r"([0-9a-f]{64})\.tar\.gz", archive.name)
+        if not match:
+            raise ValueError(f"Expected an installed <sha256>.tar.gz runtime archive: {archive}")
+        digest = hashlib.sha256()
+        fd = os.open(archive, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as src:
+            if not stat.S_ISREG(os.fstat(src.fileno()).st_mode):
+                raise ValueError(f"Runtime archive is not a regular file: {archive}")
+            target = store / archive.name
+            with target.open("xb") as dst:
+                for chunk in iter(lambda: src.read(1 << 20), b""):
+                    digest.update(chunk)
+                    dst.write(chunk)
+        if digest.hexdigest() != match[1]:
+            target.unlink()
+            raise ValueError(f"Runtime archive digest does not match its SHA-256 filename: {archive}")
+
+
+def replay(out, binary, tap, tap_revision, label, trial, archives):
     case = out / f"{label}-{trial}"
     checkout, home = case / "tap", case / "home"
     home.mkdir(parents=True)
+    seed_runtimes(home, archives)
     env = {
         "HOME": str(home),
         "PATH": os.environ["PATH"],
@@ -94,6 +123,10 @@ def main():
     parser.add_argument("homebrew_tap", type=Path, help="Local Homebrew Tap Git checkout")
     parser.add_argument("--tap-ref", default="HEAD", help="Homebrew Tap Git ref (default: HEAD)")
     parser.add_argument("--out", type=Path, help="Fresh evidence directory (default: under .tmp/opencode)")
+    parser.add_argument(
+        "--runtime-archive", action="append", type=Path, default=[],
+        help="Copy a verified installed <sha256>.tar.gz to each fresh trial home (repeatable)",
+    )
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]
     tap = args.homebrew_tap.resolve()
@@ -114,7 +147,7 @@ def main():
     samples = {label: [] for label in binaries}
     for trial in range(1, 4):
         for label, binary in binaries.items():
-            samples[label].append(replay(out, binary, tap, tap_revision, label, trial))
+            samples[label].append(replay(out, binary, tap, tap_revision, label, trial, args.runtime_archive))
     for label, pairs in samples.items():
         misses, hits = zip(*pairs)
         print(f"{label}: median miss {statistics.median(misses):.3f}s; "
