@@ -256,6 +256,22 @@ func darwinSystemTool(name string, env []string) string {
 	return ""
 }
 
+func verifyDarwinSystemToolPATH(plan handoffSystemPlan, env []string) error {
+	for _, input := range plan.Inputs {
+		if input.Tool == "" || filepath.Base(input.Path) != input.Tool {
+			continue
+		}
+		path := darwinSystemTool(input.Tool, env)
+		if path == "" {
+			return fmt.Errorf("system tool %q is no longer on PATH at %q", input.Tool, input.Path)
+		}
+		if path != input.Path {
+			return fmt.Errorf("system tool %q conflicts with PATH executable %q; keyed executable is %q", input.Tool, path, input.Path)
+		}
+	}
+	return nil
+}
+
 func addDarwinSystemInput(ctx context.Context, plan *handoffSystemPlan, checkout, path, tool string, directory, restrictRoots bool) (string, error) {
 	allowed := func(path string) bool {
 		return safeDarwinSystemPath(path, checkout) && (!restrictRoots || darwinSnapshotSystemPath(path))

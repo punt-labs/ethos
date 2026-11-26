@@ -3,7 +3,12 @@
 package hook
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -150,6 +155,66 @@ func TestDarwinSystemToolRefusesRejectedPATHHits(t *testing.T) {
 				require.Empty(t, result)
 			}
 		}
+	}
+}
+
+func TestDarwinSystemToolDefersOnPinnedRuntimeConflict(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	bin := filepath.Join(dir, "host-bin")
+	developer := filepath.Join(dir, "xcode", "Contents", "Developer")
+	allowDarwinSystemFixtureRoot(t, bin)
+	allowDarwinSystemFixtureRoot(t, filepath.Dir(developer))
+	require.NoError(t, os.MkdirAll(developer, 0o700))
+	for _, name := range []string{"Info.plist", "version.plist"} {
+		writeFile(t, filepath.Join(filepath.Dir(developer), name), "fixture")
+	}
+	hostTool := filepath.Join(bin, "true")
+	writeFile(t, hostTool, "#!/bin/sh\nexit 0\n")
+	require.NoError(t, os.Chmod(hostTool, 0o700))
+
+	var archive bytes.Buffer
+	gz := gzip.NewWriter(&archive)
+	tw := tar.NewWriter(gz)
+	body := "#!/bin/sh\nexit 42\n"
+	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "bin/true", Mode: 0o755, Size: int64(len(body))}))
+	_, err = tw.Write([]byte(body))
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+	require.NoError(t, gz.Close())
+	platform := checkset.SnapshotPlatform{
+		Bundle: "conflict-fixture", SHA256: fmt.Sprintf("%x", sha256.Sum256(archive.Bytes())),
+		Path: []string{"{runtime}/bin", bin},
+	}
+	bundle := newHandoffRuntime(dir, platform, "")
+	writeFile(t, bundle.archive, archive.String())
+	ctx := t.Context()
+	checkout := t.TempDir()
+	proof, err := digestGateInputs(ctx, checkout, "", nil)
+	require.NoError(t, err)
+	for _, isolation := range []string{"", checkset.IsolationLiveVerified} {
+		profile := &checkset.WorktreeSnapshot{
+			Isolation: isolation,
+			Env:       map[string]string{"DEVELOPER_DIR": developer},
+			Runtime:   &checkset.SnapshotRuntime{Platforms: map[string]checkset.SnapshotPlatform{runtime.GOOS + "-" + runtime.GOARCH: platform}},
+			System:    checkset.SnapshotSystem{SnapshotSystemInputs: checkset.SnapshotSystemInputs{Tools: []string{"true"}}},
+		}
+		plan, err := prepareHandoffSystem(ctx, checkout, profile)
+		require.NoError(t, err)
+		check := editCheck{
+			name: "runtime-conflict", argv: []string{"true"},
+			policy: &checkset.Check{WorktreeSnapshot: profile},
+		}
+		prepared := handoffWorktreePlan{system: plan, runtime: bundle}
+		var result string
+		if isolation == checkset.IsolationLiveVerified {
+			result, err = executeHandoffLive(ctx, "", checkout, nil, check, prepared)
+		} else {
+			result, err = executeHandoffSnapshot(ctx, "", checkout, proof, nil, check, prepared)
+		}
+		require.ErrorContains(t, err, `system tool "true" conflicts with PATH executable`)
+		require.ErrorContains(t, err, `/bin/true"; keyed executable is "`+hostTool+`"`)
+		require.Empty(t, result)
 	}
 }
 

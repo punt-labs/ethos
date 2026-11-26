@@ -480,6 +480,9 @@ func runDarwinHandoffPlan(ctx context.Context, checkout, proof string, inputs []
 		return "", err
 	}
 	system := worktree.system
+	if err := verifyDarwinSystemToolPATH(system, env); err != nil {
+		return "", err
+	}
 	command := argv[0]
 	if !strings.ContainsRune(command, '/') {
 		command = darwinSystemTool(command, env)

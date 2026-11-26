@@ -57,6 +57,9 @@ func executeHandoffLive(ctx context.Context, _, root string, inputs []string, ch
 		}
 	}
 	system := prepared.system
+	if err := verifyDarwinSystemToolPATH(system, env); err != nil {
+		return "", err
+	}
 	if system.DeveloperDir != "" {
 		env = slices.DeleteFunc(env, func(variable string) bool {
 			return strings.HasPrefix(variable, "DEVELOPER_DIR=")
