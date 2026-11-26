@@ -211,6 +211,8 @@ cmd/ethos TestFindMissions_SinceFilter
 cmd/ethos TestFindMissions_StatusFilter
 cmd/ethos TestFindMissions_WorkerFilter
 cmd/ethos TestFirstCommitAfterUpgradeDoesNotCarryRepairDeletions
+cmd/ethos TestHandoffAgentApprovalLeavesCheckoutUnchanged
+cmd/ethos TestHandoffApprovalLeavesCheckoutUnchanged
 cmd/ethos TestHookAuditSnapshot_ConfigReplacement
 cmd/ethos TestHookCommitMessageUsesLocatedSnapshot
 cmd/ethos TestHookCommitMsgExitCodes

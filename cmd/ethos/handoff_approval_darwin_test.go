@@ -16,14 +16,28 @@ import (
 )
 
 func TestHandoffApprovalLeavesCheckoutUnchanged(t *testing.T) {
+	testHandoffApprovalTTY(t, false)
+}
+
+func TestHandoffAgentApprovalLeavesCheckoutUnchanged(t *testing.T) {
+	testHandoffApprovalTTY(t, true)
+}
+
+func testHandoffApprovalTTY(t *testing.T, agentOverride bool) {
+	t.Helper()
 	root, home := t.TempDir(), t.TempDir()
 	runGit(t, root, "init", "-q")
-	for name, body := range map[string]string{
+	files := map[string]string{
 		".gitignore":                                     ".punt-labs/ethos/sessions/\n.punt-labs/local/\n",
 		".punt-labs/ethos.yaml":                          "checks: project\n",
 		".punt-labs/ethos/checks/project.yaml":           "name: project\nchecks:\n  - {name: live, stage: handoff, files: all, run: [/usr/bin/true]}\n",
 		".punt-labs/ethos/checks/snapshots/project.yaml": "checks:\n  live:\n    profile: linux-worktree-v1\n    isolation: live-verified\n    epoch: proof\n    sources: {mode: worktree}\n",
-	} {
+	}
+	if agentOverride {
+		files[".punt-labs/ethos.yaml"] = "checks: none\n"
+		files[".punt-labs/ethos/identities/implementer.yaml"] = "name: Implementer\nhandle: implementer\nkind: agent\nchecks: project\n"
+	}
+	for name, body := range files {
 		path := filepath.Join(root, name)
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
@@ -41,7 +55,11 @@ func TestHandoffApprovalLeavesCheckoutUnchanged(t *testing.T) {
 	env := testhelpers.CoverEnv([]string{"HOME=" + home, "PATH=" + os.Getenv("PATH")})
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
-	approve := exec.CommandContext(ctx, "/usr/bin/script", "-q", "/dev/null", ethosBinary, "handoff", "approve-live", "project")
+	args := []string{"-q", "/dev/null", ethosBinary, "handoff", "approve-live", "project"}
+	if agentOverride {
+		args = append(args, "--agent", "implementer")
+	}
+	approve := exec.CommandContext(ctx, "/usr/bin/script", args...)
 	approve.Dir, approve.Env = root, env
 	in, err := approve.StdinPipe()
 	require.NoError(t, err)
