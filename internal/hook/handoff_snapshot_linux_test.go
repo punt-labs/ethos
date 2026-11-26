@@ -1058,6 +1058,157 @@ func TestHandoffSnapshotRetriesInterruptedExits(t *testing.T) {
 	}
 }
 
+func TestRemoveSnapshotScratch(t *testing.T) {
+	t.Run("nested read-only directories and symlink", func(t *testing.T) {
+		root := t.TempDir()
+		scratch := filepath.Join(root, "snapshot")
+		module := filepath.Join(scratch, "go-mod", "example.org", "mod@v1.0.0")
+		outside := filepath.Join(root, "outside")
+		writeFile(t, filepath.Join(module, "go.mod"), "module example.org/mod\n")
+		writeFile(t, filepath.Join(outside, "keep"), "unchanged\n")
+		require.NoError(t, os.Symlink(outside, filepath.Join(module, "link")))
+		for _, dir := range []string{scratch, filepath.Dir(module), module, outside} {
+			require.NoError(t, os.Chmod(dir, 0o555))
+			t.Cleanup(func() {
+				if err := os.Chmod(dir, 0o755); !errors.Is(err, os.ErrNotExist) {
+					require.NoError(t, err)
+				}
+			})
+		}
+		require.NoError(t, removeSnapshotScratch(scratch))
+		require.NoDirExists(t, scratch)
+		info, err := os.Stat(outside)
+		require.NoError(t, err)
+		require.Equal(t, os.FileMode(0o555), info.Mode().Perm())
+		require.FileExists(t, filepath.Join(outside, "keep"))
+	})
+	t.Run("missing scratch", func(t *testing.T) {
+		require.NoError(t, removeSnapshotScratch(filepath.Join(t.TempDir(), "missing")))
+	})
+	t.Run("removal failure", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root can remove files from read-only directories")
+		}
+		parent := t.TempDir()
+		scratch := filepath.Join(parent, "snapshot")
+		require.NoError(t, os.Mkdir(scratch, 0o700))
+		require.NoError(t, os.Chmod(parent, 0o555))
+		t.Cleanup(func() { require.NoError(t, os.Chmod(parent, 0o755)) })
+		require.ErrorIs(t, removeSnapshotScratch(scratch), os.ErrPermission)
+		require.DirExists(t, scratch)
+	})
+}
+
+func TestHandoffSnapshotCleansReadOnlyScratch(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can remove files from read-only directories")
+	}
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	checkPolicy(t, root, "project", `  - name: snapshot-check
+    stage: handoff
+    files: all
+    run:
+      - /bin/sh
+      - -ec
+      - mkdir -p /scratch/go-mod/example.org/mod@v1.0.0 && touch /scratch/go-mod/example.org/mod@v1.0.0/go.mod && chmod 0555 /scratch/go-mod/example.org/mod@v1.0.0
+`)
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml"), `checks:
+  snapshot-check:
+    profile: linux-worktree-v1
+    epoch: cleanup
+    sources: {mode: worktree}
+`)
+	run := func() StageFeedback {
+		return RunStageChecks(context.Background(), root, "worker", "handoff")
+	}
+	cache := filepath.Join(root, ".punt-labs", "local", "ethos", "handoff-v1")
+	feedback := run()
+	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+	require.Equal(t, StageFeedback{}, feedback)
+	slots, err := filepath.Glob(filepath.Join(cache, "*", "*.json"))
+	require.NoError(t, err)
+	require.Len(t, slots, 1)
+	stripe := filepath.Base(filepath.Dir(slots[0]))
+	scratch := filepath.Join(cache, layout.TmpPath("snapshot-"+stripe))
+
+	t.Run("fresh snapshot", func(t *testing.T) {
+		dirs, err := filepath.Glob(filepath.Join(scratch, "check-*", "scratch", "go-mod", "example.org", "mod@v1.0.0"))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			for _, dir := range dirs {
+				require.NoError(t, os.Chmod(dir, 0o755))
+			}
+			require.NoError(t, os.RemoveAll(scratch))
+		})
+		require.NoDirExists(t, scratch)
+	})
+	t.Run("stale shard", func(t *testing.T) {
+		dir := filepath.Join(scratch, "go-mod", "example.org", "mod@v1.0.0")
+		writeFile(t, filepath.Join(dir, "go.mod"), "module example.org/mod\n")
+		require.NoError(t, os.Chmod(dir, 0o555))
+		t.Cleanup(func() {
+			if err := os.Chmod(dir, 0o755); !errors.Is(err, os.ErrNotExist) {
+				require.NoError(t, err)
+			}
+		})
+		require.NoError(t, os.Remove(slots[0]))
+		require.Equal(t, StageFeedback{}, run())
+		require.NoDirExists(t, scratch)
+	})
+}
+
+func TestHandoffSnapshotTeardownFailureIsNotCached(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can remove files from read-only directories")
+	}
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	checkPolicy(t, root, "project", `  - name: snapshot-check
+    stage: handoff
+    files: all
+    run: [/bin/sh, -c, 'exit 0']
+    snapshot: {profile: linux-shell-v1, inputs: [README], epoch: cleanup}
+`)
+	cache := filepath.Join(root, ".punt-labs", "local", "ethos", "handoff-v1")
+	var logs bytes.Buffer
+	var blocked bool
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{
+		ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
+			// The child has exited but the lease owner has not removed its scratch yet.
+			if !blocked && attr.Key == "outcome" && attr.Value.String() == "completed" {
+				require.NoError(t, os.Chmod(cache, 0o500))
+				blocked = true
+				t.Cleanup(func() { require.NoError(t, os.Chmod(cache, 0o700)) })
+			}
+			return attr
+		},
+	}))
+	run := func() StageFeedback {
+		ctx, _ := diagnostic.WithHookInvocation(diagnostic.WithLogger(context.Background(), logger))
+		return RunStageChecks(ctx, root, "worker", "handoff")
+	}
+
+	feedback := run()
+	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+	require.True(t, blocked, "snapshot must complete before teardown is blocked")
+	require.Contains(t, feedback.Blocking, "cannot clean up the snapshot")
+	require.Contains(t, feedback.Blocking, os.ErrPermission.Error())
+	require.Equal(t, feedback.Blocking, feedback.Notice)
+	slots, err := filepath.Glob(filepath.Join(cache, "*", "*.json"))
+	require.NoError(t, err)
+	require.Empty(t, slots)
+
+	require.NoError(t, os.Chmod(cache, 0o700))
+	logs.Reset()
+	require.Equal(t, StageFeedback{}, run())
+	require.Contains(t, logs.String(), "outcome=miss")
+	require.Contains(t, logs.String(), "outcome=launched")
+	require.NotContains(t, logs.String(), "outcome=reused")
+}
+
 func TestHandoffSnapshotLeaseAndProof(t *testing.T) {
 	root, _ := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())
