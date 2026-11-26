@@ -97,6 +97,7 @@ func TestSnapshotSidecarAllowsSystemOnlyProfileWithGitIndex(t *testing.T) {
     env: {PYTHONDONTWRITEBYTECODE: "1"}
     path: ["{scratch}/bin"]
     git: {}
+    requires: [pty, posix_shm, mach_lookup]
 `), 0o600))
 	set := &Set{Checks: []Check{{Name: "full-gate", Stage: "handoff"}}}
 	require.NoError(t, loadSnapshotSidecar(root, "project", set))
@@ -106,6 +107,7 @@ func TestSnapshotSidecarAllowsSystemOnlyProfileWithGitIndex(t *testing.T) {
 	require.Equal(t, []string{"{scratch}/bin"}, snapshot.Path)
 	require.Equal(t, map[string]string{"PYTHONDONTWRITEBYTECODE": "1"}, snapshot.Env)
 	require.Equal(t, &SnapshotGit{}, snapshot.Git)
+	require.Equal(t, Strings{"pty", "posix_shm", "mach_lookup"}, snapshot.Requires)
 }
 
 func TestLoadSnapshotSidecarRejectsInvalidPolicy(t *testing.T) {
@@ -135,6 +137,9 @@ func TestLoadSnapshotSidecarRejectsInvalidPolicy(t *testing.T) {
 		{"missing epoch", "epoch: test", "epoch: ''", "an epoch"},
 		{"unsupported sources", "mode: worktree", "mode: directory", "worktree sources"},
 		{"host network", "network: loopback", "network: host", "network must be loopback"},
+		{"unknown requirement", "network: loopback", "requires: [pty, unknown]", "unsupported snapshot requirement \"unknown\""},
+		{"scalar requirement", "network: loopback", "requires: pty", "expected a list of strings"},
+		{"null list item", "network: loopback", "requires: [pty, null]", "list elements must be strings"},
 		{"relative system directory", "network: loopback", "system: {dirs: [var/lib/texmf]}", "clean absolute paths"},
 		{"invalid system platform", "network: loopback", "system: {platforms: {linux: {tools: [make]}}}", "invalid snapshot system platform"},
 		{"invalid platform input", "network: loopback", "system: {platforms: {linux-amd64: {files: [/etc/../etc/group]}}}", "clean absolute paths"},

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -103,6 +104,9 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	}
 	var bundle handoffRuntime
 	if check.WorktreeSnapshot != nil {
+		if runtime.GOOS == "linux" && slices.Contains(check.WorktreeSnapshot.Requires, "mach_lookup") {
+			return deferGate("mach_lookup unavailable in linux snapshot")
+		}
 		var err error
 		bundle, err = prepareHandoffRuntime(ctx, check.WorktreeSnapshot, agent)
 		if err != nil {

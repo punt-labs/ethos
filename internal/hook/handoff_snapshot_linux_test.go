@@ -664,6 +664,64 @@ assert os.read(master, 7) == b"private"
 	require.Empty(t, failure)
 }
 
+func TestHandoffWorktreeRequires(t *testing.T) {
+	if _, err := os.Stat("/usr/bin/python3"); err != nil {
+		t.Skip(err)
+	}
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	const policy = "  - name: full-gate\n    stage: handoff\n    files: all\n    run: [/usr/bin/python3, gate.py]\n"
+	checkPolicy(t, root, "project", policy)
+	const sidecar = ".punt-labs/ethos/checks/snapshots/project.yaml"
+	writeFile(t, filepath.Join(root, ".gitignore"), "/"+sidecar+"\n/.punt-labs/local/\n")
+	writeFile(t, filepath.Join(root, "gate.py"), `import os
+assert not (set(os.listdir("/dev/pts")) - {"ptmx"})
+master, slave = os.openpty()
+assert os.ttyname(slave) == "/dev/pts/0"
+with open("/dev/shm/ethos-probe", "x") as probe:
+    probe.write("private")
+`)
+	path := filepath.Join(root, sidecar)
+	const profile = `checks:
+  full-gate:
+    profile: linux-worktree-v1
+    epoch: requires-probe
+    sources: {mode: worktree}
+`
+	var logs bytes.Buffer
+	ctx := diagnostic.WithLogger(context.Background(), slog.New(slog.NewTextHandler(&logs, nil)))
+	run := func() StageFeedback {
+		invocation, _ := diagnostic.WithHookInvocation(ctx)
+		return RunStageChecks(invocation, root, "worker", "handoff")
+	}
+	writeFile(t, path, profile+"    requires: [mach_lookup]\n")
+	required := run()
+	require.Contains(t, required.Blocking, "mach_lookup unavailable in linux snapshot")
+	require.Contains(t, required.Blocking, "Run the explicit project gate:")
+	require.Contains(t, required.Blocking, "/usr/bin/python3 gate.py")
+	require.Equal(t, required.Blocking, required.Notice)
+	checkPolicy(t, root, "project", policy+"    on_fail: advisory\n")
+	advisory := run()
+	require.Empty(t, advisory.Blocking)
+	require.Contains(t, advisory.Advisory, "mach_lookup unavailable in linux snapshot")
+	require.NotContains(t, logs.String(), "outcome=launched")
+	checkPolicy(t, root, "project", policy)
+
+	writeFile(t, path, profile)
+	inputs, err := worktreeSnapshotInputs(ctx, root)
+	require.NoError(t, err)
+	require.NotContains(t, inputs, sidecar)
+	first := run()
+	skipIfHandoffSandboxUnavailable(t, errors.New(first.Blocking))
+	require.Equal(t, StageFeedback{}, first)
+	writeFile(t, path, profile+"    requires: [pty, posix_shm]\n")
+	require.Equal(t, StageFeedback{}, run())
+	require.Equal(t, StageFeedback{}, run())
+	require.Equal(t, 2, strings.Count(logs.String(), "outcome=launched"), logs.String())
+	require.Equal(t, 1, strings.Count(logs.String(), "outcome=reused"), logs.String())
+}
+
 func TestHandoffWorktreeNetwork(t *testing.T) {
 	if _, err := os.Stat("/usr/bin/python3"); err != nil {
 		t.Skip(err)

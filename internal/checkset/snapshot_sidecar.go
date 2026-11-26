@@ -29,6 +29,7 @@ type WorktreeSnapshot struct {
 	Scratch    SnapshotScratch     `yaml:"scratch" json:"scratch"`
 	Git        *SnapshotGit        `yaml:"git,omitempty" json:"git,omitempty"`
 	Network    string              `yaml:"network,omitempty" json:"network,omitempty"`
+	Requires   Strings             `yaml:"requires,omitempty" json:"requires,omitempty"`
 	Prehydrate *SnapshotPrehydrate `yaml:"prehydrate,omitempty" json:"prehydrate,omitempty"`
 }
 
@@ -155,6 +156,13 @@ func (s WorktreeSnapshot) validate() error {
 	}
 	if s.Network != "" && s.Network != "loopback" {
 		return errors.New("snapshot network must be loopback or omitted")
+	}
+	for _, requirement := range s.Requires {
+		switch requirement {
+		case "pty", "posix_shm", "mach_lookup":
+		default:
+			return fmt.Errorf("unsupported snapshot requirement %q", requirement)
+		}
 	}
 	for _, file := range s.Scratch.Files {
 		if !isSnapshotDataPath(file) || slices.Contains(strings.Split(file, "/"), ".git") {
