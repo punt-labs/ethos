@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agent generation no longer prints an "unsupported edge" line for each
   `collaborates_with` or `delegates_to` edge of a team. Both types are valid;
   they are not rendered into agent files.
+- OpenCode Nightly uses the Punt Kit release and playbook that support
+  `punt release run`.
 
 ## [5.2.4] - 2026-11-26
 
