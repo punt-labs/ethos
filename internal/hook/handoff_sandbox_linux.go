@@ -142,6 +142,7 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 			return "", err
 		}
 		argv = roots.expandArgs(argv)
+		env = append(env, "ETHOS_HANDOFF_CHECKOUT_NAME="+filepath.Base(checkout))
 		plan.Worktree = &handoffSandboxWorktree{Environment: env, CheckoutScratch: profile.Scratch.Checkout}
 	}
 	manifest, err := json.Marshal(plan)
