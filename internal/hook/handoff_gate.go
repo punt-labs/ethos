@@ -79,6 +79,7 @@ type handoffSystemInput struct {
 
 func runHandoffGate(ctx context.Context, root, agent string, files []string, check checkset.Check, policy []checkset.Check) StageFeedback {
 	manualRoot := root
+	manualCheck := check
 	if check.WorktreeSnapshot != nil {
 		relative := make([]string, 0, len(files))
 		for _, file := range files {
@@ -106,7 +107,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	}
 	deferGate := func(reason string) StageFeedback {
 		diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "deferred", time.Since(start))
-		message := fmt.Sprintf("handoff checks deferred (%s): %s. Run the explicit project gate: %s", check.Name, reason, handoffManualCommand(manualRoot, files, check))
+		message := fmt.Sprintf("handoff checks deferred (%s): %s. Run the explicit project gate: %s", check.Name, reason, handoffManualCommand(manualRoot, files, manualCheck))
 		f := feedback(message)
 		if f.Blocking != "" {
 			f.Notice = message

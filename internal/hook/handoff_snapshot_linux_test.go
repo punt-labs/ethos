@@ -690,6 +690,29 @@ exec go test -race .
 	require.NoFileExists(t, marker)
 }
 
+func TestHandoffWorktreeDeferralPrintsSplicedRootAfterInputSelection(t *testing.T) {
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	checkPolicy(t, root, "project", "  - name: late-deferral\n    stage: handoff\n    files: all\n    run: [/bin/sh, '{root}/gate.sh']\n")
+	writeFile(t, filepath.Join(root, "gate.sh"), "printf 'live gate\\n'\n")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml"), `checks:
+  late-deferral:
+    profile: linux-worktree-v1
+    epoch: late-deferral
+    sources: {mode: worktree}
+    system: {files: [/etc/shadow]}
+`)
+	feedback := RunStageChecks(context.Background(), root, "worker", "handoff")
+	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+	require.Contains(t, feedback.Notice, "/etc/shadow")
+	_, manual, found := strings.Cut(feedback.Notice, "Run the explicit project gate: ")
+	require.True(t, found, feedback.Notice)
+	out, err := exec.Command("/bin/sh", "-c", manual).CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	require.Equal(t, "live gate\n", string(out))
+}
+
 func TestHandoffWorktreeSystemFileChangeInvalidatesResult(t *testing.T) {
 	root, _ := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())
