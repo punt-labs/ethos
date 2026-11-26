@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,7 +32,15 @@ func TestHandoffSystemMemoPersistsAndInvalidatesDigest(t *testing.T) {
 
 	memo := readHandoffSystemMemo(memoPath)
 	require.Equal(t, original, memo.prev[key].Digest)
-	require.Equal(t, original, hash(memo))
+	sentinel := strings.Repeat("0", 64)
+	require.NotEqual(t, original, sentinel)
+	record := memo.prev[key]
+	record.Digest = sentinel
+	memo.put(key, record)
+	memo.save()
+
+	memo = readHandoffSystemMemo(memoPath)
+	require.Equal(t, sentinel, hash(memo))
 	require.Equal(t, memo.prev, memo.next)
 	memo.save()
 
@@ -48,7 +57,9 @@ func TestHandoffSystemMemoPersistsAndInvalidatesDigest(t *testing.T) {
 	after, err := os.Stat(input)
 	require.NoError(t, err)
 	require.Equal(t, handoffMemoIdentity(before).Mtime, handoffMemoIdentity(after).Mtime)
-	require.NotEqual(t, original, hash(memo))
+	rehash := hash(memo)
+	require.NotEqual(t, original, rehash)
+	require.Equal(t, hash(nil), rehash)
 
 	require.NoError(t, os.Chmod(memoPath, 0o644))
 	require.Empty(t, readHandoffSystemMemo(memoPath).prev)
