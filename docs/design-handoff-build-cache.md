@@ -67,6 +67,13 @@ using the cache and remove only `.punt-labs/local/ethos/handoff-cache/`
 from the shared store. This subtree contains no audit logs or receipts.
 After removal, initialize a fresh, never-reused generation.
 
+To publish, take a single repository-level budget lock covering every
+runtime digest while holding the namespace lock. Reserve space before
+promotion; when eviction needs another namespace lock, try it without
+waiting and skip active namespaces. If eviction cannot make room, skip
+publication, leave that namespace's persisted cache unchanged, and log
+the skip. The completed gate's verdict still stands.
+
 Clearing or evicting a namespace must invalidate verdicts that could have
 used it. Store a generation for each namespace outside the removable
 cache tree, alongside a stable namespace lock that also survives
