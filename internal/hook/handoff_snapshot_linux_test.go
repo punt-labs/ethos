@@ -373,6 +373,20 @@ func TestHandoffSandboxReportsSetupPhase(t *testing.T) {
 	require.ErrorContains(t, err, "validate sandbox plan")
 }
 
+func TestHandoffSandboxReportsMaterializationCause(t *testing.T) {
+	live, scratch := t.TempDir(), t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(live, "input"), 0o700))
+	var log bytes.Buffer
+	ctx := diagnostic.WithLogger(context.Background(), slog.New(slog.NewTextHandler(&log, nil)))
+	_, err := executeHandoffSnapshot(ctx, scratch, live, "", []string{"input"}, editCheck{
+		argv: []string{"/bin/sh"}, cwd: gateRoot, timeout: 5 * time.Second,
+	})
+	skipIfHandoffSandboxUnavailable(t, err)
+	const detail = "materialize snapshot inputs: snapshot input is not a regular file within budget"
+	require.ErrorContains(t, err, detail)
+	require.Contains(t, log.String(), detail)
+}
+
 func TestHandoffSandboxReportsMissingSnapshotCwd(t *testing.T) {
 	live, scratch := t.TempDir(), t.TempDir()
 	writeFile(t, filepath.Join(live, "README"), "snapshot input\n")

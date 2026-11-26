@@ -18,11 +18,13 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/diagnostic"
+	"github.com/punt-labs/ethos/v4/internal/redact"
 	"golang.org/x/sys/unix"
 )
 
 const handoffSandboxArg = "--ethos-handoff-sandbox-v1"
 const handoffSandboxReady = "ready\n"
+const handoffMaterializePhase = "materialize snapshot inputs"
 
 var sandboxRuntime = []string{"/bin", "/lib", "/lib64", "/usr/bin", "/usr/lib", "/usr/lib64"}
 
@@ -88,7 +90,9 @@ func runHandoffSandbox(writeCoverage func(string) error) {
 	var setup *handoffSetupError
 	if errors.As(err, &setup) {
 		var errno unix.Errno
-		if errors.As(setup.cause, &errno) {
+		if setup.phase == handoffMaterializePhase {
+			_, _ = fmt.Fprintf(status, "%s: %.1024s\n", setup.phase, redact.Prose(setup.cause.Error()))
+		} else if errors.As(setup.cause, &errno) {
 			_, _ = fmt.Fprintf(status, "%s: %s\n", setup.phase, errno)
 		} else {
 			_, _ = fmt.Fprintln(status, setup.phase)
@@ -228,9 +232,10 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		return "", errors.New("cannot send the snapshot input manifest")
 	}
 	if !ready {
-		diagnostic.FromContext(ctx).Info("Handoff sandbox setup failed", "error_type", diagnostic.ErrorType(setupErr))
+		detail := strings.TrimSpace(string(setup))
+		diagnostic.FromContext(ctx).Info("Handoff sandbox setup failed", "error_type", diagnostic.ErrorType(setupErr), "detail", detail)
 		reason := "could not establish snapshot isolation or enter its working directory"
-		if detail := strings.TrimSpace(string(setup)); setupErr == nil && detail != "" {
+		if setupErr == nil && detail != "" {
 			reason += " (" + detail + ")"
 		}
 		return "", errors.New(reason)
@@ -340,7 +345,7 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 	if err := unix.Mount(root, root, "", unix.MS_BIND, ""); err != nil {
 		return err
 	}
-	phase = "materialize snapshot inputs"
+	phase = handoffMaterializePhase
 	checkout := filepath.Join(root, gateRoot)
 	if err := os.MkdirAll(checkout, 0o700); err != nil {
 		return err
@@ -351,8 +356,11 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 	ctx, cancel := context.WithTimeout(context.Background(), gateInputTime)
 	digest, err := digestGateInputsWithMode(ctx, live, checkout, plan.Inputs, plan.Worktree != nil)
 	cancel()
-	if err != nil || digest != proof {
-		return errors.New("snapshot inputs did not match the key or invocation")
+	if err != nil {
+		return err
+	}
+	if digest != proof {
+		return errors.New("snapshot inputs did not match the key")
 	}
 	phase = "check cwd missing from snapshot or is not a directory"
 	info, err := os.Stat(filepath.Join(checkout, strings.TrimPrefix(cwd, gateRoot)))
@@ -393,9 +401,9 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 		}
 		env = plan.Worktree.Environment
 	}
-	phase = "materialize snapshot inputs"
+	phase = handoffMaterializePhase
 	if !gatePlanInputsPresent(checkout, argv) {
-		return errors.New("snapshot inputs did not match the key or invocation")
+		return errors.New("snapshot inputs did not match the invocation")
 	}
 	if err := unix.Mount("", checkout, "", unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV, ""); err != nil {
 		return err
