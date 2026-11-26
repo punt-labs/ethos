@@ -69,8 +69,10 @@ The trusted `main` Nightly uses a GitHub-hosted Ubuntu runner and installs
 checksum-pinned OpenCode 2.2.5 and the [OpenCode setup] dependencies. Configure
 Actions secrets `OPENAI_API_KEY` (with access to `gpt-6-astra`,
 `gpt-6.1-sol`, and `gpt-5.6-terra`) and `CONTEXT7_API_KEY`.
-The job uses OpenCode's native OpenAI provider; only the disposable Actions
-checkout switches model routes. Workstations still use Bifrost.
+The job uses OpenCode's native OpenAI provider in a disposable Actions checkout.
+Workstations default to Bifrost; for a direct OpenAI discovery demo, use
+`OPENCODE_PROFILE=direct-openai` in a disposable worktree as described in
+[OpenCode setup].
 Vox uses local eSpeak and Beadle uses a disposable loopback IMAP server;
 the other local MCP state is isolated as well. Missing live credentials fail
 the job and trigger the existing Nightly failure notification.

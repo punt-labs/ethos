@@ -1117,6 +1117,13 @@ class LiveHelperTests(unittest.TestCase):
             oc.main()
         smoke.assert_called_once_with(oc.ROOT, None, nightly=True)
 
+    def test_doctor_cli_keeps_bifrost_default_and_accepts_nightly(self):
+        for flags, nightly in (([], False), (["--nightly"], True)):
+            with self.subTest(flags=flags), patch("sys.argv", ["opencode.py", "doctor", *flags]), \
+                    patch.object(live, "doctor") as doctor:
+                oc.main()
+                doctor.assert_called_once_with(oc.ROOT, **({"nightly": True} if nightly else {}))
+
     def test_api_failures_keep_safe_operation_exit_and_timeout(self):
         api = live.API(oc.ROOT)
         with patch("subprocess.run", return_value=subprocess.CompletedProcess([], 7)), \
