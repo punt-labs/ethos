@@ -225,10 +225,10 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 
 	var guard handoffLiveGuard
 	if live {
-		var err error
-		guard, err = armHandoffLive(ctx, root, check.Snapshot.Inputs)
-		if err != nil {
-			return deferGate(err.Error(), true)
+		var reason string
+		guard, reason = armHandoffLiveGate(ctx, root, check.Snapshot.Inputs)
+		if reason != "" {
+			return deferGate(reason, true)
 		}
 		defer guard.close()
 	}

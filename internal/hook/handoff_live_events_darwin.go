@@ -390,6 +390,14 @@ type darwinHandoffLive struct {
 	vnodes *darwinLiveVnodes
 }
 
+func armHandoffLiveGate(ctx context.Context, root string, inputs []string) (handoffLiveGuard, string) {
+	guard, err := armHandoffLive(ctx, root, inputs)
+	if err != nil {
+		return nil, err.Error()
+	}
+	return guard, ""
+}
+
 func armHandoffLive(ctx context.Context, root string, inputs []string) (handoffLiveGuard, error) {
 	git, err := resolveDarwinLiveGit(ctx, root)
 	if err != nil {

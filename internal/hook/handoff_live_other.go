@@ -7,8 +7,8 @@ import (
 	"errors"
 )
 
-func armHandoffLive(context.Context, string, []string) (handoffLiveGuard, error) {
-	return nil, errors.New("live-verified requires Darwin")
+func armHandoffLiveGate(context.Context, string, []string) (handoffLiveGuard, string) {
+	return nil, "live-verified requires Darwin"
 }
 
 func executeHandoffLive(context.Context, string, string, []string, editCheck, handoffWorktreePlan) (string, error) {
