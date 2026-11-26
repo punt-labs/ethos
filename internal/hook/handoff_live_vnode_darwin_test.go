@@ -76,3 +76,17 @@ func TestDarwinLiveVnodeAtimeException(t *testing.T) {
 	require.False(t, darwinAtimeOnly(before, after))
 	require.False(t, darwinAtimeOnly(before, before))
 }
+
+func TestDarwinLiveVnodeIgnoresPrivateSentinelWrite(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	writeFile(t, filepath.Join(root, ".git/HEAD"), "ref")
+	writeFile(t, filepath.Join(root, "nested/source"), "data")
+	sentinel := filepath.Join(root, ".git", "ethos-live", "proof")
+	require.NoError(t, os.MkdirAll(sentinel, 0o700))
+	guard, err := armDarwinLiveVnodes(t.Context(), root, []string{"nested/source"}, 20)
+	require.NoError(t, err)
+	defer guard.close()
+	require.NoError(t, os.WriteFile(filepath.Join(sentinel, "marker"), []byte("cutoff"), 0o600))
+	require.NoError(t, guard.drain())
+}
