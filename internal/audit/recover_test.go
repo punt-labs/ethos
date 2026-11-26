@@ -18,6 +18,37 @@ func sessLine(ts int64, tool string) string {
 	return `{"ts":"` + FormatLineTS(ts) + `","tool":"` + tool + `"}` + "\n"
 }
 
+func TestReadStreamWithSalvage(t *testing.T) {
+	p := repositoryPolicy(t, layout.RecordBlame)
+	s := Stream{Namespace: SessionNS, Session: "s"}
+	dir := filepath.Join(p.RecordRoot(), "sessions", "2026-11-04-s")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	cn := ChunkName{Namespace: SessionNS, First: 100, Last: 200}
+	source := filepath.Join(dir, cn.ChunkFile())
+	damaged := []byte(sessLine(100, "Secret") + "garbage\n")
+	require.NoError(t, os.WriteFile(source, damaged, 0o600))
+	require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), []byte(sessLine(200, "Read"))))
+
+	_, err := ReadStream(p, s)
+	require.ErrorContains(t, err, "corrupt chunk")
+	data, err := ReadStreamWithSalvage(p, s, maskGuard)
+	require.NoError(t, err)
+	require.Len(t, data.Lines, 2)
+	assert.JSONEq(t, sessLine(100, "Masked"), string(data.Lines[0].Raw))
+	assert.JSONEq(t, sessLine(200, "Read"), string(data.Lines[1].Raw))
+	assert.Equal(t, []Gap{{Chunk: cn.Stem(), First: 100, Last: 200}}, data.Gaps)
+	assert.Equal(t, int64(200), data.Floor)
+	raw, err := os.ReadFile(source)
+	require.NoError(t, err)
+	assert.Equal(t, damaged, raw)
+	assert.NoFileExists(t, filepath.Join(dir, cn.MarkerFile()))
+	assert.NoDirExists(t, ArchiveRoot(p))
+
+	require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), []byte("invalid live line\n")))
+	_, err = ReadStreamWithSalvage(p, s, maskGuard)
+	require.ErrorContains(t, err, s.LivePath(p))
+}
+
 // HIGH-2: QuarantineLocal keeps the decodable lines of the damaged bytes, as
 // SalvageChunk does, instead of recovering only from the live file.
 func TestQuarantineLocalKeepsDecodableDamagedLines(t *testing.T) {

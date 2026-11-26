@@ -580,6 +580,7 @@ cmd/ethos TestSharedTelemetryMCP
 cmd/ethos TestSharedTelemetryMCPVetoes
 cmd/ethos TestSubagentStartAndPreCompactRefuseAPersonaOnAPolicyIssue
 cmd/ethos TestSubagentStopLeavesCheckoutUnchanged
+cmd/ethos TestSubagentStopSalvagesDamagedAuditReadOnly
 cmd/ethos TestTeamActivateSnapshot_SelectedBundleLeadership
 cmd/ethos TestTeamActivate_AgentCallerSkipsLeadership
 cmd/ethos TestTeamActivate_AlreadyActive

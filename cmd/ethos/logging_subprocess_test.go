@@ -16,6 +16,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/autorepair"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/require"
 )
@@ -271,6 +274,45 @@ checks:
 	require.NoError(t, err)
 	require.Equal(t, before, status())
 	require.Contains(t, string(out), "handoff checks deferred (probe): no declared snapshot profile")
+}
+
+func TestSubagentStopSalvagesDamagedAuditReadOnly(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	checks := filepath.Join(repo, ".punt-labs", "ethos", "checks")
+	sealed := filepath.Join(audit.SealedSessionsBase(repo), "2026-11-26-fixture")
+	require.NoError(t, os.MkdirAll(checks, 0o700))
+	require.NoError(t, os.MkdirAll(sealed, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".punt-labs/local/\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos.yaml"), []byte("checks: project\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(checks, "project.yaml"), []byte(`name: project
+checks:
+  - {name: probe, stage: handoff, files: all, run: [sh, -c, 'exit 0']}
+`), 0o600))
+	chunk := filepath.Join(sealed, audit.SessionChunkFile(100, 100))
+	require.NoError(t, os.WriteFile(chunk, []byte("torn json line\n"), 0o600))
+	runGit(t, repo, "add", "--", ".gitignore", ".punt-labs")
+	runGit(t, repo, "commit", "-qm", "damaged audit checkout")
+	policy, err := layout.NewRepository(repo, repo, layout.RecordBlame)
+	require.NoError(t, err)
+	stamp := autorepair.RepositoryStampPath(policy)
+	require.NoFileExists(t, stamp)
+	status := func() string {
+		t.Helper()
+		out, err := testhelpers.GitCommand("-C", repo, "--no-optional-locks", "status", "--porcelain").CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		return string(out)
+	}
+	require.Empty(t, status())
+	cmd := loggingProcess(t, t.TempDir(), repo, "hook", "subagent-stop")
+	cmd.Stdin = strings.NewReader(`{"session_id":"fixture","agent_id":"worker","agent_type":"implementer"}`)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	require.Empty(t, status())
+	require.NoFileExists(t, stamp)
+	require.NotContains(t, string(out), "corrupt chunk")
+	require.Contains(t, string(out), "handoff checks deferred (probe): no declared snapshot profile")
+	require.Contains(t, string(out), "handoff audit gap in "+strings.TrimSuffix(filepath.Base(chunk), ".jsonl"))
 }
 
 func TestSharedLoggingHookChecks(t *testing.T) {
