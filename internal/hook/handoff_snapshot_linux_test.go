@@ -1,13 +1,16 @@
 package hook
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -828,9 +831,21 @@ func TestHandoffWorktreeSystemRunsCgoRace(t *testing.T) {
 	if !filepath.IsAbs(goroot) {
 		t.Skip("absolute Go toolchain required")
 	}
-	allowHandoffSystemFixtureRoot(t, goroot)
 	root, _ := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())
+	goPath := filepath.Join(goroot, "bin")
+	var runtimeProfile, goDir, goTool string
+	if runtimeRoot := os.Getenv("ETHOS_HANDOFF_RUNTIME"); filepath.IsAbs(runtimeRoot) {
+		physical, err := filepath.EvalSymlinks(goroot)
+		require.NoError(t, err)
+		if insideGatePath(runtimeRoot, physical) {
+			goPath, runtimeProfile = "{runtime}/bin", pinNestedCgoToolchain(t, physical)
+		}
+	}
+	if runtimeProfile == "" {
+		allowHandoffSystemFixtureRoot(t, goroot)
+		goDir, goTool = fmt.Sprintf("%q, ", goroot), "go, "
+	}
 	host := handoffSystemFixtureDir(t)
 	hostFile := filepath.Join(host, "file")
 	hostDir := filepath.Join(host, "dir")
@@ -844,12 +859,12 @@ func TestHandoffWorktreeSystemRunsCgoRace(t *testing.T) {
     epoch: cgo-race
     sources: {mode: worktree}
     path: [%q]
-    env: {CGO_ENABLED: "1", GOPROXY: "off", GOTOOLCHAIN: "local", GOMAXPROCS: "4"}
+%s    env: {CGO_ENABLED: "1", GOPROXY: "off", GOTOOLCHAIN: "local", GOMAXPROCS: "4"}
     system:
       files: [%q]
       platforms:
-        %s-%s: {dirs: [%q, %q], tools: [go, gcc, awk]}
-`, filepath.Join(goroot, "bin"), hostFile, runtime.GOOS, runtime.GOARCH, goroot, hostDir))
+        %s-%s: {dirs: [%s%q], tools: [%sgcc, awk]}
+`, goPath, runtimeProfile, hostFile, runtime.GOOS, runtime.GOARCH, goDir, hostDir, goTool))
 	writeFile(t, filepath.Join(root, "go.mod"), "module example.com/proof\n\ngo 1.23\n")
 	writeFile(t, filepath.Join(root, "cgo.go"), "package proof\n// #include <stdint.h>\nimport \"C\"\nfunc size() int { return int(C.sizeof_uint64_t) }\n")
 	writeFile(t, filepath.Join(root, "cgo_test.go"), "package proof\nimport \"testing\"\nfunc TestSize(t *testing.T) { if size() != 8 { t.Fatal(size()) } }\n")
@@ -868,6 +883,33 @@ exec go test -race .
 	require.Empty(t, feedback.Blocking)
 	require.NoFileExists(t, filepath.Join(hostDir, "new"))
 	require.NoFileExists(t, marker)
+}
+
+func pinNestedCgoToolchain(t *testing.T, goroot string) string {
+	t.Helper()
+	machineRoot, err := layout.MachineRoot()
+	require.NoError(t, err)
+	store := filepath.Join(machineRoot, "runtimes")
+	require.NoError(t, os.MkdirAll(store, 0o700))
+	file, err := os.CreateTemp(store, "toolchain-*.tar.gz")
+	require.NoError(t, err)
+	archive := file.Name()
+	t.Cleanup(func() {
+		if err := os.Remove(archive); !errors.Is(err, os.ErrNotExist) {
+			t.Error(err)
+		}
+	})
+	digest := sha256.New()
+	compressed, err := gzip.NewWriterLevel(io.MultiWriter(file, digest), gzip.BestSpeed)
+	if err != nil {
+		require.NoError(t, errors.Join(err, file.Close()))
+	}
+	bundle := tar.NewWriter(compressed)
+	err = errors.Join(bundle.AddFS(os.DirFS(goroot)), bundle.Close(), compressed.Close(), file.Close())
+	require.NoError(t, err)
+	sum := fmt.Sprintf("%x", digest.Sum(nil))
+	require.NoError(t, os.Rename(archive, filepath.Join(store, sum+".tar.gz")))
+	return fmt.Sprintf("    runtime: {platforms: {%s-%s: {bundle: cgo-toolchain.tar.gz, sha256: %q}}}\n", runtime.GOOS, runtime.GOARCH, sum)
 }
 
 func TestHandoffWorktreeDeferralMapsLiteralCheckoutPath(t *testing.T) {

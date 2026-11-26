@@ -50,6 +50,75 @@ if (echo write > /etc/passwd) || (echo write > /etc/group); then exit 43; fi
 	require.Empty(t, feedback.Blocking)
 }
 
+func TestHandoffWorktreeLoginEnvironment(t *testing.T) {
+	t.Setenv("USER", "ambient-user")
+	t.Setenv("LOGNAME", "ambient-login")
+	t.Run("defaults", func(t *testing.T) {
+		_, run := handoffMetadataFixture(t, `set -eu
+test "$USER" = "$(id -un)"
+test "$LOGNAME" = "$(id -un)"
+`)
+		feedback := run()
+		skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+		require.Empty(t, feedback.Blocking)
+	})
+	t.Run("profile", func(t *testing.T) {
+		root, run := handoffMetadataFixture(t, `set -eu
+test "$USER" = "profile-user"
+test "$LOGNAME" = ""
+`)
+		path := filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml")
+		profile, err := os.ReadFile(path)
+		require.NoError(t, err)
+		writeFile(t, path, string(profile)+"    env: {USER: profile-user, LOGNAME: \"\"}\n")
+		feedback := run()
+		skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+		require.Empty(t, feedback.Blocking)
+	})
+}
+
+func TestHandoffWorktreePrivateVarTmp(t *testing.T) {
+	host, err := os.MkdirTemp("/var/tmp", "ethos-host-var-tmp-")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(host)) })
+	private := filepath.Join(host, "private")
+	marker := filepath.Join(private, "file")
+	const emptyVarTmp = `set -eu
+test -d /var/tmp
+contents=$(ls -A /var/tmp)
+test -z "$contents"
+`
+	root, run := handoffMetadataFixture(t, emptyVarTmp+fmt.Sprintf(`mkdir -p %q
+echo marker > %q
+chmod 0555 %q
+`, private, marker, private))
+	feedback := run()
+	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+	require.Empty(t, feedback.Blocking)
+	require.NoFileExists(t, marker)
+	policy, err := handoffDataFixtureLocation(t, root).Layout()
+	require.NoError(t, err)
+	leftovers, err := filepath.Glob(filepath.Join(policy.LocalRoot(), "handoff-v1", "snapshot-*.ethos-tmp"))
+	require.NoError(t, err)
+	require.Empty(t, leftovers)
+
+	writeFile(t, filepath.Join(root, "gate.sh"), emptyVarTmp)
+	require.Equal(t, StageFeedback{}, run())
+	require.NoFileExists(t, marker)
+	slots, err := filepath.Glob(filepath.Join(policy.LocalRoot(), "handoff-v1", "*", "*.json"))
+	require.NoError(t, err)
+	require.Len(t, slots, 2)
+
+	writeFile(t, filepath.Join(root, "gate.sh"), "ls() { return 42; }\n"+emptyVarTmp)
+	require.Contains(t, run().Blocking, "exit status 42")
+
+	path := filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml")
+	profile, err := os.ReadFile(path)
+	require.NoError(t, err)
+	writeFile(t, path, string(profile)+"    system: {dirs: ["+host+"]}\n")
+	require.Contains(t, run().Blocking, "cannot safely resolve system input "+host)
+}
+
 func TestHandoffWorktreeCachesFailureMentioningSyntheticHome(t *testing.T) {
 	root, run := handoffMetadataFixture(t, `printf 'expected "%s/.punt-labs/beadle"\n' "$HOME"
 exit 42
