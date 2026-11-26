@@ -896,7 +896,7 @@ func pinNestedCgoToolchain(t *testing.T, goroot string) string {
 	archive := file.Name()
 	t.Cleanup(func() {
 		if err := os.Remove(archive); !errors.Is(err, os.ErrNotExist) {
-			assert.NoError(t, err)
+			t.Error(err)
 		}
 	})
 	digest := sha256.New()
