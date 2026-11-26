@@ -60,9 +60,12 @@ func TestDarwinHandoffLoopbackVerdict(t *testing.T) {
 		invocation, _ := diagnostic.WithHookInvocation(ctx)
 		require.Empty(t, RunStageChecks(invocation, root, "worker", "handoff").Blocking)
 	}
+	require.NoError(t, listener.Close())
+	invocation, _ = diagnostic.WithHookInvocation(ctx)
+	require.NotEmpty(t, RunStageChecks(invocation, root, "worker", "handoff").Blocking)
 	require.Contains(t, logs.String(), `outcome=completed`)
-	require.Contains(t, logs.String(), `outcome=reused`)
-	require.Equal(t, 2, strings.Count(logs.String(), `isolation=snapshot isolation_residual="residual (host localhost services reachable, shared port space)"`))
+	require.NotContains(t, logs.String(), `outcome=reused`)
+	require.Equal(t, 3, strings.Count(logs.String(), `isolation=snapshot isolation_residual="residual (host localhost services reachable, shared port space)"`))
 }
 
 func TestDarwinHandoffSnapshotIsolation(t *testing.T) {

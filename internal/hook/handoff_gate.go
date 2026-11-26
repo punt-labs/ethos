@@ -119,7 +119,8 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	}
 	baseDetails := diagnostic.HookCheckDetails{Isolation: mode}
 	verdictDetails := baseDetails
-	if runtime.GOOS == "darwin" && check.WorktreeSnapshot != nil && check.WorktreeSnapshot.Network == "loopback" {
+	cacheable := !(runtime.GOOS == "darwin" && check.WorktreeSnapshot != nil && check.WorktreeSnapshot.Network == "loopback")
+	if !cacheable {
 		verdictDetails.IsolationResidual = "residual (host localhost services reachable, shared port space)"
 	}
 	feedback := func(message string) StageFeedback {
@@ -431,7 +432,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 			}
 			// Holding the exclusive lease proves no prior owner still holds
 			// it. An orphaned pending record is neither a pass nor a failure.
-			if saved, ok := readGateResult(slot); ok && saved.Key == key && saved.Proof == proof && saved.Isolation == mode && !saved.Pending {
+			if saved, ok := readGateResult(slot); cacheable && ok && saved.Key == key && saved.Proof == proof && saved.Isolation == mode && !saved.Pending {
 				if !waited {
 					if reason := verifyData(); reason != "" {
 						result = deferGate(reason)
@@ -550,10 +551,12 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 				}
 			}
 			failure := editRedact(strings.Join(failures, "\n\n"))
-			if err := writeGateResult(loc, slot, gateResult{Key: key, Proof: proof, Isolation: mode, Failure: failure}); err != nil {
-				diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "cache_write_failed", time.Since(start))
-			} else {
-				terminal = true
+			if cacheable {
+				if err := writeGateResult(loc, slot, gateResult{Key: key, Proof: proof, Isolation: mode, Failure: failure}); err != nil {
+					diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "cache_write_failed", time.Since(start))
+				} else {
+					terminal = true
+				}
 			}
 			outcome := "completed"
 			if failure != "" {
