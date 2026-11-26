@@ -97,10 +97,13 @@ the generation that supplied it. At generation creation, write a fresh
 random ID to a host-owned file in the generation directory, outside the
 artifact tree that is copied and promoted. Promotions within that
 generation preserve the ID; clear and eviction start a generation
-with a new ID. Reuse the verdict only if the current ID equals the
-recorded ID, checked under the namespace lock. Manual deletion of the
-cache subtree also deletes the ID. If either the generation or its
-required ID is missing or unreadable, do not reuse the verdict.
+with a new ID. On a candidate verdict hit, before skipping preparation,
+read the current generation's persisted ID file under a shared lock on
+the repository's cache namespace. Reuse only if the generation
+directory and ID file exist and the ID matches the recorded ID. Treat
+a missing directory, missing or unreadable ID, or mismatched ID as a
+verdict miss and proceed to gate execution. Manual deletion of the
+cache subtree also deletes the ID.
 During preparation, compare the ID file with the expected ID in the
 persisted generation metadata. If the directory or ID is missing, or
 the ID does not match, delete that entire generation directory under
