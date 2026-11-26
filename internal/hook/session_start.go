@@ -215,8 +215,10 @@ func HandleSessionStartContext(ctx context.Context, r io.Reader, deps SessionSta
 	// only after the human greeting (retired repo). See runAgentPipeline.
 	var pipelineErr error
 	if storeFailure == nil {
-		if enabled, err := resolve.EnabledMarker(loc.Checkout); err == nil && enabled {
-			exportSessionEnv()
+		if loc.Checkout != "" {
+			if enabled, err := resolve.EnabledMarker(loc.Checkout); err == nil && enabled {
+				exportSessionEnv()
+			}
 		}
 		pipelineErr = runAgentPipeline(loc, store, deps, repoRoot)
 	}

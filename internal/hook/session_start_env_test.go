@@ -168,6 +168,22 @@ func TestHandleSessionStart_EnvExportGate(t *testing.T) {
 		assert.ErrorIs(t, err, os.ErrNotExist)
 	})
 
+	t.Run("empty checkout skips CLAUDE_ENV_FILE even when cwd has enabled marker", func(t *testing.T) {
+		dir := t.TempDir()
+		marker := filepath.Join(dir, ".punt-labs", "ethos", "enabled")
+		require.NoError(t, os.MkdirAll(filepath.Dir(marker), 0o755))
+		require.NoError(t, os.WriteFile(marker, nil, 0o644))
+
+		orig, err := os.Getwd()
+		require.NoError(t, err)
+		require.NoError(t, os.Chdir(dir))
+		t.Cleanup(func() { _ = os.Chdir(orig) })
+
+		envFile := run(t, "")
+		_, err = os.Stat(envFile)
+		assert.ErrorIs(t, err, os.ErrNotExist)
+	})
+
 	t.Run("enabled checkout writes CLAUDE_ENV_FILE", func(t *testing.T) {
 		checkout := t.TempDir()
 		marker := filepath.Join(checkout, ".punt-labs", "ethos", "enabled")
