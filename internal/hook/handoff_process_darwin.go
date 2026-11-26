@@ -56,7 +56,7 @@ func checkDarwinRunnerExecutable(file *os.File) error {
 		return err
 	}
 	if uint32(stat.Dev) != region.device || stat.Ino != region.inode {
-		return errors.New("Darwin runner executable no longer matches the running image")
+		return errors.New("runner executable no longer matches the running Darwin image")
 	}
 	return nil
 }

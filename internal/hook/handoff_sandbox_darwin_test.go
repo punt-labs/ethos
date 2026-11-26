@@ -28,7 +28,7 @@ func TestDarwinHandoffRunnerExecutable(t *testing.T) {
 	replacement, err := os.CreateTemp(t.TempDir(), "runner")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = replacement.Close() })
-	require.ErrorContains(t, checkDarwinRunnerExecutable(replacement), "no longer matches the running image")
+	require.ErrorContains(t, checkDarwinRunnerExecutable(replacement), "no longer matches the running Darwin image")
 }
 
 func TestDarwinHandoffLoopbackVerdict(t *testing.T) {
