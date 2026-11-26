@@ -56,10 +56,14 @@ this feature. For suspected corruption, compare against a cold run;
 
 Add `ethos handoff cache clear` to clear the invoking repository's
 build-cache namespaces under their writer locks. Bound the size and
-entry count per namespace. A repository's disk budget counts every
-generation directory on disk, including retired generations whose
-cleanup failed. Evict least-recently-used inactive namespaces under a
-machine-wide disk budget; skip active locks. Clearing
+entry count per namespace. Count every generation directory on disk,
+including retired generations whose cleanup failed, against the
+repository's disk budget. Evict least-recently-used inactive namespaces
+within that repository; skip active locks. There is no cross-repository
+inventory or machine-wide budget: total usage depends on the budgets
+of the repositories using the cache. Use `cache clear` to reclaim a
+repository's cache space, or remove its local store after stopping all
+processes using it. Clearing
 or evicting a namespace must also invalidate verdicts that could have
 used it. Store a generation for each namespace outside the removable
 cache tree, alongside a stable namespace lock that also survives
