@@ -376,7 +376,7 @@ func worktreeSandboxPath(checkout, value string) string {
 	return value
 }
 
-func gatePlanInputsPresent(snapshot string, argv []string, worktree *handoffSandboxWorktree) bool {
+func linuxGatePlanInputsPresent(snapshot string, argv []string, worktree *handoffSandboxWorktree) bool {
 	checkout, err := os.OpenRoot(snapshot)
 	if err != nil {
 		return false
@@ -602,7 +602,7 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 		env = plan.Worktree.Environment
 	}
 	phase = handoffMaterializePhase
-	if !gatePlanInputsPresent(checkout, argv, plan.Worktree) {
+	if !linuxGatePlanInputsPresent(checkout, argv, plan.Worktree) {
 		return errors.New("snapshot inputs did not match the invocation")
 	}
 	if err := unix.Mount("", checkout, "", unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV, ""); err != nil {

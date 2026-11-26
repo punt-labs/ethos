@@ -76,7 +76,7 @@ func TestHandoffWorktreeProofRejectsStaleInputSelection(t *testing.T) {
 	inputs, err := worktreeSnapshotInputs(ctx, root)
 	require.NoError(t, err)
 	writeFile(t, filepath.Join(root, "new-input"), "appeared after discovery")
-	_, _, err = handoffGateInputs(ctx, root, inputs, true)
+	_, _, err = handoffGateInputs(ctx, root, inputs, true, nil)
 	require.ErrorContains(t, err, "snapshot input selection changed")
 }
 
@@ -324,14 +324,14 @@ func TestHandoffPlanScratchFileOperands(t *testing.T) {
 	const output = "/checkout/build/output.tmp"
 	worktree := &handoffSandboxWorktree{ScratchFiles: []string{"build/output.tmp"}}
 	for _, argv := range [][]string{{output}, {"sh", "--", output}, {"python3", "-I", output}, {"touch", output + ".other"}, {"touch", output + "/child"}} {
-		require.False(t, gatePlanInputsPresent(dest, argv, worktree), "%v", argv)
+		require.False(t, linuxGatePlanInputsPresent(dest, argv, worktree), "%v", argv)
 	}
-	require.True(t, gatePlanInputsPresent(dest, []string{"touch", output}, worktree))
-	require.True(t, gatePlanInputsPresent(dest, []string{"touch", "/checkout/build/./output.tmp"}, worktree))
+	require.True(t, linuxGatePlanInputsPresent(dest, []string{"touch", output}, worktree))
+	require.True(t, linuxGatePlanInputsPresent(dest, []string{"touch", "/checkout/build/./output.tmp"}, worktree))
 	worktree.Prehydrate = []string{"hydrate"}
-	require.True(t, gatePlanInputsPresent(dest, []string{output}, worktree))
-	require.True(t, gatePlanInputsPresent(dest, []string{"sh", output}, worktree))
-	require.False(t, gatePlanInputsPresent(dest, []string{"sh", "/checkout/../checkout/build/output.tmp"}, worktree))
+	require.True(t, linuxGatePlanInputsPresent(dest, []string{output}, worktree))
+	require.True(t, linuxGatePlanInputsPresent(dest, []string{"sh", output}, worktree))
+	require.False(t, linuxGatePlanInputsPresent(dest, []string{"sh", "/checkout/../checkout/build/output.tmp"}, worktree))
 }
 
 func TestHandoffWorktreeRunsWithPrivateScratchFile(t *testing.T) {
