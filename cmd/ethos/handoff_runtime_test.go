@@ -57,11 +57,8 @@ checks:
 	require.Contains(t, stderr, "could not fetch published runtime bundle")
 	require.Zero(t, requests.Load())
 	store := filepath.Join(se.home, ".punt-labs", "ethos", "runtimes")
-	entries, err := os.ReadDir(store)
-	require.NoError(t, err)
-	require.Empty(t, entries)
-
 	path := filepath.Join(store, digest+".tar.gz")
+	require.NoFileExists(t, path)
 
 	local := filepath.Join(se.home, "local runtime.tar.gz")
 	const wrong = "wrong local bytes"
@@ -71,7 +68,7 @@ checks:
 	require.NotZero(t, code)
 	require.Contains(t, stderr, actual)
 	require.Contains(t, stderr, digest)
-	entries, err = os.ReadDir(store)
+	entries, err := os.ReadDir(store)
 	require.NoError(t, err)
 	require.Empty(t, entries)
 
