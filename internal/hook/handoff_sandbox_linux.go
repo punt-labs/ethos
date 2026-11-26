@@ -17,7 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"golang.org/x/sys/unix"
 )
@@ -44,6 +43,7 @@ type handoffSandboxManifest struct {
 type handoffSandboxWorktree struct {
 	Environment     []string
 	CheckoutScratch []string
+	System          handoffSystemPlan
 }
 
 // RunHandoffSandbox dispatches the private namespace child before CLI setup.
@@ -107,7 +107,7 @@ func handoffSandboxIdentity(root string) (string, error) {
 	return fmt.Sprintf("%s:%d:%d", strings.TrimSpace(string(boot)), physical.Dev, physical.Ino), nil
 }
 
-func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string, inputs []string, check editCheck) (string, error) {
+func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string, inputs []string, check editCheck, prepared ...handoffSystemPlan) (string, error) {
 	for _, root := range sandboxRuntime {
 		physical, err := filepath.EvalSymlinks(root)
 		if err == nil && (insideGatePath(physical, checkout) || insideGatePath(checkout, physical)) {
@@ -134,13 +134,18 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 	if check.policy != nil && check.policy.WorktreeSnapshot != nil {
 		profile := check.policy.WorktreeSnapshot
 		roots := linuxHandoffRoots()
-		var platform checkset.SnapshotPlatform
-		if profile.Runtime != nil {
-			platform = profile.Runtime.Platforms[runtime.GOOS+"-"+runtime.GOARCH]
-		}
-		env, err := roots.environment(profile, platform, worktreeSandboxPATH)
+		env, err := worktreeSandboxEnvironment(profile)
 		if err != nil {
 			return "", err
+		}
+		var system handoffSystemPlan
+		if len(prepared) > 0 {
+			system = prepared[0]
+		} else {
+			system, err = prepareHandoffSystem(ctx, checkout, profile)
+			if err != nil {
+				return "", err
+			}
 		}
 		argv = roots.expandArgs(argv)
 		for i := 1; i < len(argv); i++ {
@@ -148,7 +153,7 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		}
 		cwd = worktreeSandboxPath(checkout, cwd)
 		env = append(env, "ETHOS_HANDOFF_CHECKOUT_NAME="+filepath.Base(checkout))
-		plan.Worktree = &handoffSandboxWorktree{Environment: env, CheckoutScratch: profile.Scratch.Checkout}
+		plan.Worktree = &handoffSandboxWorktree{Environment: env, CheckoutScratch: profile.Scratch.Checkout, System: system}
 	}
 	manifest, err := json.Marshal(plan)
 	if err != nil {
@@ -231,20 +236,27 @@ func resolveWorktreeExecutable(name string, env []string) (string, error) {
 	if strings.ContainsRune(name, '/') {
 		return name, nil
 	}
-	for _, value := range env {
-		path, ok := strings.CutPrefix(value, "PATH=")
-		if !ok {
-			continue
+	for _, dir := range handoffExecutableDirs(env) {
+		candidate := filepath.Join(dir, name)
+		if handoffExecutable(candidate) {
+			return candidate, nil
 		}
-		for _, dir := range filepath.SplitList(path) {
-			candidate := filepath.Join(dir, name)
-			if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() && unix.Access(candidate, unix.X_OK) == nil {
-				return candidate, nil
-			}
-		}
-		break
 	}
 	return "", unix.ENOENT
+}
+
+func handoffExecutableDirs(env []string) []string {
+	for _, value := range env {
+		if path, ok := strings.CutPrefix(value, "PATH="); ok {
+			return filepath.SplitList(path)
+		}
+	}
+	return nil
+}
+
+func handoffExecutable(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular() && unix.Access(path, unix.X_OK) == nil
 }
 
 func insideGatePath(root, path string) bool {
@@ -321,20 +333,24 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 		return err
 	}
 	phase = "mount read-only system runtime"
-	for _, runtimeDir := range sandboxRuntime {
-		if _, err := os.Stat(runtimeDir); errors.Is(err, os.ErrNotExist) {
-			continue
-		} else if err != nil {
-			return err
-		}
-		if err := mountGateReadOnly(runtimeDir, filepath.Join(root, runtimeDir)); err != nil {
-			return err
-		}
-	}
 	if plan.Worktree != nil {
+		if err := mountHandoffSystem(root, plan.Worktree.System); err != nil {
+			return err
+		}
 		phase = "mount sandbox procfs and devices"
 		if err := mountHandoffProcAndDev(root); err != nil {
 			return err
+		}
+	} else {
+		for _, runtimeDir := range sandboxRuntime {
+			if _, err := os.Stat(runtimeDir); errors.Is(err, os.ErrNotExist) {
+				continue
+			} else if err != nil {
+				return err
+			}
+			if err := mountGateReadOnly(runtimeDir, filepath.Join(root, runtimeDir)); err != nil {
+				return err
+			}
 		}
 	}
 	oldRoot := filepath.Join(root, ".old-root")
@@ -376,6 +392,12 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 	if err := reportCoverage(); err != nil {
 		return err
 	}
+	if plan.Worktree != nil {
+		phase = "verify mounted system inputs"
+		if err := verifyMountedHandoffSystem(plan.Worktree.System, env); err != nil {
+			return err
+		}
+	}
 	phase = "start sandbox command"
 	executable := argv[0]
 	if plan.Worktree != nil {
@@ -394,6 +416,10 @@ func mountGateReadOnly(source, target string) error {
 	if err := os.MkdirAll(target, 0o700); err != nil {
 		return err
 	}
+	return bindHandoffReadOnly(source, target)
+}
+
+func bindHandoffReadOnly(source, target string) error {
 	if err := unix.Mount(source, target, "", unix.MS_BIND, ""); err != nil {
 		return err
 	}
@@ -403,7 +429,7 @@ func mountGateReadOnly(source, target string) error {
 var handoffDevices = []string{"/dev/null", "/dev/zero", "/dev/random", "/dev/urandom"}
 
 // mountHandoffProcAndDev gives the check a procfs for its own PID namespace
-// and only the stateless character devices.
+// and private device mounts.
 func mountHandoffProcAndDev(root string) error {
 	proc := filepath.Join(root, "proc")
 	if err := os.MkdirAll(proc, 0o555); err != nil {
@@ -431,5 +457,27 @@ func mountHandoffProcAndDev(root string) error {
 			return err
 		}
 	}
-	return nil
+	shm := filepath.Join(root, "dev/shm")
+	if err := os.Mkdir(shm, 0o755); err != nil {
+		return err
+	}
+	if err := unix.Mount("tmpfs", shm, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, "size=16m,mode=1777"); err != nil {
+		return err
+	}
+	pts := filepath.Join(root, "dev/pts")
+	if err := os.Mkdir(pts, 0o755); err != nil {
+		return err
+	}
+	if err := unix.Mount("devpts", pts, "devpts", unix.MS_NOSUID|unix.MS_NOEXEC, "newinstance,ptmxmode=0666,mode=0620"); err != nil {
+		return err
+	}
+	ptmx := filepath.Join(root, "dev/ptmx")
+	f, err := os.OpenFile(ptmx, os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return unix.Mount(filepath.Join(pts, "ptmx"), ptmx, "", unix.MS_BIND, "")
 }

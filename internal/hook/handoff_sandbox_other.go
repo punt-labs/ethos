@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"os"
+
+	"github.com/punt-labs/ethos/v4/internal/checkset"
 )
 
 func handoffSandboxSupported() bool { return false }
@@ -27,6 +29,10 @@ func handoffSandboxIdentity(string) (string, error) {
 	return "", errors.New("snapshot isolation unavailable on this host")
 }
 
-func executeHandoffSnapshot(_ context.Context, _, _, _ string, _ []string, _ editCheck) (string, error) {
+func prepareHandoffSystem(context.Context, string, *checkset.WorktreeSnapshot) (handoffSystemPlan, error) {
+	return handoffSystemPlan{}, nil
+}
+
+func executeHandoffSnapshot(_ context.Context, _, _, _ string, _ []string, _ editCheck, _ ...handoffSystemPlan) (string, error) {
 	return "", errors.New("snapshot isolation unavailable on this host")
 }
