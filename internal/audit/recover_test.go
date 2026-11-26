@@ -83,6 +83,27 @@ func TestReadStreamWithSalvageRedactedOverlap(t *testing.T) {
 	}
 }
 
+func TestReadStreamWithSalvageConflictingRedactedCopies(t *testing.T) {
+	for _, liveTool := range []string{"Secret", "DifferentSecret"} {
+		t.Run(liveTool, func(t *testing.T) {
+			p := repositoryPolicy(t, layout.RecordBlame)
+			s := Stream{Namespace: SessionNS, Session: "s"}
+			dir := filepath.Join(p.RecordRoot(), "sessions", "2026-11-04-s")
+			require.NoError(t, os.MkdirAll(dir, 0o700))
+			for i, tool := range []string{"Secret", "DifferentSecret"} {
+				chunk := filepath.Join(dir, SessionChunkFile(100, 100+int64(i)))
+				require.NoError(t, os.WriteFile(chunk, []byte(sessLine(100, tool)+"garbage\n"), 0o600))
+			}
+			require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), []byte(sessLine(100, liveTool))))
+			guard := func(_ []byte) ([]byte, string, bool) {
+				return []byte(sessLine(100, "Masked")), "masked", false
+			}
+			_, err := ReadStreamWithSalvage(p, s, guard)
+			require.ErrorContains(t, err, "audit identity conflict")
+		})
+	}
+}
+
 // HIGH-2: QuarantineLocal keeps the decodable lines of the damaged bytes, as
 // SalvageChunk does, instead of recovering only from the live file.
 func TestQuarantineLocalKeepsDecodableDamagedLines(t *testing.T) {
