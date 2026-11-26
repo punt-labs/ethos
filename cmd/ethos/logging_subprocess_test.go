@@ -370,7 +370,8 @@ checks:
 	var feedback map[string]string
 	require.NoError(t, json.Unmarshal(out, &feedback), "%s", out)
 	require.Equal(t, "block", feedback["decision"])
-	require.Contains(t, feedback["reason"], "overlap selected")
+	require.Contains(t, feedback["reason"], "selected: exit status 1")
+	require.Contains(t, feedback["reason"], "\noverlap selected")
 	require.NotContains(t, string(out), "overlap unselected")
 	require.NotContains(t, string(out), "handoff audit gap")
 }
