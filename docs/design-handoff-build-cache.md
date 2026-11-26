@@ -21,14 +21,15 @@ resolved declaration belongs in the handoff result key alongside the
 runtime pin and existing snapshot proofs. A cache hit does not replace
 a gate run on a result-cache miss.
 
-Store the cache at
-`~/.punt-labs/local/ethos/handoff-cache/<repo-id>/<runtime-digest>/<name>`.
-Derive `repo-id` from the canonical local repository identity, not the
-checkout name, remote URL, or a sidecar-supplied identifier. Linked
-checkouts of the same repository may share; distinct local clones and
-different runtime digests do not. Invalidate the build cache if the
-verified system-input fingerprint changes: Go does not necessarily
-notice changes to libraries used through cgo.
+In the proposed runner, resolve the canonical shared repository store
+root `S` as specified in [Storage layout](storage-layout.md).
+Keep cache artifacts and their lock and generation state under
+`S/.punt-labs/local/ethos/handoff-cache/<runtime-digest>/`. A cache
+namespace is identified by the store root, runtime digest, and cache
+name. Linked checkouts share that namespace and its lock; distinct
+local clones and different runtime digests do not. Invalidate the build
+cache if the verified system-input fingerprint changes: Go does not
+necessarily notice changes to libraries used through cgo.
 
 ## Containment and detection
 
@@ -62,9 +63,10 @@ machine-wide disk budget; skip active locks. Clearing
 or evicting a namespace must also invalidate verdicts that could have
 used it. Store a generation for each namespace outside the removable
 cache tree, alongside a stable namespace lock that also survives
-deletion. Keep artifacts in a subdirectory named for their generation
-(for example, `g<N>`), and seed the private copy only from the current
-generation's directory. A missing directory means a cold cache. Under
+deletion. Keep artifacts at
+`S/.punt-labs/local/ethos/handoff-cache/<runtime-digest>/g<N>/<name>`,
+and seed the private copy only from the current generation's directory.
+A missing directory means a cold cache. Under
 the lock, `cache clear` persists a new, never-reused generation before
 attempting to delete non-current directories. Each cache preparation
 also attempts this cleanup under the same lock, before mounting the
@@ -82,6 +84,9 @@ command, eviction, and generation tracking are proposed, not implemented.
 ## Measurements
 
 The throwaway Linux amd64 prototype was based on Ethos `8c89c4c`.
+It used the original home-scoped layout for the benchmark:
+`~/.punt-labs/local/ethos/handoff-cache/<repo-id>/<runtime-digest>/<name>`,
+with `repo-id` derived from the canonical local store path.
 These are wall-clock seconds for the unchanged `make check` gates.
 The hook log confirmed a gate launch for every snapshot in the table;
 no cell is a reused hook verdict.
