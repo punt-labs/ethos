@@ -641,15 +641,24 @@ func TestHandoffWorktreeRunsWithPrivateScratchFile(t *testing.T) {
     profile: linux-worktree-v1
     epoch: scratch-files
     sources: {mode: worktree}
-    scratch: {files: [output.tmp, nested/output.tmp], checkout: [.venv]}
+    scratch: {files: [output.tmp, nested/output.tmp], checkout: [.venv, nested/cache]}
 `)
+	writeFile(t, filepath.Join(root, "source", "input"), "visible\n")
+	writeFile(t, filepath.Join(root, "nested", "source", "input"), "nested\n")
+	require.NoError(t, os.Symlink("Makefile", filepath.Join(root, "gate-link")))
+	stageGit(t, root, "add", "source/input", "nested/source/input", "gate-link")
 	makefile := filepath.Join(root, "Makefile")
 	writeFile(t, makefile, `check:
 	@test ! -e output.tmp && test ! -e nested/output.tmp
 	@echo first > output.tmp && grep -qx first output.tmp
 	@rm -f output.tmp && test ! -e output.tmp
 	@echo second > output.tmp && grep -qx second output.tmp
-	@touch nested/output.tmp .venv/created
+	@touch nested/output.tmp .venv/created nested/cache/created
+	@grep -qx visible source/input && grep -qx nested nested/source/input
+	@error=$$(touch source/new 2>&1); test "$$?" -ne 0 && printf '%s\n' "$$error" | grep -q 'Read-only file system'
+	@error=$$(touch nested/source/new 2>&1); test "$$?" -ne 0 && printf '%s\n' "$$error" | grep -q 'Read-only file system'
+	@error=$$(chmod 400 Makefile 2>&1); test "$$?" -ne 0 && printf '%s\n' "$$error" | grep -q 'Read-only file system'
+	@! rm Makefile 2>/dev/null && test -f Makefile && test -L gate-link
 `)
 	run := func() StageFeedback {
 		return runStageChecks(context.Background(), root, "worker", "handoff", func() ([]string, error) {
@@ -672,8 +681,8 @@ func TestHandoffWorktreeRunsWithPrivateScratchFile(t *testing.T) {
 	require.NotEmpty(t, before)
 	for _, tc := range []struct{ cmd, path string }{
 		{"touch undeclared.tmp", "/checkout/undeclared.tmp"},
-		{"chmod 400 Makefile", "/checkout/Makefile"},
-		{"rm Makefile", "/checkout/Makefile"},
+		{"touch nested/undeclared.tmp", "/checkout/nested/undeclared.tmp"},
+		{"rm gate-link", "/checkout/gate-link"},
 	} {
 		writeFile(t, makefile, "check:\n\t@"+tc.cmd+"\n")
 		feedback = run()

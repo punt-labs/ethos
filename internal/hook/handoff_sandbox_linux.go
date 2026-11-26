@@ -571,7 +571,11 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 	}
 	if plan.Worktree != nil {
 		phase = handoffScratchOverlayPhase
-		if err := mountHandoffScratchFiles(checkout, plan.Worktree.ScratchOverlay, scratchOverlays); err != nil {
+		laterMounts := scratchDirs
+		if plan.Worktree.GitDir != "" {
+			laterMounts = slices.Concat(scratchDirs, []string{filepath.Join(checkout, ".git")})
+		}
+		if err := mountHandoffScratchFiles(checkout, plan.Worktree.ScratchOverlay, scratchOverlays, laterMounts); err != nil {
 			return err
 		}
 		phase = "mount private worktree scratch"

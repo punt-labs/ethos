@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -48,7 +49,7 @@ func (overlay handoffScratchFileOverlay) dirs(state string, index int) (string, 
 	return filepath.Join(dir, "upper"), filepath.Join(dir, "work")
 }
 
-func mountHandoffScratchFiles(checkout, state string, overlays []handoffScratchFileOverlay) error {
+func mountHandoffScratchFiles(checkout, state string, overlays []handoffScratchFileOverlay, laterMounts []string) error {
 	if len(overlays) == 0 {
 		return nil
 	}
@@ -68,11 +69,33 @@ func mountHandoffScratchFiles(checkout, state string, overlays []handoffScratchF
 			return errors.New("unsupported overlay path")
 		}
 		options := "userxattr,lowerdir=" + base + ",upperdir=" + upper + ",workdir=" + work
-		if err := unix.Mount("overlay", filepath.Join(checkout, overlay.parent), "overlay", unix.MS_NOSUID|unix.MS_NODEV, options); err != nil {
+		target := filepath.Join(checkout, overlay.parent)
+		if err := unix.Mount("overlay", target, "overlay", unix.MS_NOSUID|unix.MS_NODEV, options); err != nil {
 			return fmt.Errorf("mount overlay for %q: %w", overlay.parent, err)
+		}
+		if err := protectHandoffOverlayEntries(base, target, overlay.names, laterMounts); err != nil {
+			return err
 		}
 	}
 	return unix.Unmount(lower, unix.MNT_DETACH)
+}
+
+func protectHandoffOverlayEntries(lower, target string, declared map[string]bool, laterMounts []string) error {
+	entries, err := os.ReadDir(lower)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		path := filepath.Join(target, name)
+		if declared[name] || slices.Contains(laterMounts, path) || (!entry.IsDir() && !entry.Type().IsRegular()) {
+			continue
+		}
+		if err := bindHandoffReadOnly(filepath.Join(lower, name), path); err != nil {
+			return fmt.Errorf("protect overlay entry %q: %w", filepath.Base(path), err)
+		}
+	}
+	return nil
 }
 
 func auditHandoffScratchFiles(state string, overlays []handoffScratchFileOverlay) error {
