@@ -343,7 +343,11 @@ func TestSubagentStopSelectsRedactedOverlap(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos.yaml"), []byte("checks: project\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(checks, "project.yaml"), []byte(`name: project
 checks:
-  - {name: selected, stage: handoff, files: ['**/*.txt'], run: [sh, -c, 'echo overlap selected; exit 1']}
+  - name: selected
+    stage: handoff
+    files: ['**/*.txt']
+    run: [/bin/sh, -c, 'echo overlap selected; exit 1']
+    snapshot: {profile: linux-shell-v1, inputs: [edited.txt], epoch: v1}
   - {name: unselected, stage: handoff, files: ['**/*.go'], run: [sh, -c, 'echo overlap unselected; exit 1']}
 `), 0o600))
 	file := filepath.Join(repo, "edited.txt")
@@ -369,7 +373,15 @@ checks:
 	var feedback map[string]string
 	require.NoError(t, json.Unmarshal(out, &feedback), "%s", out)
 	require.Equal(t, "block", feedback["decision"])
-	require.Contains(t, feedback["reason"], "handoff checks deferred (selected): no declared snapshot profile")
+	if strings.Contains(feedback["reason"], "handoff checks deferred (selected)") &&
+		(strings.Contains(feedback["reason"], "isolation unavailable on this host") ||
+			strings.Contains(feedback["reason"], "make mount propagation private: permission denied") ||
+			strings.Contains(feedback["reason"], "make mount propagation private: operation not permitted")) {
+		t.Skip(feedback["reason"])
+	}
+	require.NotContains(t, feedback["reason"], "handoff checks deferred")
+	require.Contains(t, feedback["reason"], "selected: exit status 1")
+	require.Contains(t, feedback["reason"], "\noverlap selected")
 	require.NotContains(t, string(out), "overlap unselected")
 	require.NotContains(t, string(out), "handoff audit gap")
 }
