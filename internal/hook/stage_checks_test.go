@@ -353,6 +353,24 @@ func TestHandoffManualCommandMapsDeclaredSnapshotPaths(t *testing.T) {
 	require.Equal(t, "live gate\n", string(out))
 }
 
+func TestHandoffManualCommandExpandsWorktreeRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := filepath.Join(home, "checkout with spaces")
+	require.NoError(t, os.Mkdir(root, 0o700))
+	writeFile(t, filepath.Join(root, "gate.sh"), "printf '%s\\n' \"$@\"\n")
+	check := checkset.Check{
+		Name: "manual", Stage: "handoff", Files: checkset.Patterns{Globs: []string{"**"}}, Cwd: "root",
+		Run:              []string{"/bin/sh", "{root}/gate.sh", "--input={root}/input", "{files}"},
+		WorktreeSnapshot: &checkset.WorktreeSnapshot{},
+	}
+	manual := handoffManualCommand(root, []string{"{root}.txt"}, check)
+	require.NotContains(t, manual, home)
+	out, err := exec.Command("/bin/sh", "-c", manual).CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	require.Equal(t, "--input="+filepath.Join(root, "input")+"\n"+filepath.Join(root, "{root}.txt")+"\n", string(out))
+}
+
 func TestHandoffRootOperandIsNotLive(t *testing.T) {
 	root, _ := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())

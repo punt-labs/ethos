@@ -240,6 +240,11 @@ func stageInvocations(root string, files []string, check checkset.Check) []editC
 }
 
 func stageInvocationsAt(root string, files []string, check checkset.Check, snapshot bool) []editCheck {
+	unchanged := func(arg string) string { return arg }
+	return stageInvocationsRendered(root, files, check, snapshot, unchanged, unchanged)
+}
+
+func stageInvocationsRendered(root string, files []string, check checkset.Check, snapshot bool, pathWord, literalWord func(string) string) []editCheck {
 	var matched []string
 	for _, file := range files {
 		if (!snapshot || filepath.IsLocal(file)) && check.Matches(filepath.ToSlash(file)) {
@@ -294,18 +299,20 @@ func stageInvocationsAt(root string, files []string, check checkset.Check, snaps
 		for _, arg := range effective {
 			switch arg {
 			case "{files}":
-				argv = append(argv, group...)
+				for _, file := range group {
+					argv = append(argv, pathWord(file))
+				}
 			case "{package_dir}":
 				for _, pkg := range packages {
 					if snapshot {
 						pkg = filepath.Join(root, pkg)
 					}
-					argv = append(argv, pkg)
+					argv = append(argv, pathWord(pkg))
 				}
 			case "{root}":
-				argv = append(argv, root)
+				argv = append(argv, pathWord(root))
 			default:
-				argv = append(argv, arg)
+				argv = append(argv, literalWord(arg))
 			}
 		}
 		invocations = append(invocations, editCheck{name: check.Name, argv: argv, cwd: cwd, timeout: check.Duration(), onFail: check.OnFail, failOnOutput: check.FailOnOutput, policy: &check})

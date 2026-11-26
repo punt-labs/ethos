@@ -380,16 +380,22 @@ func handoffManualCommand(root string, files []string, check checkset.Check) str
 		}
 		return audit.ShellQuote(s)
 	}
+	literalWord := func(arg string) string {
+		if check.Snapshot != nil || !strings.Contains(arg, "{root}") {
+			return word(arg)
+		}
+		parts := strings.Split(arg, "{root}")
+		for i, part := range parts {
+			parts[i] = audit.ShellQuote(part)
+		}
+		return strings.Join(parts, word(root))
+	}
 	var commands []string
-	for _, invocation := range stageInvocationsAt(planRoot, files, check, true) {
+	for _, invocation := range stageInvocationsRendered(planRoot, files, check, true, word, literalWord) {
 		if len(invocation.argv) == 0 {
 			continue
 		}
-		argv := make([]string, len(invocation.argv))
-		for i, arg := range invocation.argv {
-			argv[i] = word(arg)
-		}
-		commands = append(commands, "(cd "+word(invocation.cwd)+" && "+strings.Join(argv, " ")+")")
+		commands = append(commands, "(cd "+word(invocation.cwd)+" && "+strings.Join(invocation.argv, " ")+")")
 	}
 	return strings.Join(commands, " && ")
 }
