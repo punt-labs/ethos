@@ -57,6 +57,7 @@ type handoffSandboxWorktree struct {
 	Loopback        bool
 	GitDir          string
 	RuntimeDir      string
+	CacheDir        string
 	Prehydrate      []string
 }
 
@@ -204,10 +205,20 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		}
 		cwd = worktreeSandboxPath(checkout, cwd)
 		env = append(env, "ETHOS_HANDOFF_CHECKOUT_NAME="+filepath.Base(checkout))
+		if worktree.cacheDir != "" {
+			for _, mount := range worktree.system.Mounts {
+				if pathsOverlap(mount.Target, handoffBuildCacheMount) {
+					return "", errors.New("system input overlaps the private build cache")
+				}
+			}
+			env = append(slices.DeleteFunc(env, func(entry string) bool {
+				return strings.HasPrefix(entry, "GOCACHE=")
+			}), "GOCACHE="+handoffBuildCacheMount)
+		}
 		plan.Worktree = &handoffSandboxWorktree{
 			Environment: env, CheckoutScratch: profile.Scratch.Checkout, ScratchFiles: profile.Scratch.Files,
 			ScratchSeed: profile.Scratch.Seed, System: worktree.system,
-			Loopback: profile.Network == "loopback", GitDir: worktree.gitDir, RuntimeDir: worktree.runtimeDir,
+			Loopback: profile.Network == "loopback", GitDir: worktree.gitDir, RuntimeDir: worktree.runtimeDir, CacheDir: worktree.cacheDir,
 		}
 		if len(profile.Scratch.Files) != 0 {
 			// Keep the overlay backing outside the root exposed by pivot_root.
@@ -579,6 +590,19 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 		phase = "mount private worktree scratch"
 		if err := prepareHandoffWorktreeScratch(root); err != nil {
 			return err
+		}
+		if plan.Worktree.CacheDir != "" {
+			phase = "mount private build cache"
+			target := filepath.Join(root, handoffBuildCacheMount)
+			if err := os.Mkdir(target, 0o700); err != nil {
+				return err
+			}
+			if err := unix.Mount(plan.Worktree.CacheDir, target, "", unix.MS_BIND, ""); err != nil {
+				return err
+			}
+			if err := unix.Mount("", target, "", unix.MS_REMOUNT|unix.MS_BIND|unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
+				return err
+			}
 		}
 		targets, err := handoffScratchTargets(checkout, slices.Concat(plan.Worktree.CheckoutScratch, plan.Worktree.ScratchFiles))
 		if err != nil {

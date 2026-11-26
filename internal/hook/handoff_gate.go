@@ -52,8 +52,21 @@ type gateResult struct {
 	Key     string
 	Proof   string
 	Failure string
-	Pending bool `json:",omitempty"`
+	Pending bool   `json:",omitempty"`
+	CacheID string `json:",omitempty"`
 }
+
+type snapshotBuildCache interface {
+	close()
+	keyGeneration() uint64
+	currentID() string
+	touch()
+	privateDir() string
+	prepare(context.Context, string) error
+	publish(context.Context, string) error
+}
+
+var errHandoffBuildCacheFull = errors.New("handoff build cache budget exhausted")
 
 type handoffSystemPlan struct {
 	Mounts      []handoffSystemMount
@@ -67,6 +80,7 @@ type handoffWorktreePlan struct {
 	system     handoffSystemPlan
 	gitDir     string
 	runtimeDir string
+	cacheDir   string
 }
 
 type handoffSystemMount struct {
@@ -270,6 +284,44 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		}
 		return verifyData()
 	}
+	var buildCache snapshotBuildCache
+	cacheWaited := false
+	if check.WorktreeSnapshot != nil && len(check.WorktreeSnapshot.Cache) != 0 {
+		cacheKey := func(c snapshotBuildCache) string {
+			sum := sha256.Sum256(fmt.Appendf(nil, "%s:%s:g%d", key, store, c.keyGeneration()))
+			return hex.EncodeToString(sum[:])
+		}
+		reader, waited, err := openHandoffBuildCache(ctx, loc, bundle.platform.SHA256, system.Fingerprint, false)
+		if err != nil {
+			return deferGate("cannot open the snapshot build cache")
+		}
+		readKey := cacheKey(reader)
+		_, readSlot := handoffGatePaths(cache, readKey)
+		saved, hit := readGateResult(readSlot)
+		if hit && reusableHandoffResult(saved, readKey, proof, reader) {
+			defer reader.close()
+			reason := ""
+			if waited {
+				reason = verifyCurrent("while waiting")
+			} else {
+				reason = verifyData()
+			}
+			if reason != "" {
+				return deferGate(reason)
+			}
+			reader.touch()
+			diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "reused", time.Since(start))
+			return feedback(saved.Failure)
+		}
+		reader.close()
+		buildCache, cacheWaited, err = openHandoffBuildCache(ctx, loc, bundle.platform.SHA256, system.Fingerprint, true)
+		if err != nil {
+			return deferGate("cannot acquire the snapshot build cache writer")
+		}
+		defer buildCache.close()
+		cacheWaited = cacheWaited || waited
+		key = cacheKey(buildCache)
+	}
 	lockPath, slot := handoffGatePaths(cache, key)
 	if err := layout.EnsureLocalDir(loc, filepath.Dir(slot)); err != nil {
 		return deferGate("cannot open the handoff result directory")
@@ -279,6 +331,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		return deferGate("cannot register for the handoff lease")
 	}
 	defer pin.Close()
+	waited = waited || cacheWaited
 	var result StageFeedback
 	for ctx.Err() == nil {
 		busy, err := audit.TryLock(lockPath, func() error {
@@ -301,12 +354,15 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 			}
 			// Holding the exclusive lease proves no prior owner still holds
 			// it. An orphaned pending record is neither a pass nor a failure.
-			if saved, ok := readGateResult(slot); ok && saved.Key == key && saved.Proof == proof && !saved.Pending {
+			if saved, ok := readGateResult(slot); ok && reusableHandoffResult(saved, key, proof, buildCache) {
 				if !waited {
 					if reason := verifyData(); reason != "" {
 						result = deferGate(reason)
 						return nil
 					}
+				}
+				if buildCache != nil {
+					buildCache.touch()
 				}
 				diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "reused", time.Since(start))
 				result = feedback(saved.Failure)
@@ -363,6 +419,33 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 					return nil
 				}
 			}
+			cacheID := ""
+			if buildCache != nil {
+				attachStart := time.Now()
+				prepared.cacheDir = buildCache.privateDir()
+				if err := removeSnapshotScratch(prepared.cacheDir); err != nil {
+					result = deferGate("cannot clean up the previous private build cache")
+					return nil
+				}
+				if err := os.Mkdir(prepared.cacheDir, 0o700); err != nil {
+					result = deferGate("cannot create the private build cache")
+					return nil
+				}
+				defer func() {
+					if err := removeSnapshotScratch(prepared.cacheDir); err != nil {
+						diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "build_cache_cleanup_failed", 0)
+					}
+				}()
+				if err := buildCache.prepare(ctx, prepared.cacheDir); errors.Is(err, errHandoffBuildCacheFull) {
+					diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "build_cache_budget_exhausted", time.Since(attachStart))
+				} else if err != nil {
+					result = deferGate("cannot prepare the private build cache")
+					return nil
+				} else {
+					cacheID = buildCache.currentID()
+					diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "build_cache_attached", time.Since(attachStart))
+				}
+			}
 			if err := writeGateResult(loc, slot, gateResult{Key: key, Proof: proof, Pending: true}); err != nil {
 				result = deferGate("cannot publish the handoff lease intent")
 				return nil
@@ -405,7 +488,27 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 				return nil
 			}
 			failure := editRedact(strings.Join(failures, "\n\n"))
-			if err := writeGateResult(loc, slot, gateResult{Key: key, Proof: proof, Failure: failure}); err != nil {
+			if buildCache != nil && cacheID == "" {
+				result = feedback(failure)
+				return nil
+			}
+			if buildCache != nil && failure == "" {
+				publishStart := time.Now()
+				outcome := "build_cache_promoted"
+				if err := buildCache.publish(ctx, prepared.cacheDir); err != nil {
+					outcome = "build_cache_publish_skipped"
+				}
+				diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, outcome, time.Since(publishStart))
+			}
+			if ctx.Err() != nil {
+				result = deferGate("snapshot check was interrupted")
+				return nil
+			}
+			if buildCache != nil && buildCache.currentID() != cacheID {
+				result = feedback(failure)
+				return nil
+			}
+			if err := writeGateResult(loc, slot, gateResult{Key: key, Proof: proof, Failure: failure, CacheID: cacheID}); err != nil {
 				diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "cache_write_failed", time.Since(start))
 			} else {
 				terminal = true
@@ -431,6 +534,16 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	return deferGate("interrupted while waiting for the handoff lease")
 }
 
+func reusableHandoffResult(saved gateResult, key, proof string, cache snapshotBuildCache) bool {
+	if saved.Pending || saved.Key != key || saved.Proof != proof {
+		return false
+	}
+	if cache == nil {
+		return saved.CacheID == ""
+	}
+	return saved.CacheID != "" && cache.currentID() == saved.CacheID
+}
+
 func removeSnapshotScratch(scratch string) error {
 	if err := filepath.WalkDir(scratch, func(path string, entry os.DirEntry, err error) error {
 		if errors.Is(err, os.ErrNotExist) {
@@ -454,10 +567,9 @@ func removeSnapshotScratch(scratch string) error {
 }
 
 func unsupportedWorktreeField(profile *checkset.WorktreeSnapshot) string {
-	if len(profile.Cache) != 0 {
-		return "cache"
-	}
 	switch {
+	case runtime.GOOS != "linux" && len(profile.Cache) != 0:
+		return "cache"
 	case runtime.GOOS != "linux" && len(profile.Scratch.Files) != 0:
 		return "scratch.files"
 	default:

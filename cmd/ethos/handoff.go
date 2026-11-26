@@ -70,6 +70,18 @@ func init() {
 		},
 	}
 	refresh.Flags().StringVar(&dataAgent, "agent", "", "Select the handoff policy for this agent instead of the project default")
-	handoff.AddCommand(fetch, refresh)
+	cache := &cobra.Command{Use: "cache", Short: "Manage the repository's snapshot build caches"}
+	cache.AddCommand(&cobra.Command{
+		Use:   "clear",
+		Short: "Clear the repository's snapshot build caches and invalidate their verdicts",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if _, err := requireCheckout(cmd.ErrOrStderr(), "handoff cache clear"); err != nil {
+				return err
+			}
+			return hook.ClearHandoffBuildCache(cmd.Context(), currentRoots().Located)
+		},
+	})
+	handoff.AddCommand(fetch, refresh, cache)
 	rootCmd.AddCommand(handoff)
 }

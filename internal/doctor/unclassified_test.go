@@ -57,6 +57,18 @@ func TestCheckUnclassifiedFiles_HandoffDataSnapshotIsClassified(t *testing.T) {
 	assert.Equal(t, "PASS", r.Status, r.Detail)
 }
 
+func TestCheckUnclassifiedFiles_HandoffBuildCacheIsClassified(t *testing.T) {
+	root := repoTemp(t)
+	digest := strings.Repeat("a", 64)
+	touch(t, root, ".punt-labs/local/ethos/handoff-cache/"+digest+"/g1/gocache/a0/example-a")
+	touch(t, root, ".punt-labs/local/ethos/handoff-cache/"+digest+"/g1/id")
+	touch(t, root, ".punt-labs/local/ethos/handoff-cache-state/"+digest+".json")
+	touch(t, root, ".punt-labs/local/ethos/handoff-cache-state/"+digest+".lock")
+	touch(t, root, ".punt-labs/local/ethos/handoff-cache-state/budget.lock")
+	r := CheckUnclassifiedFiles(root)
+	assert.Equal(t, "PASS", r.Status, r.Detail)
+}
+
 // TestCheckUnclassifiedFiles_CheckSetsPass: a project check set is a file
 // `ethos checks` reads and `ethos vendor` writes, so a repository that
 // defines one is not warned about it.

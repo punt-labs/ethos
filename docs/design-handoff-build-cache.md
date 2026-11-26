@@ -1,7 +1,7 @@
 # DES-086 amendment: opt-in snapshot build cache
 
-**Status:** Proposed for operator review. This does not authorize a
-runner change. Until approved, snapshots still use a cold build cache.
+**Status:** Approved by the operator in PR #706 and implemented for
+Linux worktree snapshots by this branch. Gates remain cold by default.
 
 ## Scope and key
 
@@ -14,14 +14,14 @@ cache:
     env: GOCACHE
 ```
 
-Omitting `cache` keeps the existing behavior. This proposal supports
+Omitting `cache` keeps the existing behavior. The Linux runner supports
 only the pair above, once, with a pinned runtime for the current
 platform. It does not share writable module, npm, or other caches. The
 resolved declaration belongs in the handoff result key alongside the
 runtime pin and existing snapshot proofs. A cache hit does not replace
 a gate run on a result-cache miss.
 
-In the proposed runner, resolve the canonical shared repository store
+The runner resolves the canonical shared repository store
 root `S` as specified in [Storage layout](storage-layout.md).
 Keep cache artifacts and their lock and generation state under
 `S/.punt-labs/local/ethos/handoff-cache/<runtime-digest>/`. A cache
@@ -55,9 +55,10 @@ this feature. For suspected corruption, compare against a cold run;
 `GODEBUG=gocacheverify=1` is an additional Go diagnostic, not a guarantee.
 
 Add `ethos handoff cache clear` to clear the invoking repository's
-build-cache namespaces under their writer locks. Bound the size and
-entry count per namespace. Count every generation directory on disk,
-including retired generations whose cleanup failed, against the
+build-cache namespaces under their writer locks. The repository budget
+is 10 GiB and four runtime-digest namespaces, with at most 100,000
+filesystem entries per published artifact tree. Count every generation
+directory on disk, including retired generations whose cleanup failed, against the
 repository's disk budget. Evict least-recently-used inactive namespaces
 within that repository; skip active locks. There is no cross-repository
 inventory or machine-wide budget: total usage depends on the budgets
@@ -76,9 +77,9 @@ publication, leave that namespace's persisted cache unchanged, and log
 the skip. The completed gate's verdict still stands.
 
 Clearing or evicting a namespace must invalidate verdicts that could have
-used it. Store a generation for each namespace outside the removable
-cache tree, alongside a stable namespace lock that also survives
-deletion. Keep artifacts at
+used it. Store a generation for each namespace in the sibling
+`handoff-cache-state/` directory alongside a stable namespace lock
+that also survives deletion. Keep artifacts at
 `S/.punt-labs/local/ethos/handoff-cache/<runtime-digest>/g<N>/<name>`,
 and seed the private copy only from the current generation's directory.
 A missing directory means a cold cache. Under the lock, both
@@ -111,8 +112,6 @@ the namespace lock and recreate it empty with a fresh random ID.
 Persist the replacement ID before mounting a private copy. If reset
 cannot complete, do not mount those artifacts. A cache without a valid
 ID is never reused.
-The prototype tests private copies and pass-only write-back; the clear
-command, eviction, and generation tracking are proposed, not implemented.
 
 ## Measurements
 
