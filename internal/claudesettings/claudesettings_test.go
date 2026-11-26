@@ -217,3 +217,92 @@ func TestARetryConfirmsAFailedDirectorySync(t *testing.T) {
 		t.Errorf("retry made %d directory syncs in total, want 2", calls)
 	}
 }
+
+func TestRegisterWithEnvCreatesPreservesAndRoundTrips(t *testing.T) {
+	envDefaults := map[string]string{"GIT_OPTIONAL_LOCKS": "0"}
+	t.Run("creates file with permissions and env", func(t *testing.T) {
+		root := t.TempDir()
+		addedRules, addedEnv, err := RegisterWithEnv(root, rules, envDefaults, policy(t, root))
+		if err != nil {
+			t.Fatalf("RegisterWithEnv: %v", err)
+		}
+		if !slices.Equal(addedRules, append(rules["allow"], rules["ask"]...)) {
+			t.Errorf("addedRules = %v", addedRules)
+		}
+		if !slices.Equal(addedEnv, []string{"GIT_OPTIONAL_LOCKS=0"}) {
+			t.Errorf("addedEnv = %v", addedEnv)
+		}
+		want := "{\n  \"permissions\": {\n    \"allow\": [\n      \"Bash(t:*)\",\n      \"mcp__t__*\"\n    ],\n    \"ask\": [\n      \"Bash(t admin:*)\"\n    ]\n  },\n  \"env\": {\n    \"GIT_OPTIONAL_LOCKS\": \"0\"\n  }\n}\n"
+		if got := readString(t, settingsPath(root)); got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+		// Idempotent second call.
+		addedRules, addedEnv, err = RegisterWithEnv(root, rules, envDefaults, policy(t, root))
+		if err != nil || len(addedRules) != 0 || len(addedEnv) != 0 {
+			t.Fatalf("second RegisterWithEnv = %v, %v, %v", addedRules, addedEnv, err)
+		}
+		// Deregister drops env when empty.
+		_, removedEnv, err := DeregisterWithEnv(root, rules, envDefaults, policy(t, root))
+		if err != nil || !slices.Equal(removedEnv, []string{"GIT_OPTIONAL_LOCKS=0"}) {
+			t.Fatalf("DeregisterWithEnv = %v, %v", removedEnv, err)
+		}
+		wantAfter := "{\n  \"permissions\": {\n    \"allow\": [],\n    \"ask\": []\n  }\n}\n"
+		if got := readString(t, settingsPath(root)); got != wantAfter {
+			t.Errorf("after deregister got %q, want %q", got, wantAfter)
+		}
+	})
+	t.Run("preserves other env keys and user override", func(t *testing.T) {
+		root := t.TempDir()
+		path := writeSettings(t, root, `{"env":{"FOO":"bar","GIT_OPTIONAL_LOCKS":"1"}}`)
+		_, addedEnv, err := RegisterWithEnv(root, rules, envDefaults, policy(t, root))
+		if err != nil {
+			t.Fatalf("RegisterWithEnv: %v", err)
+		}
+		if len(addedEnv) != 0 {
+			t.Errorf("override should not be overwritten: addedEnv = %v", addedEnv)
+		}
+		want := "{\n  \"env\": {\n    \"FOO\": \"bar\",\n    \"GIT_OPTIONAL_LOCKS\": \"1\"\n  },\n  \"permissions\": {\n    \"allow\": [\n      \"Bash(t:*)\",\n      \"mcp__t__*\"\n    ],\n    \"ask\": [\n      \"Bash(t admin:*)\"\n    ]\n  }\n}\n"
+		if got := readString(t, path); got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+		_, removedEnv, err := DeregisterWithEnv(root, rules, envDefaults, policy(t, root))
+		if err != nil || len(removedEnv) != 0 {
+			t.Fatalf("DeregisterWithEnv must not remove user override: %v, %v", removedEnv, err)
+		}
+	})
+	t.Run("deregister keeps other env keys", func(t *testing.T) {
+		root := t.TempDir()
+		path := writeSettings(t, root, `{"env":{"FOO":"bar","GIT_OPTIONAL_LOCKS":"0"}}`)
+		_, removedEnv, err := DeregisterWithEnv(root, nil, envDefaults, policy(t, root))
+		if err != nil || !slices.Equal(removedEnv, []string{"GIT_OPTIONAL_LOCKS=0"}) {
+			t.Fatalf("DeregisterWithEnv = %v, %v", removedEnv, err)
+		}
+		want := "{\n  \"env\": {\n    \"FOO\": \"bar\"\n  }\n}\n"
+		if got := readString(t, path); got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+	t.Run("refuses malformed env", func(t *testing.T) {
+		for name, content := range map[string]string{
+			"env null":      `{"env":null}`,
+			"env array":     `{"env":[]}`,
+			"env value int": `{"env":{"GIT_OPTIONAL_LOCKS":0}}`,
+			"env value nul": `{"env":{"GIT_OPTIONAL_LOCKS":null}}`,
+			"env dup key":   `{"env":{"GIT_OPTIONAL_LOCKS":"0","GIT_OPTIONAL_LOCKS":"1"}}`,
+		} {
+			t.Run(name, func(t *testing.T) {
+				root := t.TempDir()
+				path := writeSettings(t, root, content)
+				if err := PreflightWithEnv(root, rules, envDefaults); !errors.Is(err, ErrRefused) {
+					t.Fatalf("PreflightWithEnv err = %v, want ErrRefused", err)
+				}
+				if _, _, err := RegisterWithEnv(root, rules, envDefaults, policy(t, root)); !errors.Is(err, ErrRefused) {
+					t.Fatalf("RegisterWithEnv err = %v, want ErrRefused", err)
+				}
+				if readString(t, path) != content {
+					t.Error("refused file was changed")
+				}
+			})
+		}
+	})
+}

@@ -230,3 +230,66 @@ func TestDisableRemovesCurrentAndRetiredRulesInOneSet(t *testing.T) {
 		}
 	}
 }
+
+func envMap(t *testing.T, path string) map[string]string {
+	t.Helper()
+	var doc struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal([]byte(readFile(t, path)), &doc); err != nil {
+		t.Fatal(err)
+	}
+	return doc.Env
+}
+
+func TestEnableDisableRoundTripsGitOptionalLocksEnv(t *testing.T) {
+	dir := gitRepo(t)
+	settings := filepath.Join(dir, ".claude", "settings.json")
+	enabled, err := Enable(dir)
+	if err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	if !slices.ContainsFunc(enabled.Steps, func(s StepResult) bool {
+		return s.Step == "env" && s.Status == "done" && strings.Contains(s.Detail, "GIT_OPTIONAL_LOCKS=0")
+	}) {
+		t.Errorf("enable report missing env step: %+v", enabled.Steps)
+	}
+	if got := envMap(t, settings)["GIT_OPTIONAL_LOCKS"]; got != "0" {
+		t.Errorf("after enable env.GIT_OPTIONAL_LOCKS = %q, want %q", got, "0")
+	}
+	disabled, err := Disable(dir, false)
+	if err != nil {
+		t.Fatalf("Disable: %v", err)
+	}
+	if !slices.ContainsFunc(disabled.Steps, func(s StepResult) bool {
+		return s.Step == "env" && s.Status == "done" && strings.Contains(s.Detail, "GIT_OPTIONAL_LOCKS=0")
+	}) {
+		t.Errorf("disable report missing env step: %+v", disabled.Steps)
+	}
+	if got := envMap(t, settings); len(got) != 0 {
+		t.Errorf("after disable env = %v, want empty", got)
+	}
+}
+
+func TestEnablePreservesUserGitOptionalLocksOverride(t *testing.T) {
+	dir := gitRepo(t)
+	settings := filepath.Join(dir, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settings, []byte(`{"env":{"GIT_OPTIONAL_LOCKS":"1"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Enable(dir); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	if got := envMap(t, settings)["GIT_OPTIONAL_LOCKS"]; got != "1" {
+		t.Errorf("after enable env.GIT_OPTIONAL_LOCKS = %q, want user override %q", got, "1")
+	}
+	if _, err := Disable(dir, false); err != nil {
+		t.Fatalf("Disable: %v", err)
+	}
+	if got := envMap(t, settings)["GIT_OPTIONAL_LOCKS"]; got != "1" {
+		t.Errorf("after disable env.GIT_OPTIONAL_LOCKS = %q, want user override %q", got, "1")
+	}
+}
