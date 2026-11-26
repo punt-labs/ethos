@@ -1,7 +1,9 @@
 package hook
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -833,9 +835,14 @@ func TestHandoffWorktreeSystemRunsCgoRace(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	goPath := filepath.Join(goroot, "bin")
 	var runtimeProfile, goDir, goTool string
-	if filepath.IsAbs(os.Getenv("ETHOS_HANDOFF_RUNTIME")) && insideGatePath(os.Getenv("ETHOS_HANDOFF_RUNTIME"), goroot) {
-		goPath, runtimeProfile = pinNestedCgoToolchain(t, goroot)
-	} else {
+	if runtimeRoot := os.Getenv("ETHOS_HANDOFF_RUNTIME"); filepath.IsAbs(runtimeRoot) {
+		physical, err := filepath.EvalSymlinks(goroot)
+		require.NoError(t, err)
+		if insideGatePath(runtimeRoot, physical) {
+			goPath, runtimeProfile = "{runtime}/bin", pinNestedCgoToolchain(t, physical)
+		}
+	}
+	if runtimeProfile == "" {
 		allowHandoffSystemFixtureRoot(t, goroot)
 		goDir, goTool = fmt.Sprintf("%q, ", goroot), "go, "
 	}
@@ -878,26 +885,24 @@ exec go test -race .
 	require.NoFileExists(t, marker)
 }
 
-func pinNestedCgoToolchain(t *testing.T, goroot string) (string, string) {
+func pinNestedCgoToolchain(t *testing.T, goroot string) string {
 	t.Helper()
 	machineRoot, err := layout.MachineRoot()
 	require.NoError(t, err)
 	store := filepath.Join(machineRoot, "runtimes")
 	require.NoError(t, os.MkdirAll(store, 0o700))
 	archive := filepath.Join(store, "toolchain.tar.gz")
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "tar", "-czf", archive, "-C", filepath.Dir(goroot), filepath.Base(goroot)).CombinedOutput()
-	require.NoError(t, err, "%s", out)
-	file, err := os.Open(archive)
+	file, err := os.Create(archive)
 	require.NoError(t, err)
 	digest := sha256.New()
-	_, err = io.Copy(digest, file)
-	require.NoError(t, errors.Join(err, file.Close()))
+	compressed, err := gzip.NewWriterLevel(io.MultiWriter(file, digest), gzip.BestSpeed)
+	require.NoError(t, err)
+	bundle := tar.NewWriter(compressed)
+	err = errors.Join(bundle.AddFS(os.DirFS(goroot)), bundle.Close(), compressed.Close(), file.Close())
+	require.NoError(t, err)
 	sum := fmt.Sprintf("%x", digest.Sum(nil))
 	require.NoError(t, os.Rename(archive, filepath.Join(store, sum+".tar.gz")))
-	return "{runtime}/" + filepath.Base(goroot) + "/bin",
-		fmt.Sprintf("    runtime: {platforms: {%s-%s: {bundle: cgo-toolchain.tar.gz, sha256: %q}}}\n", runtime.GOOS, runtime.GOARCH, sum)
+	return fmt.Sprintf("    runtime: {platforms: {%s-%s: {bundle: cgo-toolchain.tar.gz, sha256: %q}}}\n", runtime.GOOS, runtime.GOARCH, sum)
 }
 
 func TestHandoffWorktreeDeferralMapsLiteralCheckoutPath(t *testing.T) {
