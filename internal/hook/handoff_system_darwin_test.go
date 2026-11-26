@@ -29,7 +29,7 @@ func TestDarwinHandoffSystemPathAllowlist(t *testing.T) {
 		"/Users/example/.ssh/id_ed25519", "/System/Volumes/Data/Users/example/.ssh/id_ed25519",
 		"/usrx/bin/tool", "/usr/local/bin/tool", "/usr", "/opt/homebrew-evil/bin/tool",
 		"/Applications/Xcode.app.backup/Contents/Developer", "/Applications/Other.app/Contents/Developer",
-		"/Applications/support/Xcode.app/Contents/Developer", "/opt/homebrew/Cellar",
+		"/Applications/Tools/Xcode.app/Contents/Developer", "/opt/homebrew/Cellar",
 		"/opt/homebrew/Cellar/checkout/key", "/opt/homebrew/Cellar/CHECKOUT/key",
 	} {
 		t.Run(path, func(t *testing.T) {
@@ -343,8 +343,9 @@ func TestDarwinHandoffWorktreeAllowsTrustedXcodeContents(t *testing.T) {
 	}
 	plan, err := prepareHandoffSystem(ctx, checkout, profile)
 	developer, linkErr := os.Readlink(darwinDeveloperSelector)
-	if linkErr != nil || darwinTrustedToolchain(developer) == "" {
+	if linkErr != nil || !safeDarwinSystemPath(developer, checkout) || darwinTrustedToolchain(developer) != developer {
 		require.ErrorIs(t, err, errHandoffXcodeUntrusted)
+		require.False(t, hasDarwinDeveloperSelector(plan))
 		return
 	}
 	require.NoError(t, err)
