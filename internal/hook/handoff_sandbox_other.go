@@ -33,6 +33,6 @@ func prepareHandoffSystem(context.Context, string, *checkset.WorktreeSnapshot) (
 	return handoffSystemPlan{}, nil
 }
 
-func executeHandoffSnapshot(_ context.Context, _, _, _ string, _ []string, _ editCheck, _ ...handoffSystemPlan) (string, error) {
+func executeHandoffSnapshot(_ context.Context, _, _, _ string, _ []string, _ editCheck, _ ...handoffWorktreePlan) (string, error) {
 	return "", errors.New("snapshot isolation unavailable on this host")
 }

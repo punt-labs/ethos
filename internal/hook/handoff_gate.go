@@ -47,6 +47,11 @@ type handoffSystemPlan struct {
 	Fingerprint string
 }
 
+type handoffWorktreePlan struct {
+	system handoffSystemPlan
+	gitDir string
+}
+
 type handoffSystemMount struct {
 	Source, Target string
 	Directory      bool
@@ -156,6 +161,10 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	if err != nil {
 		return deferGate(err.Error())
 	}
+	gitView, err := captureHandoffGit(ctx, root, check.WorktreeSnapshot)
+	if err != nil {
+		return deferGate(err.Error())
+	}
 	h := sha256.New()
 	enc := json.NewEncoder(h)
 	if err := enc.Encode([]string{"handoff-v1", root, identity, state, proof}); err != nil {
@@ -170,6 +179,11 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	if system.Fingerprint != "" {
 		if err := enc.Encode(system.Fingerprint); err != nil {
 			return deferGate("cannot encode the handoff system inputs")
+		}
+	}
+	if gitView.fingerprint != "" {
+		if err := enc.Encode(gitView.fingerprint); err != nil {
+			return deferGate("cannot encode the handoff Git view")
 		}
 	}
 	for _, invocation := range plan {
@@ -188,6 +202,10 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		currentSystem, err := prepareHandoffSystem(ctx, root, check.WorktreeSnapshot)
 		if err != nil || currentSystem.Fingerprint != system.Fingerprint {
 			return "system inputs changed " + when
+		}
+		currentGit, err := captureHandoffGit(ctx, root, check.WorktreeSnapshot)
+		if err != nil || currentGit.fingerprint != gitView.fingerprint {
+			return "Git view changed " + when
 		}
 		currentPolicy, _, err := configuredStageChecks(root, agent, "handoff")
 		if err != nil || !reflect.DeepEqual(policy, currentPolicy) {
@@ -242,6 +260,14 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 				return nil
 			}
 			defer func() { _ = os.RemoveAll(scratch) }()
+			prepared := handoffWorktreePlan{system: system}
+			if gitView.fingerprint != "" {
+				prepared.gitDir = filepath.Join(scratch, "git-view")
+				if err := gitView.materialize(ctx, root, prepared.gitDir); err != nil {
+					result = deferGate("cannot materialize the Git view within the snapshot budget")
+					return nil
+				}
+			}
 			if err := writeGateResult(loc, slot, gateResult{Key: key, Proof: proof, Pending: true}); err != nil {
 				result = deferGate("cannot publish the handoff lease intent")
 				return nil
@@ -262,7 +288,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 						return nil
 					}
 				}
-				failure, err := executeHandoffSnapshot(ctx, checkScratch, root, proof, check.Snapshot.Inputs, invocation, system)
+				failure, err := executeHandoffSnapshot(ctx, checkScratch, root, proof, check.Snapshot.Inputs, invocation, prepared)
 				if err != nil {
 					result = deferGate(err.Error())
 					return nil
@@ -316,8 +342,6 @@ func unsupportedWorktreeField(profile *checkset.WorktreeSnapshot) string {
 		return "scratch.files"
 	case profile.Prehydrate != nil:
 		return "prehydrate"
-	case profile.Git != nil:
-		return "git"
 	case len(profile.Data) != 0:
 		return "data"
 	default:
