@@ -552,20 +552,18 @@ func runDarwinHandoffCheck(ctx context.Context, profile, checkout, cwd string, e
 	if readyErr != nil || ready[0] != 'R' {
 		return "", fmt.Errorf("sandbox launch did not complete: %v: %s", err, stderr.data)
 	}
-	return darwinHandoffCommandVerdict(err, check, stdout, stderr, true)
+	return darwinHandoffCommandVerdict(err, check, stdout, stderr)
 }
 
-func darwinHandoffCommandVerdict(err error, check editCheck, stdout, stderr editTail, snapshot bool) (string, error) {
+func darwinHandoffCommandVerdict(err error, check editCheck, stdout, stderr editTail) (string, error) {
 	if err != nil {
 		var exit *exec.ExitError
-		if !errors.As(err, &exit) || exit.ExitCode() < 0 {
-			return "", errors.New("snapshot check did not complete")
+		if !errors.As(err, &exit) {
+			return "", errors.New("check did not complete")
 		}
-		if snapshot {
-			switch code := exit.ExitCode(); code {
-			case 128 + int(unix.SIGHUP), 128 + int(unix.SIGINT), 128 + int(unix.SIGKILL), 128 + int(unix.SIGTERM):
-				return "", fmt.Errorf("check exited %d (likely killed or interrupted); not cached", code)
-			}
+		switch code := exit.ExitCode(); code {
+		case -1, 128 + int(unix.SIGHUP), 128 + int(unix.SIGINT), 128 + int(unix.SIGKILL), 128 + int(unix.SIGTERM):
+			return "", fmt.Errorf("check killed or interrupted (%v); not cached", err)
 		}
 	}
 	if err == nil && (!check.failOnOutput || len(stdout.data) == 0) {

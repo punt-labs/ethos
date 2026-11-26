@@ -79,5 +79,5 @@ func executeHandoffLive(ctx context.Context, _, root string, inputs []string, ch
 	if ctx.Err() != nil {
 		return "", errors.New("live-verified check timed out or was interrupted")
 	}
-	return darwinHandoffCommandVerdict(err, check, stdout, stderr, false)
+	return darwinHandoffCommandVerdict(err, check, stdout, stderr)
 }
