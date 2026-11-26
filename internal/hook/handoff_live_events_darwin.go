@@ -411,7 +411,12 @@ func armHandoffLive(ctx context.Context, root string, inputs []string) (handoffL
 		events.close()
 		return nil, err
 	}
-	vnodes, err := armDarwinLiveVnodes(ctx, root, git, inputs, 4096)
+	ignoredDirs, err := darwinLiveIgnoredDirs(ctx, root)
+	if err != nil {
+		events.close()
+		return nil, err
+	}
+	vnodes, err := armDarwinLiveVnodes(ctx, root, git, inputs, 4096, ignoredDirs...)
 	if err != nil {
 		events.close()
 		return nil, err

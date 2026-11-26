@@ -85,7 +85,10 @@ it as a terminal result. The verdict log uses
    up to and including the checkout root, and on the containing
    directories of Git metadata. Include existing
    directories where a newly created file could enter the keyed set,
-   even if they contain no keyed files yet.
+   even if they contain no keyed files yet. Git-ignored directory
+   subtrees and Ethos local state are not walked; a keyed path still
+   adds its ancestors even when they are Git-ignored. Git metadata is
+   walked separately.
    On every watched file and directory, register `NOTE_WRITE`,
    `NOTE_EXTEND`, `NOTE_LINK`, `NOTE_RENAME`, `NOTE_DELETE`,
    `NOTE_REVOKE`, and `NOTE_ATTRIB`. Each registered note vetoes

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"golang.org/x/sys/unix"
 )
@@ -25,7 +26,7 @@ type darwinLiveVnodes struct {
 	nodes map[int]darwinLiveVnode
 }
 
-func armDarwinLiveVnodes(ctx context.Context, root string, git darwinLiveGit, inputs []string, budget int) (*darwinLiveVnodes, error) {
+func armDarwinLiveVnodes(ctx context.Context, root string, git darwinLiveGit, inputs []string, budget int, ignoredDirs ...string) (*darwinLiveVnodes, error) {
 	var limit unix.Rlimit
 	if err := unix.Getrlimit(unix.RLIMIT_NOFILE, &limit); err != nil {
 		return nil, fmt.Errorf("live-verified cannot determine vnode fd limit: %w", err)
@@ -43,7 +44,7 @@ func armDarwinLiveVnodes(ctx context.Context, root string, git darwinLiveGit, in
 		return nil, fmt.Errorf("live-verified vnode fd budget exceeded before watching %q", root)
 	}
 	budget = int(min(limit.Cur-uint64(len(open)+reserve), uint64(max(0, budget))))
-	paths, err := darwinLiveVnodePaths(ctx, root, git, inputs, budget)
+	paths, err := darwinLiveVnodePaths(ctx, root, git, inputs, budget, ignoredDirs)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +63,23 @@ func armDarwinLiveVnodes(ctx context.Context, root string, git darwinLiveGit, in
 	return guard, nil
 }
 
-func darwinLiveVnodePaths(ctx context.Context, root string, git darwinLiveGit, inputs []string, budget int) ([]string, error) {
+func darwinLiveIgnoredDirs(ctx context.Context, root string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, gateInputTime)
+	defer cancel()
+	ignored, err := handoffGitOutput(ctx, root, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory")
+	if err != nil {
+		return nil, fmt.Errorf("live-verified cannot list ignored directories: %w", err)
+	}
+	var dirs []string
+	for _, path := range strings.Split(string(ignored), "\x00") {
+		if dir, ok := strings.CutSuffix(path, "/"); ok {
+			dirs = append(dirs, dir)
+		}
+	}
+	return dirs, nil
+}
+
+func darwinLiveVnodePaths(ctx context.Context, root string, git darwinLiveGit, inputs []string, budget int, ignoredDirs []string) ([]string, error) {
 	paths := map[string]bool{}
 	add := func(path, boundary string) error {
 		if err := ctx.Err(); err != nil {
@@ -86,6 +103,28 @@ func darwinLiveVnodePaths(ctx context.Context, root string, git darwinLiveGit, i
 		if err := add(filepath.Join(root, input), root); err != nil {
 			return nil, err
 		}
+	}
+	skip := map[string]bool{".git": true, ".punt-labs/local": true, ".punt-labs/ethos/sessions": true}
+	for _, dir := range ignoredDirs {
+		skip[dir] = true
+	}
+	if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if skip[rel] {
+			return filepath.SkipDir
+		}
+		return add(path, root)
+	}); err != nil {
+		return nil, fmt.Errorf("live-verified cannot enumerate checkout directories: %w", err)
 	}
 	if err := add(filepath.Join(root, ".git"), root); err != nil {
 		return nil, err
