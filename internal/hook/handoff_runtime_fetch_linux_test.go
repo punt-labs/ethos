@@ -216,3 +216,22 @@ func TestHandoffRuntimeFetchOnlyPublishesCompleteVerifiedBytes(t *testing.T) {
 	require.ErrorContains(t, bundle.fetch(ctx, server.Client()), "could not fetch published runtime bundle")
 	require.NoFileExists(t, bundle.archive)
 }
+
+func TestHandoffRuntimeFetchRefusesLoopback(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "fixture runtime")
+	}))
+	defer server.Close()
+	client := handoffRuntimeHTTPClient()
+	transport, _ := client.Transport.(*http.Transport)
+	if transport == nil {
+		transport = http.DefaultTransport.(*http.Transport).Clone()
+		client.Transport = transport
+	}
+	transport.TLSClientConfig = server.Client().Transport.(*http.Transport).TLSClientConfig
+	bundle := newHandoffRuntime(t.TempDir(), checkset.SnapshotPlatform{
+		Bundle: "fixture", SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("fixture runtime"))), URL: server.URL,
+	}, "")
+	require.ErrorContains(t, bundle.fetch(context.Background(), client), "could not fetch published runtime bundle")
+	require.NoFileExists(t, bundle.archive)
+}

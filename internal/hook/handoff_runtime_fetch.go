@@ -7,10 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
+	"syscall"
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/attribute"
@@ -108,7 +111,13 @@ func handoffRuntimeBundles(loc resolve.Located, agent string) ([]handoffRuntime,
 }
 
 func handoffRuntimeHTTPClient() *http.Client {
+	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: checkHandoffRuntimeAddress}
+	transport := &http.Transport{
+		DialContext: dialer.DialContext, ForceAttemptHTTP2: true,
+		TLSHandshakeTimeout: 10 * time.Second, IdleConnTimeout: 90 * time.Second,
+	}
 	return &http.Client{
+		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 || req.URL.Scheme != "https" || req.URL.User != nil {
 				return errors.New("runtime asset redirect refused")
@@ -119,6 +128,24 @@ func handoffRuntimeHTTPClient() *http.Client {
 			return nil
 		},
 	}
+}
+
+var handoffCarrierNAT = netip.MustParsePrefix("100.64.0.0/10")
+
+func checkHandoffRuntimeAddress(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return err
+	}
+	ip = ip.Unmap()
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() || handoffCarrierNAT.Contains(ip) {
+		return errors.New("runtime asset address is not public")
+	}
+	return nil
 }
 
 func (b handoffRuntime) fetch(ctx context.Context, client *http.Client) error {
