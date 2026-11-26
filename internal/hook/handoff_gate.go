@@ -69,6 +69,7 @@ type handoffWorktreePlan struct {
 	system     handoffSystemPlan
 	gitDir     string
 	runtimeDir string
+	runtime    handoffRuntime
 }
 
 type handoffSystemMount struct {
@@ -356,8 +357,8 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 					cleanup()
 				}
 			}()
-			prepared := handoffWorktreePlan{system: system}
-			if bundle.archive != "" {
+			prepared := handoffWorktreePlan{system: system, runtime: bundle}
+			if bundle.archive != "" && runtime.GOOS != "darwin" {
 				prepared.runtimeDir = filepath.Join(scratch, "runtime-snapshot")
 				if err := bundle.extract(ctx, prepared.runtimeDir); err != nil {
 					result = deferGate(err.Error())
@@ -481,8 +482,6 @@ func removeSnapshotScratch(scratch string) error {
 
 func unsupportedWorktreeField(profile *checkset.WorktreeSnapshot) string {
 	switch {
-	case profile.Runtime != nil && runtime.GOOS == "darwin":
-		return "runtime"
 	case runtime.GOOS != "linux" && len(profile.Scratch.Seed) != 0:
 		return "scratch.seed"
 	case runtime.GOOS != "linux" && len(profile.Scratch.Files) != 0:

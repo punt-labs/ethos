@@ -383,10 +383,21 @@ func runDarwinHandoffPlan(ctx context.Context, checkout, proof string, inputs []
 	defer os.RemoveAll(run)
 	roots := handoffRoots{checkout: filepath.Join(run, "c"), runtime: filepath.Join(run, "r"), scratch: filepath.Join(run, "s"), temp: filepath.Join(run, "s")}
 	snapshot := roots.checkout
-	for _, name := range []string{"c", "r", "s", "s/home", "home", "gocache", "gomodcache"} {
+	for _, name := range []string{"c", "s", "s/home", "home", "gocache", "gomodcache"} {
 		if err := os.Mkdir(filepath.Join(run, name), 0o700); err != nil {
 			return "", err
 		}
+	}
+	var worktree handoffWorktreePlan
+	if len(prepared) != 0 {
+		worktree = prepared[0]
+	}
+	if worktree.runtime.archive != "" {
+		if err := worktree.runtime.extract(ctx, roots.runtime); err != nil {
+			return "", err
+		}
+	} else if err := os.Mkdir(roots.runtime, 0o700); err != nil {
+		return "", err
 	}
 	preserveMode := check.policy != nil && check.policy.WorktreeSnapshot != nil
 	if err := cloneDarwinGateInputs(ctx, checkout, snapshot, inputs, preserveMode); err != nil {
@@ -406,7 +417,11 @@ func runDarwinHandoffPlan(ctx context.Context, checkout, proof string, inputs []
 	}
 	var env, toolchain, checkoutScratch []string
 	if check.policy != nil && check.policy.WorktreeSnapshot != nil {
-		env, checkoutScratch, err = configureDarwinWorktree(roots, checkout, check.policy.WorktreeSnapshot)
+		profile := check.policy.WorktreeSnapshot
+		if profile.Runtime != nil && worktree.runtime.archive == "" {
+			return "", errors.New("runtime bundle was not prepared")
+		}
+		env, checkoutScratch, err = configureDarwinWorktree(roots, checkout, profile, worktree.runtime.platform)
 		if err != nil {
 			return "", err
 		}
@@ -430,10 +445,7 @@ func runDarwinHandoffPlan(ctx context.Context, checkout, proof string, inputs []
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	var system handoffSystemPlan
-	if len(prepared) != 0 {
-		system = prepared[0].system
-	}
+	system := worktree.system
 	command := argv[0]
 	if !strings.ContainsRune(command, '/') {
 		command = darwinSystemTool(command, env)

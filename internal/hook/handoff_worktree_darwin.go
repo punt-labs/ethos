@@ -10,11 +10,11 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/checkset"
 )
 
-func configureDarwinWorktree(roots handoffRoots, live string, profile *checkset.WorktreeSnapshot) ([]string, []string, error) {
+func configureDarwinWorktree(roots handoffRoots, live string, profile *checkset.WorktreeSnapshot, platform checkset.SnapshotPlatform) ([]string, []string, error) {
 	if field := unsupportedWorktreeField(profile); field != "" {
 		return nil, nil, fmt.Errorf("worktree profile field %s not supported by this runner yet", field)
 	}
-	env, err := roots.environment(profile, checkset.SnapshotPlatform{}, worktreeSandboxPATH)
+	env, err := roots.environment(profile, platform, worktreeSandboxPATH)
 	if err != nil {
 		return nil, nil, err
 	}
