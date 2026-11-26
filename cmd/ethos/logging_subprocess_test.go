@@ -328,7 +328,7 @@ checks:
 	var feedback map[string]string
 	require.NoError(t, json.Unmarshal(out, &feedback), "%s", out)
 	require.Contains(t, feedback["systemMessage"], "handoff audit gap in "+strings.TrimSuffix(filepath.Base(chunk), ".jsonl"))
-	require.Contains(t, string(out), "missing scope")
+	require.NotContains(t, string(out), "missing scope")
 	require.NotContains(t, string(out), "advisory scope")
 }
 

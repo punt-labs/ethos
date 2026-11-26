@@ -26,19 +26,14 @@ func RunStageChecks(ctx context.Context, checkout, agent, stage string) StageFee
 	return runStageChecks(ctx, checkout, agent, stage, func() ([]string, error) { return stageFiles(checkout, stage) })
 }
 
-type stageScope struct {
-	filesByRoot map[string][]string
-	auditGap    bool
-}
-
 func runStageChecks(ctx context.Context, checkout, agent, stage string, filesForStage func() ([]string, error)) StageFeedback {
-	return runStageRootChecks(ctx, checkout, agent, stage, func() (stageScope, error) {
+	return runStageRootChecks(ctx, checkout, agent, stage, func() (map[string][]string, error) {
 		files, err := filesForStage()
-		return stageScope{filesByRoot: map[string][]string{checkout: files}}, err
+		return map[string][]string{checkout: files}, err
 	})
 }
 
-func runStageRootChecks(ctx context.Context, checkout, agent, stage string, filesForStage func() (stageScope, error)) StageFeedback {
+func runStageRootChecks(ctx context.Context, checkout, agent, stage string, filesForStage func() (map[string][]string, error)) StageFeedback {
 	if Killed() {
 		return StageFeedback{}
 	}
@@ -78,7 +73,7 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 			env = gitenv.WithIndex(env, filepath.Join(checkout, index))
 		}
 	}
-	scope, err := filesForStage()
+	filesByRoot, err := filesForStage()
 	if err != nil {
 		if stage == "handoff" && !handoffPolicySelected(checkout, agent) {
 			return StageFeedback{}
@@ -86,7 +81,6 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 		return StageFeedback{Blocking: editRedact(stage + " files: " + err.Error())}
 	}
 	var advisory, blocking []string
-	filesByRoot := scope.filesByRoot
 	roots := make([]string, 0, len(filesByRoot))
 	for root := range filesByRoot {
 		roots = append(roots, root)
@@ -117,9 +111,6 @@ func runStageRootChecks(ctx context.Context, checkout, agent, stage string, file
 			}
 		}
 		for _, check := range rootChecks {
-			if stage == "handoff" && scope.auditGap && check.OnFail == "block" {
-				check.Files = checkset.Patterns{All: true}
-			}
 			for _, invocation := range stageInvocations(root, filesByRoot[root], check) {
 				invocation.env = env
 				if failure := runLoggedCheck(ctx, root, stage, invocation); failure != "" {
