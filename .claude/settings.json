@@ -211,5 +211,8 @@
       "Skill(ethos:mission)",
       "Skill(ethos:optimize-team)"
     ]
+  },
+  "env": {
+    "GIT_OPTIONAL_LOCKS": "0"
   }
 }

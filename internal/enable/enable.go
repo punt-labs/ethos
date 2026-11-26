@@ -140,7 +140,7 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO) (*Report, error) {
 	if err := claudemd.Preflight(filepath.Join(repoRoot, "CLAUDE.md"), CanonicalImport); err != nil {
 		return rep, fmt.Errorf("checking CLAUDE.md: %w", err)
 	}
-	if err := claudesettings.Preflight(repoRoot, PermissionRules); err != nil {
+	if err := claudesettings.PreflightWithEnv(repoRoot, PermissionRules, EnvDefaults); err != nil {
 		return rep, fmt.Errorf("checking .claude/settings.json: %w", err)
 	}
 
@@ -238,14 +238,15 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO) (*Report, error) {
 		rep.step("import", "already", CanonicalImport+" already present")
 	}
 
-	granted, err := claudesettings.Register(repoRoot, PermissionRules, p)
+	granted, envAdded, err := claudesettings.RegisterWithEnv(repoRoot, PermissionRules, EnvDefaults, p)
 	if err != nil {
-		return rep, fmt.Errorf("adding ethos permission rules to .claude/settings.json: %w", err)
+		return rep, fmt.Errorf("adding ethos settings to .claude/settings.json: %w", err)
 	}
 	if _, err := claudesettings.Deregister(repoRoot, legacyPermissionRules, p); err != nil {
 		return rep, fmt.Errorf("removing retired ethos permission rules from .claude/settings.json: %w", err)
 	}
 	permissionStep(rep, granted, "added ", "all rules already present")
+	envStep(rep, envAdded, "set ", "all env defaults already present")
 
 	hint, warning := configStatus(storeRoot)
 	if warning != "" {
@@ -298,11 +299,12 @@ func DisableTo(repoRoot, storeRoot string, force bool) (*Report, error) {
 	}
 
 	// Settings first: a refusal aborts before anything else changes.
-	revoked, err := claudesettings.Deregister(repoRoot, disableRules, p)
+	revoked, envRemoved, err := claudesettings.DeregisterWithEnv(repoRoot, disableRules, EnvDefaults, p)
 	if err != nil {
-		return rep, fmt.Errorf("removing ethos permission rules from .claude/settings.json: %w", err)
+		return rep, fmt.Errorf("removing ethos settings from .claude/settings.json: %w", err)
 	}
 	permissionStep(rep, revoked, "removed ", "no ethos rules present")
+	envStep(rep, envRemoved, "removed ", "no ethos env defaults present")
 
 	removed, err := claudemd.Deregister(filepath.Join(repoRoot, "CLAUDE.md"), CanonicalImport, claudemd.WithRepository(p))
 	if err != nil {
@@ -362,6 +364,15 @@ func permissionStep(rep *Report, rules []string, verb, none string) {
 		parts = append(parts, "ask: "+strings.Join(ask, ", "))
 	}
 	rep.step("permissions", "done", verb+strings.Join(parts, "; ")+" in .claude/settings.json")
+}
+
+// envStep records the .claude/settings.json env outcome, naming each entry.
+func envStep(rep *Report, entries []string, verb, none string) {
+	if len(entries) == 0 {
+		rep.step("env", "already", none)
+		return
+	}
+	rep.step("env", "done", verb+strings.Join(entries, ", ")+" in .claude/settings.json")
 }
 
 func writeMarker(repoRoot string) error {
