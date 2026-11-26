@@ -140,6 +140,7 @@ var writerRegistry = map[string]writerEntry{
 	"internal/hook.pinHandoffStripe":  exempt("opens or creates an empty machine-local lock file for flock; writes no payload"),
 	"internal/hook.writeGateResult":   checkpoint("LeakRule"),
 	"internal/hook.handoffRenames":    exempt("copies Git index bytes to a private temporary candidate; no record payload is authored or published, and redacting binary index bytes would corrupt them"),
+	"internal/hook.openEnvFile":       exempt("opens Claude Code's session-local CLAUDE_ENV_FILE solely to append the static export GIT_OPTIONAL_LOCKS=0 line; never publishes a repository record"),
 	"internal/layout.CreateLocalTemp": exempt("creates an empty 0600 staging file beneath the canonical local root; takes no payload and writes no content; record-writing callers retain their redaction and final-guard obligations"),
 	// This callback-based installer preserves a user-authored Git message, not
 	// a captured mission/audit record. Pin its local staging boundary; the real
