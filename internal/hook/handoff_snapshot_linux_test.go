@@ -819,6 +819,12 @@ import sys
 mode, host_ns = sys.argv[1:]
 assert os.readlink("/proc/self/ns/net") != host_ns
 assert [name for _, name in socket.if_nameindex()] == ["lo"]
+if mode == "loopback":
+    with open("/etc/hosts") as hosts:
+        assert hosts.read() == "127.0.0.1 localhost\n::1 localhost\n"
+    assert socket.gethostbyname("localhost") == "127.0.0.1"
+else:
+    assert not os.path.exists("/etc/hosts")
 with open("/proc/self/status") as status:
     caps = dict(line.split(":", 1) for line in status)
     assert int(caps["CapEff"], 16) == int(caps["CapAmb"], 16) == 0

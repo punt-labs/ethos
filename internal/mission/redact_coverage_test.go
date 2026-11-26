@@ -153,6 +153,7 @@ var writerRegistry = map[string]writerEntry{
 	"internal/hook.handoffRuntime.install":       exempt("installs the exact digest-pinned runtime archive in the machine-local store; it does not author a record"),
 	"internal/hook.mountHandoffProcAndDev":       exempt("creates empty mount targets for device files inside the private sandbox"),
 	"internal/hook.mountHandoffSystem":           exempt("writes synthetic passwd and group files and creates empty bind targets inside the private sandbox; it does not write records"),
+	"internal/hook.writeHandoffLoopbackHosts":    exempt("writes constant localhost entries inside the private sandbox; it does not write records"),
 	// internal/autorepair: the repair log (machine-local, global root).
 	"internal/autorepair.FileLog.Logf": checkpoint("Prose"),
 	// internal/mission: records.

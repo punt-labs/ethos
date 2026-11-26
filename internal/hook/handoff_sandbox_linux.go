@@ -410,6 +410,10 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 			return err
 		}
 		if plan.Worktree.Loopback {
+			phase = "write synthetic loopback hosts"
+			if err := writeHandoffLoopbackHosts(root); err != nil {
+				return err
+			}
 			phase = "enable IPv4 and IPv6 loopback"
 			if err := enableHandoffLoopback(); err != nil {
 				return err
@@ -491,6 +495,10 @@ func mountGateReadOnly(source, target string) error {
 		return err
 	}
 	return bindHandoffReadOnly(source, target)
+}
+
+func writeHandoffLoopbackHosts(root string) error {
+	return os.WriteFile(filepath.Join(root, "etc/hosts"), []byte("127.0.0.1 localhost\n::1 localhost\n"), 0o444)
 }
 
 func enableHandoffLoopback() error {
