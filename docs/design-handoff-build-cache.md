@@ -65,9 +65,12 @@ cache tree, alongside a stable namespace lock that also survives
 deletion. Keep artifacts in a subdirectory named for their generation
 (for example, `g<N>`), and seed the private copy only from the current
 generation's directory. A missing directory means a cold cache. Under
-the lock, persist a new, never-reused generation before attempting
-best-effort deletion of older directories. A crash after the bump
-leaves old artifacts on disk but makes them ineligible for reuse.
+the lock, `cache clear` persists a new, never-reused generation before
+attempting to delete non-current directories. Each cache preparation
+also attempts this cleanup under the same lock, before mounting the
+private copy. Deletion is best-effort: a crash after the bump leaves old
+artifacts on disk but makes them ineligible for reuse, and any remaining
+directories still count against the disk budget.
 For an opted-in check, read the generation and include it in the
 verdict key before looking for a reusable verdict; hold the lock
 through the reuse decision. A running gate may publish artifacts and
