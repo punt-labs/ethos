@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -23,6 +24,7 @@ type WorktreeSnapshot struct {
 	Path       []string            `yaml:"path,omitempty" json:"path,omitempty"`
 	Env        map[string]string   `yaml:"env,omitempty" json:"env,omitempty"`
 	System     SnapshotSystem      `yaml:"system,omitempty" json:"system,omitempty"`
+	Data       []SnapshotData      `yaml:"data,omitempty" json:"data,omitempty"`
 	Scratch    SnapshotScratch     `yaml:"scratch" json:"scratch"`
 	Git        *SnapshotGit        `yaml:"git,omitempty" json:"git,omitempty"`
 	Network    string              `yaml:"network,omitempty" json:"network,omitempty"`
@@ -38,7 +40,21 @@ type SnapshotRuntime struct {
 }
 
 type SnapshotSystem struct {
+	SnapshotSystemInputs `yaml:",inline"`
+	Platforms            map[string]SnapshotSystemInputs `yaml:"platforms,omitempty" json:"platforms,omitempty"`
+}
+
+type SnapshotSystemInputs struct {
 	Tools Strings `yaml:"tools,omitempty" json:"tools,omitempty"`
+	Files Strings `yaml:"files,omitempty" json:"files,omitempty"`
+	Dirs  Strings `yaml:"dirs,omitempty" json:"dirs,omitempty"`
+}
+
+type SnapshotData struct {
+	Name        string `yaml:"name" json:"name"`
+	URL         string `yaml:"url" json:"url"`
+	MaxAgeHours int    `yaml:"max_age_hours" json:"max_age_hours"`
+	Mount       string `yaml:"mount" json:"mount"`
 }
 
 type SnapshotPlatform struct {
@@ -137,11 +153,19 @@ func (s WorktreeSnapshot) validate() error {
 	if s.Network != "" && s.Network != "loopback" {
 		return errors.New("snapshot network must be loopback or omitted")
 	}
-	for _, tool := range s.System.Tools {
-		const toolChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.+-"
-		if tool == "" || tool == "." || tool == ".." || strings.Trim(tool, toolChars) != "" {
-			return errors.New("snapshot system tools must be executable names, not paths")
+	if err := s.System.SnapshotSystemInputs.validate(); err != nil {
+		return err
+	}
+	for name, inputs := range s.System.Platforms {
+		if !isSnapshotPlatform(name) {
+			return errors.New("invalid snapshot system platform; expected GOOS-GOARCH")
 		}
+		if err := inputs.validate(); err != nil {
+			return err
+		}
+	}
+	if err := validateSnapshotData(s.Data); err != nil {
+		return err
 	}
 	if s.Git != nil && s.Git.BaseRef != "" && !strings.HasPrefix(s.Git.BaseRef, "refs/") {
 		return errors.New("snapshot Git base must be a full ref")
@@ -156,8 +180,7 @@ func (s WorktreeSnapshot) validate() error {
 		return errors.New("snapshot runtime needs at least one platform")
 	}
 	for name, platform := range s.Runtime.Platforms {
-		goos, goarch, ok := strings.Cut(name, "-")
-		if !ok || !isPlatformPart(goos) || !isPlatformPart(goarch) {
+		if !isSnapshotPlatform(name) {
 			return errors.New("invalid snapshot runtime platform; expected GOOS-GOARCH")
 		}
 		digest, err := hex.DecodeString(platform.SHA256)
@@ -167,14 +190,62 @@ func (s WorktreeSnapshot) validate() error {
 		if platform.Bundle == "" || strings.ContainsAny(platform.Bundle, "/\\") {
 			return errors.New("snapshot runtime bundle must be a filename hint")
 		}
-		if platform.URL != "" {
-			u, err := url.Parse(platform.URL)
-			if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-				return errors.New("snapshot runtime URL must be a public HTTPS asset URL")
+		if platform.URL != "" && !isSnapshotHTTPSURL(platform.URL) {
+			return errors.New("snapshot runtime URL must be a public HTTPS asset URL")
+		}
+	}
+	return nil
+}
+
+func (s SnapshotSystemInputs) validate() error {
+	for _, tool := range s.Tools {
+		const toolChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.+-"
+		if tool == "" || tool == "." || tool == ".." || strings.Trim(tool, toolChars) != "" {
+			return errors.New("snapshot system tools must be executable names, not paths")
+		}
+	}
+	for _, list := range []Strings{s.Files, s.Dirs} {
+		for _, name := range list {
+			if !path.IsAbs(name) || path.Clean(name) != name || name == "/" || strings.ContainsRune(name, 0) {
+				return errors.New("snapshot system files and dirs must be clean absolute paths below the host root")
 			}
 		}
 	}
 	return nil
+}
+
+func validateSnapshotData(entries []SnapshotData) error {
+	names := make(map[string]struct{}, len(entries))
+	mounts := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		if !isSnapshotDataPath(entry.Name) || path.Base(entry.Name) != entry.Name ||
+			!isSnapshotDataPath(entry.Mount) || entry.MaxAgeHours <= 0 || !isSnapshotHTTPSURL(entry.URL) {
+			return errors.New("snapshot data needs a local name and mount, a positive max_age_hours and a public HTTPS URL")
+		}
+		_, duplicateName := names[entry.Name]
+		_, duplicateMount := mounts[entry.Mount]
+		if duplicateName || duplicateMount {
+			return errors.New("snapshot data names and mounts must be unique")
+		}
+		names[entry.Name] = struct{}{}
+		mounts[entry.Mount] = struct{}{}
+	}
+	return nil
+}
+
+func isSnapshotDataPath(name string) bool {
+	return name != "." && name != ".." && !strings.HasPrefix(name, "../") &&
+		!path.IsAbs(name) && path.Clean(name) == name && !strings.ContainsAny(name, "\\\x00")
+}
+
+func isSnapshotHTTPSURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && u.RawQuery == "" && u.Fragment == ""
+}
+
+func isSnapshotPlatform(name string) bool {
+	goos, goarch, ok := strings.Cut(name, "-")
+	return ok && isPlatformPart(goos) && isPlatformPart(goarch)
 }
 
 func isPlatformPart(part string) bool {
