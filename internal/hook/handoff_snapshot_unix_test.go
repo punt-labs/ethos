@@ -44,6 +44,32 @@ func TestHandoffScratchSeedAvailability(t *testing.T) {
 	}
 }
 
+func TestHandoffCheckoutScratchRejectsSymlinkParent(t *testing.T) {
+	checkout := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(checkout, "dir"), 0o700))
+	require.NoError(t, os.Symlink("dir", filepath.Join(checkout, "link")))
+	_, err := handoffScratchTargets(checkout, []string{"link/scratch"})
+	require.ErrorContains(t, err, "snapshot parent is not a directory")
+}
+
+func TestHandoffWorktreeSnapshotPreservesSymlinks(t *testing.T) {
+	live, scratch := t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(live, "input"), "fixture")
+	require.NoError(t, os.Symlink("input", filepath.Join(live, "alias")))
+	require.NoError(t, os.Symlink("absent", filepath.Join(live, "dangling")))
+	inputs := []string{"input", "alias", "dangling"}
+	ctx := context.Background()
+	proof, err := digestGateInputsWithMode(ctx, live, "", inputs, true)
+	require.NoError(t, err)
+	failure, err := executeHandoffSnapshot(ctx, scratch, live, proof, inputs, editCheck{
+		cwd: gateRoot, timeout: 5 * time.Second, policy: &checkset.Check{WorktreeSnapshot: &checkset.WorktreeSnapshot{}},
+		argv: []string{"/bin/sh", "-ec", `test -L alias && test "$(cat alias)" = fixture && test -L dangling && ! test -e dangling`},
+	})
+	skipIfHandoffSandboxUnavailable(t, err)
+	require.NoError(t, err)
+	require.Empty(t, failure)
+}
+
 func TestHandoffLiveVerifiedDefersWithoutAdmission(t *testing.T) {
 	var logs bytes.Buffer
 	ctx := diagnostic.WithLogger(context.Background(), slog.New(slog.NewTextHandler(&logs, nil)))
