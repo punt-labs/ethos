@@ -52,6 +52,7 @@ func prepareHandoffSystem(ctx context.Context, checkout string, profile *checkse
 	defer cancel()
 	platformKey := runtime.GOOS + "-" + runtime.GOARCH
 	inputs := profile.System.Platforms[platformKey]
+	live := profile.Isolation == checkset.IsolationLiveVerified
 	for _, group := range []struct {
 		paths []string
 		dir   bool
@@ -61,7 +62,7 @@ func prepareHandoffSystem(ctx context.Context, checkout string, profile *checkse
 	} {
 		slices.Sort(group.paths)
 		for _, path := range slices.Compact(group.paths) {
-			if _, err := addDarwinSystemInput(ctx, &plan, checkout, path, "", group.dir); err != nil {
+			if _, err := addDarwinSystemInput(ctx, &plan, checkout, path, "", group.dir, !live); err != nil {
 				return plan, err
 			}
 		}
@@ -76,7 +77,6 @@ func prepareHandoffSystem(ctx context.Context, checkout string, profile *checkse
 		return plan, err
 	}
 	tools := slices.Concat(profile.System.Tools, inputs.Tools)
-	live := profile.Isolation == checkset.IsolationLiveVerified
 	if live {
 		if err := addDarwinLiveDeveloper(ctx, &plan, checkout, env); err != nil {
 			return plan, fmt.Errorf("live-verified cannot verify the selected developer directory: %w", err)
@@ -98,11 +98,11 @@ func prepareHandoffSystem(ctx context.Context, checkout string, profile *checkse
 		if path == "" {
 			return plan, fmt.Errorf("system tool %s is not available on the sandbox PATH", tool)
 		}
-		source, err := addDarwinSystemInput(ctx, &plan, checkout, path, tool, false)
+		source, err := addDarwinSystemInput(ctx, &plan, checkout, path, tool, false, !live)
 		if err != nil {
 			return plan, err
 		}
-		if err := addDarwinLibraryClosure(ctx, &plan, checkout, source, source, nil, make(map[string]bool)); err != nil {
+		if err := addDarwinLibraryClosure(ctx, &plan, checkout, source, source, nil, make(map[string]bool), !live); err != nil {
 			return plan, fmt.Errorf("cannot resolve dylibs for system tool %s: %w", tool, err)
 		}
 		if live {
@@ -117,7 +117,7 @@ func prepareHandoffSystem(ctx context.Context, checkout string, profile *checkse
 			if darwinTrustedToolchain(git) != git || unix.Access(git, unix.X_OK) != nil {
 				return plan, fmt.Errorf("%w: cannot use Command Line Tools git", errHandoffXcodeUntrusted)
 			}
-			if _, err := addDarwinSystemInput(ctx, &plan, checkout, git, "clt-git", false); err != nil {
+			if _, err := addDarwinSystemInput(ctx, &plan, checkout, git, "clt-git", false, false); err != nil {
 				return plan, err
 			}
 		} else if darwinXcodeTool(path) && !hasDarwinDeveloperSelector(plan) {
@@ -185,7 +185,7 @@ func addDarwinLiveDeveloper(ctx context.Context, plan *handoffSystemPlan, checko
 		return errors.New("unexpected developer directory layout")
 	}
 	for _, path := range plists {
-		if _, err := addDarwinSystemInput(ctx, plan, checkout, path, "live-developer", false); err != nil {
+		if _, err := addDarwinSystemInput(ctx, plan, checkout, path, "live-developer", false, false); err != nil {
 			return err
 		}
 	}
@@ -226,7 +226,7 @@ func addDarwinCLT(ctx context.Context, plan *handoffSystemPlan, checkout, dir st
 		})
 	}
 	plan.Mounts = append(plan.Mounts, handoffSystemMount{Source: dir, Target: dir, Directory: true})
-	if _, err := addDarwinSystemInput(ctx, plan, checkout, filepath.Join(dir, "usr/bin/make"), "clt-make", false); err != nil {
+	if _, err := addDarwinSystemInput(ctx, plan, checkout, filepath.Join(dir, "usr/bin/make"), "clt-make", false, false); err != nil {
 		return fmt.Errorf("%w: %v", errHandoffXcodeUntrusted, err)
 	}
 	plan.DeveloperDir = dir
@@ -247,10 +247,13 @@ func darwinSystemTool(name string, env []string) string {
 	return ""
 }
 
-func addDarwinSystemInput(ctx context.Context, plan *handoffSystemPlan, checkout, path, tool string, directory bool) (string, error) {
+func addDarwinSystemInput(ctx context.Context, plan *handoffSystemPlan, checkout, path, tool string, directory, restrictRoots bool) (string, error) {
 	source, err := filepath.EvalSymlinks(path)
 	if err != nil || !safeDarwinSystemPath(path, checkout) || !safeDarwinSystemPath(source, checkout) {
 		return "", fmt.Errorf("cannot safely resolve system input %s", path)
+	}
+	if restrictRoots && (!darwinSnapshotSystemPath(path) || !darwinSnapshotSystemPath(source)) {
+		return "", fmt.Errorf("system input %s is outside supported Darwin system roots", path)
 	}
 	digest, err := fingerprintDarwinSystemInput(ctx, source, directory)
 	if err != nil {
@@ -259,6 +262,24 @@ func addDarwinSystemInput(ctx context.Context, plan *handoffSystemPlan, checkout
 	plan.Inputs = append(plan.Inputs, handoffSystemInput{Path: path, Tool: tool, Digest: digest, Directory: directory})
 	plan.Mounts = append(plan.Mounts, handoffSystemMount{Source: source, Target: path, Directory: directory})
 	return source, nil
+}
+
+func darwinSnapshotSystemPath(path string) bool {
+	for _, root := range []string{"/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/lib", "/usr/libexec", "/usr/share",
+		"/System/Library", "/System/Volumes/Preboot/Cryptexes/OS", "/Library/Apple/usr", darwinCLT,
+		"/private/var/db/timezone"} {
+		if darwinPathWithin(root, path) {
+			return true
+		}
+	}
+	for _, prefix := range []string{"/opt/homebrew", "/usr/local", "/opt/local"} {
+		for _, dir := range []string{"bin", "sbin", "lib", "libexec", "include", "share", "opt", "Cellar", "Frameworks"} {
+			if darwinPathWithin(filepath.Join(prefix, dir), path) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func safeDarwinSystemPath(path, checkout string) bool {
@@ -373,14 +394,14 @@ func addDarwinXcode(ctx context.Context, plan *handoffSystemPlan, checkout strin
 		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 			continue
 		}
-		if _, err := addDarwinSystemInput(ctx, plan, checkout, path, "", false); err != nil {
+		if _, err := addDarwinSystemInput(ctx, plan, checkout, path, "", false, false); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func addDarwinLibraryClosure(ctx context.Context, plan *handoffSystemPlan, checkout, executable, source string, inherited []string, seen map[string]bool) error {
+func addDarwinLibraryClosure(ctx context.Context, plan *handoffSystemPlan, checkout, executable, source string, inherited []string, seen map[string]bool, restrictRoots bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -423,11 +444,11 @@ func addDarwinLibraryClosure(ctx context.Context, plan *handoffSystemPlan, check
 					return fmt.Errorf("cannot resolve %s", dep)
 				}
 			}
-			target, err := addDarwinSystemInput(ctx, plan, checkout, path, "", false)
+			target, err := addDarwinSystemInput(ctx, plan, checkout, path, "", false, restrictRoots)
 			if err != nil {
 				return err
 			}
-			if err := addDarwinLibraryClosure(ctx, plan, checkout, executable, target, rpaths, seen); err != nil {
+			if err := addDarwinLibraryClosure(ctx, plan, checkout, executable, target, rpaths, seen, restrictRoots); err != nil {
 				return err
 			}
 		}

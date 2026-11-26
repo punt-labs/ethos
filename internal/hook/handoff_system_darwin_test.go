@@ -21,12 +21,11 @@ func TestDarwinHandoffWorktreeSystemInputs(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(systemDir) })
 
-	declared := filepath.Join(systemDir, "declared")
-	require.NoError(t, os.Mkdir(declared, 0o700))
-	data := filepath.Join(systemDir, "data")
+	const declared = "/usr/share/dict"
+	const data = "/System/Library/CoreServices/SystemVersion.plist"
+	fixture := filepath.Join(systemDir, "data")
 	secret := filepath.Join(systemDir, "unlisted")
-	writeFile(t, filepath.Join(declared, "member"), "allowed\n")
-	writeFile(t, data, "alpha\n")
+	writeFile(t, fixture, "alpha\n")
 	writeFile(t, secret, "unlisted\n")
 	profile := &checkset.WorktreeSnapshot{
 		System: checkset.SnapshotSystem{
@@ -41,23 +40,24 @@ func TestDarwinHandoffWorktreeSystemInputs(t *testing.T) {
 	checkout := t.TempDir()
 	plan, err := prepareHandoffSystem(ctx, checkout, profile)
 	require.NoError(t, err)
-	key := plan.Fingerprint
-	require.NotEmpty(t, key)
-	writeFile(t, data, "omega\n")
-	plan, err = prepareHandoffSystem(ctx, checkout, profile)
+	require.NotEmpty(t, plan.Fingerprint)
+	key, err := fingerprintDarwinSystemInput(ctx, fixture, false)
 	require.NoError(t, err)
-	require.NotEqual(t, key, plan.Fingerprint, "same-size content changes invalidate the cache")
+	writeFile(t, fixture, "omega\n")
+	updated, err := fingerprintDarwinSystemInput(ctx, fixture, false)
+	require.NoError(t, err)
+	require.NotEqual(t, key, updated, "same-size content changes invalidate the cache")
 
 	proof, err := digestGateInputs(ctx, checkout, "", nil)
 	require.NoError(t, err)
 	result, err := executeHandoffSnapshot(ctx, "", checkout, proof, nil, editCheck{
 		name: "system-inputs",
 		argv: []string{"/bin/sh", "-ec", `
-test "$(cat "$1")" = omega
-test "$(cat "$3/member")" = allowed
+test -s "$1"
+test -s "$3/words"
 ! cat "$2"
 ! (echo changed > "$1")
-! (echo changed > "$3/member")
+! (echo changed > "$3/words")
 `, "probe", data, secret, declared},
 	}, handoffWorktreePlan{system: plan})
 	require.NoError(t, err)
