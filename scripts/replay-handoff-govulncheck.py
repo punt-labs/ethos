@@ -44,8 +44,11 @@ def replay(out, ethos, scanner):
     archive = out / "govulncheck-runtime.tar.gz"
     run(out, "tar", "-czf", archive, "-C", runtime, "bin", "data",
         "-C", goroot.parent, goroot.name)
+    checksum = hashlib.sha256()
     with archive.open("rb") as stream:
-        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            checksum.update(chunk)
+    digest = checksum.hexdigest()
 
     def fixture(case, version, terminal):
         source = out / (case + "-source")
