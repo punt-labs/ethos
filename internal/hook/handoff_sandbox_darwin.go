@@ -437,10 +437,22 @@ func runDarwinHandoffCheck(ctx context.Context, profile, checkout, cwd string, e
 	if ctx.Err() != nil {
 		return "", errors.New("snapshot check timed out or was interrupted")
 	}
-	var exit *exec.ExitError
-	if readyErr != nil || ready[0] != 'R' || (errors.As(err, &exit) &&
-		(exit.ExitCode() < 0 || exit.ExitCode() >= 126)) {
+	if readyErr != nil || ready[0] != 'R' {
 		return "", fmt.Errorf("sandbox launch did not complete: %v: %s", err, stderr.data)
+	}
+	if err != nil {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() < 0 {
+			return "", errors.New("snapshot check did not complete")
+		}
+		switch code := exit.ExitCode(); code {
+		case 128 + int(unix.SIGHUP), 128 + int(unix.SIGINT), 128 + int(unix.SIGKILL), 128 + int(unix.SIGTERM):
+			return "", fmt.Errorf("check exited %d (likely killed or interrupted); not cached", code)
+		default:
+			if code >= 126 {
+				return "", fmt.Errorf("sandbox launch did not complete: %v: %s", err, stderr.data)
+			}
+		}
 	}
 	if err == nil && (!check.failOnOutput || len(stdout.data) == 0) {
 		diagnostic.LogHookCheck(ctx, checkout, checkout, "handoff", check.name, "completed", time.Since(start))

@@ -3,13 +3,18 @@
 package hook
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/punt-labs/ethos/v4/internal/diagnostic"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDarwinHandoffSnapshotIsolation(t *testing.T) {
@@ -144,6 +149,38 @@ func TestDarwinHandoffSnapshotExit125IsCheckFailure(t *testing.T) {
 	got, err := executeHandoffSnapshot(ctx, scratch, checkout, proof, nil, check)
 	if err != nil || !strings.Contains(got, "exit status 125") || !strings.Contains(got, "check-output") {
 		t.Fatalf("wanted an ordinary exit-125 check failure, got result=%q err=%v", got, err)
+	}
+}
+
+func TestDarwinHandoffSnapshotRetriesInterruptedExits(t *testing.T) {
+	for _, tc := range []struct {
+		name, script, reason string
+	}{
+		{"129", "exit 129", "check exited 129 (likely killed or interrupted); not cached"},
+		{"130", "exit 130", "check exited 130 (likely killed or interrupted); not cached"},
+		{"137", "exit 137", "check exited 137 (likely killed or interrupted); not cached"},
+		{"143", "exit 143", "check exited 143 (likely killed or interrupted); not cached"},
+		{"signal", "kill -KILL $$", "snapshot check did not complete"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, _ := postEditFixture(t)
+			t.Setenv("HOME", t.TempDir())
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+			checkPolicy(t, root, "project", "  - name: snapshot-check\n    stage: handoff\n    files: all\n    run: [/bin/sh, -c, '"+tc.script+"']\n    snapshot: {profile: linux-shell-v1, inputs: [README], epoch: v1}\n")
+			var logs bytes.Buffer
+			ctx := diagnostic.WithLogger(context.Background(), slog.New(slog.NewTextHandler(&logs, nil)))
+			for range 2 {
+				invocation, _ := diagnostic.WithHookInvocation(ctx)
+				feedback := RunStageChecks(invocation, root, "worker", "handoff")
+				require.Contains(t, feedback.Blocking, tc.reason)
+				require.Equal(t, feedback.Blocking, feedback.Notice)
+				slots, err := filepath.Glob(filepath.Join(root, ".punt-labs", "local", "ethos", "handoff-v1", "*", "*.json"))
+				require.NoError(t, err)
+				require.Empty(t, slots)
+			}
+			require.Equal(t, 2, strings.Count(logs.String(), "outcome=launched"))
+			require.NotContains(t, logs.String(), "outcome=reused")
+		})
 	}
 }
 
