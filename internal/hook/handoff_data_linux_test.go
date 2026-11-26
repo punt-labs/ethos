@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -43,9 +44,9 @@ func TestHandoffDataMergesOnlyUnoccupiedRuntimeMounts(t *testing.T) {
 	profile := &checkset.WorktreeSnapshot{Data: []checkset.SnapshotData{{
 		Name: "fixture", URL: "https://example.com/data", MaxAgeHours: 1, Mount: "nested/mount",
 	}}}
-	item := newHandoffData(policy, profile.Data[0], "")
+	item := newHandoffData(policy, profile.Data[0], root, "")
 	require.NoError(t, item.install(ctx, policy, strings.NewReader("refreshed")))
-	data, err := selectHandoffData(ctx, policy, profile, "")
+	data, err := selectHandoffData(ctx, policy, profile, root, "")
 	require.NoError(t, err)
 
 	runtime := t.TempDir()
@@ -66,6 +67,36 @@ func TestHandoffDataMergesOnlyUnoccupiedRuntimeMounts(t *testing.T) {
 	body, err = os.ReadFile(unchanged)
 	require.NoError(t, err)
 	require.Equal(t, "bundled", string(body))
+}
+
+func TestHandoffDataDeferralRefreshesLinkedWorktreePolicy(t *testing.T) {
+	main, bin := postEditFixture(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	worktree := filepath.Join(home, "linked worktree")
+	stageGit(t, main, "worktree", "add", "--detach", worktree)
+	writeFile(t, filepath.Join(main, ".punt-labs/ethos.yaml"), "checks: none\n")
+	writeFile(t, filepath.Join(worktree, ".punt-labs/ethos.yaml"), "checks: branch\n")
+	checkPolicy(t, worktree, "branch", "  - name: branch-data\n    stage: handoff\n    files: all\n    run: [sh, gate.sh]\n")
+	writeFile(t, filepath.Join(worktree, "gate.sh"), "exit 97\n")
+	writeFile(t, filepath.Join(worktree, ".punt-labs/ethos/checks/snapshots/branch.yaml"), `checks:
+  branch-data:
+    profile: linux-worktree-v1
+    epoch: data-v1
+    sources: {mode: worktree}
+    data: [{name: branch-data, url: 'https://example.com/branch', max_age_hours: 1, mount: branch}]
+`)
+	feedback := RunStageChecks(context.Background(), worktree, "worker", "handoff")
+	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+	_, command, found := strings.Cut(feedback.Notice, "\"branch-data\" is missing, expired or invalid; run ")
+	require.True(t, found, feedback.Notice)
+	command, _, _ = strings.Cut(command, ". Run the explicit project gate:")
+	postEditTool(t, bin, "ethos", `printf '%s\n' "$PWD" "$@"`)
+	cmd := exec.Command("/bin/sh", "-c", command)
+	cmd.Dir = main
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	require.Equal(t, worktree+"\nhandoff\nrefresh-data\n--agent\nworker\n", string(out))
 }
 
 func TestHandoffWorktreeDataMountAndReuse(t *testing.T) {

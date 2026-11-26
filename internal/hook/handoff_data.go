@@ -31,14 +31,14 @@ const (
 
 type handoffData struct {
 	checkset.SnapshotData
-	file, agent string
-	digest      [sha256.Size]byte
+	file, checkout, agent string
+	digest                [sha256.Size]byte
 }
 
-func newHandoffData(loc layout.Policy, spec checkset.SnapshotData, agent string) handoffData {
+func newHandoffData(loc layout.Policy, spec checkset.SnapshotData, checkout, agent string) handoffData {
 	key := sha256.Sum256([]byte(spec.URL))
 	return handoffData{
-		SnapshotData: spec, agent: agent,
+		SnapshotData: spec, checkout: checkout, agent: agent,
 		file: filepath.Join(loc.LocalRoot(), "handoff-data-v1", fmt.Sprintf("%x", key)),
 	}
 }
@@ -52,7 +52,7 @@ func (d handoffData) unavailable() error {
 	if d.agent != "" && attribute.ValidateSlug(d.agent) == nil {
 		cmd += " --agent " + d.agent
 	}
-	return fmt.Errorf("data-unavailable: %q is missing, expired or invalid; run %s", d.Name, cmd)
+	return fmt.Errorf("data-unavailable: %q is missing, expired or invalid; run (cd %s && %s)", d.Name, handoffShellPath(d.checkout), cmd)
 }
 
 // RefreshHandoffData fetches the selected policy's data outside the gate.
@@ -84,7 +84,7 @@ func refreshHandoffData(ctx context.Context, loc resolve.Located, agent string, 
 			continue
 		}
 		for _, spec := range check.WorktreeSnapshot.Data {
-			data := newHandoffData(policy, spec, agent)
+			data := newHandoffData(policy, spec, loc.Checkout, agent)
 			if seen[data.file] {
 				continue
 			}
@@ -201,13 +201,13 @@ func (d handoffData) verifyFile(ctx context.Context, f *os.File) (int64, [sha256
 	return size, digest, nil
 }
 
-func selectHandoffData(ctx context.Context, loc layout.Policy, profile *checkset.WorktreeSnapshot, agent string) ([]handoffData, error) {
+func selectHandoffData(ctx context.Context, loc layout.Policy, profile *checkset.WorktreeSnapshot, checkout, agent string) ([]handoffData, error) {
 	if profile == nil {
 		return nil, nil
 	}
 	data := make([]handoffData, 0, len(profile.Data))
 	for _, spec := range profile.Data {
-		item := newHandoffData(loc, spec, agent)
+		item := newHandoffData(loc, spec, checkout, agent)
 		f, _, digest, err := item.open(ctx)
 		if err != nil {
 			return nil, err
