@@ -3,15 +3,19 @@ package hook
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/checkset"
@@ -234,4 +238,83 @@ func TestHandoffRuntimeFetchRefusesLoopback(t *testing.T) {
 	}, "")
 	require.ErrorContains(t, bundle.fetch(context.Background(), client), "could not fetch published runtime bundle")
 	require.NoFileExists(t, bundle.archive)
+}
+
+func TestHandoffRuntimeProxyConnect(t *testing.T) {
+	const target = "[2001:db8::1]:443"
+	for _, scheme := range []string{"http", "https"} {
+		t.Run(scheme, func(t *testing.T) {
+			var calls atomic.Int32
+			var refuse atomic.Bool
+			handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				calls.Add(1)
+				if req.Method != http.MethodConnect || req.Host != target ||
+					req.Header.Get("Proxy-Authorization") != "Basic Zml4dHVyZTpwYXNz" {
+					http.Error(w, "invalid CONNECT request", http.StatusBadRequest)
+					return
+				}
+				if refuse.Load() {
+					w.WriteHeader(http.StatusProxyAuthRequired)
+					return
+				}
+				w.Header().Set("Content-Length", "0")
+				w.WriteHeader(http.StatusOK)
+			})
+			var proxy *httptest.Server
+			var proxyTLS *tls.Config
+			if scheme == "https" {
+				proxy = httptest.NewTLSServer(handler)
+				proxyTLS = proxy.Client().Transport.(*http.Transport).TLSClientConfig
+			} else {
+				proxy = httptest.NewServer(handler)
+			}
+			defer proxy.Close()
+			endpoint, err := url.Parse(proxy.URL)
+			require.NoError(t, err)
+			endpoint.User = url.UserPassword("fixture", "pass")
+			dial := func(address string) error {
+				conn, err := dialHandoffRuntimeProxy(context.Background(), "tcp", address, endpoint, proxyTLS)
+				if conn != nil {
+					require.NoError(t, conn.Close())
+				}
+				return err
+			}
+
+			for _, invalid := range []string{"localhost:443", "10.0.0.1:443", "[::ffff:100.64.0.1]:443"} {
+				require.ErrorContains(t, dial(invalid), "runtime asset address is not public")
+			}
+			require.Zero(t, calls.Load())
+			require.NoError(t, dial(target))
+			refuse.Store(true)
+			require.ErrorContains(t, dial(target), "refused the CONNECT tunnel")
+			require.EqualValues(t, 2, calls.Load())
+			endpoint.Scheme = "socks5"
+			require.ErrorContains(t, dial(target), "proxy must use HTTP or HTTPS")
+		})
+	}
+}
+
+func TestHandoffRuntimeProxyRejectsBrokenConnections(t *testing.T) {
+	const target = "192.0.2.1:443"
+	ctx := context.Background()
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		conn, _, err := http.NewResponseController(w).Hijack()
+		if err == nil {
+			_ = conn.Close()
+		}
+	}))
+	defer proxy.Close()
+	endpoint, err := url.Parse(proxy.URL)
+	require.NoError(t, err)
+	conn, err := dialHandoffRuntimeProxy(ctx, "tcp", "missing-port", endpoint, nil)
+	require.ErrorContains(t, err, "missing port")
+	require.Nil(t, conn)
+	conn, err = dialHandoffRuntimeProxy(ctx, "tcp", target, endpoint, nil)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	require.Nil(t, conn)
+
+	closed, peer := net.Pipe()
+	require.NoError(t, peer.Close())
+	defer closed.Close()
+	require.ErrorIs(t, connectHandoffRuntimeProxy(closed, target, endpoint), io.ErrClosedPipe)
 }

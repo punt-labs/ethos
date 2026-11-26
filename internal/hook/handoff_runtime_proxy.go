@@ -13,6 +13,7 @@ import (
 )
 
 func handoffRuntimeProxyDial(direct *net.Dialer) func(context.Context, string, string) (net.Conn, error) {
+	proxyTLS := &tls.Config{MinVersion: tls.VersionTLS12}
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		proxy, err := http.ProxyFromEnvironment(&http.Request{URL: &url.URL{Scheme: "https", Host: addr}})
 		if err != nil {
@@ -21,11 +22,11 @@ func handoffRuntimeProxyDial(direct *net.Dialer) func(context.Context, string, s
 		if proxy == nil {
 			return direct.DialContext(ctx, network, addr)
 		}
-		return dialHandoffRuntimeProxy(ctx, network, addr, proxy)
+		return dialHandoffRuntimeProxy(ctx, network, addr, proxy, proxyTLS)
 	}
 }
 
-func dialHandoffRuntimeProxy(ctx context.Context, network, addr string, proxy *url.URL) (net.Conn, error) {
+func dialHandoffRuntimeProxy(ctx context.Context, network, addr string, proxy *url.URL, proxyTLS *tls.Config) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	target, err := pinHandoffRuntimeTarget(ctx, addr)
@@ -44,7 +45,7 @@ func dialHandoffRuntimeProxy(ctx context.Context, network, addr string, proxy *u
 		if port == "" {
 			port = "443"
 		}
-		dial = (&tls.Dialer{Config: &tls.Config{MinVersion: tls.VersionTLS12}}).DialContext
+		dial = (&tls.Dialer{Config: proxyTLS}).DialContext
 	default:
 		return nil, errors.New("runtime asset proxy must use HTTP or HTTPS")
 	}
