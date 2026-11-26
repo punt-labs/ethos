@@ -556,18 +556,18 @@ func runDarwinHandoffCheck(ctx context.Context, profile, checkout, cwd string, e
 	if !launched {
 		return "", fmt.Errorf("sandbox launch did not complete: %v: %s", err, stderr.data)
 	}
-	return darwinHandoffCommandVerdict(err, check, stdout, stderr)
+	return darwinHandoffCommandVerdict(err, check, stdout, stderr, "snapshot check did not complete")
 }
 
-func darwinHandoffCommandVerdict(err error, check editCheck, stdout, stderr editTail) (string, error) {
+func darwinHandoffCommandVerdict(err error, check editCheck, stdout, stderr editTail, interrupted string) (string, error) {
 	if err != nil {
 		var exit *exec.ExitError
-		if !errors.As(err, &exit) {
-			return "", errors.New("check did not complete")
+		if !errors.As(err, &exit) || exit.ExitCode() < 0 {
+			return "", errors.New(interrupted)
 		}
 		switch code := exit.ExitCode(); code {
-		case -1, 128 + int(unix.SIGHUP), 128 + int(unix.SIGINT), 128 + int(unix.SIGKILL), 128 + int(unix.SIGTERM):
-			return "", fmt.Errorf("check killed or interrupted (%v); not cached", err)
+		case 128 + int(unix.SIGHUP), 128 + int(unix.SIGINT), 128 + int(unix.SIGKILL), 128 + int(unix.SIGTERM):
+			return "", fmt.Errorf("check exited %d (likely killed or interrupted); not cached", code)
 		}
 	}
 	if err == nil && (!check.failOnOutput || len(stdout.data) == 0) {
