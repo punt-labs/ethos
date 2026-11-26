@@ -891,12 +891,19 @@ func pinNestedCgoToolchain(t *testing.T, goroot string) string {
 	require.NoError(t, err)
 	store := filepath.Join(machineRoot, "runtimes")
 	require.NoError(t, os.MkdirAll(store, 0o700))
-	archive := filepath.Join(store, "toolchain.tar.gz")
-	file, err := os.Create(archive)
+	file, err := os.CreateTemp(store, "toolchain-*.tar.gz")
 	require.NoError(t, err)
+	archive := file.Name()
+	t.Cleanup(func() {
+		if err := os.Remove(archive); !errors.Is(err, os.ErrNotExist) {
+			assert.NoError(t, err)
+		}
+	})
 	digest := sha256.New()
 	compressed, err := gzip.NewWriterLevel(io.MultiWriter(file, digest), gzip.BestSpeed)
-	require.NoError(t, err)
+	if err != nil {
+		require.NoError(t, errors.Join(err, file.Close()))
+	}
 	bundle := tar.NewWriter(compressed)
 	err = errors.Join(bundle.AddFS(os.DirFS(goroot)), bundle.Close(), compressed.Close(), file.Close())
 	require.NoError(t, err)
