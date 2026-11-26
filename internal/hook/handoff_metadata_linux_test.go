@@ -81,21 +81,32 @@ func TestHandoffWorktreePrivateVarTmp(t *testing.T) {
 	host, err := os.MkdirTemp("/var/tmp", "ethos-host-var-tmp-")
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(host)) })
-	root, run := handoffMetadataFixture(t, `set -eu
+	private := filepath.Join(host, "private")
+	marker := filepath.Join(private, "file")
+	const emptyVarTmp = `set -eu
 test -d /var/tmp
 test -z "$(ls -A /var/tmp)"
-mkdir /var/tmp/private
-echo marker > /var/tmp/private/file
-chmod 0555 /var/tmp/private
-`)
+`
+	root, run := handoffMetadataFixture(t, emptyVarTmp+fmt.Sprintf(`mkdir -p %q
+echo marker > %q
+chmod 0555 %q
+`, private, marker, private))
 	feedback := run()
 	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
 	require.Empty(t, feedback.Blocking)
+	require.NoFileExists(t, marker)
 	policy, err := handoffDataFixtureLocation(t, root).Layout()
 	require.NoError(t, err)
 	leftovers, err := filepath.Glob(filepath.Join(policy.LocalRoot(), "handoff-v1", "snapshot-*.ethos-tmp"))
 	require.NoError(t, err)
 	require.Empty(t, leftovers)
+
+	writeFile(t, filepath.Join(root, "gate.sh"), emptyVarTmp)
+	require.Equal(t, StageFeedback{}, run())
+	require.NoFileExists(t, marker)
+	slots, err := filepath.Glob(filepath.Join(policy.LocalRoot(), "handoff-v1", "*", "*.json"))
+	require.NoError(t, err)
+	require.Len(t, slots, 2)
 
 	path := filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml")
 	profile, err := os.ReadFile(path)
