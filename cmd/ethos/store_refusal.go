@@ -68,6 +68,7 @@ var storeUses = map[string]storeUse{
 	"ethos checks":        storeGlobalOnly, "ethos checks schema": storeGlobalOnly,
 	"ethos handoff": storeGlobalOnly, "ethos handoff fetch-runtime": storeRefuses,
 	"ethos handoff refresh-data": storeRefuses,
+	"ethos handoff approve-live": storeRefuses, "ethos handoff revoke-live": storeHandlesError,
 
 	"ethos version": storeGlobalOnly, "ethos completion": storeGlobalOnly,
 	"ethos uninstall": storeGlobalOnly, "ethos identity schema": storeGlobalOnly,
