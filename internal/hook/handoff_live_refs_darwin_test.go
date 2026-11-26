@@ -20,3 +20,13 @@ func TestDarwinHandoffLiveTagChangeInvalidatesVerdict(t *testing.T) {
 	ctx, _ = diagnostic.WithHookInvocation(t.Context())
 	require.Contains(t, RunStageChecks(ctx, root, "worker", "handoff").Blocking, "exit status 1")
 }
+
+func TestDarwinHandoffLiveUnbornRefChangeInvalidatesVerdict(t *testing.T) {
+	root := approvedDarwinLiveGate(t, `[/bin/sh, -c, 'test "$(git symbolic-ref refs/tags/gate-input)" = refs/heads/missing-a']`, "")
+	stageGit(t, root, "symbolic-ref", "refs/tags/gate-input", "refs/heads/missing-a")
+	ctx, _ := diagnostic.WithHookInvocation(t.Context())
+	require.Equal(t, StageFeedback{}, RunStageChecks(ctx, root, "worker", "handoff"))
+	stageGit(t, root, "symbolic-ref", "refs/tags/gate-input", "refs/heads/missing-b")
+	ctx, _ = diagnostic.WithHookInvocation(t.Context())
+	require.Contains(t, RunStageChecks(ctx, root, "worker", "handoff").Blocking, "exit status 1")
+}

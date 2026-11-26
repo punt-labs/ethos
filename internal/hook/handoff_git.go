@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -54,12 +55,63 @@ func handoffGitOutput(ctx context.Context, checkout string, args ...string) ([]b
 func captureLiveHandoffRefs(ctx context.Context, checkout string) (handoffGitView, error) {
 	ctx, cancel := context.WithTimeout(ctx, gateInputTime)
 	defer cancel()
-	refs, err := handoffGitOutput(ctx, checkout, "for-each-ref", "--sort=refname", "--format=%(objectname) %(refname) %(symref)")
+	paths, err := handoffGitOutput(ctx, checkout, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir")
 	if err != nil {
 		return handoffGitView{}, errors.New("cannot capture live-verified Git refs")
 	}
-	digest := sha256.Sum256(refs)
-	return handoffGitView{fingerprint: hex.EncodeToString(digest[:])}, nil
+	local, common, ok := strings.Cut(strings.TrimSuffix(string(paths), "\n"), "\n")
+	if !ok || !filepath.IsAbs(local) || !filepath.IsAbs(common) || strings.Contains(common, "\n") {
+		return handoffGitView{}, errors.New("cannot capture live-verified Git ref paths")
+	}
+	h := sha256.New()
+	budget := &gateHashBudget{ctx: ctx, dst: h, remaining: 8 << 20}
+	if err := digestLiveGitRefs(budget, local, []string{"HEAD", "refs"}); err != nil {
+		return handoffGitView{}, fmt.Errorf("cannot capture live-verified Git refs: %w", err)
+	}
+	entries := []string{"packed-refs"}
+	if common != local {
+		entries = append(entries, "refs")
+	}
+	if err := digestLiveGitRefs(budget, common, entries); err != nil {
+		return handoffGitView{}, fmt.Errorf("cannot capture live-verified Git refs: %w", err)
+	}
+	return handoffGitView{fingerprint: hex.EncodeToString(h.Sum(nil))}, nil
+}
+
+func digestLiveGitRefs(budget *gateHashBudget, dir string, entries []string) error {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	for _, entry := range entries {
+		err := fs.WalkDir(root.FS(), entry, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				if path == entry && entry != "HEAD" && errors.Is(err, fs.ErrNotExist) {
+					return nil
+				}
+				return err
+			}
+			mode := d.Type()
+			if d.IsDir() {
+				_, err := fmt.Fprintf(budget, "%q\x00dir\x00", path)
+				return err
+			}
+			if !mode.IsRegular() {
+				return fmt.Errorf("unsupported Git ref type at %q", path)
+			}
+			data, err := readHandoffGitFile(budget.ctx, filepath.Join(dir, path))
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(budget, "%q\x00%d\x00%s", path, len(data), data)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func captureHandoffGit(ctx context.Context, checkout string, profile *checkset.WorktreeSnapshot) (handoffGitView, error) {
