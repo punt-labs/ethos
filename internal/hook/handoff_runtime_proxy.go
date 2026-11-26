@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"time"
 )
@@ -27,9 +28,13 @@ func handoffRuntimeProxyDial(direct *net.Dialer) func(context.Context, string, s
 }
 
 func dialHandoffRuntimeProxy(ctx context.Context, network, addr string, proxy *url.URL, proxyTLS *tls.Config) (net.Conn, error) {
+	return dialHandoffRuntimeProxyResolved(ctx, network, addr, proxy, proxyTLS, net.DefaultResolver.LookupNetIP)
+}
+
+func dialHandoffRuntimeProxyResolved(ctx context.Context, network, addr string, proxy *url.URL, proxyTLS *tls.Config, lookup func(context.Context, string, string) ([]netip.Addr, error)) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	target, err := pinHandoffRuntimeTarget(ctx, addr)
+	targets, err := pinHandoffRuntimeTargets(ctx, addr, lookup)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +56,25 @@ func dialHandoffRuntimeProxy(ctx context.Context, network, addr string, proxy *u
 	}
 	// Only the operator's proxy endpoint may be local. CONNECT uses the
 	// checked IP, and the outer transport authenticates the asset hostname.
-	conn, err := dial(ctx, network, net.JoinHostPort(proxy.Hostname(), port))
+	endpoint := net.JoinHostPort(proxy.Hostname(), port)
+	deadline, _ := ctx.Deadline()
+	for i, target := range targets {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		attempt, stop := context.WithTimeout(ctx, time.Until(deadline)/time.Duration(len(targets)-i))
+		var conn net.Conn
+		conn, err = openHandoffRuntimeTunnel(attempt, dial, network, endpoint, target, proxy)
+		stop()
+		if err == nil {
+			return conn, nil
+		}
+	}
+	return nil, err
+}
+
+func openHandoffRuntimeTunnel(ctx context.Context, dial func(context.Context, string, string) (net.Conn, error), network, endpoint, target string, proxy *url.URL) (net.Conn, error) {
+	conn, err := dial(ctx, network, endpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -68,24 +91,26 @@ func dialHandoffRuntimeProxy(ctx context.Context, network, addr string, proxy *u
 	return conn, nil
 }
 
-func pinHandoffRuntimeTarget(ctx context.Context, addr string) (string, error) {
+func pinHandoffRuntimeTargets(ctx context.Context, addr string, lookup func(context.Context, string, string) ([]netip.Addr, error)) ([]string, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	ips, err := lookup(ctx, "ip", host)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if len(ips) == 0 {
-		return "", errors.New("runtime asset address did not resolve")
+		return nil, errors.New("runtime asset address did not resolve")
 	}
+	targets := make([]string, 0, len(ips))
 	for _, ip := range ips {
 		if !publicHandoffRuntimeIP(ip) {
-			return "", errors.New("runtime asset address is not public")
+			return nil, errors.New("runtime asset address is not public")
 		}
+		targets = append(targets, net.JoinHostPort(ip.Unmap().String(), port))
 	}
-	return net.JoinHostPort(ips[0].Unmap().String(), port), nil
+	return targets, nil
 }
 
 func connectHandoffRuntimeProxy(conn net.Conn, target string, proxy *url.URL) error {

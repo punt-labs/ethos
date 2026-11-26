@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -292,6 +293,35 @@ func TestHandoffRuntimeProxyConnect(t *testing.T) {
 			require.ErrorContains(t, dial(target), "proxy must use HTTP or HTTPS")
 		})
 	}
+}
+
+func TestHandoffRuntimeProxyFallsBackToNextPublicAddress(t *testing.T) {
+	first := netip.MustParseAddr("2001:db8::1")
+	second := netip.MustParseAddr("192.0.2.1")
+	calls := make(chan string, 2)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		calls <- req.Host
+		if req.Method != http.MethodConnect || req.Host != "192.0.2.1:443" {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Length", "0")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer proxy.Close()
+	endpoint, err := url.Parse(proxy.URL)
+	require.NoError(t, err)
+	lookup := func(_ context.Context, network, host string) ([]netip.Addr, error) {
+		require.Equal(t, "ip", network)
+		require.Equal(t, "runtime.example", host)
+		return []netip.Addr{first, second}, nil
+	}
+	conn, err := dialHandoffRuntimeProxyResolved(context.Background(), "tcp", "runtime.example:443", endpoint, nil, lookup)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	require.Len(t, calls, 2)
+	require.Equal(t, "[2001:db8::1]:443", <-calls)
+	require.Equal(t, "192.0.2.1:443", <-calls)
 }
 
 func TestHandoffRuntimeProxyRejectsBrokenConnections(t *testing.T) {
