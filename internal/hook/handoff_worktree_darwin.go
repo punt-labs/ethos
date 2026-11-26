@@ -6,31 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 
 	"github.com/punt-labs/ethos/v4/internal/checkset"
 )
 
 func configureDarwinWorktree(roots handoffRoots, live string, profile *checkset.WorktreeSnapshot) ([]string, []string, error) {
-	platform := profile.System.Platforms[runtime.GOOS+"-"+runtime.GOARCH]
-	hasSystem := func(inputs checkset.SnapshotSystemInputs) bool {
-		return len(inputs.Tools)+len(inputs.Files)+len(inputs.Dirs) != 0
-	}
-	for _, feature := range []struct {
-		name string
-		used bool
-	}{
-		{"runtime extraction", profile.Runtime != nil},
-		{"system inputs", hasSystem(profile.System.SnapshotSystemInputs) || hasSystem(platform)},
-		{"data", len(profile.Data) != 0},
-		{"scratch.seed", len(profile.Scratch.Seed) != 0},
-		{"git", profile.Git != nil},
-		{"network", profile.Network != ""},
-		{"prehydrate", profile.Prehydrate != nil},
-	} {
-		if feature.used {
-			return nil, nil, fmt.Errorf("worktree snapshot feature not implemented: %s", feature.name)
-		}
+	if field := unsupportedWorktreeField(profile); field != "" {
+		return nil, nil, fmt.Errorf("worktree profile field %s not supported by this runner yet", field)
 	}
 	env, err := roots.environment(profile, checkset.SnapshotPlatform{}, worktreeSandboxPATH)
 	if err != nil {

@@ -347,7 +347,7 @@ func TestDarwinHandoffWorktreeContract(t *testing.T) {
 	require.NoFileExists(t, filepath.Join(root, "scratch", "local"))
 	check.policy.WorktreeSnapshot.Network = "loopback"
 	result, err = executeHandoffSnapshot(ctx, t.TempDir(), root, proof, inputs, check)
-	require.ErrorContains(t, err, "feature not implemented: network")
+	require.ErrorContains(t, err, "worktree profile field network not supported by this runner yet")
 	require.Empty(t, result)
 	check.policy.WorktreeSnapshot.Network = ""
 	check.policy.WorktreeSnapshot.Scratch.Checkout = []string{"README"}

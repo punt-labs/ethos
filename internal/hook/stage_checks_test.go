@@ -5,6 +5,7 @@ package hook
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -143,6 +144,46 @@ func TestHandoffSnapshotRuntimeDefersWithoutVerifiedArchive(t *testing.T) {
 	feedback = run()
 	require.Contains(t, feedback.Blocking, "runtime-digest-mismatch")
 	require.Contains(t, feedback.Notice, "make check")
+}
+
+func TestHandoffWorktreeDefersUnimplementedFields(t *testing.T) {
+	const archive = "fixture bundle"
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(archive)))
+	for _, tc := range []struct{ field, yaml string }{
+		{"runtime", fmt.Sprintf("runtime: {platforms: {%s-%s: {bundle: demo, sha256: %q}}}", runtime.GOOS, runtime.GOARCH, digest)},
+		{"scratch.seed", "scratch: {seed: {cache: cache}}"},
+		{"scratch.files", "scratch: {files: [output.tmp]}"},
+		{"prehydrate", "prehydrate: {run: [sh, seed.sh]}"},
+		{"git", "git: {}"},
+		{"network", "network: loopback"},
+		{"system.tools", "system: {tools: [sh]}"},
+		{"system.files", "system: {files: [/etc/os-release]}"},
+		{"system.dirs", "system: {dirs: [/usr/share]}"},
+		{"system.platforms", fmt.Sprintf("system: {platforms: {%s-%s: {tools: [sh]}}}", runtime.GOOS, runtime.GOARCH)},
+		{"data", "data: [{name: fixture, url: 'https://example.com/data', max_age_hours: 1, mount: fixture}]"},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			root, _ := postEditFixture(t)
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			writeFile(t, filepath.Join(home, ".punt-labs/ethos/runtimes", digest+".tar.gz"), archive)
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml"), "checks:\n  full-gate:\n    profile: linux-worktree-v1\n    epoch: test\n    sources: {mode: worktree}\n    "+tc.yaml+"\n")
+			writeFile(t, filepath.Join(root, "Makefile"), "check:\n\t@echo must-not-run; exit 23\n")
+			check := "  - name: full-gate\n    stage: handoff\n    files: all\n    adapter: make\n    target: check\n"
+			reason := "worktree profile field " + tc.field + " not supported by this runner yet"
+			checkPolicy(t, root, "project", check)
+			feedback := RunStageChecks(context.Background(), root, "worker", "handoff")
+			require.Contains(t, feedback.Blocking, reason)
+			require.Contains(t, feedback.Notice, "make check")
+			require.NotContains(t, feedback.Blocking, "must-not-run")
+			checkPolicy(t, root, "project", check+"    on_fail: advisory\n")
+			feedback = RunStageChecks(context.Background(), root, "worker", "handoff")
+			require.Empty(t, feedback.Blocking)
+			require.Contains(t, feedback.Advisory, reason)
+			require.Contains(t, feedback.Advisory, "make check")
+		})
+	}
 }
 
 func TestHandoffChecks(t *testing.T) {
