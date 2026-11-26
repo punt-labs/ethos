@@ -240,8 +240,10 @@ def check(root=ROOT, *, nightly=False):
         require(effect(rules, "subagent", "bwk") == "deny", f"{path.stem}: nested delegation allowed")
         require("task-result" in body and "docs/opencode-workflow.md" in body,
                 f"{path.stem}: missing result protocol")
+        require(effect(rules, "shell", "punt release run 1.0.0") == "deny",
+                f"{path.stem}: release allowed")
         if path.stem != "bwk":
-            for command in ("git push origin main", "gh release create v1", "punt release 1.0.0",
+            for command in ("git push origin main", "gh release create v1",
                             "make --eval 'x: ; true' x", "python3 -c 'print(1)'"):
                 require(effect(rules, "shell", command) == "deny", f"{path.stem}: overly broad shell")
             require(effect(rules, "edit", "internal/a.go") == "deny", f"{path.stem}: source edits allowed")
@@ -297,7 +299,7 @@ def check(root=ROOT, *, nightly=False):
 
 
 def prepare_nightly(root):
-    """Switch model pins in the disposable Actions checkout before starting OpenCode."""
+    """Switch model pins in a disposable checkout before starting OpenCode."""
     config = check(root)
     config["model"] = NIGHTLY_BUILD.split("#")[0]
     config["providers"] = NIGHTLY_PROVIDERS
@@ -397,11 +399,13 @@ def local_output(path, root=ROOT):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("check", "doctor"):
-        sub.add_parser(name)
+    sub.add_parser("check")
     sub.add_parser("prepare-nightly")
+    doctor_parser = sub.add_parser("doctor")
     smoke_parser = sub.add_parser("smoke")
-    smoke_parser.add_argument("--nightly", action="store_true", help="Verify the hosted OpenAI roster")
+    for live_parser in (doctor_parser, smoke_parser):
+        live_parser.add_argument("--nightly", action="store_true",
+                                 help="Verify the direct OpenAI roster after prepare-nightly")
     smoke_parser.add_argument("--stage", action="append", choices=SMOKE_STAGES,
                               help="Run only selected stages (repeatable); default: all stages")
     source = sub.add_parser("sources")
@@ -435,7 +439,10 @@ def main():
                 handle.write(text)
             print(f"validated {args.task} round {args.round} author {args.author} -> {output}")
         elif args.command == "doctor":
-            doctor(ROOT)
+            if args.nightly:
+                doctor(ROOT, nightly=True)
+            else:
+                doctor(ROOT)
         elif args.nightly:
             smoke(ROOT, args.stage, nightly=True)
         else:

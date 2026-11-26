@@ -9,7 +9,7 @@ so Git checkouts remain portable; the other commands use native Markdown files.
 
 ## Requirements
 
-Use the already authenticated `bifrost` provider with its
+By default, use the already authenticated `bifrost` provider with its
 `@opencode/ai/providers/openai-compatible/responses` package, endpoint and key
 configured outside this repository. Project provider overrides contain model
 configuration only. A Bifrost virtual key must route through Bifrost; a direct
@@ -92,6 +92,38 @@ Each invocation retains an independent receipt with `scope` (full/targeted),
 requested/completed stages and sessions; a targeted pass certifies only its
 listed stages, never a full smoke or unrun model turn. Every selection first
 runs the live doctor. No old failed receipt is rewritten into a pass.
+
+### Direct OpenAI discovery demo
+
+`doctor-opencode` and `smoke-opencode-discovery` can use the Nightly's direct
+OpenAI roster without changing the Bifrost defaults. Prepare a disposable linked
+worktree; the preparation command rewrites its local model pins. The operator
+must review and approve `.envrc` in this worktree for the four local MCP
+servers that launch through `direnv exec`.
+
+```bash
+git worktree add --detach ../ethos-direct-openai HEAD
+cd ../ethos-direct-openai
+direnv allow
+python3 -B scripts/opencode.py prepare-nightly
+```
+
+Supply `OPENAI_API_KEY` (with access to `gpt-6-astra`, `gpt-6.1-sol`, and
+`gpt-5.6-terra`) and the required MCP environment through your approved secret
+flow. Restart OpenCode from that same environment: `opencode service start`
+reuses an already-running service, which won't inherit new credentials.
+Coordinate the restart first if others are using that service.
+
+```bash
+opencode service restart
+make doctor-opencode OPENCODE_PROFILE=direct-openai
+make smoke-opencode-discovery OPENCODE_PROFILE=direct-openai
+```
+
+Keep the smoke receipt from the disposable worktree's `.tmp/opencode/` before
+removing the worktree.
+
+### What the checks verify
 
 The offline gate needs no provider, network, installed siblings, or OpenCode.
 It checks native shapes, roster, protected paths, formatter policy, source

@@ -215,6 +215,11 @@ func HandleSessionStartContext(ctx context.Context, r io.Reader, deps SessionSta
 	// only after the human greeting (retired repo). See runAgentPipeline.
 	var pipelineErr error
 	if storeFailure == nil {
+		if loc.Checkout != "" {
+			if enabled, err := resolve.EnabledMarker(loc.Checkout); err == nil && enabled {
+				exportSessionEnv()
+			}
+		}
 		pipelineErr = runAgentPipeline(loc, store, deps, repoRoot)
 	}
 
@@ -345,6 +350,83 @@ func runAgentPipeline(loc resolve.Located, store identity.IdentityStore, deps Se
 		pruneStaleAgents(checkoutRoot, plan.Owned, installed)
 	}
 	return nil
+}
+
+const gitOptionalLocksExport = "export GIT_OPTIONAL_LOCKS=0\n"
+
+// exportSessionEnv persists GIT_OPTIONAL_LOCKS=0 to Claude Code's
+// CLAUDE_ENV_FILE when set, so Bash commands in the session inherit it even in
+// repositories that have not re-run `ethos enable` (DES-086). An existing
+// GIT_OPTIONAL_LOCKS in the process environment or in CLAUDE_ENV_FILE is
+// preserved. Non-regular targets (symlinks, directories, FIFOs) and I/O errors
+// are logged to stderr and never fail session startup.
+func exportSessionEnv() {
+	envFile := strings.TrimSpace(os.Getenv("CLAUDE_ENV_FILE"))
+	if envFile == "" {
+		return
+	}
+	if _, set := os.LookupEnv("GIT_OPTIONAL_LOCKS"); set {
+		return
+	}
+	if err := appendEnvDefault(envFile, "GIT_OPTIONAL_LOCKS", gitOptionalLocksExport); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: CLAUDE_ENV_FILE: %v\n", err)
+	}
+}
+
+func appendEnvDefault(path, key, line string) error {
+	f, err := openEnvFile(path)
+	if err != nil {
+		return err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return err
+	}
+	if !fi.Mode().IsRegular() {
+		_ = f.Close()
+		return fmt.Errorf("refusing non-regular file %s", path)
+	}
+	existing, err := io.ReadAll(f)
+	if err != nil {
+		_ = f.Close()
+		return err
+	}
+	if hasEnvAssignment(string(existing), key) {
+		return f.Close()
+	}
+	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+		_ = f.Close()
+		return err
+	}
+	var writeErr error
+	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
+		_, writeErr = f.WriteString("\n" + line)
+	} else {
+		_, writeErr = f.WriteString(line)
+	}
+	closeErr := f.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
+}
+
+func hasEnvAssignment(content, key string) bool {
+	prefix := key + "="
+	for _, raw := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(raw)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if rest, ok := strings.CutPrefix(trimmed, "export "); ok {
+			trimmed = strings.TrimSpace(rest)
+		}
+		if strings.HasPrefix(trimmed, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // pruneStaleAgents deletes a generated agent file this session no longer

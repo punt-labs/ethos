@@ -191,7 +191,7 @@ deterministic; the port adds the exclusive lock and the code-block scan.
 - **Canonical string.** Exactly `@.punt-labs/ethos/CLAUDE.md` — forward
   slashes, no `./`, no trailing slash, no surrounding whitespace, one
   physical line. This is what `enable` writes, `disable` matches, and
-  `punt audit` greps; it must be byte-identical across all 15 CLIs (§2.4).
+  `punt repo audit` greps; it must be byte-identical across all 15 CLIs (§2.4).
 - **Terminator-insensitive idempotent match.** Presence is decided by
   comparing the canonical line against each host line **net of its
   terminator** (strip trailing `\r`, `\n`, `\r\n` before comparing), so a
@@ -513,7 +513,7 @@ order they choose; `enable` never writes identity config, and `disable`
 never removes it. The repo config file is **no longer** an enabled signal —
 the marker is.
 
-## `punt audit` checks ethos must satisfy (acceptance criteria)
+## `punt repo audit` checks ethos must satisfy (acceptance criteria)
 
 From §2.11 (and punt-labs-dir PLD-11, keyed by the marker):
 
@@ -543,8 +543,15 @@ Running `ethos enable` is the user's consent to use ethos in this repo
 (punt-kit `permissions.md` §6). It adds `Bash(ethos:*)`,
 `mcp__plugin_ethos_self__*`, and `Skill(ethos:*)` to `permissions.allow`.
 Exact rules in `permissions.ask` keep state-changing CLI groups, MCP tools, and
-skills prompt-gated even though the broad allow also matches. `disable` removes
-exactly the current allow and ask values.
+skills prompt-gated even though the broad allow also matches. It also sets
+`env.GIT_OPTIONAL_LOCKS` to `"0"` when absent so background `git status` and
+`git diff` calls in agent sessions do not take `.git/index.lock` (DES-086);
+an existing value set by the repository is preserved. `disable` removes
+exactly the current allow and ask values and removes `env.GIT_OPTIONAL_LOCKS`
+only when its value is still `"0"` (dropping an empty `env` object); like the
+owned permission rules, this is stateless (no provenance sidecar), so a
+pre-existing `"0"` is also removed on `disable` while any non-default override
+(such as `"1"`) is preserved.
 `~/.claude/settings.json` is never edited, and no `ethos-dev` rule is granted:
 the dev plugin only exists in a maintainer's checkout.
 
@@ -608,7 +615,7 @@ is nothing to retire — the migration is pure convergence:
 - **Hooks-only `enable` verb** (the leader's rejected first bead). A verb
   that only chains git hooks and skips the guide, marker, and import line
   fails §2.3 items 1–3 and §2.7. The marker is the load-bearing signal for
-  `punt audit` and the hook gates; without it there is no three-state
+  `punt repo audit` and the hook gates; without it there is no three-state
   model. Rejected.
 - **`install.sh`-owned per-repo enablement** (the v4.1.1 arrangement). A
   machine-scoped installer reaching into a specific repo's hooks conflates
