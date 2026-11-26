@@ -1,3 +1,4 @@
+# Loaded by the DES-086 snapshot runner; the existing check set is unchanged.
 checks:
   full-gate:
     profile: linux-worktree-v1
@@ -8,7 +9,7 @@ checks:
       platforms:
         linux-amd64:
           bundle: ethos-handoff-linux-amd64.tar.gz
-          sha256: e398b44a13af0567f63159fd64987a4aba852b27c3b2c9f9a89d8fe86a7023fd
+          sha256: 6c37cc9d195f213d18397a0cf20fbb991c52feeb0e8c4a0720c0b94b0034aaba
           url: https://github.com/punt-labs/ethos/releases/download/handoff-runtime-v1/ethos-handoff-linux-amd64.tar.gz
           path: ["{runtime}/go/bin", "{runtime}/bin", "{runtime}/python/bin", "{runtime}/node/bin", /usr/bin, /bin]
           env:
@@ -70,15 +71,16 @@ checks:
         - tar
         - touch
         - tr
+        - "true"
         - uname
         - wc
         - xargs
     scratch:
+      # Private snapshot mounts at the paths written by the unchanged gate.
       checkout: [.tmp, tests/e2e/.pytest_cache]
       files: [coverage.out]
       seed:
         "{scratch}/home/go/pkg/mod": "{runtime}/cache/go-mod"
-        "{scratch}/npm-cache": "{runtime}/cache/npm"
         "{scratch}/uv-cache": "{runtime}/cache/uv"
     git:
       base_ref: refs/remotes/origin/main

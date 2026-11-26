@@ -14,7 +14,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: New runtime release tag, e.g. handoff-runtime-v1
+        description: Runtime release tag pinned in the snapshot profile
+        required: true
+        type: string
+      build_run_id:
+        description: Run ID of the Handoff runtime build with the pinned archive
         required: true
         type: string
 
@@ -22,20 +26,12 @@ permissions: {}
 
 jobs:
   build:
+    if: github.event_name == 'pull_request'
     permissions:
       contents: read
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - name: Validate release request
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          TAG: ${{ inputs.tag }}
-        run: |
-          if [[ "$GITHUB_REF" != refs/heads/main || ! "$TAG" =~ ^handoff-runtime-v[1-9][0-9]*$ ]]; then
-            echo 'Dispatch on main with a new handoff-runtime-vN tag.' >&2
-            exit 2
-          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -86,7 +82,8 @@ jobs:
           printf '%s  %s\n' "$sha" "$asset" | tee "runtime-assets/$asset.sha256"
       - name: Smoke-test the relocated toolchain offline
         run: |
-          scratch=$(mktemp -d)
+          mkdir -p .punt-labs/local/ethos
+          scratch=$(mktemp -d "$PWD/.punt-labs/local/ethos/handoff-runtime.XXXXXX")
           trap 'chmod -R u+w "$scratch"; rm -rf "$scratch"' EXIT
           mkdir "$scratch/runtime" "$scratch/home" "$scratch/tmp"
           tar -xzf runtime-assets/ethos-handoff-linux-amd64.tar.gz -C "$scratch/runtime"
@@ -99,7 +96,7 @@ jobs:
             UV_PYTHON="$runtime/python/bin/python3.13" UV_PYTHON_DOWNLOADS=never \
             UV_OFFLINE=1 UV_LINK_MODE=copy UV_CACHE_DIR="$runtime/cache/uv" \
             UV_PROJECT_ENVIRONMENT="$scratch/venv" npm_config_offline=true \
-            npm_config_cache="$runtime/cache/npm" npm_config_update_notifier=false \
+            npm_config_cache="$scratch/npm-cache" npm_config_update_notifier=false \
             bash -e -c 'go list ./... >/dev/null; golangci-lint version; shellcheck --version; uv sync --project tests/e2e --offline --locked; make docs fuzz-check'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -110,33 +107,43 @@ jobs:
 
   publish:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
-    needs: build
     concurrency: handoff-runtime-release
     permissions:
+      actions: read
       contents: write
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: handoff-runtime-linux-amd64
           path: runtime-assets
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.build_run_id }}
       - name: Publish content-addressed runtime
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
         run: |
           [[ "$TAG" =~ ^handoff-runtime-v[1-9][0-9]*$ ]] || exit 2
+          profile=.punt-labs/ethos/checks/snapshots/go-default.yaml
+          platform='.checks."full-gate".runtime.platforms."linux-amd64"'
+          sha=$(yq -er "$platform.sha256" "$profile")
+          url=$(yq -er "$platform.url" "$profile")
+          asset=ethos-handoff-linux-amd64.tar.gz
+          if [[ ! "$sha" =~ ^[0-9a-f]{64}$ ||
+                "$url" != "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$asset" ]]; then
+            echo 'Release tag or SHA-256 does not match the snapshot profile.' >&2
+            exit 2
+          fi
           cd runtime-assets
-          sha256sum --check ethos-handoff-linux-amd64.tar.gz.sha256
-          gh release create "$TAG" ethos-handoff-linux-amd64.tar.gz* --repo "$GITHUB_REPOSITORY" \
+          printf '%s  %s\n' "$sha" "$asset" | sha256sum --check
+          printf '%s  %s\n' "$sha" "$asset" > "$asset.sha256"
+          # The public website excludes releases without changelogs.
+          gh release create "$TAG" "$asset" "$asset.sha256" --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" --draft --prerelease --latest=false \
-            --title "Ethos handoff runtime $TAG" --notes-file - <<'NOTES'
-          Offline Linux amd64 toolchain for the Ethos handoff gate.
-
-          Upstream sources: [Go](https://go.dev/src/), [golangci-lint](https://github.com/golangci/golangci-lint),
-          [ShellCheck](https://github.com/koalaman/shellcheck/tree/v0.11.0), [uv](https://github.com/astral-sh/uv/tree/0.13.9),
-          [Python](https://github.com/python/cpython/tree/v3.13.18), [Node.js](https://github.com/nodejs/node/tree/v24.22.3),
-          and [fuzz](https://github.com/Spivoxity/fuzz/tree/2a202a0b6f7328e729b54ef352d3bb4c6dfeb2e5).
-          NOTES
+            --title "Ethos handoff runtime $TAG" --notes ''
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false

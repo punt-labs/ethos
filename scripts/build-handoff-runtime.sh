@@ -11,7 +11,7 @@ output=$(cd -- "$1" && pwd -P)
 work=$(mktemp -d "$output/.ethos-runtime.XXXXXX")
 trap 'chmod -R u+w -- "$work"; rm -rf -- "$work"' EXIT
 runtime=$work/runtime
-mkdir -p "$runtime/bin" "$runtime/cache/"{go-mod,npm,uv} "$runtime/licenses" \
+mkdir -p "$runtime/bin" "$runtime/cache/"{go-mod,uv} "$runtime/licenses" \
     "$runtime/node/"{bin,lib/node_modules} "$work/"{home,tmp}
 
 go_tool=$(command -v go)
@@ -73,10 +73,19 @@ python_tool=$runtime/python/bin/python3.13
     "UV_CACHE_DIR=$runtime/cache/uv" "UV_PROJECT_ENVIRONMENT=$work/venv" UV_LINK_MODE=copy \
     uv --no-config sync --project "$repo/tests/e2e" --locked >&2
 
-"${isolated[@]}" "npm_config_cache=$runtime/cache/npm" npm_config_ignore_scripts=true \
-    npm_config_audit=false npm_config_fund=false npm_config_update_notifier=false \
-    npx --yes --package=markdownlint-cli2 -- node --version >&2
-rm -rf -- "$runtime/cache/npm/_logs" "$runtime/cache/go-mod/cache/vcs"
+"${isolated[@]}" "npm_config_cache=$work/npm-cache" npm_config_update_notifier=false \
+    npm install --global --prefix "$runtime/node" --ignore-scripts --no-audit --no-fund \
+    markdownlint-cli2@0.24.2 >&2
+printf '%s\n' \
+    'https://go.dev/src/' \
+    "https://github.com/golangci/golangci-lint/tree/$golangci_version" \
+    'https://github.com/koalaman/shellcheck/tree/v0.11.0' \
+    "https://github.com/astral-sh/uv/tree/$uv_version" \
+    "https://github.com/python/cpython/tree/v$python_version" \
+    "https://github.com/nodejs/node/tree/$("$node_tool" --version)" \
+    'https://github.com/Spivoxity/fuzz/tree/2a202a0b6f7328e729b54ef352d3bb4c6dfeb2e5' \
+    'https://github.com/DavidAnson/markdownlint-cli2/tree/v0.24.2' > "$runtime/licenses/SOURCES"
+rm -rf -- "$runtime/cache/go-mod/cache/vcs"
 find "$runtime/cache/go-mod/cache/download" -name '*.lock' -type f -delete
 
 # Normalize tar metadata. Package-manager cache bytes can differ across
