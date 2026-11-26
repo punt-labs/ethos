@@ -33,6 +33,8 @@ const gateRecordAge = 24 * time.Hour
 const gateRecordsPerStripe = 8
 const gateRecordBytes = 512 << 10
 
+var errHandoffScratchShadowsInput = errors.New("checkout scratch shadows snapshot content")
+
 var handoffRunnerBuild = sync.OnceValues(func() (string, error) {
 	f, err := os.Open("/proc/self/exe")
 	if err != nil {
@@ -181,8 +183,15 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 
 	inputCtx, cancel := context.WithTimeout(ctx, gateInputTime)
 	preserveMode := check.WorktreeSnapshot != nil
-	state, proof, err := handoffGateInputs(inputCtx, root, check.Snapshot.Inputs, preserveMode)
+	var scratchFiles []string
+	if preserveMode {
+		scratchFiles = check.WorktreeSnapshot.Scratch.Files
+	}
+	state, proof, err := handoffGateInputs(inputCtx, root, check.Snapshot.Inputs, preserveMode, scratchFiles...)
 	cancel()
+	if errors.Is(err, errHandoffScratchShadowsInput) {
+		return deferGate(err.Error())
+	}
 	if err != nil {
 		return deferGate("cannot verify declared snapshot inputs within the key budget")
 	}
@@ -243,7 +252,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	verifyCurrent := func(when string) string {
 		verify, cancel := context.WithTimeout(ctx, gateInputTime)
 		defer cancel()
-		currentState, currentProof, err := handoffGateInputs(verify, root, check.Snapshot.Inputs, preserveMode)
+		currentState, currentProof, err := handoffGateInputs(verify, root, check.Snapshot.Inputs, preserveMode, scratchFiles...)
 		if err != nil || currentState != state || currentProof != proof {
 			return "checkout changed " + when
 		}
@@ -521,7 +530,20 @@ func retainHandoffResults(pin *os.File, slot string, waited bool, now time.Time)
 	return !busy || hasSlot || count < gateRecordsPerStripe, err
 }
 
-func handoffGateInputs(ctx context.Context, root string, inputs []string, preserveMode bool) (string, string, error) {
+func handoffGateInputs(ctx context.Context, root string, inputs []string, preserveMode bool, scratchFiles ...string) (string, string, error) {
+	if len(scratchFiles) > 0 {
+		args := []string{"ls-files", "--cached", "-z", "--"}
+		for _, file := range scratchFiles {
+			args = append(args, ":(top,literal)"+file)
+		}
+		tracked, err := handoffGitOutput(ctx, root, args...)
+		if err != nil {
+			return "", "", err
+		}
+		if len(tracked) > 0 {
+			return "", "", errHandoffScratchShadowsInput
+		}
+	}
 	state, err := checkoutStateWithBudget(ctx, root)
 	if err != nil {
 		return "", "", err

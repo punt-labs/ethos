@@ -703,6 +703,11 @@ func TestHandoffWorktreeRunsWithPrivateScratchFile(t *testing.T) {
 	feedback = run()
 	require.Contains(t, feedback.Blocking, "checkout scratch shadows snapshot content")
 	require.NotContains(t, feedback.Blocking, "intentionally-broken")
+
+	require.NoError(t, os.Remove(filepath.Join(root, "output.tmp")))
+	feedback = run()
+	require.Contains(t, feedback.Blocking, "checkout scratch shadows snapshot content")
+	require.NotContains(t, feedback.Blocking, "intentionally-broken")
 }
 
 func TestHandoffWorktreeRunsDirectCommands(t *testing.T) {

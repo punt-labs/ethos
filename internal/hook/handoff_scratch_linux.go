@@ -12,8 +12,6 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
-var errHandoffScratchShadowsInput = errors.New("checkout scratch shadows snapshot content")
-
 func prepareHandoffWorktreeScratch(root string) error {
 	roots := linuxHandoffRoots()
 	scratch := filepath.Join(root, roots.scratch)
