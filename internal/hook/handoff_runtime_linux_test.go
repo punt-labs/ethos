@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/stretchr/testify/require"
 )
 
@@ -52,6 +55,97 @@ func TestHandoffWorktreeRejectsUnsafeRuntime(t *testing.T) {
 			require.NotContains(t, feedback.Blocking, "must-not-run")
 		})
 	}
+}
+
+func TestHandoffRuntimeExtractionNeverPublishesUnverifiedTree(t *testing.T) {
+	ctx := context.Background()
+	var archive bytes.Buffer
+	zw := gzip.NewWriter(&archive)
+	tw := tar.NewWriter(zw)
+	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "valid-directory", Typeflag: tar.TypeDir, Mode: 0o755}))
+	require.NoError(t, tw.Close())
+	require.NoError(t, zw.Close())
+	base := t.TempDir()
+	dest := filepath.Join(base, "runtime")
+	bundle := newHandoffRuntime(base, checkset.SnapshotPlatform{
+		Bundle: "demo", SHA256: fmt.Sprintf("%x", sha256.Sum256(archive.Bytes())),
+	}, "")
+	writeFile(t, bundle.archive, archive.String())
+
+	busy, err := audit.TryLock(bundle.archive+".lock", func() error {
+		canceled, cancel := context.WithCancel(ctx)
+		cancel()
+		require.ErrorContains(t, bundle.extract(canceled, dest), "runtime extraction interrupted")
+		require.NoDirExists(t, dest)
+		return nil
+	})
+	require.NoError(t, err)
+	require.False(t, busy)
+
+	changed := bundle
+	changed.platform.SHA256 = fmt.Sprintf("%064d", 1)
+	require.ErrorContains(t, changed.verify(ctx), "runtime-digest-mismatch")
+	require.ErrorContains(t, changed.extract(ctx, dest), "runtime-digest-mismatch")
+	require.NoDirExists(t, dest)
+	require.ErrorContains(t, bundle.extract(ctx, filepath.Join(dest, "missing-parent")), "could not stage")
+	writeFile(t, dest, "previous destination")
+	require.ErrorContains(t, bundle.extract(ctx, dest), "could not publish")
+	content, err := os.ReadFile(dest)
+	require.NoError(t, err)
+	require.Equal(t, "previous destination", string(content))
+	entries, err := os.ReadDir(base)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+}
+
+func TestHandoffRuntimeArchiveRejectsConflictingMembers(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		members []tar.Header
+		reason  string
+	}{
+		{"duplicate", []tar.Header{{Name: "a"}, {Name: "./a"}}, "duplicate archive entry"},
+		{"missing-hardlink", []tar.Header{{Name: "a", Typeflag: tar.TypeLink, Linkname: "absent"}}, "does not target an archived regular file"},
+		{"link-cycle", []tar.Header{{Name: "a", Typeflag: tar.TypeSymlink, Linkname: "b"}, {Name: "b", Typeflag: tar.TypeSymlink, Linkname: "a"}}, "does not resolve inside the archive"},
+		{"file-parent", []tar.Header{{Name: "a"}, {Name: "a/b"}}, "file exists"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var archive bytes.Buffer
+			zw := gzip.NewWriter(&archive)
+			tw := tar.NewWriter(zw)
+			for _, member := range tc.members {
+				require.NoError(t, tw.WriteHeader(&member))
+			}
+			require.NoError(t, tw.Close())
+			require.NoError(t, zw.Close())
+			root, err := os.OpenRoot(t.TempDir())
+			require.NoError(t, err)
+			defer root.Close()
+			require.ErrorContains(t, extractHandoffRuntime(root, &archive), tc.reason)
+		})
+	}
+}
+
+func TestHandoffRuntimeRejectsUnsafeStoreEntries(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	bundle := newHandoffRuntime(base, checkset.SnapshotPlatform{Bundle: "demo", SHA256: fmt.Sprintf("%064d", 1)}, "")
+	require.ErrorContains(t, bundle.verify(ctx), "runtime store unavailable")
+	require.NoError(t, os.MkdirAll(bundle.archive, 0o700))
+	require.ErrorContains(t, bundle.verify(ctx), "not a regular file")
+	require.NoError(t, os.Remove(bundle.archive))
+	source := filepath.Join(base, "elsewhere")
+	writeFile(t, source, "archive bytes")
+	require.NoError(t, os.Symlink(source, bundle.archive))
+	require.ErrorContains(t, bundle.verify(ctx), "cannot safely open")
+	require.NoError(t, os.Remove(bundle.archive))
+	writeFile(t, bundle.archive, "not gzip")
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	require.ErrorContains(t, bundle.verify(canceled), "runtime verification interrupted")
+	require.ErrorContains(t, bundle.extract(canceled, filepath.Join(base, "runtime")), "runtime extraction interrupted")
+	require.ErrorContains(t, bundle.extract(ctx, filepath.Join(base, "runtime")), "runtime-invalid")
+	require.NoDirExists(t, filepath.Join(base, "runtime"))
 }
 
 func writeRuntimeFixture(t *testing.T, root string, headers []tar.Header, contents map[string]string) {

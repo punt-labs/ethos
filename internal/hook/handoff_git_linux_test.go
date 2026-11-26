@@ -7,12 +7,89 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHandoffGitUnbornSHA256AndSplitIndex(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	git := func(args ...string) {
+		t.Helper()
+		_, err := gitenv.Output(dir, "git", args...)
+		require.NoError(t, err)
+	}
+	git("init", "--object-format=sha256", "--initial-branch=unborn")
+	profile := &checkset.WorktreeSnapshot{Git: &checkset.SnapshotGit{}}
+	view, err := captureHandoffGit(ctx, dir, profile)
+	require.NoError(t, err)
+	require.Equal(t, "ref: refs/heads/unborn\n", string(view.files["HEAD"]))
+	require.Contains(t, string(view.files["config"]), "objectformat = sha256")
+	require.Empty(t, view.objects)
+	dest := filepath.Join(t.TempDir(), "git")
+	require.NoError(t, view.materialize(ctx, dir, dest))
+	require.NoFileExists(t, filepath.Join(dest, "refs/heads/unborn"))
+	profile.Git.Refs = []string{"refs/heads/missing"}
+	_, err = captureHandoffGit(ctx, dir, profile)
+	require.ErrorContains(t, err, "git view ref refs/heads/missing is missing")
+
+	profile.Git.Refs = nil
+	writeFile(t, filepath.Join(dir, "staged"), "indexed content")
+	git("add", "staged")
+	git("update-index", "--split-index")
+	view, err = captureHandoffGit(ctx, dir, profile)
+	require.NoError(t, err)
+	require.Contains(t, view.files, "index")
+	var sharedIndexes []string
+	for file := range view.files {
+		if strings.HasPrefix(file, "sharedindex.") {
+			sharedIndexes = append(sharedIndexes, file)
+		}
+	}
+	require.Len(t, sharedIndexes, 1)
+	require.Len(t, strings.TrimSpace(string(view.objects)), 64)
+	require.NoError(t, view.materialize(ctx, dir, dest))
+	require.FileExists(t, filepath.Join(dest, sharedIndexes[0]))
+}
+
+func TestHandoffGitViewRejectsMalformedSelectedRefs(t *testing.T) {
+	oid := strings.Repeat("a", 40)
+	const name = "refs/remotes/origin/HEAD"
+	profile := &checkset.SnapshotGit{Refs: []string{name}}
+	for _, tc := range []struct{ line, head, reason string }{
+		{"invalid line", oid, "invalid Git view ref"},
+		{oid + " " + name + " ../escape ", oid, "invalid Git view symbolic ref"},
+		{oid + " " + name + "  ", "ref: ../escape", "invalid Git view HEAD"},
+	} {
+		view := handoffGitView{files: map[string][]byte{"HEAD": []byte(tc.head + "\n")}}
+		_, err := view.addRefs([]byte(tc.line+"\n"), profile, len(oid))
+		require.ErrorContains(t, err, tc.reason)
+	}
+}
+
+func TestHandoffGitViewRefusesMissingMetadataAndObjects(t *testing.T) {
+	root := t.TempDir()
+	ctx := context.Background()
+	profile := &checkset.WorktreeSnapshot{Git: &checkset.SnapshotGit{}}
+	_, err := captureHandoffGit(ctx, root, profile)
+	require.ErrorContains(t, err, "cannot capture Git view HEAD")
+	_, err = readHandoffGitFile(ctx, filepath.Join(root, "missing", "HEAD"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.NoError(t, os.Mkdir(filepath.Join(root, "HEAD"), 0o700))
+	_, err = readHandoffGitFile(ctx, filepath.Join(root, "HEAD"))
+	require.ErrorContains(t, err, "not a regular file")
+	_, err = gitenv.Output(root, "git", "init", "--object-format=sha1")
+	require.NoError(t, err)
+	_, err = gitenv.Output(root, "git", "update-index", "--add", "--cacheinfo", "100644,"+strings.Repeat("a", 40)+",missing")
+	require.NoError(t, err)
+	_, err = captureHandoffGit(ctx, root, profile)
+	require.ErrorContains(t, err, "cannot enumerate Git view objects")
+}
 
 func TestHandoffGitViewIgnoresUnselectedRefsAndObjects(t *testing.T) {
 	root, _ := handoffMetadataFixture(t, `set -eu
