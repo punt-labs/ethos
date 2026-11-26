@@ -728,8 +728,15 @@ func mountHandoffProcAndDev(root string) error {
 			return err
 		}
 	}
-	if err := os.Symlink("/proc/self/fd", filepath.Join(root, "dev/fd")); err != nil {
-		return err
+	for _, link := range []struct{ name, target string }{
+		{"fd", "/proc/self/fd"},
+		{"stdin", "/proc/self/fd/0"},
+		{"stdout", "/proc/self/fd/1"},
+		{"stderr", "/proc/self/fd/2"},
+	} {
+		if err := os.Symlink(link.target, filepath.Join(root, "dev", link.name)); err != nil {
+			return err
+		}
 	}
 	shm := filepath.Join(root, "dev/shm")
 	if err := os.Mkdir(shm, 0o755); err != nil {

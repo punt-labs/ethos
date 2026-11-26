@@ -460,6 +460,34 @@ func TestHandoffWorktreeSandboxBashProcessSubstitution(t *testing.T) {
 	require.Empty(t, failure)
 }
 
+func TestHandoffWorktreeSandboxStandardStreams(t *testing.T) {
+	live := t.TempDir()
+	writeFile(t, filepath.Join(live, "README"), "snapshot input\n")
+	inputs := []string{"README"}
+	ctx := context.Background()
+	proof, err := digestGateInputsWithMode(ctx, live, "", inputs, true)
+	require.NoError(t, err)
+	failure, err := executeHandoffSnapshot(ctx, t.TempDir(), live, proof, inputs, editCheck{
+		name: "standard-streams", cwd: gateRoot, timeout: 5 * time.Second,
+		policy: &checkset.Check{WorktreeSnapshot: &checkset.WorktreeSnapshot{}},
+		argv: []string{"/bin/sh", "-ec", `
+printf 'input\n' | {
+    read -r input < /dev/stdin
+    test "$input" = input
+}
+output=$( {
+    printf 'output\n' > /dev/stdout
+    printf 'error\n' > /dev/stderr
+} 2>"$TMPDIR/stderr")
+test "$output" = output
+test "$(cat "$TMPDIR/stderr")" = error
+`},
+	})
+	skipIfHandoffSandboxUnavailable(t, err)
+	require.NoError(t, err)
+	require.Empty(t, failure)
+}
+
 func TestHandoffWorktreeSandboxKeepsSocketTMPDIRShortAndPrivate(t *testing.T) {
 	if _, err := os.Stat("/usr/bin/python3"); err != nil {
 		t.Skip("test requires system python3")
