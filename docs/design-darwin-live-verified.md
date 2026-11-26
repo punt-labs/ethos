@@ -62,13 +62,23 @@ uses `isolation: live-verified`, not snapshot isolation.
    mode, UID, GID, size, mtime, ctime, device, inode and link count are
    unchanged. Otherwise veto, including on chmod. This avoids a false
    deferral from merely reading `.git/index`.
-3. **Descriptor budget:** reserve one fd per keyed file, plus the Git
-   metadata guards (about 285 vnode fds on Quarry and 437 modeled on
-   Koch). Budget against the runner's actual soft `RLIMIT_NOFILE` with
-   headroom for existing and transient fds. For example, both sets
-   exceed a soft limit of 256 even before headroom. If the full set
-   cannot be armed within the budget, defer visibly with the required
-   count and available budget; never drop files to fit.
+   Also open `EVFILT_VNODE` on each directory containing a keyed path,
+   up to and including the checkout root and `.git`. Include existing
+   directories where a newly created file could enter the keyed set,
+   even if they contain no keyed files yet. Register `NOTE_WRITE`,
+   `NOTE_EXTEND`, `NOTE_RENAME`, `NOTE_DELETE`, and `NOTE_REVOKE` on
+   these directories. Any directory-entry event vetoes, including
+   create-then-delete of an untracked, non-ignored file whose absence
+   leaves both keys equal. Coalescing a burst is safe here because a
+   single event is enough to veto.
+3. **Descriptor budget:** reserve one fd per keyed file, Git metadata
+   guard, and watched directory. Before adding directory guards, the
+   counts were about 285 vnode fds on Quarry and 437 modeled on Koch.
+   Budget against the runner's actual soft `RLIMIT_NOFILE` with headroom
+   for existing and transient fds. Both sets exceed a soft limit of 256
+   even before directory guards or headroom. If the full set cannot be
+   armed within the budget, defer visibly with the required count and
+   available budget; never drop paths to fit.
 
 ### Watcher evidence
 
