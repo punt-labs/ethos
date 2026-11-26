@@ -46,6 +46,7 @@ type handoffSandboxWorktree struct {
 	System          handoffSystemPlan
 	Loopback        bool
 	GitDir          string
+	RuntimeDir      string
 }
 
 // RunHandoffSandbox dispatches the private namespace child before CLI setup.
@@ -150,7 +151,10 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 			}
 		}
 		if profile.Git != nil && worktree.gitDir == "" {
-			return "", errors.New("Git view was not prepared")
+			return "", errors.New("git view was not prepared")
+		}
+		if profile.Runtime != nil && worktree.runtimeDir == "" {
+			return "", errors.New("runtime bundle was not prepared")
 		}
 		argv = roots.expandArgs(argv)
 		for i := 1; i < len(argv); i++ {
@@ -160,7 +164,7 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		env = append(env, "ETHOS_HANDOFF_CHECKOUT_NAME="+filepath.Base(checkout))
 		plan.Worktree = &handoffSandboxWorktree{
 			Environment: env, CheckoutScratch: profile.Scratch.Checkout, System: worktree.system,
-			Loopback: profile.Network == "loopback", GitDir: worktree.gitDir,
+			Loopback: profile.Network == "loopback", GitDir: worktree.gitDir, RuntimeDir: worktree.runtimeDir,
 		}
 	}
 	manifest, err := json.Marshal(plan)
@@ -327,6 +331,12 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 	}
 	env := sandboxEnvironment
 	if plan.Worktree != nil {
+		if plan.Worktree.RuntimeDir != "" {
+			phase = "mount verified runtime bundle"
+			if err := mountGateReadOnly(plan.Worktree.RuntimeDir, filepath.Join(root, linuxHandoffRoots().runtime)); err != nil {
+				return err
+			}
+		}
 		phase = "mount private worktree scratch"
 		if err := mountHandoffWorktreeScratch(root, checkout, plan.Worktree.CheckoutScratch); err != nil {
 			if errors.Is(err, errHandoffScratchShadowsInput) {

@@ -29,7 +29,15 @@ func configuredStageChecks(checkout, agent, stage string) ([]checkset.Check, boo
 		return nil, false, err
 	}
 	repo := filepath.Join(store, ".punt-labs", "ethos")
-	ref, projectRepo, err := resolve.CheckPolicyOf(resolve.Located{Store: store, Checkout: checkout, Ethos: repo, Config: cfg})
+	return stageChecksForLocation(resolve.Located{Store: store, Checkout: checkout, Ethos: repo, Config: cfg}, agent, stage)
+}
+
+func stageChecksForLocation(loc resolve.Located, agent, stage string) ([]checkset.Check, bool, error) {
+	if err := loc.Err(); err != nil {
+		return nil, false, err
+	}
+	cfg, store, repo := loc.Config, loc.Store, loc.Ethos
+	ref, projectRepo, err := resolve.CheckPolicyOf(loc)
 	if err != nil {
 		return nil, false, err
 	}
