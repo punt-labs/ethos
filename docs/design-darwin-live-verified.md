@@ -58,18 +58,18 @@ it as a terminal result. The verdict log uses
    and `RootChanged` as vetoes. If the stream cannot establish coverage
    through the cutoff, defer.
 2. **kqueue:** arm an independent `EVFILT_VNODE` guard for every keyed
-   file and Git metadata including `HEAD`, `index`, and refs. Write,
-   extend, rename, delete and revoke events veto. Replacement and
-   unlink also veto. Ignore `NOTE_ATTRIB` only if atime changed and
-   mode, UID, GID, size, mtime, ctime, device, inode and link count are
-   unchanged. Otherwise veto, including on chmod. This avoids a false
-   deferral from merely reading `.git/index`.
+   file and Git metadata including `HEAD`, `index`, and refs.
    Also open `EVFILT_VNODE` on each directory containing a keyed path,
    up to and including the checkout root and `.git`. Include existing
    directories where a newly created file could enter the keyed set,
-   even if they contain no keyed files yet. Watch directory-entry
-   changes with `NOTE_WRITE` and `NOTE_LINK`, and also register
-   `NOTE_EXTEND`, `NOTE_RENAME`, `NOTE_DELETE`, and `NOTE_REVOKE`.
+   even if they contain no keyed files yet.
+   On any watched file or directory, each registered note vetoes
+   on its own: `NOTE_WRITE`, `NOTE_EXTEND`, `NOTE_LINK`, `NOTE_RENAME`,
+   `NOTE_DELETE`, and `NOTE_REVOKE`. No accompanying write is needed.
+   The only exception is `NOTE_ATTRIB` when atime changed and mode,
+   UID, GID, size, mtime, ctime, device, inode and link count are
+   unchanged. Otherwise veto, including on chmod. This avoids a
+   false deferral from merely reading `.git/index`.
    The strict rule (a) is to defer on any unattributed directory write,
    including at the checkout root. Neither an equal closing key nor
    FSEvents reporting only ignored paths attributes a directory event.
