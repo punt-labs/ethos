@@ -486,6 +486,10 @@ func runDarwinHandoffPlan(ctx context.Context, checkout, proof string, inputs []
 	command := argv[0]
 	if !strings.ContainsRune(command, '/') {
 		command = darwinSystemTool(command, env)
+		if !filepath.IsAbs(command) {
+			return "", fmt.Errorf("sandbox launch did not complete: cannot resolve %q on the declared PATH", argv[0])
+		}
+		argv[0] = command
 	}
 	if system.DeveloperDir != "" {
 		if !trustedDarwinCLT(system.DeveloperDir) {

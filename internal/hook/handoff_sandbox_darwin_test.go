@@ -189,6 +189,31 @@ func TestDarwinHandoffSnapshotDefersOnLaunchFailure(t *testing.T) {
 	if !errors.As(err, &deferred) || got != "" || !strings.Contains(err.Error(), "sandbox launch") {
 		t.Fatalf("wanted sandbox launch deferral, got result=%q err=%v", got, err)
 	}
+
+	t.Run("keyed command with missing interpreter", func(t *testing.T) {
+		bin, err := filepath.EvalSymlinks(t.TempDir())
+		require.NoError(t, err)
+		allowDarwinSystemFixtureRoot(t, bin)
+		command := filepath.Join(bin, "true")
+		writeFile(t, command, "#!"+filepath.Join(bin, "missing-interpreter")+"\n")
+		require.NoError(t, os.Chmod(command, 0o700))
+		profile := &checkset.WorktreeSnapshot{
+			Path: []string{bin, "/usr/bin", "/bin"},
+			System: checkset.SnapshotSystem{
+				SnapshotSystemInputs: checkset.SnapshotSystemInputs{Tools: []string{"true"}},
+			},
+		}
+		var logs bytes.Buffer
+		ctx, _ := diagnostic.WithHookInvocation(diagnostic.WithLogger(t.Context(), slog.New(slog.NewTextHandler(&logs, nil))))
+		plan, err := prepareHandoffSystem(ctx, checkout, profile, "true")
+		require.NoError(t, err)
+		require.Contains(t, plan.Inputs, handoffSystemInput{Path: command, Tool: "true", Digest: planDigest(t, ctx, command)})
+		check := editCheck{name: "keyed command", argv: []string{"true"}, policy: &checkset.Check{WorktreeSnapshot: profile}}
+		failure, err := executeHandoffSnapshot(ctx, scratch, checkout, proof, nil, check, handoffWorktreePlan{system: plan})
+		require.ErrorContains(t, err, "sandbox launch did not complete")
+		require.Empty(t, failure)
+		require.NotContains(t, logs.String(), "outcome=launched")
+	})
 }
 
 func TestDarwinHandoffSnapshotPreservesPerlEnvironment(t *testing.T) {
