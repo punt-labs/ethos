@@ -212,6 +212,50 @@ if git show-ref --verify --quiet refs/tags/changed; then exit 42; fi
 	require.Empty(t, run().Blocking)
 }
 
+func TestHandoffWorktreeGitDiscoveryAcrossScratchOverlay(t *testing.T) {
+	root, run := handoffMetadataFixture(t, "test \"$(git -C source rev-parse --git-dir)\" = /checkout/.git")
+	writeFile(t, filepath.Join(root, "source", "input"), "snapshot input\n")
+	stageGit(t, root, "add", "source/input")
+	sidecar := filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml")
+	data, err := os.ReadFile(sidecar)
+	require.NoError(t, err)
+	profile := string(data) + "    git: {}\n    scratch: {files: [output.tmp]}\n"
+	writeFile(t, sidecar, profile+"    prehydrate: {run: [git, -C, source, rev-parse, --git-dir]}\n")
+	feedback := run()
+	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+	require.Empty(t, feedback.Blocking)
+
+	for _, value := range []string{"0", "false"} {
+		t.Run(value, func(t *testing.T) {
+			writeFile(t, filepath.Join(root, "gate.sh"), `test "$GIT_DISCOVERY_ACROSS_FILESYSTEM" = `+value)
+			writeFile(t, sidecar, profile+"    env: {GIT_DISCOVERY_ACROSS_FILESYSTEM: \""+value+"\"}\n"+
+				"    prehydrate: {run: [sh, -e, gate.sh]}\n")
+			require.Empty(t, run().Blocking)
+		})
+	}
+}
+
+func TestHandoffWorktreeValidatesPrivateGitOperand(t *testing.T) {
+	root, run := handoffMetadataFixture(t, "")
+	sidecar := filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml")
+	data, err := os.ReadFile(sidecar)
+	require.NoError(t, err)
+	writeFile(t, sidecar, string(data)+"    git: {}\n    scratch: {files: [output.tmp]}\n")
+	check := func(operand string) {
+		t.Helper()
+		checkPolicy(t, root, "project", "  - name: metadata\n    stage: handoff\n    files: all\n"+
+			"    run: [sh, -ec, 'test -s \"$1\"', git-operand, '{root}/.git/"+operand+"']\n")
+	}
+	check("HEAD")
+	feedback := run()
+	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+	require.Empty(t, feedback.Blocking)
+
+	writeFile(t, filepath.Join(root, ".git", "live-only"), "not in the private view\n")
+	check("live-only")
+	require.Contains(t, run().Blocking, "snapshot inputs did not match the invocation")
+}
+
 func TestHandoffWorktreeOmitsUndeclaredGitView(t *testing.T) {
 	_, run := handoffMetadataFixture(t, "test ! -e .git")
 	feedback := run()

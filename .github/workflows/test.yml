@@ -369,6 +369,9 @@ jobs:
               TestHandoffDoesNotReturnStaleSnapshotVerdict
               TestHandoffSnapshotRejectsChangedInputs
               TestHandoffSnapshotRetriesInterruptedExits
+              TestHandoffWorktreeRunsWithPrivateScratchFile
+              TestHandoffWorktreeGitDiscoveryAcrossScratchOverlay
+              TestHandoffWorktreeValidatesPrivateGitOperand
             )
             pattern="^($(IFS='|'; echo "${handoff_tests[*]}"))$"
             listed=$(go test -race -list "$pattern" ./internal/hook)

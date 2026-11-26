@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 func TestHandoffSnapshotAcceptsLargeInputManifest(t *testing.T) {
@@ -616,6 +618,132 @@ test ! -w .`},
 	require.ErrorContains(t, err, "checkout scratch shadows snapshot content")
 }
 
+func TestHandoffPlanScratchFileOperands(t *testing.T) {
+	dest := t.TempDir()
+	const output = "/checkout/build/output.tmp"
+	worktree := &handoffSandboxWorktree{ScratchFiles: []string{"build/output.tmp"}}
+	for _, argv := range [][]string{{output}, {"sh", "--", output}, {"python3", "-I", output}, {"touch", output + ".other"}, {"touch", output + "/child"}} {
+		require.False(t, gatePlanInputsPresent(dest, argv, worktree), "%v", argv)
+	}
+	require.True(t, gatePlanInputsPresent(dest, []string{"touch", output}, worktree))
+	require.True(t, gatePlanInputsPresent(dest, []string{"touch", "/checkout/build/./output.tmp"}, worktree))
+	worktree.Prehydrate = []string{"hydrate"}
+	require.True(t, gatePlanInputsPresent(dest, []string{output}, worktree))
+	require.True(t, gatePlanInputsPresent(dest, []string{"sh", output}, worktree))
+	require.False(t, gatePlanInputsPresent(dest, []string{"sh", "/checkout/../checkout/build/output.tmp"}, worktree))
+}
+
+func TestHandoffWorktreeRunsWithPrivateScratchFile(t *testing.T) {
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	checkPolicy(t, root, "project", "  - name: full-gate\n    stage: handoff\n    files: all\n    adapter: make\n    target: check\n")
+	sidecar := filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml")
+	profile := `checks:
+  full-gate:
+    profile: linux-worktree-v1
+    epoch: scratch-files
+    sources: {mode: worktree}
+    scratch: {files: [output.tmp, nested/output.tmp], checkout: [.venv, nested/cache]}
+`
+	writeFile(t, sidecar, profile)
+	writeFile(t, filepath.Join(root, "source", "input"), "visible\n")
+	writeFile(t, filepath.Join(root, "nested", "source", "input"), "nested\n")
+	require.NoError(t, os.Symlink("Makefile", filepath.Join(root, "gate-link")))
+	stageGit(t, root, "add", "source/input", "nested/source/input", "gate-link")
+	makefile := filepath.Join(root, "Makefile")
+	writeFile(t, makefile, `check:
+	@test ! -e output.tmp && test ! -e nested/output.tmp
+	@echo first > output.tmp && grep -qx first output.tmp
+	@rm -f output.tmp && test ! -e output.tmp
+	@echo second > output.tmp && grep -qx second output.tmp
+	@touch nested/output.tmp .venv/created nested/cache/created
+	@grep -qx visible source/input && grep -qx nested nested/source/input
+	@error=$$(touch source/new 2>&1); test "$$?" -ne 0 && printf '%s\n' "$$error" | grep -q 'Read-only file system'
+	@error=$$(touch nested/source/new 2>&1); test "$$?" -ne 0 && printf '%s\n' "$$error" | grep -q 'Read-only file system'
+	@error=$$(chmod 400 Makefile 2>&1); test "$$?" -ne 0 && printf '%s\n' "$$error" | grep -q 'Read-only file system'
+	@! rm Makefile 2>/dev/null && test -f Makefile && test -L gate-link
+`)
+	run := func() StageFeedback {
+		return runStageChecks(context.Background(), root, "worker", "handoff", func() ([]string, error) {
+			return []string{makefile}, nil
+		})
+	}
+	feedback := run()
+	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+	require.Empty(t, feedback.Blocking)
+	require.NoFileExists(t, filepath.Join(root, "output.tmp"))
+	require.NoFileExists(t, filepath.Join(root, "undeclared.tmp"))
+
+	results := func() []string {
+		t.Helper()
+		files, err := filepath.Glob(filepath.Join(root, ".punt-labs", "local", "ethos", "handoff-v1", "*", "*.json"))
+		require.NoError(t, err)
+		return files
+	}
+	before := results()
+	require.NotEmpty(t, before)
+	for _, tc := range []struct{ cmd, path string }{
+		{"touch undeclared.tmp", "/checkout/undeclared.tmp"},
+		{"touch transient.tmp && rm transient.tmp", "/checkout/transient.tmp"},
+		{"mkdir output.tmp && touch output.tmp/child && rm output.tmp/child && rmdir output.tmp", "/checkout/output.tmp"},
+		{"mkdir output.tmp", "/checkout/output.tmp"},
+		{"touch output.tmp && mv output.tmp moved.tmp && mv moved.tmp output.tmp", "/checkout/moved.tmp"},
+		{"chmod 0755 nested && chmod 0700 nested", "/checkout/nested"},
+		{"touch nested/undeclared.tmp", "/checkout/nested/undeclared.tmp"},
+		{"rm gate-link", "/checkout/gate-link"},
+	} {
+		writeFile(t, makefile, "check:\n\t@"+tc.cmd+"\n")
+		feedback = run()
+		require.Contains(t, feedback.Blocking, "scratch-violation")
+		require.Contains(t, feedback.Blocking, tc.path)
+		require.Contains(t, feedback.Blocking, "make check")
+		require.Equal(t, before, results())
+	}
+	require.NoFileExists(t, filepath.Join(root, "undeclared.tmp"))
+
+	writeFile(t, makefile, "check:\n\t@test -f output.tmp\n")
+	writeFile(t, sidecar, profile+"    prehydrate: {run: [sh, -ec, 'touch output.tmp']}\n")
+	require.Empty(t, run().Blocking)
+	before = results()
+	writeFile(t, sidecar, profile+"    prehydrate: {run: [sh, -ec, 'touch output.tmp prehydrate.tmp; rm prehydrate.tmp']}\n")
+	feedback = run()
+	require.Contains(t, feedback.Blocking, `scratch-violation: "/checkout/prehydrate.tmp"`)
+	require.Equal(t, before, results())
+	writeFile(t, sidecar, profile)
+
+	writeFile(t, makefile, "check:\n\t@echo intentionally-broken >&2; exit 23\n")
+	feedback = run()
+	require.Contains(t, feedback.Blocking, "intentionally-broken")
+	require.NotContains(t, feedback.Blocking, "deferred")
+
+	writeFile(t, filepath.Join(root, "output.tmp"), "must not be hidden\n")
+	stageGit(t, root, "add", "output.tmp")
+	feedback = run()
+	require.Contains(t, feedback.Blocking, "checkout scratch shadows snapshot content")
+	require.NotContains(t, feedback.Blocking, "intentionally-broken")
+
+	require.NoError(t, os.Remove(filepath.Join(root, "output.tmp")))
+	feedback = run()
+	require.Contains(t, feedback.Blocking, "checkout scratch shadows snapshot content")
+	require.NotContains(t, feedback.Blocking, "intentionally-broken")
+}
+
+func TestHandoffScratchFileWatchOverflow(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reader.Close() })
+	t.Cleanup(func() { _ = writer.Close() })
+	var event [unix.SizeofInotifyEvent]byte
+	binary.NativeEndian.PutUint32(event[:4], ^uint32(0))
+	binary.NativeEndian.PutUint32(event[4:8], unix.IN_Q_OVERFLOW)
+	_, err = writer.Write(event[:])
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	watch := handoffScratchFileWatch{file: reader}
+	require.EqualError(t, watch.audit("", nil), "scratch-violation: scratch.files event queue overflow")
+}
+
 func TestHandoffWorktreeRunsDirectCommands(t *testing.T) {
 	for _, tc := range []struct{ name, check, path, good, broken string }{
 		{"make adapter", "    files: all\n    adapter: make\n    target: check\n", "Makefile",
@@ -1003,12 +1131,48 @@ print("network proof: " + mode)
 	}
 }
 
+func TestHandoffSandboxUnavailableSkipsOverlayMountFailure(t *testing.T) {
+	const mount = handoffScratchOverlayPhase + `: mount overlay for ".": `
+	for _, tc := range []struct {
+		name, reason string
+		skip         bool
+	}{
+		{"denied overlay", mount + "operation not permitted", true},
+		{"no overlay permission", mount + "permission denied", true},
+		{"no overlay support", mount + "no such device", true},
+		{"unknown overlay filesystem", mount + "unknown filesystem type", true},
+		{"invalid overlay options", mount + "invalid argument", false},
+		{"overlay I/O error", mount + "input/output error", false},
+		{"overlay entry bind", handoffScratchOverlayPhase + `: protect overlay entry "source": operation not permitted`, false},
+		{"scratch violation", `scratch-violation: "/checkout/output.tmp"`, false},
+	} {
+		continued := false
+		t.Run(tc.name, func(t *testing.T) {
+			skipIfHandoffSandboxUnavailable(t, errors.New("handoff checks deferred (gate): ("+tc.reason+"). Run the explicit project gate"))
+			continued = true
+		})
+		require.Equal(t, !tc.skip, continued, tc.name)
+	}
+}
+
 func skipIfHandoffSandboxUnavailable(t *testing.T, err error) {
 	t.Helper()
-	if err != nil && (strings.Contains(err.Error(), "isolation unavailable on this host") ||
-		strings.Contains(err.Error(), "make mount propagation private: permission denied") ||
-		strings.Contains(err.Error(), "make mount propagation private: operation not permitted")) {
-		t.Skip(err.Error())
+	if err == nil {
+		return
+	}
+	message := err.Error()
+	if strings.Contains(message, "isolation unavailable on this host") ||
+		strings.Contains(message, "make mount propagation private: permission denied") ||
+		strings.Contains(message, "make mount propagation private: operation not permitted") {
+		t.Skip(message)
+	}
+	if _, mount, ok := strings.Cut(message, handoffScratchOverlayPhase+": mount overlay for "); ok {
+		_, detail, _ := strings.Cut(mount, `": `)
+		reason, _, _ := strings.Cut(detail, ")")
+		switch reason {
+		case unix.EPERM.Error(), unix.EACCES.Error(), unix.ENODEV.Error(), "unknown filesystem type":
+			t.Skip(message)
+		}
 	}
 }
 
