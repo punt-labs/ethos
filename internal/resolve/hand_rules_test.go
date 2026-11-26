@@ -88,8 +88,10 @@ func TestHandRulesStopAtFilesystemBoundary(t *testing.T) {
 			start := filepath.Join(mount, "a")
 			require.NoError(t, os.MkdirAll(start, 0o755))
 			fakeDevices(t, realpath(t, mount))
-			if c.env != "" {
-				t.Setenv("GIT_DISCOVERY_ACROSS_FILESYSTEM", c.env)
+			const discovery = "GIT_DISCOVERY_ACROSS_FILESYSTEM"
+			t.Setenv(discovery, c.env)
+			if c.env == "" {
+				require.NoError(t, os.Unsetenv(discovery))
 			}
 			t.Chdir(start)
 			hideGit(t)
