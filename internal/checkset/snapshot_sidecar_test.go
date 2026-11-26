@@ -64,7 +64,9 @@ func TestSnapshotSidecarAcceptsJSONWithDeclaredSystemTools(t *testing.T) {
 		"profile":"linux-worktree-v1","epoch":"test","sources":{"mode":"worktree"},
 		"runtime":{"platforms":{"linux-amd64":{"bundle":"test-linux",
 		"sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}},
-		"system":{"tools":["git","ffmpeg","espeak-ng"]}
+		"system":{"tools":["git","ffmpeg","espeak-ng"],"files":["/etc/localtime"],
+		"platforms":{"linux-amd64":{"dirs":["/var/lib/texmf"]},"darwin-arm64":{"tools":["xcodegen"],"files":["/private/etc/passwd"]}}},
+		"data":[{"name":"govulncheck","url":"https://vuln.go.dev/index/db.json","max_age_hours":24,"mount":"vuln/db.json"}]
 	}}}`
 	load := func(data string) Check {
 		require.NoError(t, os.WriteFile(path, []byte(data), 0o600))
@@ -76,6 +78,9 @@ func TestSnapshotSidecarAcceptsJSONWithDeclaredSystemTools(t *testing.T) {
 	require.False(t, check.InvalidSnapshotSidecar)
 	require.NotNil(t, check.WorktreeSnapshot)
 	require.Equal(t, Strings{"git", "ffmpeg", "espeak-ng"}, check.WorktreeSnapshot.System.Tools)
+	require.Equal(t, Strings{"/etc/localtime"}, check.WorktreeSnapshot.System.Files)
+	require.Equal(t, Strings{"/var/lib/texmf"}, check.WorktreeSnapshot.System.Platforms["linux-amd64"].Dirs)
+	require.Equal(t, []SnapshotData{{Name: "govulncheck", URL: "https://vuln.go.dev/index/db.json", MaxAgeHours: 24, Mount: "vuln/db.json"}}, check.WorktreeSnapshot.Data)
 	check = load(strings.Replace(data, `"git"`, `"/usr/bin/git"`, 1))
 	require.True(t, check.InvalidSnapshotSidecar)
 }
@@ -130,6 +135,13 @@ func TestLoadSnapshotSidecarRejectsInvalidPolicy(t *testing.T) {
 		{"missing epoch", "epoch: test", "epoch: ''", "an epoch"},
 		{"unsupported sources", "mode: worktree", "mode: directory", "worktree sources"},
 		{"host network", "network: loopback", "network: host", "network must be loopback"},
+		{"relative system directory", "network: loopback", "system: {dirs: [var/lib/texmf]}", "clean absolute paths"},
+		{"invalid system platform", "network: loopback", "system: {platforms: {linux: {tools: [make]}}}", "invalid snapshot system platform"},
+		{"invalid platform input", "network: loopback", "system: {platforms: {linux-amd64: {files: [/etc/../etc/group]}}}", "clean absolute paths"},
+		{"invalid data mount", "network: loopback", "data: [{name: vuln, url: 'https://example.com/db', mount: '../db', max_age_hours: 24}]", "local name and mount"},
+		{"invalid data URL", "network: loopback", "data: [{name: vuln, url: 'http://example.com/db', mount: db, max_age_hours: 24}]", "public HTTPS URL"},
+		{"invalid max age", "network: loopback", "data: [{name: vuln, url: 'https://example.com/db', mount: db, max_age_hours: 0}]", "positive max_age_hours"},
+		{"duplicate data mount", "network: loopback", "data: [{name: a, url: 'https://example.com/a', mount: db, max_age_hours: 24}, {name: b, url: 'https://example.com/b', mount: db, max_age_hours: 24}]", "names and mounts must be unique"},
 		{"ambiguous Git base", "refs/remotes/origin/main", "origin/main", "Git base must be a full ref"},
 		{"empty prehydrate", "run: [uv, sync, --offline]", "run: []", "prehydrate needs a command"},
 		{"no platforms", "runtime:", "disabled_runtime:", "field disabled_runtime not found"},
