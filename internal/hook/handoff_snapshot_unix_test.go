@@ -65,7 +65,11 @@ func TestHandoffWorktreeSnapshotPreservesSymlinks(t *testing.T) {
 		cwd: gateRoot, timeout: 5 * time.Second, policy: &checkset.Check{WorktreeSnapshot: &checkset.WorktreeSnapshot{}},
 		argv: []string{"/bin/sh", "-ec", `test -L alias && test "$(cat alias)" = fixture && test -L dangling && ! test -e dangling`},
 	})
-	skipIfHandoffSandboxUnavailable(t, err)
+	if runtime.GOOS == "linux" && err != nil && (strings.Contains(err.Error(), "isolation unavailable on this host") ||
+		strings.Contains(err.Error(), "make mount propagation private: permission denied") ||
+		strings.Contains(err.Error(), "make mount propagation private: operation not permitted")) {
+		t.Skip(err.Error())
+	}
 	require.NoError(t, err)
 	require.Empty(t, failure)
 }
