@@ -1159,6 +1159,56 @@ func TestHandoffSnapshotCleansReadOnlyScratch(t *testing.T) {
 	})
 }
 
+func TestHandoffSnapshotTeardownFailureIsNotCached(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can remove files from read-only directories")
+	}
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	checkPolicy(t, root, "project", `  - name: snapshot-check
+    stage: handoff
+    files: all
+    run: [/bin/sh, -c, 'exit 0']
+    snapshot: {profile: linux-shell-v1, inputs: [README], epoch: cleanup}
+`)
+	cache := filepath.Join(root, ".punt-labs", "local", "ethos", "handoff-v1")
+	var logs bytes.Buffer
+	var blocked bool
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{
+		ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
+			// The child has exited but the lease owner has not removed its scratch yet.
+			if !blocked && attr.Key == "outcome" && attr.Value.String() == "completed" {
+				require.NoError(t, os.Chmod(cache, 0o500))
+				blocked = true
+				t.Cleanup(func() { require.NoError(t, os.Chmod(cache, 0o700)) })
+			}
+			return attr
+		},
+	}))
+	run := func() StageFeedback {
+		ctx, _ := diagnostic.WithHookInvocation(diagnostic.WithLogger(context.Background(), logger))
+		return RunStageChecks(ctx, root, "worker", "handoff")
+	}
+
+	feedback := run()
+	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+	require.True(t, blocked, "snapshot must complete before teardown is blocked")
+	require.Contains(t, feedback.Blocking, "cannot clean up the snapshot")
+	require.Contains(t, feedback.Blocking, os.ErrPermission.Error())
+	require.Equal(t, feedback.Blocking, feedback.Notice)
+	slots, err := filepath.Glob(filepath.Join(cache, "*", "*.json"))
+	require.NoError(t, err)
+	require.Empty(t, slots)
+
+	require.NoError(t, os.Chmod(cache, 0o700))
+	logs.Reset()
+	require.Equal(t, StageFeedback{}, run())
+	require.Contains(t, logs.String(), "outcome=miss")
+	require.Contains(t, logs.String(), "outcome=launched")
+	require.NotContains(t, logs.String(), "outcome=reused")
+}
+
 func TestHandoffSnapshotLeaseAndProof(t *testing.T) {
 	root, _ := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())

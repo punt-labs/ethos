@@ -1219,6 +1219,7 @@ internal/hook TestHandoffRenameIndexUsesCanonicalLocalTemp
 internal/hook TestHandoffRenameUntrackedBudget
 internal/hook TestHandoffRenamedFiles
 internal/hook TestHandoffSnapshotCleansReadOnlyScratch
+internal/hook TestHandoffSnapshotTeardownFailureIsNotCached
 internal/hook TestHandoffUnreadableAudit
 internal/hook TestHandoffVanishedPaths
 internal/hook TestHandoffVanishedRootAttribution
