@@ -11,8 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -31,6 +33,19 @@ const gateRecordAge = 24 * time.Hour
 const gateRecordsPerStripe = 8
 const gateRecordBytes = 512 << 10
 
+var handoffRunnerBuild = sync.OnceValues(func() (string, error) {
+	f, err := os.Open("/proc/self/exe")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+})
+
 type gateResult struct {
 	Key     string
 	Proof   string
@@ -38,8 +53,47 @@ type gateResult struct {
 	Pending bool `json:",omitempty"`
 }
 
+type handoffSystemPlan struct {
+	Mounts      []handoffSystemMount
+	Inputs      []handoffSystemInput
+	Passwd      string
+	Group       string
+	Fingerprint string
+}
+
+type handoffWorktreePlan struct {
+	system     handoffSystemPlan
+	gitDir     string
+	runtimeDir string
+}
+
+type handoffSystemMount struct {
+	Source, Target string
+	Directory      bool
+}
+
+type handoffSystemInput struct {
+	Path, Tool, Digest string
+	Directory          bool
+}
+
 func runHandoffGate(ctx context.Context, root, agent string, files []string, check checkset.Check, policy []checkset.Check) StageFeedback {
 	manualRoot := root
+	manualCheck := check
+	if check.WorktreeSnapshot != nil {
+		relative := make([]string, 0, len(files))
+		for _, file := range files {
+			if filepath.IsAbs(file) {
+				path, err := filepath.Rel(root, file)
+				if err != nil || !filepath.IsLocal(path) {
+					continue
+				}
+				file = path
+			}
+			relative = append(relative, file)
+		}
+		files = relative
+	}
 	plan := stageInvocationsAt(gateRoot, files, check, true)
 	if len(plan) == 0 {
 		return StageFeedback{}
@@ -53,18 +107,47 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	}
 	deferGate := func(reason string) StageFeedback {
 		diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "deferred", time.Since(start))
-		message := fmt.Sprintf("handoff checks deferred (%s): %s. Run the explicit project gate: %s", check.Name, reason, handoffManualCommand(manualRoot, files, check))
+		message := fmt.Sprintf("handoff checks deferred (%s): %s. Run the explicit project gate: %s", check.Name, reason, handoffManualCommand(manualRoot, files, manualCheck))
 		f := feedback(message)
 		if f.Blocking != "" {
 			f.Notice = message
 		}
 		return f
 	}
+	if check.InvalidSnapshotSidecar {
+		return deferGate("invalid snapshot sidecar")
+	}
+	var bundle handoffRuntime
+	if check.WorktreeSnapshot != nil {
+		if runtime.GOOS == "linux" && slices.Contains(check.WorktreeSnapshot.Requires, "mach_lookup") {
+			return deferGate("mach_lookup unavailable in linux snapshot")
+		}
+		var err error
+		bundle, err = prepareHandoffRuntime(ctx, check.WorktreeSnapshot, agent)
+		if err != nil {
+			return deferGate(err.Error())
+		}
+		if field := unsupportedWorktreeField(check.WorktreeSnapshot); field != "" {
+			return deferGate("worktree profile field " + field + " not supported by this runner yet")
+		}
+		if !handoffSandboxSupported() {
+			return deferGate("snapshot isolation unavailable on this host")
+		}
+		inputs, err := worktreeSnapshotInputs(ctx, root)
+		if err != nil {
+			return deferGate("cannot list the worktree snapshot inputs")
+		}
+		check.Snapshot = &checkset.Snapshot{Profile: check.WorktreeSnapshot.Profile, Inputs: inputs, Epoch: check.WorktreeSnapshot.Epoch}
+	}
 	if check.Snapshot == nil {
 		return deferGate("no declared snapshot profile")
 	}
 	if !handoffSandboxSupported() {
 		return deferGate("snapshot isolation unavailable on this host")
+	}
+	runnerBuild, buildErr := handoffRunnerBuild()
+	if buildErr != nil {
+		return deferGate("cannot establish the handoff runner build identity")
 	}
 	root, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -94,14 +177,23 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	}
 
 	inputCtx, cancel := context.WithTimeout(ctx, gateInputTime)
-	state, proof, err := handoffGateInputs(inputCtx, root, check.Snapshot.Inputs)
+	preserveMode := check.WorktreeSnapshot != nil
+	state, proof, err := handoffGateInputs(inputCtx, root, check.Snapshot.Inputs, preserveMode)
 	cancel()
 	if err != nil {
 		return deferGate("cannot verify declared snapshot inputs within the key budget")
 	}
+	system, err := prepareHandoffSystem(ctx, root, check.WorktreeSnapshot)
+	if err != nil {
+		return deferGate(err.Error())
+	}
+	gitView, err := captureHandoffGit(ctx, root, check.WorktreeSnapshot)
+	if err != nil {
+		return deferGate(err.Error())
+	}
 	h := sha256.New()
 	enc := json.NewEncoder(h)
-	if err := enc.Encode([]string{"handoff-v1", root, identity, state, proof}); err != nil {
+	if err := enc.Encode([]string{"handoff-v1", runnerBuild, root, identity, state, proof}); err != nil {
 		return deferGate("cannot encode the handoff key")
 	}
 	if err := enc.Encode(policy); err != nil {
@@ -109,6 +201,16 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	}
 	if err := enc.Encode(check); err != nil {
 		return deferGate("cannot encode the selected check")
+	}
+	if system.Fingerprint != "" {
+		if err := enc.Encode(system.Fingerprint); err != nil {
+			return deferGate("cannot encode the handoff system inputs")
+		}
+	}
+	if gitView.fingerprint != "" {
+		if err := enc.Encode(gitView.fingerprint); err != nil {
+			return deferGate("cannot encode the handoff Git view")
+		}
 	}
 	for _, invocation := range plan {
 		if err := enc.Encode([]any{invocation.argv, invocation.cwd}); err != nil {
@@ -119,9 +221,17 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	verifyCurrent := func(when string) string {
 		verify, cancel := context.WithTimeout(ctx, gateInputTime)
 		defer cancel()
-		currentState, currentProof, err := handoffGateInputs(verify, root, check.Snapshot.Inputs)
+		currentState, currentProof, err := handoffGateInputs(verify, root, check.Snapshot.Inputs, preserveMode)
 		if err != nil || currentState != state || currentProof != proof {
 			return "checkout changed " + when
+		}
+		currentSystem, err := prepareHandoffSystem(ctx, root, check.WorktreeSnapshot)
+		if err != nil || currentSystem.Fingerprint != system.Fingerprint {
+			return "system inputs changed " + when
+		}
+		currentGit, err := captureHandoffGit(ctx, root, check.WorktreeSnapshot)
+		if err != nil || currentGit.fingerprint != gitView.fingerprint {
+			return "Git view changed " + when
 		}
 		currentPolicy, _, err := configuredStageChecks(root, agent, "handoff")
 		if err != nil || !reflect.DeepEqual(policy, currentPolicy) {
@@ -176,6 +286,21 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 				return nil
 			}
 			defer func() { _ = os.RemoveAll(scratch) }()
+			prepared := handoffWorktreePlan{system: system}
+			if bundle.archive != "" {
+				prepared.runtimeDir = filepath.Join(scratch, "runtime-snapshot")
+				if err := bundle.extract(ctx, prepared.runtimeDir); err != nil {
+					result = deferGate(err.Error())
+					return nil
+				}
+			}
+			if gitView.fingerprint != "" {
+				prepared.gitDir = filepath.Join(scratch, "git-view")
+				if err := gitView.materialize(ctx, root, prepared.gitDir); err != nil {
+					result = deferGate("cannot materialize the Git view within the snapshot budget")
+					return nil
+				}
+			}
 			if err := writeGateResult(loc, slot, gateResult{Key: key, Proof: proof, Pending: true}); err != nil {
 				result = deferGate("cannot publish the handoff lease intent")
 				return nil
@@ -188,7 +313,15 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 			}()
 			var failures []string
 			for _, invocation := range plan {
-				failure, err := executeHandoffSnapshot(ctx, scratch, root, proof, check.Snapshot.Inputs, invocation)
+				checkScratch := scratch
+				if check.WorktreeSnapshot != nil {
+					checkScratch, err = os.MkdirTemp(scratch, layout.ScratchDirPattern("check"))
+					if err != nil {
+						result = deferGate("cannot materialize the invocation snapshot")
+						return nil
+					}
+				}
+				failure, err := executeHandoffSnapshot(ctx, checkScratch, root, proof, check.Snapshot.Inputs, invocation, prepared)
 				if err != nil {
 					result = deferGate(err.Error())
 					return nil
@@ -232,20 +365,26 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	return deferGate("interrupted while waiting for the handoff lease")
 }
 
+func unsupportedWorktreeField(profile *checkset.WorktreeSnapshot) string {
+	switch {
+	case len(profile.Scratch.Files) != 0:
+		return "scratch.files"
+	case profile.Prehydrate != nil:
+		return "prehydrate"
+	case len(profile.Data) != 0:
+		return "data"
+	default:
+		return ""
+	}
+}
+
 func handoffManualCommand(root string, files []string, check checkset.Check) string {
 	home, _ := os.UserHomeDir()
 	planRoot := root
 	if check.Snapshot != nil {
 		planRoot = gateRoot
 	}
-	word := func(s string) string {
-		if check.Snapshot != nil {
-			if s == gateRoot {
-				s = root
-			} else if rel, ok := strings.CutPrefix(s, gateRoot+"/"); ok && filepath.IsLocal(rel) {
-				s = filepath.Join(root, rel)
-			}
-		}
+	quote := func(s string) string {
 		if home != "" && filepath.IsAbs(s) {
 			if rel, err := filepath.Rel(home, s); err == nil && filepath.IsLocal(rel) {
 				return `"$HOME"/` + audit.ShellQuote(rel)
@@ -253,16 +392,37 @@ func handoffManualCommand(root string, files []string, check checkset.Check) str
 		}
 		return audit.ShellQuote(s)
 	}
+	snapshotWord := func(s string) string {
+		if s == gateRoot {
+			s = root
+		} else if rel, ok := strings.CutPrefix(s, gateRoot+"/"); ok && filepath.IsLocal(rel) {
+			s = filepath.Join(root, rel)
+		}
+		return quote(s)
+	}
+	pathWord := quote
+	if check.Snapshot != nil {
+		pathWord = snapshotWord
+	}
+	literalWord := func(arg string) string {
+		if check.Snapshot != nil || !strings.Contains(arg, "{root}") {
+			if check.Snapshot != nil || check.WorktreeSnapshot != nil {
+				return snapshotWord(arg)
+			}
+			return quote(arg)
+		}
+		parts := strings.Split(arg, "{root}")
+		for i, part := range parts {
+			parts[i] = audit.ShellQuote(part)
+		}
+		return strings.Join(parts, quote(root))
+	}
 	var commands []string
-	for _, invocation := range stageInvocationsAt(planRoot, files, check, true) {
+	for _, invocation := range stageInvocationsRendered(planRoot, files, check, true, pathWord, literalWord) {
 		if len(invocation.argv) == 0 {
 			continue
 		}
-		argv := make([]string, len(invocation.argv))
-		for i, arg := range invocation.argv {
-			argv[i] = word(arg)
-		}
-		commands = append(commands, "(cd "+word(invocation.cwd)+" && "+strings.Join(argv, " ")+")")
+		commands = append(commands, "(cd "+pathWord(invocation.cwd)+" && "+strings.Join(invocation.argv, " ")+")")
 	}
 	return strings.Join(commands, " && ")
 }
@@ -323,29 +483,35 @@ func retainHandoffResults(pin *os.File, slot string, waited bool, now time.Time)
 	return !busy || hasSlot || count < gateRecordsPerStripe, err
 }
 
-func gatePlanInputsPresent(snapshot string, argv []string) bool {
-	for _, arg := range argv {
-		if arg != gateRoot && !strings.HasPrefix(arg, gateRoot+"/") {
-			continue
-		}
-		rel := strings.TrimPrefix(arg, gateRoot)
-		if _, err := os.Stat(filepath.Join(snapshot, rel)); err != nil {
-			return false
-		}
-	}
-	return true
-}
-
-func handoffGateInputs(ctx context.Context, root string, inputs []string) (string, string, error) {
+func handoffGateInputs(ctx context.Context, root string, inputs []string, preserveMode bool) (string, string, error) {
 	state, err := checkoutStateWithBudget(ctx, root)
 	if err != nil {
 		return "", "", err
 	}
-	proof, err := digestGateInputs(ctx, root, "", inputs)
-	return state, proof, err
+	proof, err := digestGateInputsWithMode(ctx, root, "", inputs, preserveMode)
+	if err != nil {
+		return "", "", err
+	}
+	if preserveMode {
+		current, err := worktreeSnapshotInputs(ctx, root)
+		if err != nil {
+			return "", "", err
+		}
+		slices.Sort(current)
+		want := slices.Clone(inputs)
+		slices.Sort(want)
+		if !slices.Equal(current, want) {
+			return "", "", errors.New("snapshot input selection changed")
+		}
+	}
+	return state, proof, nil
 }
 
 func digestGateInputs(ctx context.Context, root, dest string, inputs []string) (string, error) {
+	return digestGateInputsWithMode(ctx, root, dest, inputs, false)
+}
+
+func digestGateInputsWithMode(ctx context.Context, root, dest string, inputs []string, preserveMode bool) (string, error) {
 	src, err := os.OpenRoot(root)
 	if err != nil {
 		return "", err
@@ -360,7 +526,7 @@ func digestGateInputs(ctx context.Context, root, dest string, inputs []string) (
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		n, err := copyGateInput(ctx, h, src, dest, input, budget)
+		n, err := copyGateInput(ctx, h, src, dest, input, budget, preserveMode)
 		if err != nil {
 			return "", err
 		}
@@ -372,9 +538,30 @@ func digestGateInputs(ctx context.Context, root, dest string, inputs []string) (
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func copyGateInput(ctx context.Context, h io.Writer, src *os.Root, dest, input string, budget int) (int, error) {
+func copyGateInput(ctx context.Context, h io.Writer, src *os.Root, dest, input string, budget int, preserveMode bool) (int, error) {
 	f, err := openGateInput(src, input)
 	if err != nil {
+		if preserveMode {
+			if link, linkErr := src.Readlink(input); linkErr == nil {
+				if len(link) > budget {
+					return 0, errors.New("snapshot link exceeds the input budget")
+				}
+				_, _ = fmt.Fprintf(h, "%s\x00symlink\x00%d\x00%s", input, len(link), link)
+				if dest != "" {
+					path := filepath.Join(dest, input)
+					if err := rejectHandoffSymlinkParents(dest, path); err != nil {
+						return 0, err
+					}
+					if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+						return 0, err
+					}
+					if err := os.Symlink(link, path); err != nil {
+						return 0, err
+					}
+				}
+				return len(link), nil
+			}
+		}
 		return 0, err
 	}
 	defer f.Close()
@@ -386,11 +573,19 @@ func copyGateInput(ctx context.Context, h io.Writer, src *os.Root, dest, input s
 		return 0, errors.New("snapshot input is not a regular file within budget")
 	}
 	mode := info.Mode().Perm()&0o100 | 0o400
+	if preserveMode {
+		mode = info.Mode().Perm()
+	}
 	_, _ = fmt.Fprintf(h, "%s\x00%d\x00%d\x00", input, mode, info.Size())
 	output := &gateHashBudget{ctx: ctx, dst: h, remaining: int64(budget)}
 	var target *os.File
 	if dest != "" {
 		path := filepath.Join(dest, input)
+		if preserveMode {
+			if err := rejectHandoffSymlinkParents(dest, path); err != nil {
+				return 0, err
+			}
+		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return 0, err
 		}
@@ -402,12 +597,35 @@ func copyGateInput(ctx context.Context, h io.Writer, src *os.Root, dest, input s
 	}
 	n, err := io.Copy(output, io.LimitReader(f, info.Size()+1))
 	if target != nil {
+		if err == nil && preserveMode {
+			err = target.Chmod(mode)
+		}
 		err = errors.Join(err, target.Close())
 	}
 	if err == nil && n != info.Size() {
 		err = errors.New("snapshot input changed size")
 	}
 	return int(n), err
+}
+
+func rejectHandoffSymlinkParents(root, path string) error {
+	relative, err := filepath.Rel(root, path)
+	if err != nil || relative == "." || !filepath.IsLocal(relative) {
+		return errors.New("snapshot path is outside its root")
+	}
+	for dir := filepath.Dir(path); dir != root; dir = filepath.Dir(dir) {
+		info, err := os.Lstat(dir)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			return errors.New("snapshot parent is not a directory")
+		}
+	}
+	return nil
 }
 
 func readGateResult(path string) (gateResult, bool) {
@@ -459,4 +677,33 @@ func writeGateResult(p layout.Policy, path string, result gateResult) error {
 		return err
 	}
 	return os.Rename(f.Name(), path)
+}
+
+// worktreeSnapshotInputs lists the files a worktree profile snapshots: tracked
+// and untracked files that Git does not ignore and that exist on disk.
+func worktreeSnapshotInputs(ctx context.Context, root string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, gateInputTime)
+	defer cancel()
+	out, err := handoffGitOutput(ctx, root, "ls-files", "-z", "--cached", "--others", "--exclude-standard",
+		"--", ":(top)", ":(top,exclude).punt-labs/local", ":(top,exclude).punt-labs/ethos/sessions")
+	if err != nil {
+		return nil, err
+	}
+	var inputs []string
+	seen := map[string]bool{}
+	for _, name := range strings.Split(string(out), "\x00") {
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		info, err := os.Lstat(filepath.Join(root, name))
+		if err != nil || info.IsDir() {
+			continue
+		}
+		inputs = append(inputs, name)
+	}
+	if len(inputs) == 0 {
+		return nil, errors.New("worktree has no snapshot inputs")
+	}
+	return inputs, nil
 }

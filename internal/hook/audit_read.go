@@ -43,6 +43,10 @@ func readSessionAuditWithPolicy(p layout.Policy, sessionID string) ([]auditEntry
 	if err != nil {
 		return nil, err
 	}
+	return decodeSessionStream(data)
+}
+
+func decodeSessionStream(data audit.StreamData) ([]auditEntry, error) {
 	var out []auditEntry
 	for _, l := range append(data.Legacy, data.Lines...) {
 		e, err := decodeAuditLine(l.Raw)

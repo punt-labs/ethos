@@ -33,6 +33,10 @@ func ReadStream(p layout.Policy, s Stream) (StreamData, error) {
 }
 
 func readStreamCanonical(p layout.Policy, s Stream, canonicalize func([]byte) ([]byte, error)) (StreamData, error) {
+	return readStreamWithChunkLoader(p, s, canonicalize, ReadChunkVerified, nil)
+}
+
+func readStreamWithChunkLoader(p layout.Policy, s Stream, canonicalize func([]byte) ([]byte, error), loadChunk func(string, int64) ([]Line, error), reconcileLive func(int64, []byte) ([]byte, error)) (StreamData, error) {
 	path := s.LivePath(p)
 	var livePayloads [][]byte
 	loadLive := func(_ layout.Policy, _ Stream) ([]Line, error) {
@@ -56,10 +60,13 @@ func readStreamCanonical(p layout.Policy, s Stream, canonicalize func([]byte) ([
 			// The union visits live rows in read order, before dedup or sort.
 			payload := livePayloads[0]
 			livePayloads = livePayloads[1:]
+			if reconcileLive != nil {
+				return reconcileLive(l.TS, payload)
+			}
 			return payload, nil
 		})
 	}
-	return readStream(p, s, ReadChunkVerified, loadLive, merge)
+	return readStream(p, s, loadChunk, loadLive, merge)
 }
 
 func readStream(p layout.Policy, s Stream, loadChunk func(string, int64) ([]Line, error), loadLive func(layout.Policy, Stream) ([]Line, error), merge func([]Line) ([]Line, error)) (StreamData, error) {

@@ -145,7 +145,15 @@ var writerRegistry = map[string]writerEntry{
 	// This callback-based installer preserves a user-authored Git message, not
 	// a captured mission/audit record. Pin its local staging boundary; the real
 	// installed-hook tests cover the callback rename and message bytes.
-	"internal/hook.installCommitMessage": checkpoint("CreateLocalTemp"),
+	"internal/hook.installCommitMessage":         checkpoint("CreateLocalTemp"),
+	"internal/hook.handoffGitView.materialize":   exempt("writes an exact Git view, including binary pack bytes, into private sandbox staging; it does not author a record"),
+	"internal/hook.handoffRuntime.extractLocked": exempt("extracts digest-pinned runtime bytes into a private sandbox tree; redacting them would alter the runtime"),
+	"internal/hook.handoffRuntime.fetch":         exempt("streams a published runtime archive to the digest-verified installer, not to a record"),
+	"internal/hook.InstallHandoffRuntimeFile":    exempt("streams a local runtime archive to the digest-verified installer, not to a record"),
+	"internal/hook.handoffRuntime.install":       exempt("installs the exact digest-pinned runtime archive in the machine-local store; it does not author a record"),
+	"internal/hook.mountHandoffProcAndDev":       exempt("creates empty mount targets for device files inside the private sandbox"),
+	"internal/hook.mountHandoffSystem":           exempt("writes synthetic passwd and group files and creates empty bind targets inside the private sandbox; it does not write records"),
+	"internal/hook.writeHandoffLoopbackHosts":    exempt("writes constant resolver files inside the private sandbox; it does not write records"),
 	// internal/autorepair: the repair log (machine-local, global root).
 	"internal/autorepair.FileLog.Logf": checkpoint("Prose"),
 	// internal/mission: records.

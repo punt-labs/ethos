@@ -42,6 +42,9 @@ type Check struct {
 	Cwd          string            `yaml:"cwd,omitempty" json:"cwd,omitempty"`
 	Snapshot     *Snapshot         `yaml:"snapshot,omitempty" json:"snapshot,omitempty"`
 	fields       map[string]bool
+
+	WorktreeSnapshot       *WorktreeSnapshot `yaml:"-" json:"worktree_snapshot,omitempty"`
+	InvalidSnapshotSidecar bool              `yaml:"-" json:"invalid_snapshot_sidecar,omitempty"`
 }
 
 type Snapshot struct {
@@ -57,7 +60,10 @@ func (c *Check) UnmarshalYAML(node *yaml.Node) error {
 	for i := range typ.NumField() {
 		f := typ.Field(i)
 		if f.IsExported() {
-			known[strings.Split(f.Tag.Get("yaml"), ",")[0]] = true
+			name := strings.Split(f.Tag.Get("yaml"), ",")[0]
+			if name != "-" {
+				known[name] = true
+			}
 		}
 	}
 	var values map[any]yaml.Node
@@ -298,6 +304,10 @@ func (c *Check) validate() error {
 			}
 		case "{files}", "{package_dir}", "{root}":
 		default:
+			if c.Stage == "handoff" && c.Snapshot == nil &&
+				!strings.ContainsAny(worktreeArgRoots.Replace(arg), "{}") {
+				continue
+			}
 			return fmt.Errorf("unknown or spliced placeholder %q; placeholders must be whole argv elements", arg)
 		}
 	}
@@ -330,6 +340,8 @@ func (c *Check) validate() error {
 	c.Exclude = append(c.Exclude, ".tmp/**", ".punt-labs/local/**")
 	return nil
 }
+
+var worktreeArgRoots = strings.NewReplacer("{root}", "", "{runtime}", "", "{scratch}", "")
 
 // Duration is defined for validated checks.
 func (c Check) Duration() time.Duration {

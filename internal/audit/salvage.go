@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,72 @@ type SalvageResult struct {
 	Lost        bool           // some line could not be recovered; a gap marker records the range
 	Conflicts   []LiveConflict // recovered lines refused because surviving evidence disagrees
 	Replacement string         // path of the replacement chunk, "" when no line survived
+}
+
+// ReadStreamWithSalvage reconstructs a stream without changing its sources.
+// Only damaged content in named sealed chunks is recoverable. Lost ranges
+// are returned as gaps without writing markers. Other read failures remain errors.
+func ReadStreamWithSalvage(p layout.Policy, s Stream, guard LineGuard) (StreamData, error) {
+	var gaps []Gap
+	var floor int64
+	recovered := map[int64]recoveryPayload{}
+	sources := map[int64]string{}
+	load := func(path string, last int64) ([]Line, error) {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, &ChunkReadError{Path: path, Err: err}
+		}
+		lines, err := decodeChunkVerified(raw, path, last)
+		if err == nil {
+			return lines, nil
+		}
+		cn, kind := Classify(filepath.Base(path), s.Namespace)
+		if kind != KindValid {
+			return nil, err
+		}
+		r, recoverErr := recoverLines(p, s, raw, cn, path, guard, true)
+		if recoverErr != nil {
+			return nil, errors.Join(err, recoverErr)
+		}
+		if r.lost {
+			gaps = append(gaps, Gap{Chunk: cn.Stem(), First: r.lo, Last: r.hi})
+		}
+		floor = max(floor, r.verifiedLast)
+		for ts, payload := range r.payloads {
+			if prior, ok := recovered[ts]; ok && !bytes.Equal(prior.original, payload.original) {
+				if bytes.Equal(payload.original, payload.guarded) && bytes.Equal(payload.original, prior.guarded) {
+					continue
+				}
+				if !bytes.Equal(prior.original, prior.guarded) || !bytes.Equal(prior.original, payload.guarded) {
+					return nil, fmt.Errorf("audit identity conflict: session %q ts %d has divergent payloads in %s and %s", s.Session, ts, sources[ts], path)
+				}
+			}
+			recovered[ts], sources[ts] = payload, path
+		}
+		return r.keep, nil
+	}
+	liveOriginals := map[int64][]byte{}
+	reconcileLive := func(ts int64, payload []byte) ([]byte, error) {
+		recovery, ok := recovered[ts]
+		if !ok || bytes.Equal(recovery.original, recovery.guarded) {
+			return payload, nil
+		}
+		if prior, ok := liveOriginals[ts]; ok && !bytes.Equal(prior, payload) {
+			return nil, fmt.Errorf("audit identity conflict: session %q ts %d has divergent payloads in %s", s.Session, ts, s.LivePath(p))
+		}
+		liveOriginals[ts] = payload
+		if bytes.Equal(recovery.original, payload) {
+			return recovery.guarded, nil
+		}
+		return payload, nil
+	}
+	data, err := readStreamWithChunkLoader(p, s, CanonicalPayload, load, reconcileLive)
+	if err != nil {
+		return StreamData{}, err
+	}
+	data.Gaps = append(data.Gaps, gaps...)
+	data.Floor = max(data.Floor, floor)
+	return data, nil
 }
 
 // SalvageChunk repairs a sealed chunk whose bytes no longer decode (a torn
@@ -75,7 +142,7 @@ type salvageInput struct {
 func salvageBytes(p layout.Policy, s Stream, in salvageInput, guard LineGuard) (SalvageResult, error) {
 	var res SalvageResult
 	source, dir, cn := in.source, in.dir, in.cn
-	r, err := recoverLines(p, s, in.data, cn, source, guard)
+	r, err := recoverLines(p, s, in.data, cn, source, guard, false)
 	if err != nil {
 		return res, err
 	}

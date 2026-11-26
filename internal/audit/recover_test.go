@@ -18,6 +18,140 @@ func sessLine(ts int64, tool string) string {
 	return `{"ts":"` + FormatLineTS(ts) + `","tool":"` + tool + `"}` + "\n"
 }
 
+func TestReadStreamWithSalvage(t *testing.T) {
+	p := repositoryPolicy(t, layout.RecordBlame)
+	s := Stream{Namespace: SessionNS, Session: "s"}
+	dir := filepath.Join(p.RecordRoot(), "sessions", "2026-11-04-s")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	cn := ChunkName{Namespace: SessionNS, First: 100, Last: 200}
+	source := filepath.Join(dir, cn.ChunkFile())
+	damaged := []byte(sessLine(100, "Secret") + "garbage\n")
+	require.NoError(t, os.WriteFile(source, damaged, 0o600))
+	require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), []byte(sessLine(200, "Read"))))
+
+	_, err := ReadStream(p, s)
+	require.ErrorContains(t, err, "corrupt chunk")
+	data, err := ReadStreamWithSalvage(p, s, maskGuard)
+	require.NoError(t, err)
+	require.Len(t, data.Lines, 2)
+	assert.JSONEq(t, sessLine(100, "Masked"), string(data.Lines[0].Raw))
+	assert.JSONEq(t, sessLine(200, "Read"), string(data.Lines[1].Raw))
+	assert.Equal(t, []Gap{{Chunk: cn.Stem(), First: 100, Last: 200}}, data.Gaps)
+	assert.Equal(t, int64(200), data.Floor)
+	raw, err := os.ReadFile(source)
+	require.NoError(t, err)
+	assert.Equal(t, damaged, raw)
+	assert.NoFileExists(t, filepath.Join(dir, cn.MarkerFile()))
+	assert.NoDirExists(t, ArchiveRoot(p))
+
+	require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), []byte("invalid live line\n")))
+	_, err = ReadStreamWithSalvage(p, s, maskGuard)
+	require.ErrorContains(t, err, s.LivePath(p))
+}
+
+func TestReadStreamWithSalvageRedactedOverlap(t *testing.T) {
+	for _, liveTool := range []string{"Secret", "DifferentSecret"} {
+		t.Run(liveTool, func(t *testing.T) {
+			p := repositoryPolicy(t, layout.RecordBlame)
+			s := Stream{Namespace: SessionNS, Session: "s"}
+			dir := filepath.Join(p.RecordRoot(), "sessions", "2026-11-04-s")
+			require.NoError(t, os.MkdirAll(dir, 0o700))
+			source := filepath.Join(dir, SessionChunkFile(100, 100))
+			damaged := []byte(sessLine(100, "Secret") + "garbage\n")
+			require.NoError(t, os.WriteFile(source, damaged, 0o600))
+			live := []byte(sessLine(100, liveTool))
+			require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), live))
+
+			guard := func(_ []byte) ([]byte, string, bool) {
+				return []byte(sessLine(100, "Masked")), "masked", false
+			}
+			data, err := ReadStreamWithSalvage(p, s, guard)
+			if liveTool == "Secret" {
+				require.NoError(t, err)
+				require.Len(t, data.Lines, 1)
+				require.JSONEq(t, sessLine(100, "Masked"), string(data.Lines[0].Raw))
+				require.Len(t, data.Gaps, 1)
+			} else {
+				require.ErrorContains(t, err, "audit identity conflict")
+			}
+			for path, want := range map[string][]byte{source: damaged, s.LivePath(p): live} {
+				raw, err := os.ReadFile(path)
+				require.NoError(t, err)
+				require.Equal(t, want, raw)
+			}
+		})
+	}
+}
+
+func TestReadStreamWithSalvageConflictingRedactedCopies(t *testing.T) {
+	for _, liveTool := range []string{"Secret", "DifferentSecret"} {
+		t.Run(liveTool, func(t *testing.T) {
+			p := repositoryPolicy(t, layout.RecordBlame)
+			s := Stream{Namespace: SessionNS, Session: "s"}
+			dir := filepath.Join(p.RecordRoot(), "sessions", "2026-11-04-s")
+			require.NoError(t, os.MkdirAll(dir, 0o700))
+			for i, tool := range []string{"Secret", "DifferentSecret"} {
+				chunk := filepath.Join(dir, SessionChunkFile(100, 100+int64(i)))
+				require.NoError(t, os.WriteFile(chunk, []byte(sessLine(100, tool)+"garbage\n"), 0o600))
+			}
+			require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), []byte(sessLine(100, liveTool))))
+			guard := func(_ []byte) ([]byte, string, bool) {
+				return []byte(sessLine(100, "Masked")), "masked", false
+			}
+			_, err := ReadStreamWithSalvage(p, s, guard)
+			require.ErrorContains(t, err, "audit identity conflict")
+		})
+	}
+}
+
+func TestReadStreamWithSalvageEquivalentCopies(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		reversed bool
+		intact   bool
+	}{
+		{name: "guarded damaged copy"},
+		{name: "guarded damaged copy first", reversed: true},
+		{name: "original intact copy", intact: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := repositoryPolicy(t, layout.RecordBlame)
+			s := Stream{Namespace: SessionNS, Session: "s"}
+			dir := filepath.Join(p.RecordRoot(), "sessions", "2026-11-04-s")
+			require.NoError(t, os.MkdirAll(dir, 0o700))
+			raw := sessLine(100, "Secret")
+			guarded := sessLine(100, "Masked")
+			short, long := raw, guarded
+			if tc.reversed {
+				short, long = guarded, raw
+			}
+			require.NoError(t, os.WriteFile(filepath.Join(dir, SessionChunkFile(100, 100)), []byte(short[:len(short)-1]), 0o600))
+			if tc.intact {
+				long = raw
+			}
+			long += sessLine(200, "Read")
+			if !tc.intact {
+				long = long[:len(long)-1]
+			}
+			require.NoError(t, os.WriteFile(filepath.Join(dir, SessionChunkFile(100, 200)), []byte(long), 0o600))
+			require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), []byte(raw)))
+			guard := func(line []byte) ([]byte, string, bool) {
+				if string(line) == raw[:len(raw)-1] {
+					return []byte(guarded), "masked", false
+				}
+				return line, "", false
+			}
+			data, err := ReadStreamWithSalvage(p, s, guard)
+			require.NoError(t, err)
+			require.Len(t, data.Lines, 2)
+			require.Empty(t, data.Gaps)
+			if !tc.intact {
+				require.JSONEq(t, guarded, string(data.Lines[0].Raw))
+			}
+		})
+	}
+}
+
 // HIGH-2: QuarantineLocal keeps the decodable lines of the damaged bytes, as
 // SalvageChunk does, instead of recovering only from the live file.
 func TestQuarantineLocalKeepsDecodableDamagedLines(t *testing.T) {

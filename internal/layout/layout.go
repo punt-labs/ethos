@@ -193,6 +193,9 @@ var Table = []Entry{
 	{Pattern: ".punt-labs/ethos/agents/*.md", Class: Source},
 	{Pattern: ".punt-labs/ethos/archetypes/*.yaml", Class: Source},
 	{Pattern: ".punt-labs/ethos/pipelines/*.yaml", Class: Source},
+	// Project check sets (DES-085): checkset.LayeredStore reads
+	// checks/<slug>.yaml and nothing deeper; `ethos vendor` writes the same.
+	{Pattern: ".punt-labs/ethos/checks/*.yaml", Class: Source},
 	{Pattern: ".punt-labs/ethos-bundles/**", Class: Source},
 	{Pattern: ".claude/agents/*.md", Class: Source},
 	{Pattern: ".claude/settings.json", Class: Source}, // ethos enable permission rules

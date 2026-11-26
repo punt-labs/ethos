@@ -50,6 +50,17 @@ func TestCheckUnclassifiedFiles_ClassifiedFilesPass(t *testing.T) {
 	assert.False(t, strings.HasPrefix(r.Detail, "not scanned"), "zones were walked: %s", r.Detail)
 }
 
+// TestCheckUnclassifiedFiles_CheckSetsPass: a project check set is a file
+// `ethos checks` reads and `ethos vendor` writes, so a repository that
+// defines one is not warned about it.
+func TestCheckUnclassifiedFiles_CheckSetsPass(t *testing.T) {
+	root := repoTemp(t)
+	touch(t, root, ".punt-labs/ethos/checks/beadle-go.yaml")
+	r := CheckUnclassifiedFiles(root)
+	assert.Equal(t, "PASS", r.Status, r.Detail)
+	assert.NotContains(t, r.Detail, "beadle-go.yaml")
+}
+
 func TestCheckUnclassifiedFiles_WarnsAndListsUnmatched(t *testing.T) {
 	root := t.TempDir()
 	touch(t, root, ".punt-labs/ethos/identities/bwk.yaml")

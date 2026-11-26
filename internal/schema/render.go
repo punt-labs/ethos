@@ -102,19 +102,29 @@ func snapshotSchema(items map[string]any) {
 
 func adapterSchema(items map[string]any) {
 	props := items["properties"].(map[string]any)
-	argv := func(file bool) map[string]any {
+	argv := func(file, worktree bool) map[string]any {
 		placeholders := "files|root|package_dir"
 		if file {
 			placeholders = "file|" + placeholders
 		}
 		pattern := `^([^{}]*|\{(` + placeholders + `)\})$`
+		if worktree {
+			pattern = `^(([^{}]|\{(root|runtime|scratch)\})*|\{(files|package_dir)\})$`
+		}
 		return map[string]any{"type": "array", "minItems": 1, "items": map[string]any{"type": "string", "pattern": pattern}, "prefixItems": []any{map[string]any{"type": "string", "pattern": pattern, "allOf": []any{map[string]any{"pattern": `\S`}}}}}
 	}
-	props["run"] = argv(true)
-	props["uv"] = argv(true)
 	props["vars"] = map[string]any{"type": "object", "propertyNames": map[string]any{"pattern": checkset.MakeVariablePattern}, "additionalProperties": map[string]any{"type": "string", "pattern": `^[^${}]*$`}}
 	props["script"] = map[string]any{"type": "string", "pattern": `^[^{}-][^{}]*$`, "allOf": []any{map[string]any{"pattern": `\S`}}}
-	items["else"] = map[string]any{"properties": map[string]any{"run": argv(false), "uv": argv(false)}}
+	items["then"].(map[string]any)["properties"].(map[string]any)["run"] = argv(true, false)
+	items["then"].(map[string]any)["properties"].(map[string]any)["uv"] = argv(true, false)
+	items["else"] = map[string]any{
+		"if": map[string]any{
+			"properties": map[string]any{"stage": map[string]any{"const": "handoff"}},
+			"not":        map[string]any{"required": []string{"snapshot"}},
+		},
+		"then": map[string]any{"properties": map[string]any{"run": argv(false, true), "uv": argv(false, true)}},
+		"else": map[string]any{"properties": map[string]any{"run": argv(false, false), "uv": argv(false, false)}},
+	}
 	var choices []any
 	for _, adapter := range []string{"exec", "make", "go", "uv", "npm"} {
 		own := map[string][]string{"exec": {"run"}, "make": {"target", "vars"}, "go": {"go"}, "uv": {"uv"}, "npm": {"script"}}[adapter]

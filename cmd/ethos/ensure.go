@@ -50,6 +50,9 @@ var noEnsure = []string{"version", "completion", "help", "uninstall",
 	cobra.ShellCompRequestCmd, cobra.ShellCompNoDescRequestCmd}
 
 func exemptFromEnsure(cmd *cobra.Command) bool {
+	if cmd.CommandPath() == "ethos hook subagent-stop" {
+		return true
+	}
 	top := cmd
 	for top.HasParent() && top.Parent().HasParent() {
 		top = top.Parent()
