@@ -19,9 +19,7 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/attribute"
-	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/checkset"
-	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
@@ -33,14 +31,14 @@ const (
 
 type handoffData struct {
 	checkset.SnapshotData
-	file, checkout, agent string
-	digest                [sha256.Size]byte
+	file, agent string
+	digest      [sha256.Size]byte
 }
 
-func newHandoffData(loc layout.Policy, spec checkset.SnapshotData, checkout, agent string) handoffData {
+func newHandoffData(loc layout.Policy, spec checkset.SnapshotData, agent string) handoffData {
 	key := sha256.Sum256([]byte(spec.URL))
 	return handoffData{
-		SnapshotData: spec, checkout: checkout, agent: agent,
+		SnapshotData: spec, agent: agent,
 		file: filepath.Join(loc.LocalRoot(), "handoff-data-v1", fmt.Sprintf("%x", key)),
 	}
 }
@@ -54,53 +52,7 @@ func (d handoffData) unavailable() error {
 	if d.agent != "" && attribute.ValidateSlug(d.agent) == nil {
 		cmd += " --agent " + d.agent
 	}
-	dir := handoffShellPath(d.checkout)
-	if editRedact(dir) != dir {
-		if ref := handoffDataWorktreeRef(d.checkout); ref != "" {
-			return fmt.Errorf("data-unavailable: %q is missing, expired or invalid; run %s --worktree %s", d.Name, cmd, audit.ShellQuote(ref))
-		}
-	}
-	return fmt.Errorf("data-unavailable: %q is missing, expired or invalid; run (cd %s && %s)", d.Name, dir, cmd)
-}
-
-func handoffDataWorktreeRef(checkout string) string {
-	dir, common, err := resolve.HandGitDirs(checkout)
-	if err != nil {
-		return ""
-	}
-	if dir == common {
-		return "primary"
-	}
-	if filepath.Dir(dir) == filepath.Join(common, "worktrees") {
-		return "linked:" + filepath.Base(dir)
-	}
-	return ""
-}
-
-// HandoffDataCheckout selects a registered worktree in the current repository.
-func HandoffDataCheckout(loc resolve.Located, ref string) (resolve.Located, error) {
-	if ref == "" {
-		return loc, nil
-	}
-	if err := loc.Err(); err != nil {
-		return resolve.Located{}, err
-	}
-	list, err := gitenv.Output(loc.Checkout, "git", "worktree", "list", "--porcelain", "-z")
-	if err != nil {
-		return resolve.Located{}, errors.New("cannot list the repository worktrees for refresh-data")
-	}
-	for field := range strings.SplitSeq(string(list), "\x00") {
-		checkout, found := strings.CutPrefix(field, "worktree ")
-		if found && handoffDataWorktreeRef(checkout) == ref {
-			root, store, err := resolve.CheckoutAndStoreOf(checkout)
-			if err == nil && root != "" && store == loc.Store {
-				loc.Checkout = root
-				return loc, nil
-			}
-			break
-		}
-	}
-	return resolve.Located{}, fmt.Errorf("refresh-data worktree %q is not registered in this repository", ref)
+	return fmt.Errorf("data-unavailable: %q is missing, expired or invalid; run %s in the checkout this stop checked", d.Name, cmd)
 }
 
 // RefreshHandoffData fetches the selected policy's data outside the gate.
@@ -132,7 +84,7 @@ func refreshHandoffData(ctx context.Context, loc resolve.Located, agent string, 
 			continue
 		}
 		for _, spec := range check.WorktreeSnapshot.Data {
-			data := newHandoffData(policy, spec, loc.Checkout, agent)
+			data := newHandoffData(policy, spec, agent)
 			if seen[data.file] {
 				continue
 			}
@@ -249,13 +201,13 @@ func (d handoffData) verifyFile(ctx context.Context, f *os.File) (int64, [sha256
 	return size, digest, nil
 }
 
-func selectHandoffData(ctx context.Context, loc layout.Policy, profile *checkset.WorktreeSnapshot, checkout, agent string) ([]handoffData, error) {
+func selectHandoffData(ctx context.Context, loc layout.Policy, profile *checkset.WorktreeSnapshot, agent string) ([]handoffData, error) {
 	if profile == nil {
 		return nil, nil
 	}
 	data := make([]handoffData, 0, len(profile.Data))
 	for _, spec := range profile.Data {
-		item := newHandoffData(loc, spec, checkout, agent)
+		item := newHandoffData(loc, spec, agent)
 		f, _, digest, err := item.open(ctx)
 		if err != nil {
 			return nil, err

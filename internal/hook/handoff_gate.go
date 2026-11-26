@@ -186,7 +186,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	if err != nil {
 		return deferGate("cannot verify declared snapshot inputs within the key budget")
 	}
-	data, err := selectHandoffData(ctx, loc, check.WorktreeSnapshot, root, agent)
+	data, err := selectHandoffData(ctx, loc, check.WorktreeSnapshot, agent)
 	if err != nil {
 		return deferGate(err.Error())
 	}
@@ -231,7 +231,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	}
 	key := hex.EncodeToString(h.Sum(nil))
 	verifyData := func() string {
-		current, err := selectHandoffData(ctx, loc, check.WorktreeSnapshot, root, agent)
+		current, err := selectHandoffData(ctx, loc, check.WorktreeSnapshot, agent)
 		if err != nil {
 			return err.Error()
 		}
