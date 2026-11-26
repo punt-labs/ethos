@@ -565,10 +565,6 @@ func darwinHandoffCommandVerdict(err error, check editCheck, stdout, stderr edit
 			switch code := exit.ExitCode(); code {
 			case 128 + int(unix.SIGHUP), 128 + int(unix.SIGINT), 128 + int(unix.SIGKILL), 128 + int(unix.SIGTERM):
 				return "", fmt.Errorf("check exited %d (likely killed or interrupted); not cached", code)
-			default:
-				if code >= 126 {
-					return "", fmt.Errorf("sandbox launch did not complete: %v: %s", err, stderr.data)
-				}
 			}
 		}
 	}
