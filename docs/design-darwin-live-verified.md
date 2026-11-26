@@ -23,12 +23,26 @@ validation error. The resolved mode is part of the key, cache record,
 and verdict log. A Linux runner seeing `live-verified` visibly defers;
 it neither rejects the sidecar nor executes the gate in snapshot mode.
 
-As in DES-085, policy comes from the session's canonical policy store,
-not the edited checkout. Because live verification runs unsandboxed,
-only an operator-approved policy revision may opt in. A mutable sidecar
-in the worktree (including when it is also the canonical checkout) is
-not approval. If the runner cannot establish approval, visibly defer
-before launch.
+Because live verification runs unsandboxed, selecting a policy is not
+approval, even when the policy is in the canonical checkout. An operator
+runs `ethos handoff approve-live <slug>` from the checkout. The command
+shows the resolved policy and its revision and asks for confirmation on
+an interactive stdin TTY. It refuses known Claude Code and OpenCode
+environment markers. These checks are defense in depth, not proof of
+human presence: an agent with the same host credentials can obtain a
+PTY, remove environment markers, or modify the local approval store.
+
+The pin is stored under `~/.punt-labs/ethos/live-approvals/`, outside the
+checkout and the snapshot sandbox's write access. It binds the common
+physical Git directory, checkset slug, and SHA-256 revision derived from
+both resolved YAML files' bytes. Linked worktrees share the repository
+identity but do not share approval for differing policy revisions.
+Changes to either YAML file require new approval. A missing or
+mismatched pin visibly defers before launch with
+`live-verified not approved (run: ethos handoff approve-live <slug>)`.
+Run `ethos handoff revoke-live <slug>` to remove the pin. A grant ID is
+part of the result key; revocation and reapproval cannot reuse verdicts
+from an earlier grant.
 
 The runner's optional `requires` list declares `pty`, `posix_shm`,
 or `mach_lookup`; unknown entries are validation errors, and the
@@ -52,7 +66,12 @@ it as a terminal result. The verdict log uses
 `isolation: live-verified`, not snapshot isolation.
 
 1. **FSEvents:** enable file-level events and watch keyed paths and Git
-   metadata through an event ID sampled after taking the closing key.
+   metadata through the event ID of a unique sentinel written after the
+   closing key. Create its private Git subdirectory before arming either
+   guard, exclude only the sentinel subtree from the Git event watch,
+   and remove the run's directory after verification. Unkeyed ignored
+   paths are not themselves vetoes, and cannot explain away a vnode
+   event. A sentinel timeout is unresolved coverage.
    Delivery may be late or coalesced. Treat `MustScanSubDirs`,
    `UserDropped`, `KernelDropped`,
    and `RootChanged` as vetoes. If the stream cannot establish coverage
@@ -116,11 +135,15 @@ keys. The transient source nevertheless changed `make lint` (exit 2).
 Attribution based on FSEvents was rejected because it can miss an event
 without a loss flag.
 
-Under the strict live-verified rule, Quarry's clean gate always
-visibly defers, never passes: XcodeGen replaces the root `.xcodeproj`
-on every run. Directing XcodeGen output into a dedicated ignored
-subdirectory or using `xcodegen --use-cache` are possible remedies;
-the choice belongs to Quarry and is outside this slice.
+Under the strict live-verified rule, Quarry's original clean gate always
+visibly deferred: XcodeGen replaced the root `.xcodeproj` on every run.
+[Quarry's consumer change](https://github.com/punt-labs/quarry-menubar/pull/89)
+moved that output to the ignored `build/xcodegen/` directory. The primed
+clean gate passed 10/10 with no deferral; the transient root Swift probe
+deferred 20/20 on kqueue alone. The first run on a fresh checkout still
+deferred on a root write. Quarry rejected `xcodegen --use-cache` because
+it could preserve an independently edited `project.pbxproj`. These are
+consumer probe results, not real-hook parity.
 
 Keep the index veto strict. In the
 [optional-lock and index burst probes](https://github.com/punt-labs/quarry-menubar/tree/5d94f8305a1c21362e2a06689e89692f08278dae/docs/ethos-live-evidence),

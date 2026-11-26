@@ -88,7 +88,7 @@ type SnapshotPrehydrate struct {
 	Run []string `yaml:"run" json:"run"`
 }
 
-func loadSnapshotSidecar(root, slug string, set *Set) error {
+func loadSnapshotSidecar(root, slug string, set *Set, revision ...*[32]byte) error {
 	dir, err := os.OpenRoot(root)
 	if err != nil {
 		return err
@@ -120,6 +120,9 @@ func loadSnapshotSidecar(root, slug string, set *Set) error {
 	}
 	if len(data) > maxSidecar {
 		return errors.New("snapshot sidecar is too large")
+	}
+	if len(revision) != 0 {
+		*revision[0] = sha256.Sum256(data)
 	}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)

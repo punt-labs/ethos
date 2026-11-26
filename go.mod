@@ -5,6 +5,7 @@ go 1.26.1
 toolchain go1.26.5
 
 require (
+	github.com/ebitengine/purego v0.11.3
 	github.com/mark3labs/mcp-go v0.45.0
 	github.com/punt-labs/punt-observe-go v0.0.0-20261122192811-90067f488a2a
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2

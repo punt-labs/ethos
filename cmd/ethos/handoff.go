@@ -1,8 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"os"
+	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/spf13/cobra"
@@ -70,6 +75,78 @@ func init() {
 		},
 	}
 	refresh.Flags().StringVar(&dataAgent, "agent", "", "Select the handoff policy for this agent instead of the project default")
-	handoff.AddCommand(fetch, refresh)
+	handoff.AddCommand(fetch, refresh, &cobra.Command{
+		Use:   "approve-live <slug>",
+		Short: "Approve the current revision of a live-verified handoff policy",
+		Args:  cobra.ExactArgs(1),
+		RunE:  approveLiveHandoff,
+	}, &cobra.Command{
+		Use:   "revoke-live <slug>",
+		Short: "Revoke the live-verified handoff approval for this checkset",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			checkout, err := requireCheckout(cmd.ErrOrStderr(), "handoff revoke-live")
+			if err != nil {
+				return err
+			}
+			policy, err := hook.ResolveHandoffLiveRevocation(checkout, args[0])
+			if err != nil {
+				return err
+			}
+			return policy.Revoke()
+		},
+	})
 	rootCmd.AddCommand(handoff)
+}
+
+func approveLiveHandoff(cmd *cobra.Command, args []string) error {
+	in, ok := cmd.InOrStdin().(*os.File)
+	if err := checkLiveApprovalTerminal(ok && isTTY(in), os.Environ()); err != nil {
+		return err
+	}
+	checkout, err := requireCheckout(cmd.ErrOrStderr(), "handoff approve-live")
+	if err != nil {
+		return err
+	}
+	policy, err := hook.ResolveHandoffLivePolicy(checkout, args[0])
+	if err != nil {
+		return err
+	}
+	description, err := policy.Description()
+	if err != nil {
+		return err
+	}
+	out := cmd.OutOrStdout()
+	if _, err := fmt.Fprintf(out, "Repository: %q\nCheckset: %s\nPolicy SHA-256: %s\n%s\nApprove this policy to run without sandboxing? Type yes to approve: ", policy.Repo, policy.Slug, policy.Revision, description); err != nil {
+		return err
+	}
+	if err := confirmLiveApproval(in); err != nil {
+		return err
+	}
+	if err := policy.Approve(); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(out, "Approved %s at %s\n", policy.Slug, policy.Revision)
+	return err
+}
+
+func checkLiveApprovalTerminal(tty bool, env []string) error {
+	if !tty {
+		return errors.New("approve-live requires an interactive TTY on stdin")
+	}
+	for _, entry := range env {
+		key, value, _ := strings.Cut(entry, "=")
+		if value != "" && (key == "CLAUDECODE" || key == "CLAUDE_PID" || strings.HasPrefix(key, "CLAUDE_CODE_") || key == "OPENCODE" || strings.HasPrefix(key, "OPENCODE_")) {
+			return errors.New("approve-live refuses to run in an agent environment")
+		}
+	}
+	return nil
+}
+
+func confirmLiveApproval(in io.Reader) error {
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil || strings.TrimSpace(line) != "yes" {
+		return errors.New("live policy not approved")
+	}
+	return nil
 }

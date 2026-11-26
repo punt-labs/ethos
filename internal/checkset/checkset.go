@@ -45,6 +45,8 @@ type Check struct {
 
 	WorktreeSnapshot       *WorktreeSnapshot `yaml:"-" json:"worktree_snapshot,omitempty"`
 	InvalidSnapshotSidecar bool              `yaml:"-" json:"invalid_snapshot_sidecar,omitempty"`
+	HandoffPolicySlug      string            `yaml:"-" json:"-"`
+	HandoffPolicyRevision  string            `yaml:"-" json:"-"`
 }
 
 type Snapshot struct {

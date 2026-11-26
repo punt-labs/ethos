@@ -72,6 +72,11 @@ type handoffWorktreePlan struct {
 	runtime    handoffRuntime
 }
 
+type handoffLiveGuard interface {
+	close()
+	finish(context.Context, []string) error
+}
+
 type handoffSystemMount struct {
 	Source, Target string
 	Directory      bool
@@ -135,15 +140,27 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	if check.InvalidSnapshotSidecar {
 		return deferGate("invalid snapshot sidecar")
 	}
-	if mode == checkset.IsolationLiveVerified {
-		if runtime.GOOS == "darwin" {
-			return deferGate("live-verified FSEvents cutoff unverified in darwin", true)
+	live := mode == checkset.IsolationLiveVerified
+	var approval liveApprovalPolicy
+	var grant string
+	unapproved := "live-verified not approved (run: ethos handoff approve-live " + check.HandoffPolicySlug + ")"
+	if live {
+		if runtime.GOOS != "darwin" {
+			return deferGate("live-verified unavailable in "+runtime.GOOS+" snapshot", true)
 		}
-		return deferGate("live-verified unavailable in "+runtime.GOOS+" snapshot", true)
+		var err error
+		approval, err = newLiveApprovalPolicy(root, check.HandoffPolicySlug, check.HandoffPolicyRevision)
+		if err != nil {
+			return deferGate(unapproved, true)
+		}
+		grant = approval.approval()
+		if grant == "" {
+			return deferGate(unapproved, true)
+		}
 	}
 	var bundle handoffRuntime
 	if check.WorktreeSnapshot != nil {
-		if reason := unavailableSnapshotCapability(runtime.GOOS, check.WorktreeSnapshot.Requires); reason != "" {
+		if reason := unavailableSnapshotCapability(runtime.GOOS, check.WorktreeSnapshot.Requires); reason != "" && !live {
 			return deferGate(reason)
 		}
 		var err error
@@ -154,7 +171,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		if field := unsupportedWorktreeField(check.WorktreeSnapshot); field != "" {
 			return deferGate("worktree profile field " + field + " not supported by this runner yet")
 		}
-		if !handoffSandboxSupported() {
+		if !live && !handoffSandboxSupported() {
 			return deferGate("snapshot isolation unavailable on this host")
 		}
 		inputs, err := worktreeSnapshotInputs(ctx, root)
@@ -166,7 +183,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	if check.Snapshot == nil {
 		return deferGate("no declared snapshot profile")
 	}
-	if !handoffSandboxSupported() {
+	if !live && !handoffSandboxSupported() {
 		return deferGate("snapshot isolation unavailable on this host")
 	}
 	runnerBuild, buildErr := handoffRunnerBuild()
@@ -203,6 +220,15 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		return deferGate("cannot open the handoff cache")
 	}
 
+	var guard handoffLiveGuard
+	if live {
+		var err error
+		guard, err = armHandoffLive(ctx, root, check.Snapshot.Inputs)
+		if err != nil {
+			return deferGate(err.Error(), true)
+		}
+		defer guard.close()
+	}
 	inputCtx, cancel := context.WithTimeout(ctx, gateInputTime)
 	preserveMode := check.WorktreeSnapshot != nil
 	var scratchFiles []string
@@ -231,7 +257,11 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	}
 	h := sha256.New()
 	enc := json.NewEncoder(h)
-	if err := enc.Encode([]string{"handoff-v1", runnerBuild, root, identity, state, proof, mode}); err != nil {
+	keyInputs := []string{"handoff-v1", runnerBuild, root, identity, state, proof, mode}
+	if live {
+		keyInputs = append(keyInputs, approval.Revision, grant)
+	}
+	if err := enc.Encode(keyInputs); err != nil {
 		return deferGate("cannot encode the handoff key")
 	}
 	if err := enc.Encode(policy); err != nil {
@@ -274,6 +304,15 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	verifyCurrent := func(when string) string {
 		verify, cancel := context.WithTimeout(ctx, gateInputTime)
 		defer cancel()
+		if live {
+			if approval.approval() != grant {
+				return unapproved
+			}
+			inputs, err := worktreeSnapshotInputs(verify, root)
+			if err != nil || !slices.Equal(inputs, check.Snapshot.Inputs) {
+				return "checkout input set changed " + when
+			}
+		}
 		currentState, currentProof, err := handoffGateInputs(verify, root, check.Snapshot.Inputs, preserveMode, scratchFiles...)
 		if err != nil || currentState != state || currentProof != proof {
 			return "checkout changed " + when
@@ -292,6 +331,21 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		}
 		return verifyData()
 	}
+	finishLive := func() string {
+		if !live {
+			return ""
+		}
+		if reason := verifyCurrent("during the live-verified check"); reason != "" {
+			return reason
+		}
+		if err := guard.finish(ctx, check.Snapshot.Inputs); err != nil {
+			return err.Error()
+		}
+		if approval.approval() != grant {
+			return unapproved
+		}
+		return ""
+	}
 	lockPath, slot := handoffGatePaths(cache, key)
 	if err := layout.EnsureLocalDir(loc, filepath.Dir(slot)); err != nil {
 		return deferGate("cannot open the handoff result directory")
@@ -306,9 +360,9 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		busy, err := audit.TryLock(lockPath, func() error {
 			// Re-select the input identity after waiting; a stale stop must not
 			// report an owner's failure for a checkout that no longer matches.
-			if waited {
+			if waited || live {
 				if reason := verifyCurrent("while waiting"); reason != "" {
-					result = deferGate(reason)
+					result = deferGate(reason, live)
 					return nil
 				}
 			}
@@ -330,11 +384,15 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 						return nil
 					}
 				}
+				if reason := finishLive(); reason != "" {
+					result = deferGate(reason, true)
+					return nil
+				}
 				diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "reused", time.Since(start), isolation...)
 				result = feedback(saved.Failure)
 				return nil
 			}
-			diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "miss", time.Since(start))
+			diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "miss", time.Since(start), isolation...)
 			scratch := filepath.Join(cache, layout.TmpPath("snapshot-"+key[:3]))
 			if err := removeSnapshotScratch(scratch); err != nil {
 				result = deferGate("cannot clean up the previous snapshot: " + editRedact(err.Error()))
@@ -378,7 +436,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 					return nil
 				}
 			}
-			if gitView.fingerprint != "" {
+			if gitView.fingerprint != "" && !live {
 				prepared.gitDir = filepath.Join(scratch, "git-view")
 				if err := gitView.materialize(ctx, root, prepared.gitDir); err != nil {
 					result = deferGate("cannot materialize the Git view within the snapshot budget")
@@ -405,9 +463,14 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 						return nil
 					}
 				}
-				failure, err := executeHandoffSnapshot(ctx, checkScratch, root, proof, check.Snapshot.Inputs, invocation, prepared)
+				var failure string
+				if live {
+					failure, err = executeHandoffLive(ctx, checkScratch, root, check.Snapshot.Inputs, invocation, prepared)
+				} else {
+					failure, err = executeHandoffSnapshot(ctx, checkScratch, root, proof, check.Snapshot.Inputs, invocation, prepared)
+				}
 				if err != nil {
-					result = deferGate(err.Error(), errors.Is(err, errHandoffXcodeUntrusted))
+					result = deferGate(err.Error(), live || errors.Is(err, errHandoffXcodeUntrusted))
 					return nil
 				}
 				if failure != "" {
@@ -419,12 +482,18 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 				return nil
 			}
 			if ctx.Err() != nil {
-				result = deferGate("snapshot check was interrupted")
+				result = deferGate(mode+" check was interrupted", live)
 				return nil
 			}
-			if reason := verifyCurrent("during the snapshot check"); reason != "" {
-				result = deferGate(reason)
+			if reason := finishLive(); reason != "" {
+				result = deferGate(reason, true)
 				return nil
+			}
+			if !live {
+				if reason := verifyCurrent("during the snapshot check"); reason != "" {
+					result = deferGate(reason)
+					return nil
+				}
 			}
 			failure := editRedact(strings.Join(failures, "\n\n"))
 			if err := writeGateResult(loc, slot, gateResult{Key: key, Proof: proof, Isolation: mode, Failure: failure}); err != nil {
