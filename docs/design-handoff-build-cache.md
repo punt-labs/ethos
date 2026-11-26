@@ -60,12 +60,16 @@ namespaces under a machine-wide disk budget; skip active locks. Clearing
 or evicting a namespace must also invalidate verdicts that could have
 used it. Store a generation for each namespace outside the removable
 cache tree, alongside a stable namespace lock that also survives
-deletion. Under that lock, persist a new, never-reused generation before
-deleting the tree. A crash between these operations invalidates verdicts
-even if deletion must be retried. For an opted-in check, read the
-generation and include it in the verdict key before looking for a
-reusable verdict; hold the lock through the reuse decision. A running
-gate may record a verdict only under the generation it opened with.
+deletion. Keep artifacts in a subdirectory named for their generation
+(for example, `g<N>`), and seed the private copy only from the current
+generation's directory. A missing directory means a cold cache. Under
+the lock, persist a new, never-reused generation before attempting
+best-effort deletion of older directories. A crash after the bump
+leaves old artifacts on disk but makes them ineligible for reuse.
+For an opted-in check, read the generation and include it in the
+verdict key before looking for a reusable verdict; hold the lock
+through the reuse decision. A running gate may publish artifacts and
+record a verdict only under the generation it opened with.
 If the generation cannot be read reliably, do not reuse a verdict.
 The prototype tests private copies and pass-only write-back; the clear
 command, eviction, and generation tracking are proposed, not implemented.
