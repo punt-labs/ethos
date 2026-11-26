@@ -75,6 +75,11 @@ func Deregister(repoRoot string, rules map[string][]string, p layout.Policy) ([]
 // DeregisterWithEnv removes every rule from its permissions tier and every env
 // entry whose value still matches the owned default, in one atomic write. A
 // repo with no settings file is left as it is.
+//
+// Like permissions, env defaults follow a stateless ownership contract with no
+// sidecar provenance file: DeregisterWithEnv removes an owned key whenever its
+// value equals the owned default, even if the repository already had that exact
+// value before RegisterWithEnv ran. Any non-default value (e.g. "1") is kept.
 func DeregisterWithEnv(repoRoot string, rules map[string][]string, env map[string]string, p layout.Policy) ([]string, []string, error) {
 	if _, err := os.Lstat(settingsPath(repoRoot)); errors.Is(err, fs.ErrNotExist) {
 		return nil, nil, nil

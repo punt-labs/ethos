@@ -548,7 +548,10 @@ skills prompt-gated even though the broad allow also matches. It also sets
 `git diff` calls in agent sessions do not take `.git/index.lock` (DES-086);
 an existing value set by the repository is preserved. `disable` removes
 exactly the current allow and ask values and removes `env.GIT_OPTIONAL_LOCKS`
-only when its value is still `"0"` (dropping an empty `env` object).
+only when its value is still `"0"` (dropping an empty `env` object); like the
+owned permission rules, this is stateless (no provenance sidecar), so a
+pre-existing `"0"` is also removed on `disable` while any non-default override
+(such as `"1"`) is preserved.
 `~/.claude/settings.json` is never edited, and no `ethos-dev` rule is granted:
 the dev plugin only exists in a maintainer's checkout.
 
