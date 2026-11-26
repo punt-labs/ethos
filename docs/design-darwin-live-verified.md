@@ -70,21 +70,25 @@ uses `isolation: live-verified`, not snapshot isolation.
    even if they contain no keyed files yet. Register `NOTE_WRITE`,
    `NOTE_EXTEND`, `NOTE_RENAME`, `NOTE_DELETE`, and `NOTE_REVOKE` on
    these directories. A directory-entry event vetoes unless both
-   conditions hold: file-level FSEvents reports one or more paths
-   for that directory over the watch window and every reported path
-   is Git-ignored, with no drop or other coverage-loss flags; and the
-   closing rescan finds the same non-ignored entry names and inodes
-   as the opening scan. If either condition fails or cannot be
+   conditions hold: file-level FSEvents reports at least one entry
+   change (`ItemCreated`, `ItemRemoved`, or `ItemRenamed`) on a
+   Git-ignored path in that directory over the watch window, all paths
+   reported for that directory are Git-ignored, and there are no drop
+   or other coverage-loss flags; and the closing rescan finds the same
+   non-ignored entry names and inodes as the opening scan. A record
+   with only `ItemModified` does not attribute a directory-entry event.
+   If either condition fails or cannot be
    verified, defer. This exception does not excuse a Git metadata or
    keyed-file veto, or a watched directory being moved, removed, or
    revoked. With no attributable ignored output, a single coalesced
    directory event is enough to catch an untracked, non-ignored file
    that is created and removed between equal keys.
 
-   **Residual:** if a gate also writes ignored output in a watched
-   directory, FSEvents can miss a non-ignored create-then-delete in
-   the same window. The closing entry list then matches, and the
-   directory event may be attributed to the ignored output alone.
+   **Residual:** if a gate also creates, removes, or renames a
+   Git-ignored entry in a watched directory, FSEvents can miss a
+   non-ignored create-then-delete in the same window. The closing
+   entry list then matches, and the directory event may be attributed
+   to the ignored entry change alone.
    Profiles should direct outputs into dedicated ignored directories
    with no keyed paths. Create those directories before the opening
    scan so the gate writes inside unwatched directories rather than
