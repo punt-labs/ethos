@@ -371,6 +371,17 @@ func TestHandoffManualCommandExpandsWorktreeRoot(t *testing.T) {
 	require.Equal(t, "--input="+filepath.Join(root, "input")+"\n"+filepath.Join(root, "{root}.txt")+"\n", string(out))
 }
 
+func TestHandoffManualCommandKeepsLiveRootUnderCheckout(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	check := checkset.Check{
+		Name: "manual", Stage: "handoff", Files: checkset.Patterns{Globs: []string{"**"}}, Cwd: "file_dir",
+		Run:              []string{"/bin/sh", "/checkout/gate.sh", "{root}", "{package_dir}", "{files}", "--input={root}/input"},
+		WorktreeSnapshot: &checkset.WorktreeSnapshot{},
+	}
+	manual := handoffManualCommand("/checkout/project", []string{"nested/report.txt"}, check)
+	require.Equal(t, "(cd /checkout/project/nested && /bin/sh /checkout/project/gate.sh /checkout/project /checkout/project/nested /checkout/project/nested/report.txt --input=/checkout/project/input)", manual)
+}
+
 func TestHandoffRootOperandIsNotLive(t *testing.T) {
 	root, _ := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())
