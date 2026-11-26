@@ -402,6 +402,7 @@ func TestHandoffWorktreeSandboxExpandsLogicalPathPrefixes(t *testing.T) {
 				runtime.GOOS + "-" + runtime.GOARCH: {
 					Path: []string{"{runtime}/bin", "/usr/bin", "/bin"},
 					Env: map[string]string{
+						"LANG":           "C.UTF-8",
 						"RUFF_CACHE_DIR": "{scratch}/ruff-cache",
 						"MYPY_CACHE_DIR": "{scratch}/mypy-cache",
 					},
@@ -415,6 +416,7 @@ test "$3" = "/checkout/sub" &&
 test "$RUFF_CACHE_DIR" = "/scratch/ruff-cache" &&
 test "$MYPY_CACHE_DIR" = "/scratch/mypy-cache" &&
 test "$PATH" = "/runtime/bin:/usr/bin:/bin" &&
+test "$(/usr/bin/locale charmap)" = "UTF-8" &&
 test "$ETHOS_HANDOFF_ROOT" = "/checkout" &&
 test "$ETHOS_HANDOFF_RUNTIME" = "/runtime" &&
 test "$ETHOS_HANDOFF_SCRATCH" = "/scratch"`,
