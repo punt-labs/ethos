@@ -268,12 +268,13 @@ checks:
 	}
 	before := status()
 	require.Empty(t, before)
-	cmd := loggingProcess(t, t.TempDir(), repo, "hook", "subagent-stop")
+	home := t.TempDir()
+	cmd := loggingProcess(t, home, repo, "hook", "subagent-stop")
 	cmd.Stdin = strings.NewReader(`{"session_id":"fixture","agent_id":"worker","agent_type":"implementer"}`)
 	out, err := cmd.Output()
-	require.NoError(t, err)
+	require.NoError(t, err, "%s", out)
 	require.Equal(t, before, status())
-	require.Contains(t, string(out), "handoff checks deferred (probe): no declared snapshot profile")
+	require.Regexp(t, "Check finished .*stage=handoff check=probe outcome=completed", diagnosticLog(t, home))
 }
 
 func TestSubagentStopSalvagesDamagedAuditReadOnly(t *testing.T) {
@@ -304,14 +305,15 @@ checks:
 		return string(out)
 	}
 	require.Empty(t, status())
-	cmd := loggingProcess(t, t.TempDir(), repo, "hook", "subagent-stop")
+	home := t.TempDir()
+	cmd := loggingProcess(t, home, repo, "hook", "subagent-stop")
 	cmd.Stdin = strings.NewReader(`{"session_id":"fixture","agent_id":"worker","agent_type":"implementer"}`)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
 	require.Empty(t, status())
 	require.NoFileExists(t, stamp)
 	require.NotContains(t, string(out), "corrupt chunk")
-	require.Contains(t, string(out), "handoff checks deferred (probe): no declared snapshot profile")
+	require.Regexp(t, "Check finished .*stage=handoff check=probe outcome=completed", diagnosticLog(t, home))
 	require.Contains(t, string(out), "handoff audit gap in "+strings.TrimSuffix(filepath.Base(chunk), ".jsonl"))
 }
 
