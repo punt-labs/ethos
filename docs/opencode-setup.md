@@ -97,11 +97,14 @@ runs the live doctor. No old failed receipt is rewritten into a pass.
 
 `doctor-opencode` and `smoke-opencode-discovery` can use the Nightly's direct
 OpenAI roster without changing the Bifrost defaults. Prepare a disposable linked
-worktree; the preparation command rewrites its local model pins.
+worktree; the preparation command rewrites its local model pins. The operator
+must review and approve `.envrc` in this worktree for the four local MCP
+servers that launch through `direnv exec`.
 
 ```bash
 git worktree add --detach ../ethos-direct-openai HEAD
 cd ../ethos-direct-openai
+direnv allow
 python3 -B scripts/opencode.py prepare-nightly
 ```
 
