@@ -47,14 +47,14 @@ through the closing key and cutoff. Run the unchanged gate on the live
 checkout. Publish or reuse a pass or failure only when the keys agree,
 both guards establish coverage through the cutoff, and neither vetoes
 under the rules below. A detected change, unresolved coverage, or
-inability to arm or drain either guard
-visibly defers; never cache it as a terminal result. The verdict log
-uses `isolation: live-verified`, not snapshot isolation.
+inability to arm or drain either guard visibly defers; never cache
+it as a terminal result. The verdict log uses
+`isolation: live-verified`, not snapshot isolation.
 
 1. **FSEvents:** enable file-level events and watch keyed paths and Git
    metadata through an event ID sampled after taking the closing key.
-   Delivery may be late or
-   coalesced. Treat `MustScanSubDirs`, `UserDropped`, `KernelDropped`,
+   Delivery may be late or coalesced. Treat `MustScanSubDirs`,
+   `UserDropped`, `KernelDropped`,
    and `RootChanged` as vetoes. If the stream cannot establish coverage
    through the cutoff, defer.
 2. **kqueue:** arm an independent `EVFILT_VNODE` guard for every keyed
@@ -67,28 +67,15 @@ uses `isolation: live-verified`, not snapshot isolation.
    Also open `EVFILT_VNODE` on each directory containing a keyed path,
    up to and including the checkout root and `.git`. Include existing
    directories where a newly created file could enter the keyed set,
-   even if they contain no keyed files yet. Register `NOTE_WRITE`,
-   `NOTE_EXTEND`, `NOTE_RENAME`, `NOTE_DELETE`, and `NOTE_REVOKE` on
-   these directories. A directory-entry event vetoes unless both
-   conditions hold: file-level FSEvents reports at least one entry
-   change (`ItemCreated`, `ItemRemoved`, or `ItemRenamed`) on a
-   Git-ignored path in that directory over the watch window, all paths
-   reported for that directory are Git-ignored, and there are no drop
-   or other coverage-loss flags; and the closing rescan finds the same
-   non-ignored entry names and inodes as the opening scan. A record
-   with only `ItemModified` does not attribute a directory-entry event.
-   If either condition fails or cannot be
-   verified, defer. This exception does not excuse a Git metadata or
-   keyed-file veto, or a watched directory being moved, removed, or
-   revoked. With no attributable ignored output, a single coalesced
-   directory event is enough to catch an untracked, non-ignored file
-   that is created and removed between equal keys.
+   even if they contain no keyed files yet. Watch directory-entry
+   changes with `NOTE_WRITE` and `NOTE_LINK`, and also register
+   `NOTE_EXTEND`, `NOTE_RENAME`, `NOTE_DELETE`, and `NOTE_REVOKE`.
+   The strict rule (a) is to defer on any unattributed directory write,
+   including at the checkout root. Neither an equal closing key nor
+   FSEvents reporting only ignored paths attributes a directory event.
+   One coalesced note is enough to veto an untracked, non-ignored file
+   created and removed between equal keys.
 
-   **Residual:** if a gate also creates, removes, or renames a
-   Git-ignored entry in a watched directory, FSEvents can miss a
-   non-ignored create-then-delete in the same window. The closing
-   entry list then matches, and the directory event may be attributed
-   to the ignored entry change alone.
    Profiles should direct outputs into dedicated ignored directories
    with no keyed paths. Create those directories before the opening
    scan so the gate writes inside unwatched directories rather than
@@ -117,7 +104,22 @@ made after the closing key and before the cutoff:
 kqueue caught 60/60 and 300/300 transient probes. In the
 [attribute and descriptor follow-up](https://github.com/punt-labs/quarry-menubar/tree/786f39a524fe80e3c6e894077fe74ea51a7c4e19/docs/ethos-live-evidence),
 the guard caught chmod 20/20 on a keyed file and 20/20 on `.git/index`;
-the clean gate passed 3/3.
+the clean gate passed 3/3 under that earlier probe.
+
+In the [directory-guard follow-up](https://github.com/punt-labs/quarry-menubar/pull/89),
+with FSEvents disabled, the directory watch deferred 20/20 times on
+an untracked source created and removed between key samples. At the
+checkout root, XcodeGen replacing the Git-ignored `.xcodeproj` and a
+transient root `.swift` file both produced vnode note 18 and equal
+keys. The transient source nevertheless changed `make lint` (exit 2).
+Attribution based on FSEvents was rejected because it can miss an event
+without a loss flag.
+
+Under the strict live-verified rule, Quarry's clean gate always
+visibly defers, never passes: XcodeGen replaces the root `.xcodeproj`
+on every run. Directing XcodeGen output into a dedicated ignored
+subdirectory or using `xcodegen --use-cache` are possible remedies;
+the choice belongs to Quarry and is outside this slice.
 
 Keep the index veto strict. In the
 [optional-lock and index burst probes](https://github.com/punt-labs/quarry-menubar/tree/5d94f8305a1c21362e2a06689e89692f08278dae/docs/ethos-live-evidence),
