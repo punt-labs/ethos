@@ -1132,11 +1132,17 @@ print("network proof: " + mode)
 }
 
 func TestHandoffSandboxUnavailableSkipsOverlayMountFailure(t *testing.T) {
+	const mount = handoffScratchOverlayPhase + `: mount overlay for ".": `
 	for _, tc := range []struct {
 		name, reason string
 		skip         bool
 	}{
-		{"unavailable overlay", handoffScratchOverlayPhase + `: mount overlay for ".": operation not permitted`, true},
+		{"denied overlay", mount + "operation not permitted", true},
+		{"no overlay permission", mount + "permission denied", true},
+		{"no overlay support", mount + "no such device", true},
+		{"unknown overlay filesystem", mount + "unknown filesystem type", true},
+		{"invalid overlay options", mount + "invalid argument", false},
+		{"overlay I/O error", mount + "input/output error", false},
 		{"overlay entry bind", handoffScratchOverlayPhase + `: protect overlay entry "source": operation not permitted`, false},
 		{"scratch violation", `scratch-violation: "/checkout/output.tmp"`, false},
 	} {
@@ -1151,11 +1157,22 @@ func TestHandoffSandboxUnavailableSkipsOverlayMountFailure(t *testing.T) {
 
 func skipIfHandoffSandboxUnavailable(t *testing.T, err error) {
 	t.Helper()
-	if err != nil && (strings.Contains(err.Error(), "isolation unavailable on this host") ||
-		strings.Contains(err.Error(), "make mount propagation private: permission denied") ||
-		strings.Contains(err.Error(), "make mount propagation private: operation not permitted") ||
-		strings.Contains(err.Error(), handoffScratchOverlayPhase+": mount overlay for ")) {
-		t.Skip(err.Error())
+	if err == nil {
+		return
+	}
+	message := err.Error()
+	if strings.Contains(message, "isolation unavailable on this host") ||
+		strings.Contains(message, "make mount propagation private: permission denied") ||
+		strings.Contains(message, "make mount propagation private: operation not permitted") {
+		t.Skip(message)
+	}
+	if _, mount, ok := strings.Cut(message, handoffScratchOverlayPhase+": mount overlay for "); ok {
+		_, detail, _ := strings.Cut(mount, `": `)
+		reason, _, _ := strings.Cut(detail, ")")
+		switch reason {
+		case unix.EPERM.Error(), unix.EACCES.Error(), unix.ENODEV.Error(), "unknown filesystem type":
+			t.Skip(message)
+		}
 	}
 }
 
