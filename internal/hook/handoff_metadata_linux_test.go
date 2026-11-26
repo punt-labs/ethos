@@ -50,6 +50,28 @@ if (echo write > /etc/passwd) || (echo write > /etc/group); then exit 43; fi
 	require.Empty(t, feedback.Blocking)
 }
 
+func TestHandoffWorktreeCachesFailureMentioningSyntheticHome(t *testing.T) {
+	root, run := handoffMetadataFixture(t, `printf 'expected "%s/.punt-labs/beadle"\n' "$HOME"
+exit 42
+`)
+	first := run()
+	skipIfHandoffSandboxUnavailable(t, errors.New(first.Blocking))
+	require.Contains(t, first.Blocking, "exit status 42")
+	policy, err := handoffDataFixtureLocation(t, root).Layout()
+	require.NoError(t, err)
+	slots, err := filepath.Glob(filepath.Join(policy.LocalRoot(), "handoff-v1", "*", "*.json"))
+	require.NoError(t, err)
+	require.Len(t, slots, 1, first.Blocking)
+	record, ok := readGateResult(slots[0])
+	require.True(t, ok)
+	require.False(t, record.Pending)
+	require.Contains(t, record.Failure, "$HOME/.punt-labs/beadle")
+	require.Equal(t, first, run())
+
+	record.Failure += "\nactual /home/another-user/private"
+	require.ErrorContains(t, writeGateResult(policy, slots[0], record), "handoff result failed the redaction guard")
+}
+
 func TestHandoffWorktreeMountsOSRelease(t *testing.T) {
 	release, err := os.ReadFile("/etc/os-release")
 	if errors.Is(err, os.ErrNotExist) {
