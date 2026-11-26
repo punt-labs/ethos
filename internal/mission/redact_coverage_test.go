@@ -148,7 +148,9 @@ var writerRegistry = map[string]writerEntry{
 	"internal/hook.installCommitMessage":         checkpoint("CreateLocalTemp"),
 	"internal/hook.handoffGitView.materialize":   exempt("writes an exact Git view, including binary pack bytes, into private sandbox staging; it does not author a record"),
 	"internal/hook.handoffRuntime.extractLocked": exempt("extracts digest-pinned runtime bytes into a private sandbox tree; redacting them would alter the runtime"),
-	"internal/hook.handoffRuntime.fetch":         exempt("installs the exact digest-pinned runtime archive in the machine-local store; it does not author a record"),
+	"internal/hook.handoffRuntime.fetch":         exempt("streams a published runtime archive to the digest-verified installer, not to a record"),
+	"internal/hook.InstallHandoffRuntimeFile":    exempt("streams a local runtime archive to the digest-verified installer, not to a record"),
+	"internal/hook.handoffRuntime.install":       exempt("installs the exact digest-pinned runtime archive in the machine-local store; it does not author a record"),
 	"internal/hook.mountHandoffProcAndDev":       exempt("creates empty mount targets for device files inside the private sandbox"),
 	"internal/hook.mountHandoffSystem":           exempt("writes synthetic passwd and group files and creates empty bind targets inside the private sandbox; it does not write records"),
 	// internal/autorepair: the repair log (machine-local, global root).
