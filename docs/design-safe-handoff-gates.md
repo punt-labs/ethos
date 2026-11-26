@@ -50,7 +50,8 @@ on keble was not measured.
 4. Admission is per checkout and execution plan, not per reply, agent ID
    or session. Use a versioned key over the physical checkout identity,
    HEAD, index and effective dirty content, resolved policy, logical argv
-   and cwd, and the enforced execution profile. Represent the checkout
+   and cwd, the enforced execution profile, and the running executable's
+   digest. A changed runner build cannot reuse a verdict. Represent the checkout
    root symbolically and file and directory operands relative to it;
    the key never includes the temporary snapshot path. Policy may select
    different commands for different roles; two genuinely different plans

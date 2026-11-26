@@ -41,4 +41,36 @@ checks:
 	require.NotContains(t, string(out), "systemMessage")
 	require.NotContains(t, string(out), `"decision":"block"`)
 	require.Regexp(t, `Check finished .*check=process-substitution outcome=completed`, diagnosticLog(t, home))
+
+	t.Run("build identity", func(t *testing.T) {
+		run := func(binary string) {
+			t.Helper()
+			cmd := loggingProcess(t, home, repo, "hook", "subagent-stop")
+			cmd.Path = binary
+			cmd.Args[0] = binary
+			cmd.Stdin = strings.NewReader(`{"session_id":"fixture","agent_id":"worker","agent_type":"implementer"}`)
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "%s", out)
+			require.NotContains(t, string(out), "systemMessage")
+		}
+		run(ethosBinary)
+		const reused = "check=process-substitution outcome=reused"
+		const missed = "check=process-substitution outcome=miss"
+		before := diagnosticLog(t, home)
+		require.Equal(t, 1, strings.Count(before, reused))
+		require.Equal(t, 1, strings.Count(before, missed))
+
+		// Linux ignores trailing bytes when loading ELF. Keep the runner's
+		// behavior identical while giving it a distinct executable digest.
+		candidate := filepath.Join(t.TempDir(), "ethos")
+		executable, err := os.ReadFile(ethosBinary)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(candidate, append(executable, '2'), 0o700))
+		run(candidate)
+		after := diagnosticLog(t, home)
+		require.Equal(t, 1, strings.Count(after, reused))
+		require.Equal(t, 2, strings.Count(after, missed))
+		run(candidate)
+		require.Equal(t, 2, strings.Count(diagnosticLog(t, home), reused))
+	})
 }

@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -31,6 +32,19 @@ const gateInputTime = time.Second
 const gateRecordAge = 24 * time.Hour
 const gateRecordsPerStripe = 8
 const gateRecordBytes = 512 << 10
+
+var handoffRunnerBuild = sync.OnceValues(func() (string, error) {
+	f, err := os.Open("/proc/self/exe")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+})
 
 type gateResult struct {
 	Key     string
@@ -130,6 +144,10 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	if !handoffSandboxSupported() {
 		return deferGate("snapshot isolation unavailable on this host")
 	}
+	runnerBuild, buildErr := handoffRunnerBuild()
+	if buildErr != nil {
+		return deferGate("cannot establish the handoff runner build identity")
+	}
 	root, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return deferGate("cannot resolve physical checkout")
@@ -174,7 +192,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	}
 	h := sha256.New()
 	enc := json.NewEncoder(h)
-	if err := enc.Encode([]string{"handoff-v1", root, identity, state, proof}); err != nil {
+	if err := enc.Encode([]string{"handoff-v1", runnerBuild, root, identity, state, proof}); err != nil {
 		return deferGate("cannot encode the handoff key")
 	}
 	if err := enc.Encode(policy); err != nil {
