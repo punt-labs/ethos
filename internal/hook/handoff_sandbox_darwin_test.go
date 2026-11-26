@@ -207,6 +207,41 @@ func TestDarwinHandoffSnapshotSetupUsesCheckDeadline(t *testing.T) {
 	}
 }
 
+func TestDarwinHandoffSnapshotUsesShortPrivateRoot(t *testing.T) {
+	checkout := t.TempDir()
+	scratch := filepath.Join(checkout, "scratch")
+	if err := os.Mkdir(scratch, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	proof, err := digestGateInputs(ctx, checkout, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := editCheck{name: "root", cwd: gateRoot, failOnOutput: true,
+		argv: []string{"/bin/sh", "-c", `test "$PWD" = "$1" && printf 'root=%s\n' "$1"`, "sh", "{root}"}}
+	first := ""
+	for range 2 {
+		got, err := executeHandoffSnapshot(ctx, scratch, checkout, proof, nil, check)
+		_, path, ok := strings.Cut(got, "\nroot=")
+		path = strings.TrimSpace(path)
+		if err != nil || !ok {
+			t.Fatalf("wanted a snapshot root from the check, got result=%q err=%v", got, err)
+		}
+		const psStartTimeAndPadding = 29
+		if psStartTimeAndPadding+len(path+"/.venv/bin/python ./voxd") > 80 {
+			t.Fatalf("Vox command at snapshot root %q would exceed 80 columns", path)
+		}
+		if path == first {
+			t.Fatalf("reused snapshot root %q", path)
+		}
+		first = path
+		if _, err := os.Stat(filepath.Dir(path)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("private run directory was not removed: %v", err)
+		}
+	}
+}
+
 func TestDarwinHandoffStripe(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "stripe")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

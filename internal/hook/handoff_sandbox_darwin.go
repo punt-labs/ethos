@@ -327,17 +327,17 @@ func runDarwinHandoffSnapshot(ctx context.Context, scratch, checkout, proof stri
 	if err != nil {
 		return "", err
 	}
-	scratch, err = darwinHandoffScratch(ctx, scratch, checkout)
+	scratch, err = darwinHandoffScratch(scratch, checkout)
 	if err != nil {
 		return "", err
 	}
-	run, err := os.MkdirTemp(scratch, "ethos-handoff-")
+	run, err := os.MkdirTemp(scratch, "e-")
 	if err != nil {
 		return "", err
 	}
 	defer os.RemoveAll(run)
-	snapshot := filepath.Join(run, "snapshot")
-	for _, name := range []string{"snapshot", "home", "tmp", "gocache", "gomodcache"} {
+	snapshot := filepath.Join(run, "s")
+	for _, name := range []string{"s", "home", "tmp", "gocache", "gomodcache"} {
 		if err := os.Mkdir(filepath.Join(run, name), 0o700); err != nil {
 			return "", err
 		}
@@ -377,7 +377,7 @@ func runDarwinHandoffSnapshot(ctx context.Context, scratch, checkout, proof stri
 	return runDarwinHandoffCheck(ctx, profile, checkout, cwd, env, argv, check)
 }
 
-func darwinHandoffScratch(ctx context.Context, scratch, checkout string) (string, error) {
+func darwinHandoffScratch(scratch, checkout string) (string, error) {
 	physical := func(path string) (string, error) {
 		abs, err := filepath.Abs(path)
 		if err != nil {
@@ -390,15 +390,18 @@ func darwinHandoffScratch(ctx context.Context, scratch, checkout string) (string
 		return dir, err
 	}
 	// Gate cache scratch is in the checkout and cannot be exposed as cwd or argv.
-	output, err := exec.CommandContext(ctx, "/usr/bin/getconf", "DARWIN_USER_TEMP_DIR").Output()
-	if err != nil {
+	const systemTemp = "/private/tmp"
+	var info unix.Stat_t
+	if err := unix.Lstat(systemTemp, &info); err != nil {
 		return "", err
 	}
-	dir, err = physical(strings.TrimSpace(string(output)))
-	if err == nil && darwinPathWithin(checkout, dir) {
+	if info.Uid != 0 || info.Mode&unix.S_IFMT != unix.S_IFDIR || info.Mode&unix.S_ISVTX == 0 {
+		return "", errors.New("sandbox scratch parent is not a root-owned sticky directory")
+	}
+	if darwinPathWithin(checkout, systemTemp) {
 		return "", errors.New("sandbox scratch is inside checkout")
 	}
-	return dir, err
+	return systemTemp, nil
 }
 
 func runDarwinHandoffCheck(ctx context.Context, profile, checkout, cwd string, env, argv []string, check editCheck) (string, error) {
