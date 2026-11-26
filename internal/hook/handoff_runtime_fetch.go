@@ -113,7 +113,7 @@ func handoffRuntimeBundles(loc resolve.Located, agent string) ([]handoffRuntime,
 func handoffRuntimeHTTPClient() *http.Client {
 	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: checkHandoffRuntimeAddress}
 	transport := &http.Transport{
-		DialContext: dialer.DialContext, ForceAttemptHTTP2: true,
+		DialContext: handoffRuntimeProxyDial(dialer), ForceAttemptHTTP2: true,
 		TLSHandshakeTimeout: 10 * time.Second, IdleConnTimeout: 90 * time.Second,
 	}
 	return &http.Client{
@@ -141,11 +141,15 @@ func checkHandoffRuntimeAddress(_, address string, _ syscall.RawConn) error {
 	if err != nil {
 		return err
 	}
-	ip = ip.Unmap()
-	if !ip.IsGlobalUnicast() || ip.IsPrivate() || handoffCarrierNAT.Contains(ip) {
+	if !publicHandoffRuntimeIP(ip) {
 		return errors.New("runtime asset address is not public")
 	}
 	return nil
+}
+
+func publicHandoffRuntimeIP(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	return ip.IsGlobalUnicast() && !ip.IsPrivate() && !handoffCarrierNAT.Contains(ip)
 }
 
 func (b handoffRuntime) fetch(ctx context.Context, client *http.Client) error {

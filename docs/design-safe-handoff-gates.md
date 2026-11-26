@@ -237,8 +237,15 @@ checks:
     sources: {mode: worktree}
 ```
 
-The worktree profile selects Git-visible checkout files. The older inline
-`linux-shell-v1` profile instead lists its inputs:
+The worktree profile selects Git-visible checkout files.
+
+Explicit `ethos handoff fetch-runtime` downloads honor the operator's
+`HTTPS_PROXY` and `NO_PROXY` settings. For a tunnel the fetcher resolves
+the asset hostname locally and sends CONNECT only to a checked public IP,
+while TLS still verifies the original asset identity. The operator's HTTP
+or HTTPS proxy can be local; the checkout cannot choose the proxy endpoint.
+
+The older inline `linux-shell-v1` profile instead lists its inputs:
 
 ```yaml
 - name: verify-manifest
