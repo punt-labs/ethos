@@ -68,6 +68,11 @@ inability to arm or drain either guard visibly defers; never cache
 it as a terminal result. The verdict log uses
 `isolation: live-verified`, not snapshot isolation.
 
+This slice uses the same per-key cache-stripe lease as snapshot gates.
+It does not enforce the proposed host-wide heavy-gate limit in
+[Single-flight and bounded execution](design-safe-handoff-gates.md#3-single-flight-and-bounded-execution).
+Checks with different keys or checkouts may run concurrently.
+
 1. **FSEvents:** enable file-level events and watch keyed paths and Git
    metadata through the event ID of a unique sentinel written after the
    closing key. Create its private subdirectory in the worktree-local
