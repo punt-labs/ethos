@@ -29,8 +29,17 @@ func TestHandoffWorktreeMissingCheckoutScratchOperandWithoutPrehydrate(t *testin
 }
 
 func TestHandoffWorktreePrehydrateCreatesCheckoutScratchOperand(t *testing.T) {
+	for _, operand := range []string{"/checkout/build/gen.sh", "/checkout/build/./gen.sh"} {
+		t.Run(operand, func(t *testing.T) {
+			testHandoffPrehydrateCreatesCheckoutScratchOperand(t, operand)
+		})
+	}
+}
+
+func testHandoffPrehydrateCreatesCheckoutScratchOperand(t *testing.T, operand string) {
+	t.Helper()
 	root, run := handoffMetadataFixture(t, "exit 97\n")
-	checkPolicy(t, root, "project", "  - name: metadata\n    stage: handoff\n    files: all\n    run: [sh, /checkout/build/gen.sh]\n")
+	checkPolicy(t, root, "project", "  - name: metadata\n    stage: handoff\n    files: all\n    run: [sh, "+operand+"]\n")
 	writeFile(t, filepath.Join(root, "hydrate.sh"), "printf '%s\\n' 'exit 0' > /checkout/build/gen.sh\n")
 	writeFile(t, filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml"), `checks:
   metadata:

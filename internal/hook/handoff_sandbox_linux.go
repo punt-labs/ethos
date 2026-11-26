@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"runtime/coverage"
@@ -327,15 +328,13 @@ operands:
 		if arg != gateRoot && !strings.HasPrefix(arg, gateRoot+"/") {
 			continue
 		}
-		rel := strings.TrimPrefix(arg, gateRoot+"/")
-		if arg == gateRoot {
-			rel = "."
+		rel := path.Clean(strings.TrimLeft(arg[len(gateRoot):], "/"))
+		if !filepath.IsLocal(rel) {
+			return false
 		}
-		if filepath.Clean(rel) == rel {
-			for _, scratch := range checkoutScratch {
-				if insideGatePath(scratch, rel) {
-					continue operands
-				}
+		for _, scratch := range checkoutScratch {
+			if insideGatePath(scratch, rel) {
+				continue operands
 			}
 		}
 		if _, err := checkout.Lstat(rel); err != nil {

@@ -283,6 +283,8 @@ func TestHandoffMaterializesDeclaredRegularFiles(t *testing.T) {
 	require.True(t, gatePlanInputsPresent(dest, []string{"/bin/sh", "/checkout/build/gen.sh"}, []string{"build"}))
 	require.False(t, gatePlanInputsPresent(dest, []string{"/bin/sh", "/checkout/build-other/gen.sh"}, []string{"build"}))
 	require.False(t, gatePlanInputsPresent(dest, []string{"/bin/sh", "/checkout/build/../undeclared"}, []string{"build"}))
+	require.False(t, gatePlanInputsPresent(dest, []string{"/bin/sh", "/checkout/../etc/os-release"}, []string{"build"}))
+	require.False(t, gatePlanInputsPresent(dest, []string{"/bin/sh", "/checkout/../checkout/build/gen.sh"}, []string{"build"}))
 	_, err = digestGateInputs(ctx, root, "", []string{"linked/gate"})
 	require.Error(t, err)
 	_, err = digestGateInputs(ctx, root, "", []string{"pkg"})
