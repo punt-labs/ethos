@@ -20,6 +20,7 @@ type WorktreeSnapshot struct {
 	Epoch      string              `yaml:"epoch" json:"epoch"`
 	Sources    SnapshotSources     `yaml:"sources" json:"sources"`
 	Runtime    SnapshotRuntime     `yaml:"runtime" json:"runtime"`
+	System     SnapshotSystem      `yaml:"system,omitempty" json:"system,omitempty"`
 	Scratch    SnapshotScratch     `yaml:"scratch" json:"scratch"`
 	Git        *SnapshotGit        `yaml:"git,omitempty" json:"git,omitempty"`
 	Network    string              `yaml:"network,omitempty" json:"network,omitempty"`
@@ -32,6 +33,10 @@ type SnapshotSources struct {
 
 type SnapshotRuntime struct {
 	Platforms map[string]SnapshotPlatform `yaml:"platforms" json:"platforms"`
+}
+
+type SnapshotSystem struct {
+	Tools Strings `yaml:"tools,omitempty" json:"tools,omitempty"`
 }
 
 type SnapshotPlatform struct {
@@ -129,6 +134,12 @@ func (s WorktreeSnapshot) validate() error {
 	}
 	if s.Network != "" && s.Network != "loopback" {
 		return errors.New("snapshot network must be loopback or omitted")
+	}
+	for _, tool := range s.System.Tools {
+		const toolChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.+-"
+		if tool == "" || tool == "." || tool == ".." || strings.Trim(tool, toolChars) != "" {
+			return errors.New("snapshot system tools must be executable names, not paths")
+		}
 	}
 	if s.Git != nil && !strings.HasPrefix(s.Git.BaseRef, "refs/") {
 		return errors.New("snapshot Git base must be a full ref")
