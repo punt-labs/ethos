@@ -48,6 +48,7 @@ type handoffSandboxWorktree struct {
 	Loopback        bool
 	GitDir          string
 	RuntimeDir      string
+	BuildCacheDir   string
 }
 
 // RunHandoffSandbox dispatches the private namespace child before CLI setup.
@@ -163,9 +164,14 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		}
 		cwd = worktreeSandboxPath(checkout, cwd)
 		env = append(env, "ETHOS_HANDOFF_CHECKOUT_NAME="+filepath.Base(checkout))
+		if worktree.buildCacheDir != "" {
+			env = slices.DeleteFunc(env, func(entry string) bool { return strings.HasPrefix(entry, "GOCACHE=") })
+			env = append(env, "GOCACHE=/scratch/.handoff-gocache")
+		}
 		plan.Worktree = &handoffSandboxWorktree{
 			Environment: env, CheckoutScratch: profile.Scratch.Checkout, ScratchSeed: profile.Scratch.Seed, System: worktree.system,
 			Loopback: profile.Network == "loopback", GitDir: worktree.gitDir, RuntimeDir: worktree.runtimeDir,
+			BuildCacheDir: worktree.buildCacheDir,
 		}
 	}
 	manifest, err := json.Marshal(plan)
@@ -361,6 +367,16 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 		phase = "copy private scratch.seed"
 		if err := seedHandoffScratch(root, plan.Worktree.ScratchSeed); err != nil {
 			return err
+		}
+		if plan.Worktree.BuildCacheDir != "" {
+			phase = "mount private build cache"
+			target := filepath.Join(root, "/scratch/.handoff-gocache")
+			if err := os.Mkdir(target, 0o700); err != nil {
+				return err
+			}
+			if err := mountHandoffWritable(plan.Worktree.BuildCacheDir, target); err != nil {
+				return err
+			}
 		}
 		if plan.Worktree.GitDir != "" {
 			phase = "mount private Git view"

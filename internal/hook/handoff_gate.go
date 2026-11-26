@@ -48,9 +48,10 @@ type handoffSystemPlan struct {
 }
 
 type handoffWorktreePlan struct {
-	system     handoffSystemPlan
-	gitDir     string
-	runtimeDir string
+	system        handoffSystemPlan
+	gitDir        string
+	runtimeDir    string
+	buildCacheDir string
 }
 
 type handoffSystemMount struct {
@@ -268,6 +269,17 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 			}
 			defer func() { _ = os.RemoveAll(scratch) }()
 			prepared := handoffWorktreePlan{system: system}
+			var publishBuildCache func() error
+			if check.WorktreeSnapshot != nil && len(check.WorktreeSnapshot.Cache) != 0 {
+				dir, publish, cleanup, err := prepareHandoffBuildCache(ctx, store, bundle.platform.SHA256)
+				if err != nil {
+					result = deferGate("could not prepare the private build cache: " + err.Error())
+					return nil
+				}
+				prepared.buildCacheDir = dir
+				publishBuildCache = publish
+				defer cleanup()
+			}
 			if bundle.archive != "" {
 				prepared.runtimeDir = filepath.Join(scratch, "runtime-snapshot")
 				if err := bundle.extract(ctx, prepared.runtimeDir); err != nil {
@@ -320,6 +332,12 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 				return nil
 			}
 			failure := editRedact(strings.Join(failures, "\n\n"))
+			if failure == "" && publishBuildCache != nil {
+				if err := publishBuildCache(); err != nil {
+					result = deferGate("could not publish the private build cache: " + err.Error())
+					return nil
+				}
+			}
 			if err := writeGateResult(loc, slot, gateResult{Key: key, Proof: proof, Failure: failure}); err != nil {
 				diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "cache_write_failed", time.Since(start))
 			} else {

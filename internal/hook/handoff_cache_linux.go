@@ -10,13 +10,17 @@ import (
 )
 
 func pinHandoffStripe(ctx context.Context, path string) (*os.File, bool, error) {
+	return pinHandoffLock(ctx, path, unix.LOCK_SH)
+}
+
+func pinHandoffLock(ctx context.Context, path string, mode int) (*os.File, bool, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, false, err
 	}
 	waited := false
 	for {
-		err := unix.Flock(int(f.Fd()), unix.LOCK_SH|unix.LOCK_NB)
+		err := unix.Flock(int(f.Fd()), mode|unix.LOCK_NB)
 		if err == nil {
 			return f, waited, nil
 		}

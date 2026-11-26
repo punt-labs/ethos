@@ -18,6 +18,10 @@ func pinHandoffStripe(context.Context, string) (*os.File, bool, error) {
 	return nil, false, errHandoffSandboxUnavailable
 }
 
+func prepareHandoffBuildCache(context.Context, string, string) (string, func() error, func(), error) {
+	return "", nil, nil, errHandoffSandboxUnavailable
+}
+
 func withUnpinnedStripe(*os.File, func() error) (bool, error) {
 	return false, errHandoffSandboxUnavailable
 }

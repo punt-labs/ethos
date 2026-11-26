@@ -30,7 +30,13 @@ type WorktreeSnapshot struct {
 	Git        *SnapshotGit        `yaml:"git,omitempty" json:"git,omitempty"`
 	Network    string              `yaml:"network,omitempty" json:"network,omitempty"`
 	Requires   Strings             `yaml:"requires,omitempty" json:"requires,omitempty"`
+	Cache      []SnapshotCache     `yaml:"cache,omitempty" json:"cache,omitempty"`
 	Prehydrate *SnapshotPrehydrate `yaml:"prehydrate,omitempty" json:"prehydrate,omitempty"`
+}
+
+type SnapshotCache struct {
+	Name string `yaml:"name" json:"name"`
+	Env  string `yaml:"env" json:"env"`
 }
 
 type SnapshotSources struct {
@@ -156,6 +162,9 @@ func (s WorktreeSnapshot) validate() error {
 	}
 	if s.Network != "" && s.Network != "loopback" {
 		return errors.New("snapshot network must be loopback or omitted")
+	}
+	if len(s.Cache) != 0 && (len(s.Cache) != 1 || s.Cache[0] != (SnapshotCache{Name: "gocache", Env: "GOCACHE"}) || s.Runtime == nil) {
+		return errors.New("snapshot cache requires a pinned runtime and supports only {name: gocache, env: GOCACHE}")
 	}
 	for _, requirement := range s.Requires {
 		switch requirement {
