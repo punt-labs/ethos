@@ -31,6 +31,8 @@ import (
 // tests skip in that case while in-process tests still run.
 var ethosBinary string
 
+const ethosTestBuildRace = "ETHOS_TEST_BUILD_RACE"
+
 // TestMain builds the ethos binary into a temp file before running
 // any tests. Subprocess tests need this so they can exercise the
 // runtime os.Exit error paths in `runMissionCreate` (the in-process
@@ -65,10 +67,19 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	bin := filepath.Join(dir, "ethos")
-	cmd := exec.Command("go", testhelpers.CoverBuild("-o", bin, ".")...)
+	args := []string{"-o", bin, "."}
+	buildRace := os.Getenv(ethosTestBuildRace) == "1"
+	if buildRace {
+		args = append([]string{"-race"}, args...)
+	}
+	cmd := exec.Command("go", testhelpers.CoverBuild(args...)...)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "go build for cmd/ethos tests failed: %v\n", err)
+		if buildRace {
+			_ = os.RemoveAll(dir)
+			os.Exit(1)
+		}
 		// Leave ethosBinary empty; subprocess tests will skip and the
 		// other tests still run.
 	} else {

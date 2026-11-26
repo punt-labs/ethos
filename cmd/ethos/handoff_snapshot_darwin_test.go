@@ -1,6 +1,7 @@
 package main
 
 import (
+	"debug/buildinfo"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,17 @@ import (
 )
 
 func TestHandoffSnapshotLaunchVerdicts(t *testing.T) {
+	if os.Getenv(ethosTestBuildRace) == "1" {
+		info, err := buildinfo.ReadFile(ethosBinary)
+		require.NoError(t, err)
+		race := false
+		for _, setting := range info.Settings {
+			if setting.Key == "-race" && setting.Value == "true" {
+				race = true
+			}
+		}
+		require.True(t, race, "ethos subprocess binary was not built with -race")
+	}
 	for _, tc := range []struct {
 		name, run, script, verdict, outcome string
 		launches                            int
