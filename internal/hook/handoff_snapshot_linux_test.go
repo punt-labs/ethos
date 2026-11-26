@@ -686,6 +686,8 @@ func TestHandoffWorktreeRunsWithPrivateScratchFile(t *testing.T) {
 	for _, tc := range []struct{ cmd, path string }{
 		{"touch undeclared.tmp", "/checkout/undeclared.tmp"},
 		{"touch transient.tmp && rm transient.tmp", "/checkout/transient.tmp"},
+		{"mkdir output.tmp && touch output.tmp/child && rm output.tmp/child && rmdir output.tmp", "/checkout/output.tmp"},
+		{"mkdir output.tmp", "/checkout/output.tmp"},
 		{"touch output.tmp && mv output.tmp moved.tmp && mv moved.tmp output.tmp", "/checkout/moved.tmp"},
 		{"chmod 0755 nested && chmod 0700 nested", "/checkout/nested"},
 		{"touch nested/undeclared.tmp", "/checkout/nested/undeclared.tmp"},

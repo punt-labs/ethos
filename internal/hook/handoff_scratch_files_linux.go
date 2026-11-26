@@ -175,7 +175,7 @@ func (w *handoffScratchFileWatch) audit(state string, overlays []handoffScratchF
 		if !ok {
 			return errors.New("cannot audit scratch.files overlay: unexpected watch descriptor")
 		}
-		if !overlay.names[name] {
+		if !overlay.names[name] || mask&unix.IN_ISDIR != 0 {
 			violated[filepath.Join(gateRoot, overlay.parent, name)] = true
 		}
 		return nil
