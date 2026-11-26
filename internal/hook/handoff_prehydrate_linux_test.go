@@ -1,0 +1,137 @@
+package hook
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestHandoffWorktreeCreatesCheckoutScratchOutputWithoutPrehydrate(t *testing.T) {
+	root, run := handoffMetadataFixture(t, `set -eu
+printf '%s\n' output > "$1"
+test "$(cat "$1")" = output
+`)
+	checkPolicy(t, root, "project", "  - name: metadata\n    stage: handoff\n    files: all\n    run: [sh, /checkout/gate.sh, /checkout/build/output]\n")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml"), `checks:
+  metadata:
+    profile: linux-worktree-v1
+    epoch: metadata-v1
+    sources: {mode: worktree}
+    scratch: {checkout: [build]}
+`)
+	feedback := run()
+	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+	require.Equal(t, StageFeedback{}, feedback)
+	require.NoDirExists(t, filepath.Join(root, "build"))
+}
+
+func TestHandoffWorktreeMissingCheckoutScratchOperandWithoutPrehydrate(t *testing.T) {
+	root, run := handoffMetadataFixture(t, "exit 97\n")
+	checkPolicy(t, root, "project", "  - name: metadata\n    stage: handoff\n    files: all\n    run: [sh, /checkout/build/gen.sh]\n")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml"), `checks:
+  metadata:
+    profile: linux-worktree-v1
+    epoch: metadata-v1
+    sources: {mode: worktree}
+    scratch: {checkout: [build]}
+`)
+	feedback := run()
+	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+	require.Contains(t, feedback.Blocking, "snapshot inputs did not match the invocation")
+	require.Contains(t, feedback.Notice, "Run the explicit project gate")
+	slots, err := filepath.Glob(filepath.Join(root, ".punt-labs", "local", "ethos", "handoff-v1", "*", "*.json"))
+	require.NoError(t, err)
+	require.Empty(t, slots)
+}
+
+func TestHandoffWorktreePrehydrateCreatesCheckoutScratchOperand(t *testing.T) {
+	for _, operand := range []string{"/checkout/build/gen.sh", "/checkout/build/./gen.sh"} {
+		t.Run(operand, func(t *testing.T) {
+			testHandoffPrehydrateCreatesCheckoutScratchOperand(t, operand)
+		})
+	}
+}
+
+func testHandoffPrehydrateCreatesCheckoutScratchOperand(t *testing.T, operand string) {
+	t.Helper()
+	root, run := handoffMetadataFixture(t, "exit 97\n")
+	checkPolicy(t, root, "project", "  - name: metadata\n    stage: handoff\n    files: all\n    run: [sh, "+operand+"]\n")
+	writeFile(t, filepath.Join(root, "hydrate.sh"), "printf '%s\\n' 'exit 0' > /checkout/build/gen.sh\n")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml"), `checks:
+  metadata:
+    profile: linux-worktree-v1
+    epoch: metadata-v1
+    sources: {mode: worktree}
+    scratch: {checkout: [build]}
+    prehydrate: {run: [sh, '{root}/hydrate.sh']}
+`)
+	feedback := run()
+	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+	require.Equal(t, StageFeedback{}, feedback)
+	require.NoDirExists(t, filepath.Join(root, "build"))
+}
+
+func TestHandoffWorktreePrehydrate(t *testing.T) {
+	root, run := handoffMetadataFixture(t, `set -eu
+test "$(cat /scratch/hydrated)" = ready
+test -e "/proc/$(cat /scratch/child)"
+python3 -c 'import socket; s = socket.create_connection(("127.0.0.1", int(open("/scratch/port").read())), timeout=2); assert s.recv(20) == b"fixture"'
+`)
+	if _, err := os.Stat("/usr/bin/python3"); err != nil {
+		t.Skip(err)
+	}
+	token := filepath.Base(filepath.Dir(root))
+	writeFile(t, filepath.Join(root, "listener.py"), `import socket
+import sys
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+s.listen()
+with open("/scratch/port", "w") as port:
+    port.write(str(s.getsockname()[1]))
+while True:
+    conn, _ = s.accept()
+    with conn:
+        print("service-output" * 8192, file=sys.stderr, flush=True)
+        conn.sendall(b"fixture")
+`)
+	writeFile(t, filepath.Join(root, "hydrate.sh"), `set -eu
+test "$PWD" = /checkout
+test "$(cat /runtime/value)" = runtime
+test "$(cat /scratch/input)" = checkout
+test "$#" = 2
+test "$1" != failure || exit 19
+python3 listener.py "$2" &
+printf '%s' "$!" > /scratch/child
+while test ! -s /scratch/port; do sleep 0.01; done
+printf '%s' "$1" > /scratch/hydrated
+`)
+	writeFile(t, filepath.Join(root, "input"), "checkout\n")
+	writeProfile := func(arg string) {
+		t.Helper()
+		writeHandoffScratchProfile(t, root, "    network: loopback\n    scratch: {seed: {'{scratch}/input': '{root}/input'}}\n"+
+			"    prehydrate: {run: [sh, '{root}/hydrate.sh', "+arg+", "+token+"]}\n", map[string]string{"value": "runtime\n"})
+	}
+	writeProfile("ready")
+	pass := run()
+	skipIfHandoffSandboxUnavailable(t, errors.New(pass.Blocking))
+	require.Equal(t, StageFeedback{}, pass)
+	processes, err := filepath.Glob("/proc/[0-9]*/cmdline")
+	require.NoError(t, err)
+	for _, process := range processes {
+		if argv, err := os.ReadFile(process); err == nil {
+			require.NotContains(t, string(argv), "listener.py\x00"+token+"\x00")
+		}
+	}
+
+	writeProfile("failure")
+	for range 2 {
+		failure := run()
+		require.Contains(t, failure.Blocking, "prehydrate-failed")
+		require.Contains(t, failure.Notice, "Run the explicit project gate")
+		require.NotContains(t, failure.Blocking, "metadata: exit status")
+	}
+	require.NoFileExists(t, filepath.Join(root, "hydrated"))
+}

@@ -9,7 +9,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"runtime/coverage"
 	"slices"
@@ -25,6 +27,7 @@ import (
 const handoffSandboxArg = "--ethos-handoff-sandbox-v1"
 const handoffSandboxReady = "ready\n"
 const handoffMaterializePhase = "materialize snapshot inputs"
+const handoffSandboxPrehydrating = "prehydrating\n"
 
 var sandboxRuntime = []string{"/bin", "/lib", "/lib64", "/usr/bin", "/usr/lib", "/usr/lib64"}
 
@@ -50,6 +53,7 @@ type handoffSandboxWorktree struct {
 	Loopback        bool
 	GitDir          string
 	RuntimeDir      string
+	Prehydrate      []string
 }
 
 // RunHandoffSandbox dispatches the private namespace child before CLI setup.
@@ -178,6 +182,12 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 			Environment: env, CheckoutScratch: profile.Scratch.Checkout, ScratchSeed: profile.Scratch.Seed, System: worktree.system,
 			Loopback: profile.Network == "loopback", GitDir: worktree.gitDir, RuntimeDir: worktree.runtimeDir,
 		}
+		if profile.Prehydrate != nil {
+			plan.Worktree.Prehydrate = roots.expandArgs(profile.Prehydrate.Run)
+			for i := 1; i < len(plan.Worktree.Prehydrate); i++ {
+				plan.Worktree.Prehydrate[i] = worktreeSandboxPath(checkout, plan.Worktree.Prehydrate[i])
+			}
+		}
 	}
 	manifest, err := json.Marshal(plan)
 	if err != nil {
@@ -195,6 +205,24 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		cmd.Env = append(cmd.Env, "GOCOVERDIR="+dir)
 	}
 	cmd.ExtraFiles = []*os.File{w, manifestReader}
+	var prehydrateOutput editTail
+	var prehydrateDrained chan struct{}
+	var prehydrateWriter *os.File
+	if plan.Worktree != nil && len(plan.Worktree.Prehydrate) != 0 {
+		reader, writer, err := os.Pipe()
+		if err != nil {
+			return "", errors.New("cannot create the snapshot runner prehydrate output pipe")
+		}
+		defer reader.Close()
+		defer writer.Close()
+		cmd.ExtraFiles = append(cmd.ExtraFiles, writer)
+		prehydrateWriter = writer
+		prehydrateDrained = make(chan struct{})
+		go func() {
+			defer close(prehydrateDrained)
+			_, _ = io.Copy(&prehydrateOutput, reader)
+		}()
+	}
 	cmd.WaitDelay = time.Second
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: unix.CLONE_NEWUSER | unix.CLONE_NEWNS | unix.CLONE_NEWPID | unix.CLONE_NEWNET | unix.CLONE_NEWIPC,
@@ -219,20 +247,38 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 	_ = manifestReader.Close()
 	_, manifestErr := manifestWriter.Write(manifest)
 	_ = manifestWriter.Close()
+	if prehydrateWriter != nil {
+		_ = prehydrateWriter.Close()
+	}
 	setup, setupErr := io.ReadAll(io.LimitReader(r, 4096))
-	ready := setupErr == nil && string(setup) == handoffSandboxReady
+	status, prehydrating := strings.CutPrefix(string(setup), handoffSandboxPrehydrating)
+	ready := setupErr == nil && status == handoffSandboxReady
 	if ready {
 		diagnostic.LogHookCheck(ctx, checkout, checkout, "handoff", check.name, "launched", time.Since(start))
 	}
 	err = cmd.Wait()
+	if prehydrateDrained != nil {
+		<-prehydrateDrained
+	}
 	if ctx.Err() != nil {
+		if prehydrating && !ready {
+			return "", errors.New("prehydrate-failed: timed out or interrupted")
+		}
 		return "", errors.New("snapshot check timed out or was interrupted")
 	}
 	if manifestErr != nil {
 		return "", errors.New("cannot send the snapshot input manifest")
 	}
 	if !ready {
-		detail := strings.TrimSpace(string(setup))
+		if prehydrating && strings.HasPrefix(status, "prehydrate-failed") {
+			const previewBytes = 2048
+			preview := strings.TrimSpace(string(prehydrateOutput.data[max(0, len(prehydrateOutput.data)-previewBytes):]))
+			if preview != "" {
+				return "", fmt.Errorf("%s:\n%s", strings.TrimSpace(status), preview)
+			}
+			return "", errors.New(strings.TrimSpace(status))
+		}
+		detail := strings.TrimSpace(status)
 		diagnostic.FromContext(ctx).Info("Handoff sandbox setup failed", "error_type", diagnostic.ErrorType(setupErr), "detail", detail)
 		reason := "could not establish snapshot isolation or enter its working directory"
 		if setupErr == nil && detail != "" {
@@ -259,9 +305,16 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		detail = err.Error()
 	}
 	diagnostic.LogHookCheck(ctx, checkout, checkout, "handoff", check.name, "failed", time.Since(start))
-	lines := strings.Split(strings.TrimRight(string(bytes.Join([][]byte{stdout.data, stderr.data}, []byte("\n"))), "\n"), "\n")
+	output := string(bytes.Join([][]byte{stdout.data, stderr.data}, []byte("\n")))
+	if plan.Worktree != nil {
+		output = sandboxHomePath.ReplaceAllString(output, "${1}$$HOME${2}")
+	}
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
 	return fmt.Sprintf("%s: %s\ncommand: %s\n%s", check.name, detail, strings.Join(check.argv, " "), strings.Join(lines[max(0, len(lines)-40):], "\n")), nil
 }
+
+var sandboxHomePath = regexp.MustCompile(`(^|[^[:alnum:]_./-])` +
+	regexp.QuoteMeta(linuxHandoffRoots().home()) + `($|[^[:alnum:]_.-])`)
 
 func worktreeSandboxPath(checkout, value string) string {
 	if filepath.IsAbs(value) {
@@ -272,25 +325,79 @@ func worktreeSandboxPath(checkout, value string) string {
 	return value
 }
 
-func gatePlanInputsPresent(snapshot string, argv []string) bool {
+func gatePlanInputsPresent(snapshot string, argv []string, worktree *handoffSandboxWorktree) bool {
 	checkout, err := os.OpenRoot(snapshot)
 	if err != nil {
 		return false
 	}
 	defer checkout.Close()
-	for _, arg := range argv {
+	script := gateScriptOperand(argv)
+operands:
+	for i, arg := range argv {
 		if arg != gateRoot && !strings.HasPrefix(arg, gateRoot+"/") {
 			continue
 		}
-		rel := strings.TrimPrefix(arg, gateRoot+"/")
-		if arg == gateRoot {
-			rel = "."
+		rel := path.Clean(strings.TrimLeft(arg[len(gateRoot):], "/"))
+		if !filepath.IsLocal(rel) {
+			return false
+		}
+		if worktree != nil {
+			// Without prehydrate, checkout scratch starts empty. A non-program
+			// scratch operand is an output or a profile error that fails deterministically.
+			for _, scratch := range worktree.CheckoutScratch {
+				if len(worktree.Prehydrate) != 0 && insideGatePath(scratch, rel) ||
+					i != 0 && i != script && insideGatePath(scratch, path.Dir(rel)) {
+					continue operands
+				}
+			}
 		}
 		if _, err := checkout.Lstat(rel); err != nil {
 			return false
 		}
 	}
 	return true
+}
+
+func gateScriptOperand(argv []string) int {
+	if len(argv) < 2 {
+		return -1
+	}
+	name := path.Base(argv[0])
+	shell := slices.Contains([]string{"sh", "bash", "dash", "ash", "ksh", "zsh"}, name)
+	version, python := strings.CutPrefix(name, "python")
+	python = python && strings.Trim(version, "0123456789.") == ""
+	if !shell && !python {
+		return -1
+	}
+args:
+	for i := 1; i < len(argv); i++ {
+		arg := argv[i]
+		switch {
+		case arg == "--":
+			return i + 1
+		case arg == "-":
+			return -1
+		case strings.HasPrefix(arg, "--"):
+			if shell && (arg == "--init-file" || arg == "--rcfile") || python && arg == "--check-hash-based-pycs" {
+				i++
+			}
+		case strings.HasPrefix(arg, "-") || shell && strings.HasPrefix(arg, "+"):
+			for j, flag := range arg[1:] {
+				switch {
+				case shell && arg[0] == '-' && (flag == 'c' || flag == 's'), python && (flag == 'c' || flag == 'm'):
+					return -1
+				case shell && (flag == 'o' || flag == 'O'), python && (flag == 'W' || flag == 'X'):
+					if j+2 == len(arg) {
+						i++
+					}
+					continue args
+				}
+			}
+		default:
+			return i
+		}
+	}
+	return -1
 }
 
 func resolveWorktreeExecutable(name string, env []string) (string, error) {
@@ -419,7 +526,7 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 		env = plan.Worktree.Environment
 	}
 	phase = handoffMaterializePhase
-	if !gatePlanInputsPresent(checkout, argv) {
+	if !gatePlanInputsPresent(checkout, argv, plan.Worktree) {
 		return errors.New("snapshot inputs did not match the invocation")
 	}
 	if err := unix.Mount("", checkout, "", unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV, ""); err != nil {
@@ -491,14 +598,19 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 	if err := unix.Capset(&unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}, &caps[0]); err != nil {
 		return err
 	}
-	phase = "collect sandbox coverage"
-	if err := reportCoverage(); err != nil {
-		return err
-	}
 	if plan.Worktree != nil {
 		phase = "verify mounted system inputs"
 		if err := verifyMountedHandoffSystem(plan.Worktree.System, env); err != nil {
 			return err
+		}
+		if len(plan.Worktree.Prehydrate) != 0 {
+			phase = "prehydrate-failed"
+			if _, err := io.WriteString(status, handoffSandboxPrehydrating); err != nil {
+				return err
+			}
+			if err := runHandoffPrehydrate(plan.Worktree.Prehydrate, env); err != nil {
+				return err
+			}
 		}
 	}
 	phase = "start sandbox command"
@@ -509,10 +621,31 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 			return err
 		}
 	}
+	phase = "collect sandbox coverage"
+	if err := reportCoverage(); err != nil {
+		return err
+	}
+	phase = "start sandbox command"
 	if _, err := io.WriteString(status, handoffSandboxReady); err != nil {
 		return err
 	}
 	return unix.Exec(executable, argv, env)
+}
+
+func runHandoffPrehydrate(argv, env []string) error {
+	if os.Getpid() != 1 {
+		return errors.New("prehydrate requires a private PID namespace")
+	}
+	path, err := resolveWorktreeExecutable(argv[0], env)
+	if err != nil {
+		return err
+	}
+	const prehydrateOutputFD = 5
+	output := os.NewFile(prehydrateOutputFD, "handoff prehydrate output")
+	unix.CloseOnExec(prehydrateOutputFD)
+	defer output.Close()
+	cmd := &exec.Cmd{Path: path, Args: argv, Env: env, Stdout: output, Stderr: output}
+	return cmd.Run()
 }
 
 func mountGateReadOnly(source, target string) error {

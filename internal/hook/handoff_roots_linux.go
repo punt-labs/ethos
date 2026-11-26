@@ -14,6 +14,10 @@ type handoffRoots struct {
 	checkout, runtime, scratch, temp string
 }
 
+func (roots handoffRoots) home() string {
+	return filepath.Join(roots.scratch, "home")
+}
+
 func (roots handoffRoots) replacer() *strings.Replacer {
 	return strings.NewReplacer("{root}", roots.checkout, "{runtime}", roots.runtime, "{scratch}", roots.scratch)
 }
@@ -42,7 +46,7 @@ func (roots handoffRoots) environment(profile *checkset.WorktreeSnapshot, platfo
 	maps.Copy(values, platform.Env)
 	env := []string{
 		"PATH=" + defaultPath, "TZ=UTC",
-		"HOME=" + filepath.Join(roots.scratch, "home"), "TMPDIR=" + roots.temp,
+		"HOME=" + roots.home(), "TMPDIR=" + roots.temp,
 		"ETHOS_HANDOFF_ROOT=" + roots.checkout,
 		"ETHOS_HANDOFF_RUNTIME=" + roots.runtime,
 		"ETHOS_HANDOFF_SCRATCH=" + roots.scratch,

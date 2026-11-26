@@ -50,6 +50,13 @@ func TestCheckUnclassifiedFiles_ClassifiedFilesPass(t *testing.T) {
 	assert.False(t, strings.HasPrefix(r.Detail, "not scanned"), "zones were walked: %s", r.Detail)
 }
 
+func TestCheckUnclassifiedFiles_HandoffDataSnapshotIsClassified(t *testing.T) {
+	root := repoTemp(t)
+	touch(t, root, ".punt-labs/local/ethos/handoff-data-v1/"+strings.Repeat("a", 64))
+	r := CheckUnclassifiedFiles(root)
+	assert.Equal(t, "PASS", r.Status, r.Detail)
+}
+
 // TestCheckUnclassifiedFiles_CheckSetsPass: a project check set is a file
 // `ethos checks` reads and `ethos vendor` writes, so a repository that
 // defines one is not warned about it.

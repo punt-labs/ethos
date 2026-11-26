@@ -154,6 +154,9 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		return deferGate("cannot resolve physical checkout")
 	}
 	rawArgs, _ := check.Argv()
+	if check.WorktreeSnapshot != nil && check.WorktreeSnapshot.Prehydrate != nil {
+		rawArgs = slices.Concat(rawArgs, check.WorktreeSnapshot.Prehydrate.Run)
+	}
 	for _, arg := range rawArgs {
 		if strings.Contains(arg, root) {
 			return deferGate("a literal argument refers to the live checkout")
@@ -183,6 +186,10 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	if err != nil {
 		return deferGate("cannot verify declared snapshot inputs within the key budget")
 	}
+	data, err := selectHandoffData(ctx, loc, check.WorktreeSnapshot, agent)
+	if err != nil {
+		return deferGate(err.Error())
+	}
 	system, err := prepareHandoffSystem(ctx, root, check.WorktreeSnapshot)
 	if err != nil {
 		return deferGate(err.Error())
@@ -202,6 +209,11 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	if err := enc.Encode(check); err != nil {
 		return deferGate("cannot encode the selected check")
 	}
+	for _, item := range data {
+		if err := enc.Encode(item.digest); err != nil {
+			return deferGate("cannot encode the handoff data")
+		}
+	}
 	if system.Fingerprint != "" {
 		if err := enc.Encode(system.Fingerprint); err != nil {
 			return deferGate("cannot encode the handoff system inputs")
@@ -218,6 +230,16 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		}
 	}
 	key := hex.EncodeToString(h.Sum(nil))
+	verifyData := func() string {
+		current, err := selectHandoffData(ctx, loc, check.WorktreeSnapshot, agent)
+		if err != nil {
+			return err.Error()
+		}
+		if !slices.Equal(data, current) {
+			return "handoff data changed; retry the handoff"
+		}
+		return ""
+	}
 	verifyCurrent := func(when string) string {
 		verify, cancel := context.WithTimeout(ctx, gateInputTime)
 		defer cancel()
@@ -237,7 +259,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		if err != nil || !reflect.DeepEqual(policy, currentPolicy) {
 			return "handoff policy changed " + when
 		}
-		return ""
+		return verifyData()
 	}
 	lockPath, slot := handoffGatePaths(cache, key)
 	if err := layout.EnsureLocalDir(loc, filepath.Dir(slot)); err != nil {
@@ -271,6 +293,12 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 			// Holding the exclusive lease proves no prior owner still holds
 			// it. An orphaned pending record is neither a pass nor a failure.
 			if saved, ok := readGateResult(slot); ok && saved.Key == key && saved.Proof == proof && !saved.Pending {
+				if !waited {
+					if reason := verifyData(); reason != "" {
+						result = deferGate(reason)
+						return nil
+					}
+				}
 				diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "reused", time.Since(start))
 				result = feedback(saved.Failure)
 				return nil
@@ -290,6 +318,19 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 			if bundle.archive != "" {
 				prepared.runtimeDir = filepath.Join(scratch, "runtime-snapshot")
 				if err := bundle.extract(ctx, prepared.runtimeDir); err != nil {
+					result = deferGate(err.Error())
+					return nil
+				}
+			}
+			if len(data) != 0 {
+				if prepared.runtimeDir == "" {
+					prepared.runtimeDir = filepath.Join(scratch, "runtime-snapshot")
+					if err := os.Mkdir(prepared.runtimeDir, 0o700); err != nil {
+						result = deferGate("cannot prepare the handoff data mount")
+						return nil
+					}
+				}
+				if err := materializeHandoffData(ctx, prepared.runtimeDir, data); err != nil {
 					result = deferGate(err.Error())
 					return nil
 				}
@@ -369,28 +410,25 @@ func unsupportedWorktreeField(profile *checkset.WorktreeSnapshot) string {
 	switch {
 	case len(profile.Scratch.Files) != 0:
 		return "scratch.files"
-	case profile.Prehydrate != nil:
-		return "prehydrate"
-	case len(profile.Data) != 0:
-		return "data"
 	default:
 		return ""
 	}
 }
 
-func handoffManualCommand(root string, files []string, check checkset.Check) string {
+func handoffShellPath(s string) string {
 	home, _ := os.UserHomeDir()
+	if home != "" && filepath.IsAbs(s) {
+		if rel, err := filepath.Rel(home, s); err == nil && filepath.IsLocal(rel) {
+			return `"$HOME"/` + audit.ShellQuote(rel)
+		}
+	}
+	return audit.ShellQuote(s)
+}
+
+func handoffManualCommand(root string, files []string, check checkset.Check) string {
 	planRoot := root
 	if check.Snapshot != nil {
 		planRoot = gateRoot
-	}
-	quote := func(s string) string {
-		if home != "" && filepath.IsAbs(s) {
-			if rel, err := filepath.Rel(home, s); err == nil && filepath.IsLocal(rel) {
-				return `"$HOME"/` + audit.ShellQuote(rel)
-			}
-		}
-		return audit.ShellQuote(s)
 	}
 	snapshotWord := func(s string) string {
 		if s == gateRoot {
@@ -398,9 +436,9 @@ func handoffManualCommand(root string, files []string, check checkset.Check) str
 		} else if rel, ok := strings.CutPrefix(s, gateRoot+"/"); ok && filepath.IsLocal(rel) {
 			s = filepath.Join(root, rel)
 		}
-		return quote(s)
+		return handoffShellPath(s)
 	}
-	pathWord := quote
+	pathWord := handoffShellPath
 	if check.Snapshot != nil {
 		pathWord = snapshotWord
 	}
@@ -409,13 +447,13 @@ func handoffManualCommand(root string, files []string, check checkset.Check) str
 			if check.Snapshot != nil || check.WorktreeSnapshot != nil {
 				return snapshotWord(arg)
 			}
-			return quote(arg)
+			return handoffShellPath(arg)
 		}
 		parts := strings.Split(arg, "{root}")
 		for i, part := range parts {
 			parts[i] = audit.ShellQuote(part)
 		}
-		return strings.Join(parts, quote(root))
+		return strings.Join(parts, handoffShellPath(root))
 	}
 	var commands []string
 	for _, invocation := range stageInvocationsRendered(planRoot, files, check, true, pathWord, literalWord) {
