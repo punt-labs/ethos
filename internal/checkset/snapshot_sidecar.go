@@ -73,7 +73,8 @@ type SnapshotScratch struct {
 }
 
 type SnapshotGit struct {
-	BaseRef string `yaml:"base_ref,omitempty" json:"base_ref,omitempty"`
+	BaseRef string   `yaml:"base_ref,omitempty" json:"base_ref,omitempty"`
+	Refs    []string `yaml:"refs,omitempty" json:"refs,omitempty"`
 }
 
 type SnapshotPrehydrate struct {
@@ -174,8 +175,15 @@ func (s WorktreeSnapshot) validate() error {
 	if err := validateSnapshotData(s.Data); err != nil {
 		return err
 	}
-	if s.Git != nil && s.Git.BaseRef != "" && !strings.HasPrefix(s.Git.BaseRef, "refs/") {
-		return errors.New("snapshot Git base must be a full ref")
+	if s.Git != nil {
+		if s.Git.BaseRef != "" && !strings.HasPrefix(s.Git.BaseRef, "refs/") {
+			return errors.New("snapshot Git base must be a full ref")
+		}
+		for _, ref := range s.Git.Refs {
+			if !validSnapshotGitRef(ref) {
+				return errors.New("snapshot git.refs entries must be full branch, remote-tracking or tag refs")
+			}
+		}
 	}
 	if s.Prehydrate != nil && (len(s.Prehydrate.Run) == 0 || s.Prehydrate.Run[0] == "") {
 		return errors.New("snapshot prehydrate needs a command")
@@ -202,6 +210,20 @@ func (s WorktreeSnapshot) validate() error {
 		}
 	}
 	return nil
+}
+
+func validSnapshotGitRef(ref string) bool {
+	if !(strings.HasPrefix(ref, "refs/heads/") || strings.HasPrefix(ref, "refs/remotes/") || strings.HasPrefix(ref, "refs/tags/")) ||
+		strings.Contains(ref, "..") || strings.Contains(ref, "@{") || strings.HasSuffix(ref, ".") ||
+		strings.ContainsAny(ref, "~^:?*[\\") || strings.ContainsFunc(ref, func(c rune) bool { return c <= ' ' || c == 127 }) {
+		return false
+	}
+	for _, part := range strings.Split(ref, "/") {
+		if part == "" || strings.HasPrefix(part, ".") || strings.HasSuffix(part, ".lock") {
+			return false
+		}
+	}
+	return true
 }
 
 func (s SnapshotSystemInputs) validate() error {

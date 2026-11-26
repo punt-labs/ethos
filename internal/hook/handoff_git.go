@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -106,14 +107,15 @@ func captureHandoffGit(ctx context.Context, checkout string, profile *checkset.W
 	default:
 		return view, errors.New("unsupported Git object format")
 	}
-	refs, err := handoffGitOutput(ctx, checkout, "for-each-ref", "--format=%(objectname) %(refname) %(symref)")
+	refs, err := handoffGitOutput(ctx, checkout, "for-each-ref", "--format=%(objectname) %(refname) %(symref) %(upstream)")
 	if err != nil {
 		return view, errors.New("cannot capture Git view refs")
 	}
-	if err := view.addRefs(refs, profile.Git.BaseRef, oidLen); err != nil {
+	tips, err := view.addRefs(refs, profile.Git, oidLen)
+	if err != nil {
 		return view, err
 	}
-	view.objects, err = handoffGitOutput(ctx, checkout, "cat-file", "--batch-all-objects", handoffGitObjectList)
+	view.objects, err = handoffReachableGitObjects(ctx, checkout, tips, oidLen)
 	if err != nil {
 		return view, errors.New("cannot enumerate Git view objects within the key budget")
 	}
@@ -146,30 +148,104 @@ func readHandoffGitFile(ctx context.Context, path string) ([]byte, error) {
 	return out.Bytes(), err
 }
 
-func (v handoffGitView) addRefs(data []byte, base string, oidLen int) error {
-	found := base == ""
+type handoffGitRef struct {
+	oid, target, upstream string
+}
+
+func (v handoffGitView) addRefs(data []byte, git *checkset.SnapshotGit, oidLen int) (map[string]bool, error) {
+	all := make(map[string]handoffGitRef)
+	required := slices.Clone(git.Refs)
 	for _, line := range strings.Split(strings.TrimSuffix(string(data), "\n"), "\n") {
 		if line == "" {
 			continue
 		}
 		fields := strings.Split(line, " ")
-		if len(fields) != 3 || !validHandoffGitOID(fields[0], oidLen) || !validHandoffGitRef(fields[1]) {
-			return errors.New("invalid Git view ref")
+		if len(fields) != 4 || !validHandoffGitOID(fields[0], oidLen) || !validHandoffGitRef(fields[1]) {
+			return nil, errors.New("invalid Git view ref")
 		}
-		name, value := fields[1], fields[0]
-		if fields[2] != "" {
-			if !validHandoffGitRef(fields[2]) {
-				return errors.New("invalid Git view symbolic ref")
+		name := fields[1]
+		all[name] = handoffGitRef{oid: fields[0], target: fields[2], upstream: fields[3]}
+		if strings.HasPrefix(name, "refs/tags/") {
+			required = append(required, name)
+		}
+	}
+	if git.BaseRef != "" {
+		required = append(required, git.BaseRef)
+		if upstream := all[git.BaseRef].upstream; strings.HasPrefix(upstream, "refs/remotes/") {
+			if _, exists := all[upstream]; exists {
+				required = append(required, upstream)
 			}
-			value = "ref: " + fields[2]
 		}
-		v.files[name] = []byte(value + "\n")
-		found = found || name == base
 	}
-	if !found {
-		return fmt.Errorf("Git view base_ref %s is missing", base)
+	tips := make(map[string]bool)
+	head := strings.TrimSuffix(string(v.files["HEAD"]), "\n")
+	if branch, symbolic := strings.CutPrefix(head, "ref: "); symbolic && validHandoffGitRef(branch) {
+		if _, exists := all[branch]; exists {
+			required = append(required, branch)
+		}
+	} else if validHandoffGitOID(head, oidLen) {
+		tips[head] = true
+	} else {
+		return nil, errors.New("invalid Git view HEAD")
 	}
-	return nil
+	for _, name := range required {
+		for name != "" {
+			if _, included := v.files[name]; included {
+				break
+			}
+			ref, exists := all[name]
+			if !exists {
+				return nil, fmt.Errorf("Git view ref %s is missing", name)
+			}
+			value := ref.oid
+			if ref.target != "" {
+				if !validHandoffGitRef(ref.target) {
+					return nil, errors.New("invalid Git view symbolic ref")
+				}
+				value = "ref: " + ref.target
+			}
+			v.files[name] = []byte(value + "\n")
+			tips[ref.oid] = true
+			name = ref.target
+		}
+	}
+	return tips, nil
+}
+
+func handoffReachableGitObjects(ctx context.Context, checkout string, tips map[string]bool, oidLen int) ([]byte, error) {
+	index, err := handoffGitOutput(ctx, checkout, "ls-files", "--stage", "-z")
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range strings.Split(string(index), "\x00") {
+		if entry == "" {
+			continue
+		}
+		meta, _, hasPath := strings.Cut(entry, "\t")
+		fields := strings.Fields(meta)
+		if !hasPath || len(fields) != 3 || !validHandoffGitOID(fields[1], oidLen) {
+			return nil, errors.New("invalid Git index entry")
+		}
+		if fields[0] != "160000" {
+			tips[fields[1]] = true
+		}
+	}
+	if len(tips) == 0 {
+		return nil, nil
+	}
+	var input, out bytes.Buffer
+	for oid := range tips {
+		input.WriteString(oid)
+		input.WriteByte('\n')
+	}
+	err = runHandoffGit(ctx, checkout, &input, &gateHashBudget{ctx: ctx, dst: &out, remaining: 8 << 20},
+		"rev-list", "--objects", "--no-object-names", "--stdin")
+	if err != nil {
+		return nil, err
+	}
+	objects := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	slices.Sort(objects)
+	return []byte(strings.Join(slices.Compact(objects), "\n") + "\n"), nil
 }
 
 func validHandoffGitRef(ref string) bool {
