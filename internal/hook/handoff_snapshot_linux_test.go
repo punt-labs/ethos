@@ -25,6 +25,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestHandoffSnapshotAcceptsLargeInputManifest(t *testing.T) {
+	live, scratch := t.TempDir(), t.TempDir()
+	ctx := context.Background()
+	check := editCheck{cwd: gateRoot, timeout: 5 * time.Second, argv: []string{"/bin/sh", "-ec", "test -f input"}}
+	writeFile(t, filepath.Join(live, "input"), "fixture")
+	inputs := []string{"input"}
+	proof, err := digestGateInputs(ctx, live, "", inputs)
+	require.NoError(t, err)
+	failure, err := executeHandoffSnapshot(ctx, scratch, live, proof, inputs, check)
+	skipIfHandoffSandboxUnavailable(t, err)
+	require.NoError(t, err)
+	require.Empty(t, failure)
+
+	for i := range 640 {
+		name := fmt.Sprintf("%0230d", i)
+		writeFile(t, filepath.Join(live, name), "fixture")
+		inputs = append(inputs, name)
+	}
+	proof, err = digestGateInputs(ctx, live, "", inputs)
+	require.NoError(t, err)
+	failure, err = executeHandoffSnapshot(ctx, t.TempDir(), live, proof, inputs, check)
+	require.NoError(t, err)
+	require.Empty(t, failure)
+}
+
 func TestHandoffWaiterKeepsOwnerResultAcrossStripeCollision(t *testing.T) {
 	root, _ := postEditFixture(t)
 	p, err := (resolve.Located{Checkout: root, Store: root}).Layout()
@@ -314,8 +339,8 @@ func TestHandoffDefersWhenInputsCannotBeVerified(t *testing.T) {
 
 func TestHandoffSandboxRejectsInvalidPlan(t *testing.T) {
 	root := t.TempDir()
-	require.ErrorContains(t, enterHandoffSandbox(root, root, gateRoot, "", "", []string{"/bin/bash"}, nil, nil), "invalid sandbox plan")
-	require.ErrorContains(t, enterHandoffSandbox(root, root, "/etc", "", "", []string{"/bin/sh"}, nil, nil), "invalid sandbox plan")
+	require.ErrorContains(t, enterHandoffSandbox(root, root, gateRoot, "", nil, []string{"/bin/bash"}, nil, nil), "invalid sandbox plan")
+	require.ErrorContains(t, enterHandoffSandbox(root, root, "/etc", "", nil, []string{"/bin/sh"}, nil, nil), "invalid sandbox plan")
 	_, err := executeHandoffSnapshot(context.Background(), root, "/usr", "", nil, editCheck{})
 	require.ErrorContains(t, err, "checkout overlaps the sandbox system runtime")
 	_, err = handoffSandboxIdentity(filepath.Join(root, "missing"))

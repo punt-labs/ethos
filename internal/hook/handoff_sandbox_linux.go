@@ -61,12 +61,19 @@ func RunHandoffSandbox() {
 }
 
 func runHandoffSandbox(writeCoverage func(string) error) {
-	if len(os.Args) < 8 || os.Args[1] != handoffSandboxArg || os.Getpid() != 1 {
+	if len(os.Args) < 7 || os.Args[1] != handoffSandboxArg || os.Getpid() != 1 {
 		return
 	}
 	runtime.LockOSThread()
 	status := os.NewFile(3, "handoff sandbox status")
 	unix.CloseOnExec(3)
+	manifestPipe := os.NewFile(4, "handoff sandbox manifest")
+	manifest, err := io.ReadAll(manifestPipe)
+	_ = manifestPipe.Close()
+	if err != nil {
+		_, _ = fmt.Fprintln(status, "read sandbox manifest")
+		os.Exit(126)
+	}
 	cwd := os.Args[4]
 	reportCoverage := func() error { return nil }
 	if dir := os.Getenv("GOCOVERDIR"); filepath.IsAbs(dir) {
@@ -77,7 +84,7 @@ func runHandoffSandbox(writeCoverage func(string) error) {
 		}
 		reportCoverage = func() error { return writeSandboxCoverage(coverDir, cwd, writeCoverage) }
 	}
-	err := enterHandoffSandbox(os.Args[2], os.Args[3], cwd, os.Args[5], os.Args[6], os.Args[7:], status, reportCoverage)
+	err = enterHandoffSandbox(os.Args[2], os.Args[3], cwd, os.Args[5], manifest, os.Args[6:], status, reportCoverage)
 	var setup *handoffSetupError
 	if errors.As(err, &setup) {
 		var errno unix.Errno
@@ -172,12 +179,18 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 	if err != nil {
 		return "", errors.New("cannot encode the snapshot input manifest")
 	}
-	cmd := exec.CommandContext(ctx, self, append([]string{handoffSandboxArg, scratch, checkout, cwd, proof, string(manifest)}, argv...)...)
+	manifestReader, manifestWriter, err := os.Pipe()
+	if err != nil {
+		return "", errors.New("cannot create the snapshot runner manifest pipe")
+	}
+	defer manifestReader.Close()
+	defer manifestWriter.Close()
+	cmd := exec.CommandContext(ctx, self, append([]string{handoffSandboxArg, scratch, checkout, cwd, proof}, argv...)...)
 	cmd.Env = slices.Clone(sandboxEnvironment)
 	if dir := os.Getenv("GOCOVERDIR"); filepath.IsAbs(dir) {
 		cmd.Env = append(cmd.Env, "GOCOVERDIR="+dir)
 	}
-	cmd.ExtraFiles = []*os.File{w}
+	cmd.ExtraFiles = []*os.File{w, manifestReader}
 	cmd.WaitDelay = time.Second
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: unix.CLONE_NEWUSER | unix.CLONE_NEWNS | unix.CLONE_NEWPID | unix.CLONE_NEWNET | unix.CLONE_NEWIPC,
@@ -199,6 +212,9 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		return "", errors.New("snapshot isolation unavailable on this host")
 	}
 	_ = w.Close()
+	_ = manifestReader.Close()
+	_, manifestErr := manifestWriter.Write(manifest)
+	_ = manifestWriter.Close()
 	setup, setupErr := io.ReadAll(io.LimitReader(r, 4096))
 	ready := setupErr == nil && string(setup) == handoffSandboxReady
 	if ready {
@@ -207,6 +223,9 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 	err = cmd.Wait()
 	if ctx.Err() != nil {
 		return "", errors.New("snapshot check timed out or was interrupted")
+	}
+	if manifestErr != nil {
+		return "", errors.New("cannot send the snapshot input manifest")
 	}
 	if !ready {
 		diagnostic.FromContext(ctx).Info("Handoff sandbox setup failed", "error_type", diagnostic.ErrorType(setupErr))
@@ -301,7 +320,7 @@ type handoffSetupError struct {
 func (e *handoffSetupError) Error() string { return e.phase + ": " + e.cause.Error() }
 func (e *handoffSetupError) Unwrap() error { return e.cause }
 
-func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string, status io.Writer, reportCoverage func() error) (err error) {
+func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []string, status io.Writer, reportCoverage func() error) (err error) {
 	phase := "validate sandbox plan"
 	defer func() {
 		if err != nil {
@@ -310,7 +329,7 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 	}()
 	var plan handoffSandboxManifest
 	if len(argv) == 0 || argv[0] == "" || !insideGatePath(gateRoot, cwd) ||
-		json.Unmarshal([]byte(manifest), &plan) != nil || (plan.Worktree == nil && argv[0] != "/bin/sh") {
+		json.Unmarshal(manifest, &plan) != nil || (plan.Worktree == nil && argv[0] != "/bin/sh") {
 		return errors.New("invalid sandbox plan")
 	}
 	phase = "make mount propagation private"
