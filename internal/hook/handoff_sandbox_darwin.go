@@ -132,7 +132,7 @@ func cloneDarwinGateInputs(ctx context.Context, checkout, snapshot string, input
 			}
 			return err
 		}
-		err = cloneDarwinGateInput(src, target, preserveMode)
+		err = cloneDarwinGateInput(ctx, src, target, preserveMode, unix.Fclonefileat)
 		_ = src.Close()
 		if err != nil {
 			return err
@@ -141,7 +141,7 @@ func cloneDarwinGateInputs(ctx context.Context, checkout, snapshot string, input
 	return nil
 }
 
-func cloneDarwinGateInput(src *os.File, dst string, preserveMode bool) error {
+func cloneDarwinGateInput(ctx context.Context, src *os.File, dst string, preserveMode bool, clone func(int, int, string, int) error) error {
 	info, err := src.Stat()
 	if err != nil {
 		return err
@@ -152,14 +152,34 @@ func cloneDarwinGateInput(src *os.File, dst string, preserveMode bool) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return err
 	}
-	if err := unix.Fclonefileat(int(src.Fd()), unix.AT_FDCWD, dst, unix.CLONE_NOOWNERCOPY); err != nil {
-		return err
-	}
 	mode := info.Mode().Perm()
 	if !preserveMode {
 		mode = mode&0o100 | 0o400
 	}
-	return os.Chmod(dst, mode)
+	err = clone(int(src.Fd()), unix.AT_FDCWD, dst, unix.CLONE_NOOWNERCOPY)
+	switch {
+	case err == nil:
+		return os.Chmod(dst, mode)
+	case errors.Is(err, unix.EXDEV), errors.Is(err, unix.ENOTSUP):
+		if info.Size() > gateBytes {
+			return errors.New("snapshot input exceeds the input budget")
+		}
+		file, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			return err
+		}
+		out := &gateHashBudget{ctx: ctx, dst: file, remaining: info.Size()}
+		n, err := io.Copy(out, io.LimitReader(src, info.Size()+1))
+		if err == nil && n != info.Size() {
+			err = errors.New("snapshot input changed size")
+		}
+		if err == nil {
+			err = file.Chmod(mode)
+		}
+		return errors.Join(err, file.Close())
+	default:
+		return err
+	}
 }
 
 func darwinPathWithin(root, path string) bool {
