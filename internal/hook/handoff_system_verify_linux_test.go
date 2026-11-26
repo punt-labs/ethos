@@ -100,6 +100,20 @@ func TestHandoffSystemRejectsUncoveredToolsAndSpecialInputs(t *testing.T) {
 	require.ErrorContains(t, err, "not available on the mounted sandbox PATH")
 }
 
+func TestHandoffSystemRefusesPrivateSidecarPaths(t *testing.T) {
+	private, err := os.MkdirTemp("/var/tmp", "ethos-private-")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.Remove(private)) })
+	profile := &checkset.WorktreeSnapshot{}
+	profile.System.Dirs = []string{private}
+	_, err = prepareHandoffSystem(context.Background(), t.TempDir(), profile)
+	require.ErrorContains(t, err, "cannot safely resolve system input "+private)
+	for _, path := range []string{"/home/a/input", "/root/input", "/etc/shadow", "/etc/ssl/private/key", "/sys/input", "/proc/input", "/run/input", "/tmp/input", "/usr-other/input"} {
+		require.False(t, safeHandoffSystemPath(path, "/checkout-fixture"), path)
+	}
+	require.True(t, safeHandoffSystemPath("/usr/bin/sh", "/checkout-fixture"))
+}
+
 func TestMountHandoffSystemRejectsOccupiedTargets(t *testing.T) {
 	t.Run("existing accounts directory", func(t *testing.T) {
 		root := t.TempDir()

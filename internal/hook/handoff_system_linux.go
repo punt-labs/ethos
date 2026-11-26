@@ -17,12 +17,20 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"golang.org/x/sys/unix"
 )
 
 var worktreeSystemRuntime = []string{"/usr/include", "/usr/share", "/usr/libexec", "/etc/alternatives"}
+
+const handoffSystemProofTime = 5 * time.Second
+
+var worktreeSystemRoots = []string{
+	"/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32",
+	"/etc/alternatives", "/etc/os-release", "/etc/ssl/certs", "/etc/ssl/openssl.cnf", "/etc/ca-certificates",
+}
 
 func worktreeSandboxEnvironment(profile *checkset.WorktreeSnapshot) ([]string, error) {
 	var platform checkset.SnapshotPlatform
@@ -37,7 +45,7 @@ func prepareHandoffSystem(ctx context.Context, checkout string, profile *checkse
 	if profile == nil {
 		return plan, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, gateInputTime)
+	ctx, cancel := context.WithTimeout(ctx, handoffSystemProofTime)
 	defer cancel()
 	var err error
 	plan.Passwd, plan.Group, err = handoffAccountFiles()
@@ -70,8 +78,11 @@ func prepareHandoffSystem(ctx context.Context, checkout string, profile *checkse
 	} {
 		slices.Sort(group.paths)
 		for _, path := range slices.Compact(group.paths) {
+			if !safeHandoffSystemPath(path, checkout) {
+				return plan, fmt.Errorf("cannot safely resolve system input %s", path)
+			}
 			source, err := filepath.EvalSymlinks(path)
-			if err != nil || !safeHandoffSystemPath(path, checkout) || !safeHandoffSystemPath(source, checkout) {
+			if err != nil || !safeHandoffSystemPath(source, checkout) {
 				return plan, fmt.Errorf("cannot safely resolve system input %s", path)
 			}
 			input := handoffSystemInput{Path: path, Directory: group.dir}
@@ -152,7 +163,9 @@ func safeHandoffSystemPath(path, checkout string) bool {
 			return false
 		}
 	}
-	return true
+	return slices.ContainsFunc(worktreeSystemRoots, func(root string) bool {
+		return insideGatePath(root, path)
+	})
 }
 
 func handoffSystemCovers(mounts []handoffSystemMount, path string) bool {
@@ -296,7 +309,7 @@ func bindHandoffSystemInput(host *os.Root, target string, mount handoffSystemMou
 }
 
 func verifyMountedHandoffSystem(plan handoffSystemPlan, env []string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), gateInputTime)
+	ctx, cancel := context.WithTimeout(context.Background(), handoffSystemProofTime)
 	defer cancel()
 	for _, input := range plan.Inputs {
 		if input.Tool != "" {

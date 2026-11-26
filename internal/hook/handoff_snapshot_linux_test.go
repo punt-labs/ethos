@@ -616,6 +616,7 @@ func TestHandoffWorktreeSystemRunsCgoRace(t *testing.T) {
 	if !filepath.IsAbs(goroot) {
 		t.Skip("absolute Go toolchain required")
 	}
+	allowHandoffSystemFixtureRoot(t, goroot)
 	root, _ := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())
 	host := handoffSystemFixtureDir(t)
@@ -690,7 +691,17 @@ func handoffSystemFixtureDir(t *testing.T) string {
 	dir, err := os.MkdirTemp("/var/tmp", "ethos-system-")
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
+	allowHandoffSystemFixtureRoot(t, dir)
 	return dir
+}
+
+func allowHandoffSystemFixtureRoot(t *testing.T, dir string) {
+	t.Helper()
+	physical, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+	previous := worktreeSystemRoots
+	worktreeSystemRoots = append([]string{dir, physical}, previous...)
+	t.Cleanup(func() { worktreeSystemRoots = previous })
 }
 
 func TestHandoffWorktreeHasPrivatePTY(t *testing.T) {
