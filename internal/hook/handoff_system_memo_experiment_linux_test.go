@@ -87,8 +87,7 @@ func TestHandoffSystemMemoPersistsBoundedCurrentEntries(t *testing.T) {
 
 	saved := readHandoffSystemMemo(path).prev
 	require.NotContains(t, saved, stale)
-	require.NotEmpty(t, saved)
-	require.Less(t, len(saved), count)
+	require.Equal(t, memoExperimentEntries, len(saved))
 	for i := range len(saved) {
 		key := fmt.Sprintf("%064x", i)
 		if saved[key] != entry {
