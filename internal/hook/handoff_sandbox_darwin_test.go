@@ -330,7 +330,9 @@ func TestDarwinHandoffWorktreeContract(t *testing.T) {
 			case "$TMPDIR" in /private/tmp/eh-????????/s) ;; *) exit 3 ;; esac
 			test "$PATH" = "$ETHOS_HANDOFF_ROOT/bin:/usr/local/bin:/usr/bin:/bin"
 			test "$CACHE" = "$ETHOS_HANDOFF_SCRATCH/cache dir"
-			test -f README && test ! -e .git && test ! -e scratch/live-only
+			test -f README
+			test ! -e .git
+			test ! -e scratch/live-only
 			touch scratch/local "$HOME/available" "$TMPDIR/temporary"
 			test -f scratch/local
 			if (echo changed > README) 2>/dev/null; then exit 4; fi
