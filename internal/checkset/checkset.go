@@ -304,6 +304,10 @@ func (c *Check) validate() error {
 			}
 		case "{files}", "{package_dir}", "{root}":
 		default:
+			if c.Stage == "handoff" && c.Snapshot == nil &&
+				!strings.ContainsAny(worktreeArgRoots.Replace(arg), "{}") {
+				continue
+			}
 			return fmt.Errorf("unknown or spliced placeholder %q; placeholders must be whole argv elements", arg)
 		}
 	}
@@ -336,6 +340,8 @@ func (c *Check) validate() error {
 	c.Exclude = append(c.Exclude, ".tmp/**", ".punt-labs/local/**")
 	return nil
 }
+
+var worktreeArgRoots = strings.NewReplacer("{root}", "", "{runtime}", "", "{scratch}", "")
 
 // Duration is defined for validated checks.
 func (c Check) Duration() time.Duration {
