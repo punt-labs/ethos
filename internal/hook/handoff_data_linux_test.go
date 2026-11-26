@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/stretchr/testify/require"
 )
@@ -32,6 +33,39 @@ func TestHandoffWorktreeDataMustBeRefreshed(t *testing.T) {
 	require.Contains(t, feedback.Blocking, "data-unavailable")
 	require.Contains(t, feedback.Notice, "ethos handoff refresh-data")
 	require.Contains(t, feedback.Notice, "Run the explicit project gate")
+}
+
+func TestHandoffDataMergesOnlyUnoccupiedRuntimeMounts(t *testing.T) {
+	root, _ := handoffMetadataFixture(t, "exit 97\n")
+	policy, err := handoffDataFixtureLocation(t, root).Layout()
+	require.NoError(t, err)
+	ctx := context.Background()
+	profile := &checkset.WorktreeSnapshot{Data: []checkset.SnapshotData{{
+		Name: "fixture", URL: "https://example.com/data", MaxAgeHours: 1, Mount: "nested/mount",
+	}}}
+	item := newHandoffData(policy, profile.Data[0], "")
+	require.NoError(t, item.install(ctx, policy, strings.NewReader("refreshed")))
+	data, err := selectHandoffData(ctx, policy, profile, "")
+	require.NoError(t, err)
+
+	runtime := t.TempDir()
+	unchanged := filepath.Join(runtime, "data", "nested", "bundled")
+	writeFile(t, unchanged, "bundled")
+	require.NoError(t, materializeHandoffData(ctx, runtime, data))
+	mounted := filepath.Join(runtime, "data", "nested", "mount")
+	body, err := os.ReadFile(mounted)
+	require.NoError(t, err)
+	require.Equal(t, "refreshed", string(body))
+
+	require.NoError(t, os.Remove(mounted))
+	writeFile(t, mounted, "occupied")
+	require.ErrorContains(t, materializeHandoffData(ctx, runtime, data), "mount already exists")
+	body, err = os.ReadFile(mounted)
+	require.NoError(t, err)
+	require.Equal(t, "occupied", string(body))
+	body, err = os.ReadFile(unchanged)
+	require.NoError(t, err)
+	require.Equal(t, "bundled", string(body))
 }
 
 func TestHandoffWorktreeDataMountAndReuse(t *testing.T) {

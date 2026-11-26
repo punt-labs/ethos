@@ -221,7 +221,10 @@ func selectHandoffData(ctx context.Context, loc layout.Policy, profile *checkset
 
 func materializeHandoffData(ctx context.Context, runtime string, data []handoffData) error {
 	dir := filepath.Join(runtime, "data")
-	if err := os.Mkdir(dir, 0o700); err != nil {
+	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return errors.New("cannot reserve runtime/data for the declared handoff data")
+	}
+	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
 		return errors.New("cannot reserve runtime/data for the declared handoff data")
 	}
 	root, err := os.OpenRoot(dir)
@@ -253,7 +256,10 @@ func (d handoffData) materialize(ctx context.Context, root *os.Root) error {
 	}
 	var materializeErr error
 	if d.govulndb() {
-		materializeErr = root.MkdirAll(d.Mount, 0o700)
+		materializeErr = root.MkdirAll(filepath.Dir(d.Mount), 0o700)
+		if materializeErr == nil {
+			materializeErr = root.Mkdir(d.Mount, 0o700)
+		}
 		if materializeErr == nil {
 			var dest *os.Root
 			dest, materializeErr = root.OpenRoot(d.Mount)
@@ -263,6 +269,9 @@ func (d handoffData) materialize(ctx context.Context, root *os.Root) error {
 		}
 	} else {
 		materializeErr = writeHandoffDataFile(ctx, root, d.Mount, &payload, size)
+	}
+	if errors.Is(materializeErr, os.ErrExist) {
+		return fmt.Errorf("handoff data %q mount already exists", d.Name)
 	}
 	if materializeErr != nil {
 		return fmt.Errorf("cannot materialize handoff data %q", d.Name)
