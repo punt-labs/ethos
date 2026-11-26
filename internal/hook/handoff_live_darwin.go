@@ -49,17 +49,14 @@ func executeHandoffLive(ctx context.Context, _, root string, inputs []string, ch
 	if err != nil {
 		return "", err
 	}
-	system := prepared.system
 	command := argv[0]
 	if !strings.ContainsRune(command, '/') {
-		command = darwinPreparedSystemTool(command, system)
-		if command == "" {
-			command = darwinSystemTool(argv[0], env)
-		}
+		command = darwinSystemTool(command, env)
 		if command == "" {
 			return "", fmt.Errorf("live-verified command %q is not on the declared PATH", argv[0])
 		}
 	}
+	system := prepared.system
 	if system.DeveloperDir != "" {
 		env = slices.DeleteFunc(env, func(variable string) bool {
 			return strings.HasPrefix(variable, "DEVELOPER_DIR=")

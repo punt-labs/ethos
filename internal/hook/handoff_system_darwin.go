@@ -74,6 +74,9 @@ func prepareHandoffSystem(ctx context.Context, checkout string, profile *checkse
 		}
 	}
 	roots := handoffRoots{checkout: gateRoot, runtime: "/runtime", scratch: "/scratch", temp: "/scratch"}
+	if live {
+		roots.checkout = checkout
+	}
 	var platform checkset.SnapshotPlatform
 	if profile.Runtime != nil {
 		platform = profile.Runtime.Platforms[platformKey]
@@ -100,12 +103,9 @@ func prepareHandoffSystem(ctx context.Context, checkout string, profile *checkse
 	}
 	slices.Sort(tools)
 	for _, tool := range slices.Compact(tools) {
-		path, err := findDarwinSystemTool(tool, env, func(path string) error {
-			_, err := resolveDarwinSystemInput(checkout, path, !live)
-			return err
-		})
-		if err != nil {
-			return plan, err
+		path := darwinSystemTool(tool, env)
+		if path == "" {
+			return plan, fmt.Errorf("system tool %s is not available on the sandbox PATH", tool)
 		}
 		source, err := addDarwinSystemInput(ctx, &plan, checkout, path, tool, false, !live)
 		if err != nil {
@@ -243,47 +243,20 @@ func addDarwinCLT(ctx context.Context, plan *handoffSystemPlan, checkout, dir st
 }
 
 func darwinSystemTool(name string, env []string) string {
-	path, _ := findDarwinSystemTool(name, env, nil)
-	return path
-}
-
-func findDarwinSystemTool(name string, env []string, validate func(string) error) (string, error) {
-	var rejected error
 	for _, value := range env {
 		if path, ok := strings.CutPrefix(value, "PATH="); ok {
 			for _, dir := range filepath.SplitList(path) {
 				candidate := filepath.Join(dir, name)
-				if info, err := os.Stat(candidate); err != nil || !info.Mode().IsRegular() || unix.Access(candidate, unix.X_OK) != nil {
-					continue
+				if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() && unix.Access(candidate, unix.X_OK) == nil {
+					return candidate
 				}
-				if validate != nil {
-					if err := validate(candidate); err != nil {
-						if rejected == nil {
-							rejected = err
-						}
-						continue
-					}
-				}
-				return candidate, nil
 			}
-		}
-	}
-	if rejected != nil {
-		return "", rejected
-	}
-	return "", fmt.Errorf("system tool %s is not available on the sandbox PATH", name)
-}
-
-func darwinPreparedSystemTool(name string, plan handoffSystemPlan) string {
-	for _, input := range plan.Inputs {
-		if input.Tool == name && filepath.Base(input.Path) == name {
-			return input.Path
 		}
 	}
 	return ""
 }
 
-func resolveDarwinSystemInput(checkout, path string, restrictRoots bool) (string, error) {
+func addDarwinSystemInput(ctx context.Context, plan *handoffSystemPlan, checkout, path, tool string, directory, restrictRoots bool) (string, error) {
 	allowed := func(path string) bool {
 		return safeDarwinSystemPath(path, checkout) && (!restrictRoots || darwinSnapshotSystemPath(path))
 	}
@@ -296,14 +269,6 @@ func resolveDarwinSystemInput(checkout, path string, restrictRoots bool) (string
 	}
 	if !allowed(source) {
 		return "", fmt.Errorf("resolved system input %s is outside supported Darwin system roots", path)
-	}
-	return source, nil
-}
-
-func addDarwinSystemInput(ctx context.Context, plan *handoffSystemPlan, checkout, path, tool string, directory, restrictRoots bool) (string, error) {
-	source, err := resolveDarwinSystemInput(checkout, path, restrictRoots)
-	if err != nil {
-		return "", err
 	}
 	digest, err := fingerprintDarwinSystemInput(ctx, source, directory)
 	if err != nil {

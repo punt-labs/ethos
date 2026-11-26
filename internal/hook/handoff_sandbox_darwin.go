@@ -482,12 +482,7 @@ func runDarwinHandoffPlan(ctx context.Context, checkout, proof string, inputs []
 	system := worktree.system
 	command := argv[0]
 	if !strings.ContainsRune(command, '/') {
-		if selected := darwinPreparedSystemTool(command, system); selected != "" {
-			command = selected
-			argv[0] = selected
-		} else {
-			command = darwinSystemTool(command, env)
-		}
+		command = darwinSystemTool(command, env)
 	}
 	if system.DeveloperDir != "" {
 		if !trustedDarwinCLT(system.DeveloperDir) {
