@@ -136,7 +136,7 @@ func TestDarwinLiveGateApprovalAndVerdict(t *testing.T) {
 	run := func() StageFeedback { return runHandoffGate(context.Background(), root, "", nil, policy[0], policy) }
 	require.Contains(t, run().Advisory, "live-verified not approved (run: ethos handoff approve-live project)")
 	require.NoFileExists(t, launches)
-	approval, err := ResolveHandoffLivePolicy(root, "project")
+	approval, err := ResolveHandoffLivePolicy(root, "", "project")
 	require.NoError(t, err)
 	require.NoError(t, approval.Approve())
 	require.Empty(t, run())

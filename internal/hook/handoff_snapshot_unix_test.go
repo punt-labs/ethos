@@ -85,7 +85,7 @@ func TestHandoffLiveVerifiedDefersWithoutAdmission(t *testing.T) {
 	got := runHandoffGate(ctx, root, "worker", []string{"file"}, check, nil)
 	reason := "live-verified unavailable in linux snapshot"
 	if runtime.GOOS == "darwin" {
-		reason = "live-verified not approved (run: ethos handoff approve-live project)"
+		reason = "live-verified not approved (run: ethos handoff approve-live project --agent worker)"
 	}
 	require.Contains(t, got.Advisory, reason)
 	require.Contains(t, logs.String(), "isolation=live-verified")

@@ -39,7 +39,10 @@ both resolved YAML files' bytes. Linked worktrees share the repository
 identity but do not share approval for differing policy revisions.
 Changes to either YAML file require new approval. A missing or
 mismatched pin visibly defers before launch with
-`live-verified not approved (run: ethos handoff approve-live <slug>)`.
+`live-verified not approved` and the approval command. For policies
+selected by an agent or its role, use
+`ethos handoff approve-live <slug> --agent <handle>` to resolve the same
+policy the hook selected.
 Run `ethos handoff revoke-live <slug>` to remove the pin. A grant ID is
 part of the result key; revocation and reapproval cannot reuse verdicts
 from an earlier grant.

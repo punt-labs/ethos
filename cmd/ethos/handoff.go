@@ -75,12 +75,14 @@ func init() {
 		},
 	}
 	refresh.Flags().StringVar(&dataAgent, "agent", "", "Select the handoff policy for this agent instead of the project default")
-	handoff.AddCommand(fetch, refresh, &cobra.Command{
+	approve := &cobra.Command{
 		Use:   "approve-live <slug>",
 		Short: "Approve the current revision of a live-verified handoff policy",
 		Args:  cobra.ExactArgs(1),
 		RunE:  approveLiveHandoff,
-	}, &cobra.Command{
+	}
+	approve.Flags().String("agent", "", "Select the handoff policy for this agent instead of the project default")
+	handoff.AddCommand(fetch, refresh, approve, &cobra.Command{
 		Use:   "revoke-live <slug>",
 		Short: "Revoke the live-verified handoff approval for this checkset",
 		Args:  cobra.ExactArgs(1),
@@ -116,7 +118,11 @@ func confirmAndApproveLiveHandoff(cmd *cobra.Command, slug string, in io.Reader)
 	if err != nil {
 		return err
 	}
-	policy, err := hook.ResolveHandoffLivePolicy(checkout, slug)
+	agent := ""
+	if flag := cmd.Flags().Lookup("agent"); flag != nil {
+		agent = flag.Value.String()
+	}
+	policy, err := hook.ResolveHandoffLivePolicy(checkout, agent, slug)
 	if err != nil {
 		return err
 	}

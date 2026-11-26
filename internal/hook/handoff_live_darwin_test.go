@@ -33,7 +33,7 @@ func approvedDarwinLiveGate(t *testing.T, run, extra string) string {
 	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
 	checkPolicy(t, root, "project", "  - {name: live, stage: handoff, files: all, run: "+run+"}\n")
 	writeFile(t, filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml"), "checks:\n  live:\n    profile: linux-worktree-v1\n    isolation: live-verified\n    epoch: proof\n    sources: {mode: worktree}\n"+extra)
-	policy, err := ResolveHandoffLivePolicy(root, "project")
+	policy, err := ResolveHandoffLivePolicy(root, "", "project")
 	require.NoError(t, err)
 	require.NoError(t, policy.Approve())
 	return root

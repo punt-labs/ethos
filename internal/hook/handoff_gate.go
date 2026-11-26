@@ -147,7 +147,11 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	live := mode == checkset.IsolationLiveVerified
 	var approval liveApprovalPolicy
 	var grant string
-	unapproved := "live-verified not approved (run: ethos handoff approve-live " + check.HandoffPolicySlug + ")"
+	approveCommand := "ethos handoff approve-live " + check.HandoffPolicySlug
+	if agent != "" {
+		approveCommand += " --agent " + audit.ShellQuote(agent)
+	}
+	unapproved := "live-verified not approved (run: " + approveCommand + ")"
 	if live {
 		if runtime.GOOS != "darwin" {
 			return deferGate("live-verified unavailable in "+runtime.GOOS+" snapshot", true)

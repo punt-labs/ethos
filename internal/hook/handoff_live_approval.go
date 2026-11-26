@@ -27,8 +27,13 @@ type liveApprovalRecord struct {
 	Repo, Slug, Revision, Grant string
 }
 
-func ResolveHandoffLivePolicy(checkout, slug string) (liveApprovalPolicy, error) {
-	checks, _, err := configuredStageChecks(checkout, "", "handoff")
+func ResolveHandoffLivePolicy(checkout, agent, slug string) (liveApprovalPolicy, error) {
+	if agent != "" {
+		if err := attribute.ValidateSlug(agent); err != nil {
+			return liveApprovalPolicy{}, err
+		}
+	}
+	checks, _, err := configuredStageChecks(checkout, agent, "handoff")
 	if err != nil {
 		return liveApprovalPolicy{}, err
 	}

@@ -22,7 +22,7 @@ func TestHandoffLiveApprovalRevisionAndLinkedWorktree(t *testing.T) {
 	stageGit(t, root, "worktree", "add", "--detach", sibling)
 	selected := func(checkout string) liveApprovalPolicy {
 		t.Helper()
-		got, err := ResolveHandoffLivePolicy(checkout, "project")
+		got, err := ResolveHandoffLivePolicy(checkout, "", "project")
 		require.NoError(t, err)
 		return got
 	}
