@@ -9,7 +9,8 @@ checks:
       platforms:
         linux-amd64:
           bundle: ethos-handoff-linux-amd64.tar.gz
-          sha256: 6c37cc9d195f213d18397a0cf20fbb991c52feeb0e8c4a0720c0b94b0034aaba
+          # Publish the exact archive from Handoff runtime run 45738877712, not a rebuild.
+          sha256: 30e086e0145ec47f0d6f3021a4e693fbbafb5b080beb152e404c51daa95edbee
           url: https://github.com/punt-labs/ethos/releases/download/handoff-runtime-v1/ethos-handoff-linux-amd64.tar.gz
           path: ["{runtime}/go/bin", "{runtime}/bin", "{runtime}/python/bin", "{runtime}/node/bin", /usr/bin, /bin]
           env:
