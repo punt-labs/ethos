@@ -305,15 +305,27 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 			}
 			diagnostic.LogHookCheck(ctx, root, root, "handoff", check.Name, "miss", time.Since(start))
 			scratch := filepath.Join(cache, layout.TmpPath("snapshot-"+key[:3]))
-			if err := os.RemoveAll(scratch); err != nil {
-				result = deferGate("cannot clean up the previous snapshot")
+			if err := removeSnapshotScratch(scratch); err != nil {
+				result = deferGate("cannot clean up the previous snapshot: " + editRedact(err.Error()))
 				return nil
 			}
 			if err := os.Mkdir(scratch, 0o700); err != nil {
 				result = deferGate("cannot materialize the snapshot")
 				return nil
 			}
-			defer func() { _ = os.RemoveAll(scratch) }()
+			cleanup := func() bool {
+				if err := removeSnapshotScratch(scratch); err != nil {
+					result = deferGate("cannot clean up the snapshot: " + editRedact(err.Error()))
+					return false
+				}
+				return true
+			}
+			cleanupPending := true
+			defer func() {
+				if cleanupPending {
+					cleanup()
+				}
+			}()
 			prepared := handoffWorktreePlan{system: system}
 			if bundle.archive != "" {
 				prepared.runtimeDir = filepath.Join(scratch, "runtime-snapshot")
@@ -371,6 +383,10 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 					failures = append(failures, failure)
 				}
 			}
+			cleanupPending = false
+			if !cleanup() {
+				return nil
+			}
 			if ctx.Err() != nil {
 				result = deferGate("snapshot check was interrupted")
 				return nil
@@ -404,6 +420,28 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		}
 	}
 	return deferGate("interrupted while waiting for the handoff lease")
+}
+
+func removeSnapshotScratch(scratch string) error {
+	if err := filepath.WalkDir(scratch, func(path string, entry os.DirEntry, err error) error {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil || !entry.IsDir() {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if mode := info.Mode(); mode&0o700 != 0o700 {
+			return os.Chmod(path, mode|0o700)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	return os.RemoveAll(scratch)
 }
 
 func unsupportedWorktreeField(profile *checkset.WorktreeSnapshot) string {
