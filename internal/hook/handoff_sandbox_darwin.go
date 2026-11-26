@@ -527,7 +527,10 @@ func runDarwinHandoffCheck(ctx context.Context, profile, checkout, cwd string, e
 	}
 	defer read.Close()
 	defer write.Close()
-	args := []string{"-f", profile, "/bin/sh", "-c", `printf R >&3 || exit 125; exec 3>&-; exec "$@"`, "ethos-handoff"}
+	// The group closes fd 3 on successful exec, but Bash restores it if
+	// exec returns. Privileged mode ignores shell startup environment.
+	const launcher = `shopt -s execfail || exit 125; printf R >&3 || exit 125; { exec "$@"; } 3>&-; printf E >&3; exit 125`
+	args := []string{"-f", profile, "/bin/bash", "--noprofile", "--norc", "-p", "-c", launcher, "ethos-handoff"}
 	var stdout, stderr editTail
 	wait, err := startDarwinHandoffProcess(ctx, "/usr/bin/sandbox-exec", append(args, argv...), func(cmd *exec.Cmd) {
 		cmd.Dir, cmd.Env = cwd, env
@@ -538,18 +541,19 @@ func runDarwinHandoffCheck(ctx context.Context, profile, checkout, cwd string, e
 		return "", fmt.Errorf("sandbox launch did not complete: %w", err)
 	}
 	_ = write.Close()
-	var ready [1]byte
+	var ready [2]byte
 	stop := context.AfterFunc(ctx, func() { _ = read.Close() })
-	_, readyErr := io.ReadFull(read, ready[:])
+	n, readyErr := io.ReadFull(read, ready[:])
 	stop()
-	if readyErr == nil && ready[0] == 'R' {
+	launched := n == 1 && ready[0] == 'R' && errors.Is(readyErr, io.ErrUnexpectedEOF)
+	if launched {
 		diagnostic.LogHookCheck(ctx, checkout, checkout, "handoff", check.name, "launched", time.Since(start))
 	}
 	err = wait()
 	if ctx.Err() != nil {
 		return "", errors.New("snapshot check timed out or was interrupted")
 	}
-	if readyErr != nil || ready[0] != 'R' {
+	if !launched {
 		return "", fmt.Errorf("sandbox launch did not complete: %v: %s", err, stderr.data)
 	}
 	return darwinHandoffCommandVerdict(err, check, stdout, stderr)
