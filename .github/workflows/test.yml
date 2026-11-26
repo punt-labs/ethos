@@ -116,10 +116,16 @@ jobs:
           packages=$(bash "$selector" "$SHARD")
           mapfile -t selected <<< "$packages"
           if [[ "$SHARD" == hook ]]; then
-            pattern='^TestHandoff(SandboxReportsMissingSnapshotCwd|RootOperandIsNotLive|SandboxReportsHighExitStatuses)$'
-            listed=$(go test -race -list "$pattern" "${selected[@]}")
-            mapfile -t handoff_tests < <(grep -Ex "$pattern" <<< "$listed")
-            if ((${#handoff_tests[@]})); then
+            if [[ -f internal/hook/handoff_sandbox_linux.go ]]; then
+              handoff_tests=(TestHandoffSandboxReportsMissingSnapshotCwd TestHandoffRootOperandIsNotLive TestHandoffSandboxReportsHighExitStatuses)
+              pattern="^($(IFS='|'; echo "${handoff_tests[*]}"))$"
+              listed=$(go test -race -list "$pattern" "${selected[@]}")
+              for handoff_test in "${handoff_tests[@]}"; do
+                if ! grep -Fxq -- "$handoff_test" <<< "$listed"; then
+                  echo "Missing required handoff sandbox proof test: $handoff_test" >&2
+                  exit 1
+                fi
+              done
               go test -race -count=1 -v -run "$pattern" "${selected[@]}" | tee "$RUNNER_TEMP/handoff-sandbox-tests.log"
               for handoff_test in "${handoff_tests[@]}"; do
                 grep -Fq -- "--- PASS: $handoff_test " "$RUNNER_TEMP/handoff-sandbox-tests.log"
@@ -332,10 +338,16 @@ jobs:
       - name: Verify sandbox tests ran without skipping
         shell: bash
         run: |
-          pattern='^TestHandoff(SandboxReportsMissingSnapshotCwd|RootOperandIsNotLive|SandboxReportsHighExitStatuses)$'
-          listed=$(go test -race -list "$pattern" ./internal/hook)
-          mapfile -t handoff_tests < <(grep -Ex "$pattern" <<< "$listed")
-          if ((${#handoff_tests[@]})); then
+          if [[ -f internal/hook/handoff_sandbox_linux.go ]]; then
+            handoff_tests=(TestHandoffSandboxReportsMissingSnapshotCwd TestHandoffRootOperandIsNotLive TestHandoffSandboxReportsHighExitStatuses)
+            pattern="^($(IFS='|'; echo "${handoff_tests[*]}"))$"
+            listed=$(go test -race -list "$pattern" ./internal/hook)
+            for handoff_test in "${handoff_tests[@]}"; do
+              if ! grep -Fxq -- "$handoff_test" <<< "$listed"; then
+                echo "Missing required handoff sandbox proof test: $handoff_test" >&2
+                exit 1
+              fi
+            done
             go test -race -count=1 -v -run "$pattern" ./internal/hook | tee "$RUNNER_TEMP/handoff-sandbox-tests.log"
             for handoff_test in "${handoff_tests[@]}"; do
               grep -Fq -- "--- PASS: $handoff_test " "$RUNNER_TEMP/handoff-sandbox-tests.log"
