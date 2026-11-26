@@ -39,11 +39,12 @@ func TestDarwinHandoffSnapshotIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	marker := filepath.Base(filepath.Dir(checkout))
 	done := make(chan error, 1)
 	go func() {
 		for _, phase := range []struct{ event, content string }{{"editing", "changed"}, {"reverting", "original"}} {
 			for {
-				events, globErr := filepath.Glob(filepath.Join(scratch, "*", "tmp", phase.event))
+				events, globErr := filepath.Glob(filepath.Join("/private/tmp", "eh-*", "s", marker+"-"+phase.event))
 				if globErr != nil {
 					done <- globErr
 					return
@@ -71,7 +72,8 @@ func TestDarwinHandoffSnapshotIsolation(t *testing.T) {
 	}
 	script := `set -eu
 	    test "$PWD/input" = "$1"
-	    shift
+	    marker=$2
+	    shift 2
 	    for p; do
 	        if /bin/cat "${p#path:}" >/dev/null 2>&1; then
 	            echo "unexpected live read: $p"; exit 1
@@ -79,12 +81,12 @@ func TestDarwinHandoffSnapshotIsolation(t *testing.T) {
 	    done
 	    if (echo corrupted > input) 2>/dev/null; then exit 1; fi
 	    for phase in editing reverting; do
-	        : > "$TMPDIR/$phase"
-	        while [ ! -e "$TMPDIR/$phase-ack" ]; do /bin/sleep .01; done
+	        : > "$TMPDIR/$marker-$phase"
+	        while [ ! -e "$TMPDIR/$marker-$phase-ack" ]; do /bin/sleep .01; done
 	        test "$(/bin/cat input)" = original
 	    done`
 	check := editCheck{name: "isolation", cwd: checkout, timeout: 10 * time.Second,
-		argv: []string{"/bin/sh", "-c", script, "sh", live, "path:" + live, "path:" + symlink, "path:" + hardlink,
+		argv: []string{"/bin/sh", "-c", script, "sh", live, marker, "path:" + live, "path:" + symlink, "path:" + hardlink,
 			"path:/System/Volumes/Data" + physical}}
 	caseAlias := strings.Replace(physical, "/TestDarwin", "/testdarwin", 1)
 	if info, err := os.Stat(caseAlias); err == nil && info.Mode().IsRegular() && caseAlias != physical {
@@ -240,6 +242,67 @@ func TestDarwinHandoffSnapshotUsesShortPrivateRoot(t *testing.T) {
 			t.Fatalf("private run directory was not removed: %v", err)
 		}
 	}
+}
+
+func TestDarwinHandoffLogicalRoots(t *testing.T) {
+	checkout := t.TempDir()
+	ctx := context.Background()
+	proof, err := digestGateInputs(ctx, checkout, "", nil)
+	require.NoError(t, err)
+	check := editCheck{name: "roots", cwd: gateRoot, failOnOutput: true,
+		argv: []string{"/bin/sh", "-ec", `
+			test "$1" = "$PWD" && test "$1" = "$ETHOS_HANDOFF_ROOT"
+			test "$2" = "$ETHOS_HANDOFF_RUNTIME" && test -d "$2"
+			test "$3" = "$ETHOS_HANDOFF_SCRATCH" && test "$3" = "$TMPDIR"
+			test "${1%/*}/r" = "$2" && test "${1%/*}/s" = "$3"
+			if (echo bad > "$2/denied") 2>/dev/null; then exit 1; fi
+			echo ok > "$3/result"
+			/bin/cat "$3/result"
+		`, "sh", "{root}", "{runtime}", "{scratch}"}}
+	result, err := executeHandoffSnapshot(ctx, checkout, checkout, proof, nil, check)
+	require.NoError(t, err)
+	require.Contains(t, result, "\nok\n")
+
+	check.argv = []string{"/bin/sh", "-ec", `
+		test "$1" = "$RUNTIME_PROBE"
+		test "$RUNTIME_PROBE" = "$ETHOS_HANDOFF_RUNTIME/bin/probe"
+		"$1"
+	`, "sh", "{runtime}/bin/probe"}
+	plan := darwinHandoffPlan{
+		env: map[string]string{"RUNTIME_PROBE": "{runtime}/bin/probe"},
+		prepareRuntime: func(_ context.Context, runtime string) error {
+			bin := filepath.Join(runtime, "bin")
+			if err := os.Mkdir(bin, 0o700); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(bin, "probe"), []byte("#!/bin/sh\necho runtime-ok\n"), 0o700)
+		},
+	}
+	result, err = runDarwinHandoffPlan(ctx, checkout, proof, nil, check, plan)
+	require.NoError(t, err)
+	require.Contains(t, result, "\nruntime-ok\n")
+}
+
+func TestDarwinHandoffScratchSupportsUnixSocket(t *testing.T) {
+	checkout, scratch := t.TempDir(), t.TempDir()
+	ctx := context.Background()
+	proof, err := digestGateInputs(ctx, checkout, "", nil)
+	require.NoError(t, err)
+	check := editCheck{name: "socket", cwd: gateRoot, failOnOutput: true,
+		argv: []string{"/usr/bin/perl", "-MSocket", "-MFile::Path=make_path", "-e", `
+			my $tmp = $ENV{TMPDIR};
+			my $dir = "$tmp/pytest-of-devin/pytest-100/popen-gw0/test_worker_environment0";
+			my $path = "$dir/worker.sock";
+			die "socket path too long: $path\n" if length($path) >= 104;
+			make_path($dir);
+			socket(my $socket, PF_UNIX, SOCK_STREAM, 0) or die "socket: $!\n";
+			bind($socket, pack_sockaddr_un($path)) or die "bind: $!\n";
+			listen($socket, 1) or die "listen: $!\n";
+			print "socket-ok\n";
+		`}}
+	result, err := executeHandoffSnapshot(ctx, scratch, checkout, proof, nil, check)
+	require.NoError(t, err)
+	require.Contains(t, result, "\nsocket-ok\n")
 }
 
 func TestDarwinHandoffStripe(t *testing.T) {

@@ -5,6 +5,7 @@ package hook
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -158,7 +159,23 @@ func darwinPathWithin(root, path string) bool {
 	return err == nil && filepath.IsLocal(rel)
 }
 
-func darwinHandoffInvocation(check editCheck, original, checkout, snapshot string, inputs []string) ([]string, string, error) {
+type darwinHandoffRoots struct {
+	checkout, runtime, scratch string
+}
+
+func (roots darwinHandoffRoots) expand(value string) string {
+	return strings.NewReplacer("{root}", roots.checkout, "{runtime}", roots.runtime, "{scratch}", roots.scratch).Replace(value)
+}
+
+type darwinHandoffPlan struct {
+	// The shared gate selects and verifies the platform artifact before preparing it here.
+	prepareRuntime func(context.Context, string) error
+	env            map[string]string
+	toolPaths      []string
+}
+
+func darwinHandoffInvocation(check editCheck, original, checkout string, roots darwinHandoffRoots, inputs []string) ([]string, string, error) {
+	snapshot := roots.checkout
 	rebase := func(path string) (string, bool) {
 		for _, root := range []string{gateRoot, original, checkout} {
 			rel, err := filepath.Rel(root, path)
@@ -179,8 +196,6 @@ func darwinHandoffInvocation(check editCheck, original, checkout, snapshot strin
 	var argv []string
 	for _, arg := range check.argv {
 		switch arg {
-		case "{root}":
-			argv = append(argv, snapshot)
 		case "{files}":
 			for _, input := range inputs {
 				argv = append(argv, filepath.Join(snapshot, input))
@@ -193,7 +208,7 @@ func darwinHandoffInvocation(check editCheck, original, checkout, snapshot strin
 					return nil, "", errors.New("a literal argument refers to the live checkout")
 				}
 			}
-			argv = append(argv, operand)
+			argv = append(argv, roots.expand(operand))
 		}
 	}
 	if len(argv) == 0 || argv[0] == "" {
@@ -221,7 +236,7 @@ func darwinTrustedToolchain(path string) string {
 	}
 }
 
-func darwinHandoffEnvironment(ctx context.Context, run string) ([]string, []string) {
+func darwinHandoffEnvironment(ctx context.Context, run string, roots darwinHandoffRoots, overrides map[string]string) ([]string, []string) {
 	var read []string
 	path := []string{"/usr/bin", "/bin", "/usr/sbin", "/sbin"}
 	var env []string
@@ -253,19 +268,33 @@ func darwinHandoffEnvironment(ctx context.Context, run string) ([]string, []stri
 			break
 		}
 	}
+	keys := make([]string, 0, len(overrides))
+	for key := range overrides {
+		switch key {
+		case "ETHOS_HANDOFF_ROOT", "ETHOS_HANDOFF_RUNTIME", "ETHOS_HANDOFF_SCRATCH", "TMPDIR":
+			continue
+		}
+		keys = append(keys, key)
+	}
 	env = append(env, "PATH="+strings.Join(path, ":"), "HOME="+filepath.Join(run, "home"),
-		"TMPDIR="+filepath.Join(run, "tmp"), "GOCACHE="+filepath.Join(run, "gocache"),
+		"TMPDIR="+roots.scratch, "GOCACHE="+filepath.Join(run, "gocache"),
 		"GOMODCACHE="+filepath.Join(run, "gomodcache"), "GOTOOLCHAIN=local", "GOPROXY=off",
 		"GIT_CONFIG_NOSYSTEM=1", "GIT_OPTIONAL_LOCKS=0", "LC_ALL=C")
+	slices.Sort(keys)
+	for _, key := range keys {
+		env = append(env, key+"="+roots.expand(overrides[key]))
+	}
+	env = append(env, "ETHOS_HANDOFF_ROOT="+roots.checkout, "ETHOS_HANDOFF_RUNTIME="+roots.runtime,
+		"ETHOS_HANDOFF_SCRATCH="+roots.scratch)
 	return env, read
 }
 
-func writeDarwinHandoffProfile(run, checkout, snapshot string, toolchain []string) (string, error) {
-	read := []string{snapshot, "/bin", "/sbin", "/usr/bin", "/usr/lib", "/usr/libexec", "/usr/share",
+func writeDarwinHandoffProfile(run, checkout string, roots darwinHandoffRoots, toolchain []string) (string, error) {
+	read := []string{roots.checkout, roots.runtime, "/bin", "/sbin", "/usr/bin", "/usr/lib", "/usr/libexec", "/usr/share",
 		"/System/Library", "/System/Volumes/Preboot/Cryptexes/OS", "/Library/Developer",
 		"/dev", "/private/var/db/timezone"}
 	read = append(read, toolchain...)
-	write := []string{filepath.Join(run, "home"), filepath.Join(run, "tmp"), filepath.Join(run, "gocache"),
+	write := []string{filepath.Join(run, "home"), roots.scratch, filepath.Join(run, "gocache"),
 		filepath.Join(run, "gomodcache")}
 	read = append(read, write...)
 	ancestors := map[string]bool{}
@@ -294,6 +323,7 @@ func writeDarwinHandoffProfile(run, checkout, snapshot string, toolchain []strin
 		"(allow file-read-metadata" + filters("literal", parents) + ")\n" +
 		"(allow file-read*" + filters("subpath", read) + ")\n" +
 		"(allow file-write*" + filters("subpath", write) + " (literal \"/dev/null\"))\n" +
+		"(allow network-bind network-inbound (local unix-socket (subpath " + strconv.Quote(roots.scratch) + ")))\n" +
 		"(allow process-exec file-map-executable" + filters("subpath", read) + ")\n" +
 		"(deny file-read* file-write*" + filters("subpath", []string{checkout}) + ")\n"
 	target := filepath.Join(run, "profile.sb")
@@ -307,7 +337,11 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 	return runDarwinHandoffSnapshot(ctx, scratch, checkout, proof, inputs, check)
 }
 
-func runDarwinHandoffSnapshot(ctx context.Context, scratch, checkout, proof string, inputs []string, check editCheck) (_ string, err error) {
+func runDarwinHandoffSnapshot(ctx context.Context, _, checkout, proof string, inputs []string, check editCheck) (string, error) {
+	return runDarwinHandoffPlan(ctx, checkout, proof, inputs, check, darwinHandoffPlan{})
+}
+
+func runDarwinHandoffPlan(ctx context.Context, checkout, proof string, inputs []string, check editCheck, plan darwinHandoffPlan) (_ string, err error) {
 	timeout := check.timeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second
@@ -327,17 +361,18 @@ func runDarwinHandoffSnapshot(ctx context.Context, scratch, checkout, proof stri
 	if err != nil {
 		return "", err
 	}
-	scratch, err = darwinHandoffScratch(scratch, checkout)
+	scratch, err := darwinHandoffScratch(checkout)
 	if err != nil {
 		return "", err
 	}
-	run, err := os.MkdirTemp(scratch, "e-")
-	if err != nil {
+	run := filepath.Join(scratch, "eh-"+rand.Text()[:8])
+	if err := os.Mkdir(run, 0o700); err != nil {
 		return "", err
 	}
 	defer os.RemoveAll(run)
-	snapshot := filepath.Join(run, "s")
-	for _, name := range []string{"s", "home", "tmp", "gocache", "gomodcache"} {
+	roots := darwinHandoffRoots{checkout: filepath.Join(run, "c"), runtime: filepath.Join(run, "r"), scratch: filepath.Join(run, "s")}
+	snapshot := roots.checkout
+	for _, name := range []string{"c", "r", "s", "home", "gocache", "gomodcache"} {
 		if err := os.Mkdir(filepath.Join(run, name), 0o700); err != nil {
 			return "", err
 		}
@@ -352,7 +387,12 @@ func runDarwinHandoffSnapshot(ctx context.Context, scratch, checkout, proof stri
 	if proof != got {
 		return "", errors.New("could not establish snapshot isolation: snapshot proof mismatch")
 	}
-	argv, cwd, err := darwinHandoffInvocation(check, original, checkout, snapshot, inputs)
+	if plan.prepareRuntime != nil {
+		if err := plan.prepareRuntime(ctx, roots.runtime); err != nil {
+			return "", err
+		}
+	}
+	argv, cwd, err := darwinHandoffInvocation(check, original, checkout, roots, inputs)
 	if err != nil {
 		return "", err
 	}
@@ -366,30 +406,18 @@ func runDarwinHandoffSnapshot(ctx context.Context, scratch, checkout, proof stri
 	if !gatePlanInputsPresent(snapshot, check.argv) {
 		return "", errors.New("could not establish snapshot isolation: undeclared snapshot operand")
 	}
-	env, toolchain := darwinHandoffEnvironment(ctx, run)
+	env, toolchain := darwinHandoffEnvironment(ctx, run, roots, plan.env)
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	profile, err := writeDarwinHandoffProfile(run, checkout, snapshot, toolchain)
+	profile, err := writeDarwinHandoffProfile(run, checkout, roots, append(toolchain, plan.toolPaths...))
 	if err != nil {
 		return "", err
 	}
 	return runDarwinHandoffCheck(ctx, profile, checkout, cwd, env, argv, check)
 }
 
-func darwinHandoffScratch(scratch, checkout string) (string, error) {
-	physical := func(path string) (string, error) {
-		abs, err := filepath.Abs(path)
-		if err != nil {
-			return "", err
-		}
-		return filepath.EvalSymlinks(abs)
-	}
-	dir, err := physical(scratch)
-	if err != nil || !darwinPathWithin(checkout, dir) {
-		return dir, err
-	}
-	// Gate cache scratch is in the checkout and cannot be exposed as cwd or argv.
+func darwinHandoffScratch(checkout string) (string, error) {
 	const systemTemp = "/private/tmp"
 	var info unix.Stat_t
 	if err := unix.Lstat(systemTemp, &info); err != nil {
