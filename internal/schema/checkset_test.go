@@ -81,6 +81,12 @@ func TestAdapterSchemaRuntimeParity(t *testing.T) {
 		require.Equal(t, valid, schema.Validate(value) == nil, "schema: %v, %s", schema.Validate(value), data)
 	}
 	snapshot := map[string]any{"profile": "linux-shell-v1", "inputs": []string{"gate.sh"}, "epoch": "v1"}
+	validate(t, map[string]any{"stage": "handoff", "run": []string{"{runtime}/tool", "{scratch}", "--input={root}/file"}}, true)
+	validate(t, map[string]any{"stage": "handoff", "adapter": "uv", "uv": []string{"ruff", "{runtime}/config"}}, true)
+	validate(t, map[string]any{"stage": "handoff", "run": []string{"tool", "{root}/{unknown}"}}, false)
+	validate(t, map[string]any{"stage": "handoff", "run": []string{"tool", "{file}"}}, false)
+	validate(t, map[string]any{"stage": "commit", "run": []string{"tool", "{scratch}"}}, false)
+	validate(t, map[string]any{"stage": "handoff", "run": []string{"/bin/sh", "{root}/gate.sh"}, "snapshot": snapshot}, false)
 	validate(t, map[string]any{"stage": "handoff", "run": []string{"/bin/sh", "gate.sh"}, "snapshot": snapshot}, true)
 	for _, input := range []string{"../gate.sh", "lib/../gate.sh", "lib/./gate.sh", "/gate.sh", "lib//gate.sh", "lib/", ".git/config", "lib/.tmp/cache", ".punt-labs/local/data", ".punt-labs/ethos/sessions/session", "lib/*.sh", "lib\\gate.sh"} {
 		t.Run(input, func(t *testing.T) {
