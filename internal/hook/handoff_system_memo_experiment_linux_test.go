@@ -2,6 +2,7 @@ package hook
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,4 +67,32 @@ func TestHandoffSystemMemoPersistsAndInvalidatesDigest(t *testing.T) {
 	require.Nil(t, loadHandoffSystemMemo(dir))
 	t.Setenv("HOME", dir)
 	require.NotNil(t, loadHandoffSystemMemo("/home/linuxbrew/.linuxbrew"))
+}
+
+func TestHandoffSystemMemoPersistsBoundedCurrentEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memo.json")
+	stale := strings.Repeat("f", 64)
+	entry := handoffMemoRecord{Digest: strings.Repeat("a", 64)}
+	memo := readHandoffSystemMemo(path)
+	memo.put(stale, entry)
+	memo.save()
+	memo = readHandoffSystemMemo(path)
+	require.Contains(t, memo.prev, stale)
+
+	const count = 90_000
+	for i := count - 1; i >= 0; i-- {
+		memo.put(fmt.Sprintf("%064x", i), entry)
+	}
+	memo.save()
+
+	saved := readHandoffSystemMemo(path).prev
+	require.NotContains(t, saved, stale)
+	require.NotEmpty(t, saved)
+	require.Less(t, len(saved), count)
+	for i := range len(saved) {
+		key := fmt.Sprintf("%064x", i)
+		if saved[key] != entry {
+			t.Fatalf("deterministic retained entries are missing %s", key)
+		}
+	}
 }

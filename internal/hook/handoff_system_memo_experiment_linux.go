@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"syscall"
 
@@ -16,7 +18,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const memoExperimentLimit = 16 << 20
+const (
+	memoExperimentLimit = 16 << 20
+	// Includes both hex strings, five 64-bit integers, JSON fields and separators.
+	memoExperimentRecordBytes = 320
+	memoExperimentEntries     = (memoExperimentLimit - 2) / memoExperimentRecordBytes
+)
 
 type handoffMemoKey struct {
 	Dev, Inode         uint64
@@ -101,6 +108,12 @@ func (m *handoffSystemMemo) put(path string, entry handoffMemoRecord) {
 }
 
 func (m *handoffSystemMemo) save() {
+	if len(m.next) > memoExperimentEntries {
+		keys := slices.Sorted(maps.Keys(m.next))
+		for _, key := range keys[memoExperimentEntries:] {
+			delete(m.next, key)
+		}
+	}
 	if len(m.next) == len(m.prev) {
 		unchanged := true
 		for path, entry := range m.next {
