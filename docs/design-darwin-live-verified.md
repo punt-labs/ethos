@@ -45,13 +45,15 @@ Apply the same admission and time budget as for snapshot checks. Arm
 both guards before taking the opening tree key and keep them active
 through the closing key and cutoff. Run the unchanged gate on the live
 checkout. Publish or reuse a pass or failure only when the keys agree,
-both guards establish coverage through the cutoff, and neither fires.
-Any change, uncertainty, or inability to arm or drain either guard
+both guards establish coverage through the cutoff, and neither vetoes
+under the rules below. A detected change, unresolved coverage, or
+inability to arm or drain either guard
 visibly defers; never cache it as a terminal result. The verdict log
 uses `isolation: live-verified`, not snapshot isolation.
 
-1. **FSEvents:** watch keyed paths and Git metadata through an event ID
-   sampled after taking the closing key. Delivery may be late or
+1. **FSEvents:** enable file-level events and watch keyed paths and Git
+   metadata through an event ID sampled after taking the closing key.
+   Delivery may be late or
    coalesced. Treat `MustScanSubDirs`, `UserDropped`, `KernelDropped`,
    and `RootChanged` as vetoes. If the stream cannot establish coverage
    through the cutoff, defer.
@@ -67,10 +69,26 @@ uses `isolation: live-verified`, not snapshot isolation.
    directories where a newly created file could enter the keyed set,
    even if they contain no keyed files yet. Register `NOTE_WRITE`,
    `NOTE_EXTEND`, `NOTE_RENAME`, `NOTE_DELETE`, and `NOTE_REVOKE` on
-   these directories. Any directory-entry event vetoes, including
-   create-then-delete of an untracked, non-ignored file whose absence
-   leaves both keys equal. Coalescing a burst is safe here because a
-   single event is enough to veto.
+   these directories. A directory-entry event vetoes unless both
+   conditions hold: file-level FSEvents reports one or more paths
+   for that directory over the watch window and every reported path
+   is Git-ignored, with no drop or other coverage-loss flags; and the
+   closing rescan finds the same non-ignored entry names and inodes
+   as the opening scan. If either condition fails or cannot be
+   verified, defer. This exception does not excuse a Git metadata or
+   keyed-file veto, or a watched directory being moved, removed, or
+   revoked. With no attributable ignored output, a single coalesced
+   directory event is enough to catch an untracked, non-ignored file
+   that is created and removed between equal keys.
+
+   **Residual:** if a gate also writes ignored output in a watched
+   directory, FSEvents can miss a non-ignored create-then-delete in
+   the same window. The closing entry list then matches, and the
+   directory event may be attributed to the ignored output alone.
+   Profiles should direct outputs into dedicated ignored directories
+   with no keyed paths. Create those directories before the opening
+   scan so the gate writes inside unwatched directories rather than
+   creating their entries in watched parents.
 3. **Descriptor budget:** reserve one fd per keyed file, Git metadata
    guard, and watched directory. Before adding directory guards, the
    counts were about 285 vnode fds on Quarry and 437 modeled on Koch.
