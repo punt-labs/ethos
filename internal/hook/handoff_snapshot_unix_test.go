@@ -33,17 +33,18 @@ func TestHandoffSnapshotCapabilityAvailability(t *testing.T) {
 	require.Equal(t, "mach_lookup unavailable in linux snapshot", unavailableSnapshotCapability("linux", []string{"pty", "mach_lookup"}))
 }
 
-func TestHandoffLiveVerifiedDefersWithoutWatchers(t *testing.T) {
+func TestHandoffLiveVerifiedDefersWithoutAdmission(t *testing.T) {
 	var logs bytes.Buffer
 	ctx := diagnostic.WithLogger(context.Background(), slog.New(slog.NewTextHandler(&logs, nil)))
 	ctx, _ = diagnostic.WithHookInvocation(ctx)
 	root := t.TempDir()
 	check := checkset.Check{Name: "live-gate", Stage: "handoff", Run: []string{"/bin/false"}, Files: checkset.Patterns{All: true},
-		WorktreeSnapshot: &checkset.WorktreeSnapshot{Isolation: checkset.IsolationLiveVerified}}
+		HandoffPolicySlug: "project",
+		WorktreeSnapshot:  &checkset.WorktreeSnapshot{Isolation: checkset.IsolationLiveVerified}}
 	got := runHandoffGate(ctx, root, "worker", []string{"file"}, check, nil)
 	reason := "live-verified unavailable in linux snapshot"
 	if runtime.GOOS == "darwin" {
-		reason = "live-verified FSEvents cutoff unverified in darwin"
+		reason = "live-verified not approved (run: ethos handoff approve-live project)"
 	}
 	require.Contains(t, got.Advisory, reason)
 	require.Contains(t, logs.String(), "isolation=live-verified")
