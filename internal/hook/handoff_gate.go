@@ -60,6 +60,12 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		}
 		return f
 	}
+	if check.InvalidSnapshotSidecar {
+		return deferGate("invalid snapshot sidecar")
+	}
+	if check.WorktreeSnapshot != nil {
+		return deferGate("worktree snapshot runner unavailable")
+	}
 	if check.Snapshot == nil {
 		return deferGate("no declared snapshot profile")
 	}

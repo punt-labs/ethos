@@ -42,6 +42,9 @@ type Check struct {
 	Cwd          string            `yaml:"cwd,omitempty" json:"cwd,omitempty"`
 	Snapshot     *Snapshot         `yaml:"snapshot,omitempty" json:"snapshot,omitempty"`
 	fields       map[string]bool
+
+	WorktreeSnapshot       *WorktreeSnapshot `yaml:"-" json:"worktree_snapshot,omitempty"`
+	InvalidSnapshotSidecar bool              `yaml:"-" json:"invalid_snapshot_sidecar,omitempty"`
 }
 
 type Snapshot struct {
@@ -57,7 +60,10 @@ func (c *Check) UnmarshalYAML(node *yaml.Node) error {
 	for i := range typ.NumField() {
 		f := typ.Field(i)
 		if f.IsExported() {
-			known[strings.Split(f.Tag.Get("yaml"), ",")[0]] = true
+			name := strings.Split(f.Tag.Get("yaml"), ",")[0]
+			if name != "-" {
+				known[name] = true
+			}
 		}
 	}
 	var values map[any]yaml.Node
