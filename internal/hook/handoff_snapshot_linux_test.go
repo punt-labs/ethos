@@ -1063,8 +1063,7 @@ func TestHandoffSnapshotTeardownFailureIsNotCached(t *testing.T) {
 	var blocked bool
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{
 		ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
-			// The child has exited but the lease owner has not removed its scratch yet.
-			if !blocked && attr.Key == "outcome" && attr.Value.String() == "completed" {
+			if !blocked && attr.Key == "outcome" && attr.Value.String() == "launched" {
 				require.NoError(t, os.Chmod(cache, 0o500))
 				blocked = true
 				t.Cleanup(func() { require.NoError(t, os.Chmod(cache, 0o700)) })
@@ -1079,7 +1078,7 @@ func TestHandoffSnapshotTeardownFailureIsNotCached(t *testing.T) {
 
 	feedback := run()
 	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
-	require.True(t, blocked, "snapshot must complete before teardown is blocked")
+	require.True(t, blocked, "snapshot must launch before teardown is blocked")
 	require.Contains(t, feedback.Blocking, "cannot clean up the snapshot")
 	require.Contains(t, feedback.Blocking, os.ErrPermission.Error())
 	require.Equal(t, feedback.Blocking, feedback.Notice)
