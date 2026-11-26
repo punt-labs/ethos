@@ -535,10 +535,6 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 	if err := unix.Capset(&unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}, &caps[0]); err != nil {
 		return err
 	}
-	phase = "collect sandbox coverage"
-	if err := reportCoverage(); err != nil {
-		return err
-	}
 	if plan.Worktree != nil {
 		phase = "verify mounted system inputs"
 		if err := verifyMountedHandoffSystem(plan.Worktree.System, env); err != nil {
@@ -562,6 +558,11 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 			return err
 		}
 	}
+	phase = "collect sandbox coverage"
+	if err := reportCoverage(); err != nil {
+		return err
+	}
+	phase = "start sandbox command"
 	if _, err := io.WriteString(status, handoffSandboxReady); err != nil {
 		return err
 	}
