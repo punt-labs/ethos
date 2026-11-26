@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Declare a Linux amd64 snapshot profile and offline runtime for the existing
+  handoff `make check` gate.
+
 ### Fixed
 
 - Verifier writes accept macOS checkout path aliases such as `/var` without

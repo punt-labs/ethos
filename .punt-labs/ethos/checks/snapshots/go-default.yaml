@@ -1,0 +1,86 @@
+checks:
+  full-gate:
+    profile: linux-worktree-v1
+    epoch: ethos-v1
+    sources:
+      mode: worktree
+    runtime:
+      platforms:
+        linux-amd64:
+          bundle: ethos-handoff-linux-amd64.tar.gz
+          sha256: e398b44a13af0567f63159fd64987a4aba852b27c3b2c9f9a89d8fe86a7023fd
+          url: https://github.com/punt-labs/ethos/releases/download/handoff-runtime-v1/ethos-handoff-linux-amd64.tar.gz
+          path: ["{runtime}/go/bin", "{runtime}/bin", "{runtime}/python/bin", "{runtime}/node/bin", /usr/bin, /bin]
+          env:
+            CC: gcc
+            CI: "1"
+            FUZZLIB: "{runtime}/fuzzlib"
+            GOBIN: "{runtime}/bin"
+            GOCACHE: "{scratch}/go-build"
+            GOMODCACHE: "{scratch}/home/go/pkg/mod"
+            GOPROXY: "off"
+            MYPY_CACHE_DIR: "{scratch}/mypy-cache"
+            PYTHONDONTWRITEBYTECODE: "1"
+            RUFF_CACHE_DIR: "{scratch}/ruff-cache"
+            UV_CACHE_DIR: "{scratch}/uv-cache"
+            UV_LINK_MODE: copy
+            UV_OFFLINE: "1"
+            UV_PROJECT_ENVIRONMENT: "{scratch}/e2e-venv"
+            UV_PYTHON: "{runtime}/python/bin/python3.13"
+            UV_PYTHON_DOWNLOADS: never
+            npm_config_cache: "{scratch}/npm-cache"
+            npm_config_offline: "true"
+            npm_config_update_notifier: "false"
+    system:
+      tools:
+        - as
+        - awk
+        - bash
+        - busybox
+        - cat
+        - chmod
+        - cmp
+        - cp
+        - diff
+        - dirname
+        - env
+        - find
+        - gcc
+        - git
+        - grep
+        - head
+        - jq
+        - ld
+        - ln
+        - make
+        - mkdir
+        - mkfifo
+        - mktemp
+        - mv
+        - perl
+        - ps
+        - readlink
+        - rm
+        - sed
+        - sh
+        - sleep
+        - sort
+        - ssh-keygen
+        - strace
+        - tar
+        - touch
+        - tr
+        - uname
+        - wc
+        - xargs
+    scratch:
+      checkout: [.tmp, tests/e2e/.pytest_cache]
+      files: [coverage.out]
+      seed:
+        "{scratch}/home/go/pkg/mod": "{runtime}/cache/go-mod"
+        "{scratch}/npm-cache": "{runtime}/cache/npm"
+        "{scratch}/uv-cache": "{runtime}/cache/uv"
+    git:
+      base_ref: refs/remotes/origin/main
+      refs: [refs/tags/v4.8.0]
+    network: loopback
