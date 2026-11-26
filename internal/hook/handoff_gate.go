@@ -456,7 +456,22 @@ func handoffGateInputs(ctx context.Context, root string, inputs []string, preser
 		return "", "", err
 	}
 	proof, err := digestGateInputsWithMode(ctx, root, "", inputs, preserveMode)
-	return state, proof, err
+	if err != nil {
+		return "", "", err
+	}
+	if preserveMode {
+		current, err := worktreeSnapshotInputs(ctx, root)
+		if err != nil {
+			return "", "", err
+		}
+		slices.Sort(current)
+		want := slices.Clone(inputs)
+		slices.Sort(want)
+		if !slices.Equal(current, want) {
+			return "", "", errors.New("snapshot input selection changed")
+		}
+	}
+	return state, proof, nil
 }
 
 func digestGateInputs(ctx context.Context, root, dest string, inputs []string) (string, error) {

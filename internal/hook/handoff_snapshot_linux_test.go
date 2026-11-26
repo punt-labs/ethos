@@ -50,6 +50,18 @@ func TestHandoffSnapshotAcceptsLargeInputManifest(t *testing.T) {
 	require.Empty(t, failure)
 }
 
+func TestHandoffWorktreeProofRejectsStaleInputSelection(t *testing.T) {
+	root, _ := postEditFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), gateInputTime)
+	defer cancel()
+	writeFile(t, filepath.Join(root, "first"), "original")
+	inputs, err := worktreeSnapshotInputs(ctx, root)
+	require.NoError(t, err)
+	writeFile(t, filepath.Join(root, "new-input"), "appeared after discovery")
+	_, _, err = handoffGateInputs(ctx, root, inputs, true)
+	require.ErrorContains(t, err, "snapshot input selection changed")
+}
+
 func TestHandoffWaiterKeepsOwnerResultAcrossStripeCollision(t *testing.T) {
 	root, _ := postEditFixture(t)
 	p, err := (resolve.Located{Checkout: root, Store: root}).Layout()
