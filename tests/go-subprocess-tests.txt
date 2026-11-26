@@ -213,6 +213,7 @@ cmd/ethos TestFindMissions_WorkerFilter
 cmd/ethos TestFirstCommitAfterUpgradeDoesNotCarryRepairDeletions
 cmd/ethos TestHandoffAgentApprovalLeavesCheckoutUnchanged
 cmd/ethos TestHandoffApprovalLeavesCheckoutUnchanged
+cmd/ethos TestHandoffSnapshotLaunchVerdicts
 cmd/ethos TestHookAuditSnapshot_ConfigReplacement
 cmd/ethos TestHookCommitMessageUsesLocatedSnapshot
 cmd/ethos TestHookCommitMsgExitCodes
