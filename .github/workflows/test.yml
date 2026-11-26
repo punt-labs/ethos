@@ -115,10 +115,18 @@ jobs:
           fi
           packages=$(bash "$selector" "$SHARD")
           mapfile -t selected <<< "$packages"
-          if [[ "$SHARD" == hook && "$SNAPSHOT" != base ]]; then
-            go test -race -count=1 -v -run '^TestHandoff(SandboxReportsMissingSnapshotCwd|RootOperandIsNotLive)$' "${selected[@]}" | tee "$RUNNER_TEMP/handoff-sandbox-tests.log"
-            grep -Fq -- '--- PASS: TestHandoffSandboxReportsMissingSnapshotCwd ' "$RUNNER_TEMP/handoff-sandbox-tests.log"
-            grep -Fq -- '--- PASS: TestHandoffRootOperandIsNotLive ' "$RUNNER_TEMP/handoff-sandbox-tests.log"
+          if [[ "$SHARD" == hook ]]; then
+            pattern='^TestHandoff(SandboxReportsMissingSnapshotCwd|RootOperandIsNotLive|SandboxReportsHighExitStatuses)$'
+            listed=$(go test -race -list "$pattern" "${selected[@]}")
+            mapfile -t handoff_tests < <(grep -Ex "$pattern" <<< "$listed")
+            if ((${#handoff_tests[@]})); then
+              go test -race -count=1 -v -run "$pattern" "${selected[@]}" | tee "$RUNNER_TEMP/handoff-sandbox-tests.log"
+              for handoff_test in "${handoff_tests[@]}"; do
+                grep -Fq -- "--- PASS: $handoff_test " "$RUNNER_TEMP/handoff-sandbox-tests.log"
+              done
+            else
+              echo 'No handoff sandbox proof tests in this snapshot.'
+            fi
           fi
           go test -race -count=1 -timeout 30m -p 2 -coverprofile=coverage.out "${selected[@]}"
       - name: Upload shard coverage
@@ -324,9 +332,17 @@ jobs:
       - name: Verify sandbox tests ran without skipping
         shell: bash
         run: |
-          go test -race -count=1 -v -run '^TestHandoff(SandboxReportsMissingSnapshotCwd|RootOperandIsNotLive)$' ./internal/hook | tee "$RUNNER_TEMP/handoff-sandbox-tests.log"
-          grep -Fq -- '--- PASS: TestHandoffSandboxReportsMissingSnapshotCwd ' "$RUNNER_TEMP/handoff-sandbox-tests.log"
-          grep -Fq -- '--- PASS: TestHandoffRootOperandIsNotLive ' "$RUNNER_TEMP/handoff-sandbox-tests.log"
+          pattern='^TestHandoff(SandboxReportsMissingSnapshotCwd|RootOperandIsNotLive|SandboxReportsHighExitStatuses)$'
+          listed=$(go test -race -list "$pattern" ./internal/hook)
+          mapfile -t handoff_tests < <(grep -Ex "$pattern" <<< "$listed")
+          if ((${#handoff_tests[@]})); then
+            go test -race -count=1 -v -run "$pattern" ./internal/hook | tee "$RUNNER_TEMP/handoff-sandbox-tests.log"
+            for handoff_test in "${handoff_tests[@]}"; do
+              grep -Fq -- "--- PASS: $handoff_test " "$RUNNER_TEMP/handoff-sandbox-tests.log"
+            done
+          else
+            echo 'No handoff sandbox proof tests in this snapshot.'
+          fi
       - name: Report statement coverage of Go subprocess suites
         run: make coverage-subprocess
       - name: Upload subprocess statement coverage
