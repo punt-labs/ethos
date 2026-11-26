@@ -1131,11 +1131,30 @@ print("network proof: " + mode)
 	}
 }
 
+func TestHandoffSandboxUnavailableSkipsOverlayMountFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name, reason string
+		skip         bool
+	}{
+		{"unavailable overlay", handoffScratchOverlayPhase + `: mount overlay for ".": operation not permitted`, true},
+		{"overlay entry bind", handoffScratchOverlayPhase + `: protect overlay entry "source": operation not permitted`, false},
+		{"scratch violation", `scratch-violation: "/checkout/output.tmp"`, false},
+	} {
+		continued := false
+		t.Run(tc.name, func(t *testing.T) {
+			skipIfHandoffSandboxUnavailable(t, errors.New("handoff checks deferred (gate): ("+tc.reason+"). Run the explicit project gate"))
+			continued = true
+		})
+		require.Equal(t, !tc.skip, continued, tc.name)
+	}
+}
+
 func skipIfHandoffSandboxUnavailable(t *testing.T, err error) {
 	t.Helper()
 	if err != nil && (strings.Contains(err.Error(), "isolation unavailable on this host") ||
 		strings.Contains(err.Error(), "make mount propagation private: permission denied") ||
-		strings.Contains(err.Error(), "make mount propagation private: operation not permitted")) {
+		strings.Contains(err.Error(), "make mount propagation private: operation not permitted") ||
+		strings.Contains(err.Error(), handoffScratchOverlayPhase+": mount overlay for ")) {
 		t.Skip(err.Error())
 	}
 }
