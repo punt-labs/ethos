@@ -1,12 +1,23 @@
 package hook
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDarwinHandoffLiveDefersUnkeyedSymlink(t *testing.T) {
+	root := approvedDarwinLiveGate(t, `[/bin/sh, -c, 'test "$(cat gate-input)" = pass']`, "")
+	target := filepath.Join(root, "ignored-scratch", "value")
+	writeFile(t, target, "pass")
+	require.NoError(t, os.Symlink("ignored-scratch/value", filepath.Join(root, "gate-input")))
+	ctx, _ := diagnostic.WithHookInvocation(t.Context())
+	result := RunStageChecks(ctx, root, "worker", "handoff")
+	require.Contains(t, result.Advisory, "symlink target is outside the keyed inputs", "%+v", result)
+}
 
 func TestDarwinHandoffLiveExit127Blocks(t *testing.T) {
 	root := approvedDarwinLiveGate(t, "[/bin/sh, -c, missing-ethos-test-command]", "")

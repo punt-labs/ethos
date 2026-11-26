@@ -832,6 +832,9 @@ func digestGateInputPaths(ctx context.Context, root, dest string, inputs []strin
 		var dst io.Writer = h
 		var part hash.Hash
 		if fingerprints != nil {
+			if err := verifyLiveSymlink(src, input, inputs); err != nil {
+				return "", &os.PathError{Op: "fingerprint", Path: input, Err: err}
+			}
 			part = sha256.New()
 			dst = io.MultiWriter(h, part)
 		}
@@ -851,6 +854,26 @@ func digestGateInputPaths(ctx context.Context, root, dest string, inputs []strin
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func verifyLiveSymlink(src *os.Root, input string, inputs []string) error {
+	link, err := src.Readlink(input)
+	if err != nil {
+		return nil
+	}
+	if parent := filepath.Dir(input); parent != "." {
+		dir, err := openGateInput(src, parent)
+		if err != nil {
+			return err
+		}
+		_ = dir.Close()
+	}
+	target := filepath.Join(filepath.Dir(input), link)
+	_, keyed := slices.BinarySearch(inputs, target)
+	if filepath.IsAbs(link) || filepath.Clean(link) != link || !filepath.IsLocal(target) || !keyed {
+		return errors.New("symlink target is outside the keyed inputs")
+	}
+	return nil
 }
 
 func copyGateInput(ctx context.Context, h io.Writer, src *os.Root, dest, input string, budget int, preserveMode bool) (int, error) {
