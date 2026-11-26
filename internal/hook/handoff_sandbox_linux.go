@@ -43,6 +43,7 @@ type handoffSandboxManifest struct {
 type handoffSandboxWorktree struct {
 	Environment     []string
 	CheckoutScratch []string
+	ScratchSeed     map[string]string
 	System          handoffSystemPlan
 	Loopback        bool
 	GitDir          string
@@ -163,7 +164,7 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		cwd = worktreeSandboxPath(checkout, cwd)
 		env = append(env, "ETHOS_HANDOFF_CHECKOUT_NAME="+filepath.Base(checkout))
 		plan.Worktree = &handoffSandboxWorktree{
-			Environment: env, CheckoutScratch: profile.Scratch.Checkout, System: worktree.system,
+			Environment: env, CheckoutScratch: profile.Scratch.Checkout, ScratchSeed: profile.Scratch.Seed, System: worktree.system,
 			Loopback: profile.Network == "loopback", GitDir: worktree.gitDir, RuntimeDir: worktree.runtimeDir,
 		}
 	}
@@ -342,6 +343,10 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 			if errors.Is(err, errHandoffScratchShadowsInput) {
 				phase = errHandoffScratchShadowsInput.Error()
 			}
+			return err
+		}
+		phase = "copy private scratch.seed"
+		if err := seedHandoffScratch(root, plan.Worktree.ScratchSeed); err != nil {
 			return err
 		}
 		if plan.Worktree.GitDir != "" {

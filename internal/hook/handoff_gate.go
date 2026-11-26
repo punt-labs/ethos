@@ -348,8 +348,6 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 
 func unsupportedWorktreeField(profile *checkset.WorktreeSnapshot) string {
 	switch {
-	case len(profile.Scratch.Seed) != 0:
-		return "scratch.seed"
 	case len(profile.Scratch.Files) != 0:
 		return "scratch.files"
 	case profile.Prehydrate != nil:
