@@ -317,14 +317,15 @@ func worktreeSandboxPath(checkout, value string) string {
 	return value
 }
 
-func gatePlanInputsPresent(snapshot string, argv, checkoutScratch []string) bool {
+func gatePlanInputsPresent(snapshot string, argv []string, worktree *handoffSandboxWorktree) bool {
 	checkout, err := os.OpenRoot(snapshot)
 	if err != nil {
 		return false
 	}
 	defer checkout.Close()
+	script := gateScriptOperand(argv)
 operands:
-	for _, arg := range argv {
+	for i, arg := range argv {
 		if arg != gateRoot && !strings.HasPrefix(arg, gateRoot+"/") {
 			continue
 		}
@@ -332,9 +333,12 @@ operands:
 		if !filepath.IsLocal(rel) {
 			return false
 		}
-		for _, scratch := range checkoutScratch {
-			if insideGatePath(scratch, rel) {
-				continue operands
+		if worktree != nil {
+			for _, scratch := range worktree.CheckoutScratch {
+				if len(worktree.Prehydrate) != 0 && insideGatePath(scratch, rel) ||
+					i != 0 && i != script && insideGatePath(scratch, path.Dir(rel)) {
+					continue operands
+				}
 			}
 		}
 		if _, err := checkout.Lstat(rel); err != nil {
@@ -342,6 +346,48 @@ operands:
 		}
 	}
 	return true
+}
+
+func gateScriptOperand(argv []string) int {
+	if len(argv) < 2 {
+		return -1
+	}
+	name := path.Base(argv[0])
+	shell := slices.Contains([]string{"sh", "bash", "dash", "ash", "ksh", "zsh"}, name)
+	version, python := strings.CutPrefix(name, "python")
+	python = python && strings.Trim(version, "0123456789.") == ""
+	if !shell && !python {
+		return -1
+	}
+args:
+	for i := 1; i < len(argv); i++ {
+		arg := argv[i]
+		switch {
+		case arg == "--":
+			return i + 1
+		case arg == "-":
+			return -1
+		case strings.HasPrefix(arg, "--"):
+			if shell && (arg == "--init-file" || arg == "--rcfile") || python && arg == "--check-hash-based-pycs" {
+				i++
+			}
+		case strings.HasPrefix(arg, "-") || shell && strings.HasPrefix(arg, "+"):
+			for j, flag := range arg[1:] {
+				switch {
+				case shell && arg[0] == '-' && (flag == 'c' || flag == 's'), python && (flag == 'c' || flag == 'm'):
+					return -1
+				case shell && (flag == 'o' || flag == 'O'), python && (flag == 'W' || flag == 'X'):
+					if j+2 == len(arg) {
+						i++
+					}
+					continue args
+				}
+			}
+		default:
+			return i
+		}
+	}
+	return -1
 }
 
 func resolveWorktreeExecutable(name string, env []string) (string, error) {
@@ -439,7 +485,6 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 		return unix.ENOTDIR
 	}
 	env := sandboxEnvironment
-	var generatedCheckoutScratch []string
 	if plan.Worktree != nil {
 		if plan.Worktree.RuntimeDir != "" {
 			phase = "mount verified runtime bundle"
@@ -453,9 +498,6 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 				phase = errHandoffScratchShadowsInput.Error()
 			}
 			return err
-		}
-		if len(plan.Worktree.Prehydrate) != 0 {
-			generatedCheckoutScratch = plan.Worktree.CheckoutScratch
 		}
 		phase = "copy private scratch.seed"
 		if err := seedHandoffScratch(root, plan.Worktree.ScratchSeed); err != nil {
@@ -474,7 +516,7 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 		env = plan.Worktree.Environment
 	}
 	phase = handoffMaterializePhase
-	if !gatePlanInputsPresent(checkout, argv, generatedCheckoutScratch) {
+	if !gatePlanInputsPresent(checkout, argv, plan.Worktree) {
 		return errors.New("snapshot inputs did not match the invocation")
 	}
 	if err := unix.Mount("", checkout, "", unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV, ""); err != nil {

@@ -9,6 +9,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestHandoffWorktreeCreatesCheckoutScratchOutputWithoutPrehydrate(t *testing.T) {
+	root, run := handoffMetadataFixture(t, `set -eu
+printf '%s\n' output > "$1"
+test "$(cat "$1")" = output
+`)
+	checkPolicy(t, root, "project", "  - name: metadata\n    stage: handoff\n    files: all\n    run: [sh, /checkout/gate.sh, /checkout/build/output]\n")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml"), `checks:
+  metadata:
+    profile: linux-worktree-v1
+    epoch: metadata-v1
+    sources: {mode: worktree}
+    scratch: {checkout: [build]}
+`)
+	feedback := run()
+	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+	require.Equal(t, StageFeedback{}, feedback)
+	require.NoDirExists(t, filepath.Join(root, "build"))
+}
+
 func TestHandoffWorktreeMissingCheckoutScratchOperandWithoutPrehydrate(t *testing.T) {
 	root, run := handoffMetadataFixture(t, "exit 97\n")
 	checkPolicy(t, root, "project", "  - name: metadata\n    stage: handoff\n    files: all\n    run: [sh, /checkout/build/gen.sh]\n")
