@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Linux handoff snapshots support `scratch.files` and defer without caching
-  when a post-run overlay audit detects changes to undeclared paths.
+  when overlay events or the final overlay contents show undeclared changes.
 
 ### Fixed
 

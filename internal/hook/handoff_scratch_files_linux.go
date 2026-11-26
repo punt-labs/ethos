@@ -2,8 +2,10 @@ package hook
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -59,10 +61,8 @@ func mountHandoffScratchFiles(checkout, state string, overlays []handoffScratchF
 	}
 	for i, overlay := range overlays {
 		upper, work := overlay.dirs(state, i)
-		for _, dir := range []string{upper, work} {
-			if err := os.MkdirAll(dir, 0o700); err != nil {
-				return err
-			}
+		if err := os.Mkdir(work, 0o700); err != nil {
+			return err
 		}
 		base := filepath.Join(lower, overlay.parent)
 		if strings.ContainsAny(base+upper+work, `,:\`) {
@@ -98,8 +98,91 @@ func protectHandoffOverlayEntries(lower, target string, declared map[string]bool
 	return nil
 }
 
-func auditHandoffScratchFiles(state string, overlays []handoffScratchFileOverlay) error {
-	var violations []string
+type handoffScratchFileWatch struct {
+	file    *os.File
+	parents map[int32]handoffScratchFileOverlay
+}
+
+func watchHandoffScratchFiles(state string, overlays []handoffScratchFileOverlay) (*handoffScratchFileWatch, error) {
+	fd, err := unix.InotifyInit1(unix.IN_NONBLOCK | unix.IN_CLOEXEC)
+	if err != nil {
+		return nil, err
+	}
+	w := &handoffScratchFileWatch{os.NewFile(uintptr(fd), "handoff scratch watch"), make(map[int32]handoffScratchFileOverlay, len(overlays))}
+	for i, overlay := range overlays {
+		upper, _ := overlay.dirs(state, i)
+		if err := os.MkdirAll(upper, 0o700); err != nil {
+			_ = w.file.Close()
+			return nil, err
+		}
+		const mask = unix.IN_CREATE | unix.IN_MOVED_TO | unix.IN_MOVED_FROM | unix.IN_DELETE | unix.IN_ATTRIB |
+			unix.IN_DELETE_SELF | unix.IN_MOVE_SELF | unix.IN_DONT_FOLLOW | unix.IN_ONLYDIR
+		wd, err := unix.InotifyAddWatch(fd, upper, mask)
+		if err != nil {
+			_ = w.file.Close()
+			return nil, err
+		}
+		w.parents[int32(wd)] = overlay
+	}
+	return w, nil
+}
+
+func drainHandoffScratchEvents(fd int, visit func(int32, uint32, string) error) error {
+	var buf [4096]byte
+	for {
+		n, err := unix.Read(fd, buf[:])
+		switch err {
+		case unix.EAGAIN:
+			return nil
+		case unix.EINTR:
+			continue
+		case nil:
+		default:
+			return err
+		}
+		if n == 0 {
+			return io.ErrUnexpectedEOF
+		}
+		for data := buf[:n]; len(data) > 0; {
+			if len(data) < unix.SizeofInotifyEvent {
+				return io.ErrUnexpectedEOF
+			}
+			wd := int32(binary.NativeEndian.Uint32(data[:4]))
+			mask := binary.NativeEndian.Uint32(data[4:8])
+			length := binary.NativeEndian.Uint32(data[12:16])
+			data = data[unix.SizeofInotifyEvent:]
+			if uint64(length) > uint64(len(data)) {
+				return io.ErrUnexpectedEOF
+			}
+			if visit != nil {
+				name, _, _ := bytes.Cut(data[:length], []byte{0})
+				if err := visit(wd, mask, string(name)); err != nil {
+					return err
+				}
+			}
+			data = data[length:]
+		}
+	}
+}
+
+func (w *handoffScratchFileWatch) audit(state string, overlays []handoffScratchFileOverlay) error {
+	violated := map[string]bool{}
+	watchErr := drainHandoffScratchEvents(int(w.file.Fd()), func(wd int32, mask uint32, name string) error {
+		if mask&unix.IN_Q_OVERFLOW != 0 {
+			return errors.New("scratch-violation: scratch.files event queue overflow")
+		}
+		overlay, ok := w.parents[wd]
+		if !ok {
+			return errors.New("cannot audit scratch.files overlay: unexpected watch descriptor")
+		}
+		if !overlay.names[name] {
+			violated[filepath.Join(gateRoot, overlay.parent, name)] = true
+		}
+		return nil
+	})
+	if watchErr != nil {
+		return watchErr
+	}
 	for i, overlay := range overlays {
 		upper, _ := overlay.dirs(state, i)
 		info, err := os.Lstat(upper)
@@ -107,7 +190,7 @@ func auditHandoffScratchFiles(state string, overlays []handoffScratchFileOverlay
 			return errors.New("cannot audit scratch.files overlay")
 		}
 		if info.Mode() != os.ModeDir|0o700 || scratchFileOverlayHasXattr(upper) {
-			violations = append(violations, filepath.Join(gateRoot, overlay.parent))
+			violated[filepath.Join(gateRoot, overlay.parent)] = true
 			continue
 		}
 		entries, err := os.ReadDir(upper)
@@ -116,13 +199,18 @@ func auditHandoffScratchFiles(state string, overlays []handoffScratchFileOverlay
 		}
 		for _, entry := range entries {
 			if !overlay.names[entry.Name()] || !entry.Type().IsRegular() {
-				violations = append(violations, filepath.Join(gateRoot, overlay.parent, entry.Name()))
+				violated[filepath.Join(gateRoot, overlay.parent, entry.Name())] = true
 			}
 		}
 	}
-	if len(violations) == 0 {
+	if len(violated) == 0 {
 		return nil
 	}
+	violations := make([]string, 0, len(violated))
+	for name := range violated {
+		violations = append(violations, name)
+	}
+	sort.Strings(violations)
 	const maxReportedPaths = 20
 	var reported []string
 	for _, name := range violations[:min(len(violations), maxReportedPaths)] {

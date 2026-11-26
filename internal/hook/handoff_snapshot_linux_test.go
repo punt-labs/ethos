@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 func TestHandoffSnapshotAcceptsLargeInputManifest(t *testing.T) {
@@ -636,13 +638,15 @@ func TestHandoffWorktreeRunsWithPrivateScratchFile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
 	checkPolicy(t, root, "project", "  - name: full-gate\n    stage: handoff\n    files: all\n    adapter: make\n    target: check\n")
-	writeFile(t, filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml"), `checks:
+	sidecar := filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml")
+	profile := `checks:
   full-gate:
     profile: linux-worktree-v1
     epoch: scratch-files
     sources: {mode: worktree}
     scratch: {files: [output.tmp, nested/output.tmp], checkout: [.venv, nested/cache]}
-`)
+`
+	writeFile(t, sidecar, profile)
 	writeFile(t, filepath.Join(root, "source", "input"), "visible\n")
 	writeFile(t, filepath.Join(root, "nested", "source", "input"), "nested\n")
 	require.NoError(t, os.Symlink("Makefile", filepath.Join(root, "gate-link")))
@@ -681,6 +685,9 @@ func TestHandoffWorktreeRunsWithPrivateScratchFile(t *testing.T) {
 	require.NotEmpty(t, before)
 	for _, tc := range []struct{ cmd, path string }{
 		{"touch undeclared.tmp", "/checkout/undeclared.tmp"},
+		{"touch transient.tmp && rm transient.tmp", "/checkout/transient.tmp"},
+		{"touch output.tmp && mv output.tmp moved.tmp && mv moved.tmp output.tmp", "/checkout/moved.tmp"},
+		{"chmod 0755 nested && chmod 0700 nested", "/checkout/nested"},
 		{"touch nested/undeclared.tmp", "/checkout/nested/undeclared.tmp"},
 		{"rm gate-link", "/checkout/gate-link"},
 	} {
@@ -692,6 +699,16 @@ func TestHandoffWorktreeRunsWithPrivateScratchFile(t *testing.T) {
 		require.Equal(t, before, results())
 	}
 	require.NoFileExists(t, filepath.Join(root, "undeclared.tmp"))
+
+	writeFile(t, makefile, "check:\n\t@test -f output.tmp\n")
+	writeFile(t, sidecar, profile+"    prehydrate: {run: [sh, -ec, 'touch output.tmp']}\n")
+	require.Empty(t, run().Blocking)
+	before = results()
+	writeFile(t, sidecar, profile+"    prehydrate: {run: [sh, -ec, 'touch output.tmp prehydrate.tmp; rm prehydrate.tmp']}\n")
+	feedback = run()
+	require.Contains(t, feedback.Blocking, `scratch-violation: "/checkout/prehydrate.tmp"`)
+	require.Equal(t, before, results())
+	writeFile(t, sidecar, profile)
 
 	writeFile(t, makefile, "check:\n\t@echo intentionally-broken >&2; exit 23\n")
 	feedback = run()
@@ -708,6 +725,21 @@ func TestHandoffWorktreeRunsWithPrivateScratchFile(t *testing.T) {
 	feedback = run()
 	require.Contains(t, feedback.Blocking, "checkout scratch shadows snapshot content")
 	require.NotContains(t, feedback.Blocking, "intentionally-broken")
+}
+
+func TestHandoffScratchFileWatchOverflow(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reader.Close() })
+	t.Cleanup(func() { _ = writer.Close() })
+	var event [unix.SizeofInotifyEvent]byte
+	binary.NativeEndian.PutUint32(event[:4], ^uint32(0))
+	binary.NativeEndian.PutUint32(event[4:8], unix.IN_Q_OVERFLOW)
+	_, err = writer.Write(event[:])
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	watch := handoffScratchFileWatch{file: reader}
+	require.EqualError(t, watch.audit("", nil), "scratch-violation: scratch.files event queue overflow")
 }
 
 func TestHandoffWorktreeRunsDirectCommands(t *testing.T) {

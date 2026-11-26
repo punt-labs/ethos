@@ -29,6 +29,7 @@ const handoffSandboxArg = "--ethos-handoff-sandbox-v1"
 const handoffSandboxReady = "ready\n"
 const handoffMaterializePhase = "materialize snapshot inputs"
 const handoffSandboxPrehydrating = "prehydrating\n"
+const prehydrateOutputFD = 5
 
 var sandboxRuntime = []string{"/bin", "/lib", "/lib64", "/usr/bin", "/usr/lib", "/usr/lib64"}
 
@@ -57,6 +58,13 @@ type handoffSandboxWorktree struct {
 	GitDir          string
 	RuntimeDir      string
 	Prehydrate      []string
+}
+
+func (w *handoffSandboxWorktree) scratchWatchFD() int {
+	if len(w.Prehydrate) == 0 {
+		return prehydrateOutputFD
+	}
+	return prehydrateOutputFD + 1
 }
 
 // RunHandoffSandbox dispatches the private namespace child before CLI setup.
@@ -151,6 +159,8 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 	ctx, cancel := context.WithTimeout(ctx, check.timeout)
 	defer cancel()
 	plan := handoffSandboxManifest{Inputs: inputs}
+	var scratchWatch *handoffScratchFileWatch
+	var scratchOverlays []handoffScratchFileOverlay
 	argv := check.argv
 	cwd := check.cwd
 	if check.policy != nil && check.policy.WorktreeSnapshot != nil {
@@ -194,6 +204,12 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 			}
 			defer removeHandoffScratchFiles(overlay)
 			plan.Worktree.ScratchOverlay = overlay
+			scratchOverlays = handoffScratchFileOverlays(profile.Scratch.Files)
+			scratchWatch, err = watchHandoffScratchFiles(overlay, scratchOverlays)
+			if err != nil {
+				return "", errors.New("cannot watch scratch.files overlay")
+			}
+			defer scratchWatch.file.Close()
 		}
 		if profile.Prehydrate != nil {
 			plan.Worktree.Prehydrate = roots.expandArgs(profile.Prehydrate.Run)
@@ -235,6 +251,9 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 			defer close(prehydrateDrained)
 			_, _ = io.Copy(&prehydrateOutput, reader)
 		}()
+	}
+	if scratchWatch != nil {
+		cmd.ExtraFiles = append(cmd.ExtraFiles, scratchWatch.file)
 	}
 	cmd.WaitDelay = time.Second
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -303,8 +322,8 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		}
 		return "", errors.New(reason)
 	}
-	if worktree := plan.Worktree; worktree != nil && len(worktree.ScratchFiles) != 0 {
-		if auditErr := auditHandoffScratchFiles(worktree.ScratchOverlay, handoffScratchFileOverlays(worktree.ScratchFiles)); auditErr != nil {
+	if scratchWatch != nil {
+		if auditErr := scratchWatch.audit(plan.Worktree.ScratchOverlay, scratchOverlays); auditErr != nil {
 			return "", auditErr
 		}
 	}
@@ -578,6 +597,15 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 		if err := mountHandoffScratchFiles(checkout, plan.Worktree.ScratchOverlay, scratchOverlays, laterMounts); err != nil {
 			return err
 		}
+		if len(scratchOverlays) > 0 {
+			fd := plan.Worktree.scratchWatchFD()
+			// Overlayfs can set internal xattrs on mount. Discard setup events before executing user code.
+			drainErr := drainHandoffScratchEvents(fd, nil)
+			closeErr := unix.Close(fd)
+			if err := errors.Join(drainErr, closeErr); err != nil {
+				return err
+			}
+		}
 		phase = "mount private worktree scratch"
 		if err := mountHandoffCheckoutScratch(root, scratchDirs); err != nil {
 			return err
@@ -701,7 +729,6 @@ func runHandoffPrehydrate(argv, env []string) error {
 	if err != nil {
 		return err
 	}
-	const prehydrateOutputFD = 5
 	output := os.NewFile(prehydrateOutputFD, "handoff prehydrate output")
 	unix.CloseOnExec(prehydrateOutputFD)
 	defer output.Close()
