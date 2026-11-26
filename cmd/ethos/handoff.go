@@ -108,11 +108,15 @@ func approveLiveHandoff(cmd *cobra.Command, args []string) error {
 	if err := checkLiveApprovalTerminal(ok && isTTY(in), os.Environ()); err != nil {
 		return err
 	}
+	return confirmAndApproveLiveHandoff(cmd, args[0], in)
+}
+
+func confirmAndApproveLiveHandoff(cmd *cobra.Command, slug string, in io.Reader) error {
 	checkout, err := requireCheckout(cmd.ErrOrStderr(), "handoff approve-live")
 	if err != nil {
 		return err
 	}
-	policy, err := hook.ResolveHandoffLivePolicy(checkout, args[0])
+	policy, err := hook.ResolveHandoffLivePolicy(checkout, slug)
 	if err != nil {
 		return err
 	}
