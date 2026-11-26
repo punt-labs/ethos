@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -322,6 +323,54 @@ func TestHandoffRuntimeProxyFallsBackToNextPublicAddress(t *testing.T) {
 	require.Len(t, calls, 2)
 	require.Equal(t, "[2001:db8::1]:443", <-calls)
 	require.Equal(t, "192.0.2.1:443", <-calls)
+}
+
+func TestHandoffRuntimeProxyClosesStalledConnectAndRetries(t *testing.T) {
+	const budget = 2 * time.Second
+	type disconnect struct {
+		at  time.Time
+		err error
+	}
+	stalled := make(chan disconnect, 1)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		switch req.Host {
+		case "[2001:db8::1]:443":
+			conn, rw, err := http.NewResponseController(w).Hijack()
+			if err == nil {
+				defer conn.Close()
+				err = conn.SetReadDeadline(time.Now().Add(budget))
+				if err == nil {
+					_, err = rw.ReadByte()
+				}
+			}
+			stalled <- disconnect{time.Now(), err}
+		case "192.0.2.1:443":
+			w.Header().Set("Content-Length", "0")
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer proxy.Close()
+	endpoint, err := url.Parse(proxy.URL)
+	require.NoError(t, err)
+	lookup := func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("2001:db8::1"), netip.MustParseAddr("192.0.2.1")}, nil
+	}
+	deadline := time.Now().Add(budget)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	conn, err := dialHandoffRuntimeProxyResolved(ctx, "tcp", "runtime.example:443", endpoint, nil, lookup)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	require.True(t, time.Now().Before(deadline), "fallback missed the overall deadline")
+	select {
+	case result := <-stalled:
+		require.ErrorIs(t, result.err, io.EOF)
+		require.WithinDuration(t, deadline.Add(-budget/2), result.at, budget/4)
+	case <-ctx.Done():
+		t.Fatal("the stalled CONNECT socket was not closed")
+	}
 }
 
 func TestHandoffRuntimeProxyRejectsBrokenConnections(t *testing.T) {
