@@ -191,6 +191,29 @@ func TestDarwinHandoffSnapshotDefersOnLaunchFailure(t *testing.T) {
 	}
 }
 
+func TestDarwinHandoffSnapshotPreservesPerlEnvironment(t *testing.T) {
+	checkout, scratch := t.TempDir(), t.TempDir()
+	ctx := t.Context()
+	proof, err := digestGateInputs(ctx, checkout, "", nil)
+	require.NoError(t, err)
+	check := editCheck{
+		cwd: gateRoot,
+		argv: []string{"/bin/sh", "-c", `test "$PERL_UNICODE" = D &&
+test "$PERL5OPT" = -MNoSuchEthosModule &&
+test "$PERLIO" = utf8 &&
+test "$PERL5LIB" = "$ETHOS_HANDOFF_RUNTIME/perl"`},
+		policy: &checkset.Check{WorktreeSnapshot: &checkset.WorktreeSnapshot{Env: map[string]string{
+			"PERL_UNICODE": "D",
+			"PERL5OPT":     "-MNoSuchEthosModule",
+			"PERLIO":       "utf8",
+			"PERL5LIB":     "{runtime}/perl",
+		}}},
+	}
+	result, err := executeHandoffSnapshot(ctx, scratch, checkout, proof, nil, check)
+	require.NoError(t, err)
+	require.Empty(t, result)
+}
+
 func TestDarwinHandoffSnapshotExit125IsCheckFailure(t *testing.T) {
 	checkout, scratch := t.TempDir(), t.TempDir()
 	ctx := context.Background()

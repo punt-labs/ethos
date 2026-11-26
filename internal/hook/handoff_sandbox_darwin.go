@@ -527,20 +527,35 @@ func runDarwinHandoffCheck(ctx context.Context, profile, checkout, cwd string, e
 	}
 	defer read.Close()
 	defer write.Close()
-	// Taint mode ignores Perl startup environment; the check still gets its declared env.
+	const envPrefix = "ETHOS_HANDOFF_LAUNCHER_ENV_"
+	launcherEnv := make([]string, len(env))
+	for i, variable := range env {
+		if strings.HasPrefix(variable, "PERL") || strings.HasPrefix(variable, envPrefix) {
+			variable = envPrefix + variable
+		}
+		launcherEnv[i] = variable
+	}
+	// Restore declared Perl variables only after the launcher has started.
 	const launcher = `use Fcntl qw(F_SETFD FD_CLOEXEC);
 no warnings "taint";
 open(my $status, ">&=3") or exit 125;
 fcntl($status, F_SETFD, FD_CLOEXEC) or exit 125;
+my %declared;
+for my $key (keys %ENV) {
+    if ($key =~ /^\Q` + envPrefix + `\E(.*)$/s) {
+        $declared{$1} = delete $ENV{$key};
+    }
+}
+@ENV{keys %declared} = values %declared;
 syswrite($status, "R") == 1 or exit 125;
 exec { $ARGV[0] } @ARGV;
 syswrite($status, "E");
 print STDERR "exec: $!\n";
 exit 125;`
-	args := []string{"-f", profile, "/usr/bin/perl", "-t", "-f", "-e", launcher, "--"}
+	args := []string{"-f", profile, "/usr/bin/perl", "-t", "-f", "-C0", "-e", launcher, "--"}
 	var stdout, stderr editTail
 	wait, err := startDarwinHandoffProcess(ctx, "/usr/bin/sandbox-exec", append(args, argv...), func(cmd *exec.Cmd) {
-		cmd.Dir, cmd.Env = cwd, env
+		cmd.Dir, cmd.Env = cwd, launcherEnv
 		cmd.ExtraFiles = []*os.File{write}
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	})
