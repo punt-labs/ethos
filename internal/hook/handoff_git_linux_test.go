@@ -212,6 +212,24 @@ if git show-ref --verify --quiet refs/tags/changed; then exit 42; fi
 	require.Empty(t, run().Blocking)
 }
 
+func TestHandoffWorktreeGitDiscoveryAcrossScratchOverlay(t *testing.T) {
+	root, run := handoffMetadataFixture(t, "test \"$(git -C source rev-parse --git-dir)\" = /checkout/.git")
+	writeFile(t, filepath.Join(root, "source", "input"), "snapshot input\n")
+	stageGit(t, root, "add", "source/input")
+	sidecar := filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml")
+	data, err := os.ReadFile(sidecar)
+	require.NoError(t, err)
+	profile := string(data) + "    git: {}\n    scratch: {files: [output.tmp]}\n"
+	writeFile(t, sidecar, profile)
+	feedback := run()
+	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+	require.Empty(t, feedback.Blocking)
+
+	writeFile(t, sidecar, profile+"    env: {GIT_DISCOVERY_ACROSS_FILESYSTEM: \"0\"}\n"+
+		"    prehydrate: {run: [git, -C, source, rev-parse, --git-dir]}\n")
+	require.Empty(t, run().Blocking)
+}
+
 func TestHandoffWorktreeOmitsUndeclaredGitView(t *testing.T) {
 	_, run := handoffMetadataFixture(t, "test ! -e .git")
 	feedback := run()
