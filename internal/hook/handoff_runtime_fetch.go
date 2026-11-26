@@ -80,7 +80,7 @@ func handoffRuntimeBundles(loc resolve.Located, agent string) ([]handoffRuntime,
 	}
 	key := runtime.GOOS + "-" + runtime.GOARCH
 	var bundles []handoffRuntime
-	seen := make(map[string]bool)
+	seen := make(map[string]int)
 	for _, check := range checks {
 		if check.InvalidSnapshotSidecar {
 			return nil, errors.New("invalid snapshot sidecar")
@@ -94,9 +94,11 @@ func handoffRuntimeBundles(loc resolve.Located, agent string) ([]handoffRuntime,
 			return nil, fmt.Errorf("runtime-missing: check %q has no pinned bundle for %s", check.Name, key)
 		}
 		bundle := newHandoffRuntime(global, platform, agent)
-		if !seen[bundle.archive] {
+		if i, ok := seen[bundle.archive]; !ok {
+			seen[bundle.archive] = len(bundles)
 			bundles = append(bundles, bundle)
-			seen[bundle.archive] = true
+		} else if bundles[i].platform.URL == "" && bundle.platform.URL != "" {
+			bundles[i] = bundle
 		}
 	}
 	if len(bundles) == 0 {

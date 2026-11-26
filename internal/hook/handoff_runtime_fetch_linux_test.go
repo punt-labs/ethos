@@ -55,6 +55,14 @@ func TestFetchHandoffRuntimesSelectsPinnedPlatform(t *testing.T) {
 		requireInvalid("", "has no pinned bundle")
 	}
 	selected := profile(runtime.GOOS + "-" + runtime.GOARCH)
+	const secondURL = "https://github.com/example/project/releases/download/v1/runtime.tar.gz"
+	withURL := strings.Replace(selected, "}}}", ", url: "+secondURL+"}}}", 1)
+	writeFile(t, sidecar, "checks:\n  first:\n"+selected+"  second:\n"+withURL)
+	bundles, err := handoffRuntimeBundles(loc, "worker")
+	require.NoError(t, err)
+	require.Len(t, bundles, 1)
+	require.Equal(t, secondURL, bundles[0].platform.URL)
+
 	writeFile(t, sidecar, "checks:\n  first:\n"+selected+"  second:\n"+selected)
 	requireInvalid("worker", "--agent=worker")
 	path := filepath.Join(home, ".punt-labs/ethos/runtimes", digest+".tar.gz")
