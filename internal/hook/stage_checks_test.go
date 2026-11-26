@@ -404,14 +404,17 @@ func TestHandoffRepeatedAuditPaths(t *testing.T) {
 	root, err := filepath.EvalSymlinks(root)
 	require.NoError(t, err)
 	git := filepath.Join(bin, "git")
-	require.NoError(t, os.Rename(git, filepath.Join(bin, "real-git")))
+	realGit, err := os.Readlink(git)
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(git))
 	log := filepath.Join(t.TempDir(), "lookups")
 	t.Setenv("LOOKUP_LOG", log)
 	dir := filepath.Join(root, "src")
 	t.Setenv("LOOKUP_DIR", dir)
 	postEditTool(t, bin, "git", `if [ "$1" = -C ] && [ "$2" = "$LOOKUP_DIR" ] && [ "$3" = rev-parse ]; then printf 'lookup\n' >> "$LOOKUP_LOG"; fi
-exec "${0%/*}/real-git" "$@"
+exec "$REAL_GIT" "$@"
 `)
+	t.Setenv("REAL_GIT", realGit)
 	writeFile(t, filepath.Join(dir, "file.go"), "package example\n")
 	var entries []auditEntry
 	for i := range 6 {
