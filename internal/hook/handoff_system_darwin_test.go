@@ -89,9 +89,22 @@ func allowDarwinSystemFixtureRoot(t *testing.T, dir string) {
 	t.Cleanup(func() { darwinSystemRoots = roots })
 }
 
+func darwinSystemDeveloperFixture(t *testing.T, app string) string {
+	t.Helper()
+	contents := filepath.Join(app, "Contents")
+	developer := filepath.Join(contents, "Developer")
+	allowDarwinSystemFixtureRoot(t, contents)
+	require.NoError(t, os.MkdirAll(developer, 0o700))
+	for _, name := range []string{"Info.plist", "version.plist"} {
+		writeFile(t, filepath.Join(contents, name), "fixture")
+	}
+	return developer
+}
+
 func TestDarwinSystemToolRefusesRejectedPATHHits(t *testing.T) {
 	dir, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
+	developer := darwinSystemDeveloperFixture(t, filepath.Join(dir, "Xcode.app"))
 	outside := filepath.Join(dir, "outside")
 	allowed := filepath.Join(dir, "allowed")
 	symlinks := filepath.Join(dir, "symlinks")
@@ -111,6 +124,7 @@ func TestDarwinSystemToolRefusesRejectedPATHHits(t *testing.T) {
 	checkout := t.TempDir()
 	profile := &checkset.WorktreeSnapshot{
 		Path: []string{outside, allowed},
+		Env:  map[string]string{"DEVELOPER_DIR": developer},
 		System: checkset.SnapshotSystem{
 			SnapshotSystemInputs: checkset.SnapshotSystemInputs{Tools: []string{"git"}},
 		},
@@ -146,6 +160,7 @@ func TestDarwinSystemToolRefusesRejectedPATHHits(t *testing.T) {
 				policy: &checkset.Check{WorktreeSnapshot: profile},
 			}
 			if isolation == checkset.IsolationLiveVerified {
+				require.Equal(t, developer, plan.DeveloperDir)
 				result, err := executeHandoffLive(ctx, "", checkout, nil, check, handoffWorktreePlan{system: plan})
 				require.NoError(t, err)
 				require.Empty(t, result)
@@ -162,13 +177,8 @@ func TestDarwinSystemToolDefersOnPinnedRuntimeConflict(t *testing.T) {
 	dir, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 	bin := filepath.Join(dir, "host-bin")
-	developer := filepath.Join(dir, "xcode", "Contents", "Developer")
+	developer := darwinSystemDeveloperFixture(t, filepath.Join(dir, "Xcode.app"))
 	allowDarwinSystemFixtureRoot(t, bin)
-	allowDarwinSystemFixtureRoot(t, filepath.Dir(developer))
-	require.NoError(t, os.MkdirAll(developer, 0o700))
-	for _, name := range []string{"Info.plist", "version.plist"} {
-		writeFile(t, filepath.Join(filepath.Dir(developer), name), "fixture")
-	}
 	hostTool := filepath.Join(bin, "true")
 	writeFile(t, hostTool, "#!/bin/sh\nexit 0\n")
 	require.NoError(t, os.Chmod(hostTool, 0o700))
