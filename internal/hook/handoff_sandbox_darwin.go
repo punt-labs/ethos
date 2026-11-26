@@ -114,11 +114,25 @@ func cloneDarwinGateInputs(ctx context.Context, checkout, snapshot string, input
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		target := filepath.Join(snapshot, input)
+		if preserveMode {
+			if err := rejectHandoffSymlinkParents(snapshot, target); err != nil {
+				return err
+			}
+		}
 		src, err := openGateInput(root, input)
 		if err != nil {
+			if preserveMode {
+				if link, linkErr := root.Readlink(input); linkErr == nil {
+					if err := materializeGateSymlink(snapshot, input, link); err != nil {
+						return err
+					}
+					continue
+				}
+			}
 			return err
 		}
-		err = cloneDarwinGateInput(src, filepath.Join(snapshot, input), preserveMode)
+		err = cloneDarwinGateInput(src, target, preserveMode)
 		_ = src.Close()
 		if err != nil {
 			return err

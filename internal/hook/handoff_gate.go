@@ -847,14 +847,7 @@ func copyGateInput(ctx context.Context, h io.Writer, src *os.Root, dest, input s
 				}
 				_, _ = fmt.Fprintf(h, "%s\x00symlink\x00%d\x00%s", input, len(link), link)
 				if dest != "" {
-					path := filepath.Join(dest, input)
-					if err := rejectHandoffSymlinkParents(dest, path); err != nil {
-						return 0, err
-					}
-					if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-						return 0, err
-					}
-					if err := os.Symlink(link, path); err != nil {
+					if err := materializeGateSymlink(dest, input, link); err != nil {
 						return 0, err
 					}
 				}
@@ -905,6 +898,17 @@ func copyGateInput(ctx context.Context, h io.Writer, src *os.Root, dest, input s
 		err = errors.New("snapshot input changed size")
 	}
 	return int(n), err
+}
+
+func materializeGateSymlink(root, input, link string) error {
+	path := filepath.Join(root, input)
+	if err := rejectHandoffSymlinkParents(root, path); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.Symlink(link, path)
 }
 
 func rejectHandoffSymlinkParents(root, path string) error {
