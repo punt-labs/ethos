@@ -26,7 +26,7 @@ func seedHandoffScratch(root string, entries map[string]string) error {
 	var copied []string
 	for _, name := range destinations {
 		target := strings.TrimPrefix(name, "{scratch}/")
-		if !validHandoffSeedPath(target) {
+		if !validHandoffSeedPath(target, false) {
 			return errors.New("invalid scratch seed destination")
 		}
 		for _, other := range copied {
@@ -36,7 +36,8 @@ func seedHandoffScratch(root string, entries map[string]string) error {
 		}
 		copied = append(copied, target)
 		base, source, ok := strings.Cut(entries[name], "/")
-		if !ok || !validHandoffSeedPath(source) {
+		fromRuntime := base == "{runtime}"
+		if !ok || !validHandoffSeedPath(source, fromRuntime) {
 			return errors.New("invalid scratch seed source")
 		}
 		var from string
@@ -48,19 +49,19 @@ func seedHandoffScratch(root string, entries map[string]string) error {
 		default:
 			return errors.New("invalid scratch seed source root")
 		}
-		if err := copyHandoffScratchSeed(filepath.Join(root, from), source, dest, target, &remaining); err != nil {
+		if err := copyHandoffScratchSeed(filepath.Join(root, from), source, dest, target, &remaining, fromRuntime); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validHandoffSeedPath(name string) bool {
+func validHandoffSeedPath(name string, allowGit bool) bool {
 	return name != "." && filepath.IsLocal(name) && filepath.Clean(name) == name &&
-		!strings.ContainsAny(name, "\\\x00{}") && !slices.Contains(strings.Split(name, "/"), ".git")
+		!strings.ContainsAny(name, "\\\x00{}") && (allowGit || !slices.Contains(strings.Split(name, "/"), ".git"))
 }
 
-func copyHandoffScratchSeed(from, source string, dest *os.Root, target string, remaining *int64) error {
+func copyHandoffScratchSeed(from, source string, dest *os.Root, target string, remaining *int64, allowGit bool) error {
 	src, err := os.OpenRoot(from)
 	if err != nil {
 		return err
@@ -74,7 +75,7 @@ func copyHandoffScratchSeed(from, source string, dest *os.Root, target string, r
 			return err
 		}
 		rel, err := filepath.Rel(source, name)
-		if err != nil || !validHandoffSeedPath(name) {
+		if err != nil || !validHandoffSeedPath(name, allowGit) {
 			return errors.New("invalid path in scratch seed tree")
 		}
 		output := filepath.Join(target, rel)

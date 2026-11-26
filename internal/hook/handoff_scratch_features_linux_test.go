@@ -14,13 +14,15 @@ func TestHandoffWorktreeCopiesScratchSeeds(t *testing.T) {
 	root, run := handoffMetadataFixture(t, `set -eu
 test "$(cat /scratch/root-seed)" = checkout
 test "$(cat /scratch/cache/value)" = runtime
+test -f /scratch/cache/sdists-v11/.git
+test ! -s /scratch/cache/sdists-v11/.git
 printf writable > /scratch/root-seed
 printf writable > /scratch/cache/value
 test "$(cat input)" = checkout
 test "$(cat /runtime/cache/value)" = runtime
 `)
 	writeFile(t, filepath.Join(root, "input"), "checkout\n")
-	writeHandoffScratchProfile(t, root, "    scratch:\n      seed:\n        '{scratch}/root-seed': '{root}/input'\n        '{scratch}/cache': '{runtime}/cache'\n", map[string]string{"cache/value": "runtime\n"})
+	writeHandoffScratchProfile(t, root, "    scratch:\n      seed:\n        '{scratch}/root-seed': '{root}/input'\n        '{scratch}/cache': '{runtime}/cache'\n", map[string]string{"cache/value": "runtime\n", "cache/sdists-v11/.git": ""})
 	got := run()
 	skipIfHandoffSandboxUnavailable(t, errors.New(got.Blocking))
 	require.Equal(t, StageFeedback{}, got)
@@ -41,6 +43,7 @@ func TestHandoffScratchSeedPaths(t *testing.T) {
 	require.NoError(t, os.Symlink("data", filepath.Join(checkout, "tree", "link")))
 	require.NoError(t, os.Mkdir(filepath.Join(checkout, "outside"), 0o700))
 	require.NoError(t, os.Symlink("../tree/data", filepath.Join(checkout, "outside", "link")))
+	writeFile(t, filepath.Join(checkout, "metadata", "nested", ".git"), "")
 
 	require.NoError(t, seedHandoffScratch(root, map[string]string{"copy": "{root}/tree"}))
 	data, err := os.ReadFile(filepath.Join(scratch, "copy", "link"))
@@ -57,6 +60,8 @@ func TestHandoffScratchSeedPaths(t *testing.T) {
 		{"bare source", map[string]string{"bare": "host/file"}, "invalid scratch seed source root"},
 		{"missing runtime", map[string]string{"runtime": "{runtime}/cache"}, "no such file"},
 		{"escaping symlink", map[string]string{"unsafe": "{root}/outside"}, "scratch seed symlink escapes the copied tree"},
+		{"checkout git", map[string]string{"git-copy": "{root}/metadata"}, "invalid path in scratch seed tree"},
+		{"direct checkout git", map[string]string{"unsafe": "{root}/metadata/nested/.git"}, "invalid scratch seed source"},
 		{"existing destination", map[string]string{"copy": "{root}/tree"}, "file exists"},
 	} {
 		t.Run(tc.name, func(t *testing.T) { require.ErrorContains(t, seedHandoffScratch(root, tc.entries), tc.want) })
@@ -65,7 +70,7 @@ func TestHandoffScratchSeedPaths(t *testing.T) {
 	require.NoError(t, err)
 	defer dest.Close()
 	remaining := int64(2)
-	require.ErrorContains(t, copyHandoffScratchSeed(checkout, "tree/data", dest, "limited", &remaining), "scratch seed exceeds the copy budget")
+	require.ErrorContains(t, copyHandoffScratchSeed(checkout, "tree/data", dest, "limited", &remaining, false), "scratch seed exceeds the copy budget")
 }
 
 func writeHandoffScratchProfile(t *testing.T, root, fields string, members map[string]string) {
