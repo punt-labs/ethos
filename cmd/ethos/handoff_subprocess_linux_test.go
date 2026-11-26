@@ -33,7 +33,9 @@ checks:
 	cmd.Stdin = strings.NewReader(`{"session_id":"fixture","agent_id":"worker","agent_type":"implementer"}`)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
-	if strings.Contains(string(out), "isolation unavailable on this host") {
+	if strings.Contains(string(out), "isolation unavailable on this host") ||
+		strings.Contains(string(out), "make mount propagation private: permission denied") ||
+		strings.Contains(string(out), "make mount propagation private: operation not permitted") {
 		t.Skipf("sandbox unavailable: %s", out)
 	}
 	require.NotContains(t, string(out), "systemMessage")
