@@ -217,6 +217,10 @@ stop allowed on re-entry was a verified pass.
 
 ### Snapshot check profile
 
+The Linux worktree profile is declared in
+`.punt-labs/ethos/checks/snapshots/<check-set>.yaml` beside the selected
+check set. There is no separate `handoff-worktree.yaml` to install.
+
 A handoff check can opt into the Linux snapshot runner, for example:
 
 ```yaml
