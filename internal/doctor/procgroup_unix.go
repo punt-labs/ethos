@@ -5,6 +5,7 @@ package doctor
 import (
 	"errors"
 	"os/exec"
+	"runtime"
 	"syscall"
 	"time"
 )
@@ -78,8 +79,7 @@ func termProcessGroup(cmd *exec.Cmd) error {
 // called unconditionally after every Run(), and the common case is a group
 // that has already exited on its own with nothing left to reap (Copilot, PR
 // #515). Surfacing that as a sandbox error would read as a confusing
-// spurious failure on a perfectly healthy hook. Every other errno (EPERM, a
-// genuinely wedged process) is still returned.
+// spurious failure on a perfectly healthy hook.
 func reapProcessGroup(cmd *exec.Cmd, grace time.Duration) error {
 	if cmd.Process == nil {
 		return nil
@@ -90,8 +90,24 @@ func reapProcessGroup(cmd *exec.Cmd, grace time.Duration) error {
 			return nil // nothing left in the group
 		}
 	}
-	if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return err
+	err := syscall.Kill(-pgid, syscall.SIGKILL)
+	if errors.Is(err, syscall.ESRCH) {
+		return nil
 	}
-	return nil
+	if runtime.GOOS == "darwin" && errors.Is(err, syscall.EPERM) {
+		// Darwin returns EPERM for a group containing only zombies.
+		// Wait for the OS to reap it, but never treat EPERM itself as
+		// success or send another signal to a potentially reused group.
+		for deadline := time.Now().Add(250 * time.Millisecond); time.Now().Before(deadline); {
+			time.Sleep(10 * time.Millisecond)
+			probeErr := syscall.Kill(-pgid, 0)
+			if errors.Is(probeErr, syscall.ESRCH) {
+				return nil
+			}
+			if !errors.Is(probeErr, syscall.EPERM) {
+				break
+			}
+		}
+	}
+	return err
 }
