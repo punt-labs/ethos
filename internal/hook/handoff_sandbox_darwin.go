@@ -527,10 +527,17 @@ func runDarwinHandoffCheck(ctx context.Context, profile, checkout, cwd string, e
 	}
 	defer read.Close()
 	defer write.Close()
-	// The group closes fd 3 on successful exec, but Bash restores it if
-	// exec returns. Privileged mode ignores shell startup environment.
-	const launcher = `shopt -s execfail || exit 125; printf R >&3 || exit 125; { exec "$@"; } 3>&-; printf E >&3; exit 125`
-	args := []string{"-f", profile, "/bin/bash", "--noprofile", "--norc", "-p", "-c", launcher, "ethos-handoff"}
+	// Taint mode ignores Perl startup environment; the check still gets its declared env.
+	const launcher = `use Fcntl qw(F_SETFD FD_CLOEXEC);
+no warnings "taint";
+open(my $status, ">&=3") or exit 125;
+fcntl($status, F_SETFD, FD_CLOEXEC) or exit 125;
+syswrite($status, "R") == 1 or exit 125;
+exec { $ARGV[0] } @ARGV;
+syswrite($status, "E");
+print STDERR "exec: $!\n";
+exit 125;`
+	args := []string{"-f", profile, "/usr/bin/perl", "-t", "-f", "-e", launcher, "--"}
 	var stdout, stderr editTail
 	wait, err := startDarwinHandoffProcess(ctx, "/usr/bin/sandbox-exec", append(args, argv...), func(cmd *exec.Cmd) {
 		cmd.Dir, cmd.Env = cwd, env

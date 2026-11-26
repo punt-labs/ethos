@@ -457,7 +457,7 @@ jobs:
           ETHOS_TEST_BUILD_RACE: '1'
         run: |
           export TMPDIR="$(cd "$RUNNER_TEMP" && pwd -P)"
-          go test -race -count=1 -v -run '^Test(Darwin|Handoff(ScratchSeedAvailability|LiveVerifiedDefersWithoutAdmission|WorktreeSnapshotPreservesSymlinks)$)' ./internal/hook
+          go test -race -count=1 -v -run '^Test(Darwin|Handoff)' ./internal/hook
           go test -race -count=1 -v -run '^TestHandoff(AgentApprovalLeavesCheckoutUnchanged|ApprovalLeavesCheckoutUnchanged|SnapshotLaunchVerdicts)$' ./cmd/ethos
 
   test:
