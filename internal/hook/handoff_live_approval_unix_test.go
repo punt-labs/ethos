@@ -1,3 +1,5 @@
+//go:build linux || darwin
+
 package hook
 
 import (
@@ -5,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,4 +50,35 @@ func TestHandoffLiveApprovalRevisionAndLinkedWorktree(t *testing.T) {
 	require.Empty(t, local.approval())
 	require.NoError(t, local.Approve())
 	require.NotEqual(t, nonce, local.approval())
+}
+
+func TestHandoffLiveApprovalRejectsUnsafePins(t *testing.T) {
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	policy, err := newLiveApprovalPolicy(root, "project", "policy-sha")
+	require.NoError(t, err)
+	require.NoError(t, policy.Revoke())
+	require.NoError(t, policy.Approve())
+	path, err := policy.pinPath(false)
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(path, 0o644))
+	require.Empty(t, policy.approval())
+	require.NoError(t, policy.Approve())
+	writeFile(t, path, "{invalid")
+	require.Empty(t, policy.approval())
+	busy, err := audit.TryLock(path+".lock", func() error {
+		require.ErrorContains(t, policy.Revoke(), "live approval is being updated")
+		return nil
+	})
+	require.NoError(t, err)
+	require.False(t, busy)
+	require.NoError(t, policy.Revoke())
+
+	for _, slot := range []string{".", "../escape"} {
+		_, err := newLiveApprovalPolicy(root, slot, "policy-sha")
+		require.Error(t, err)
+	}
+	t.Setenv("HOME", root)
+	require.ErrorContains(t, policy.Approve(), "live approval directory must be outside the checkout")
+	require.ErrorContains(t, (liveApprovalPolicy{}).Approve(), "no resolved live policy revision")
 }
