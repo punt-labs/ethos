@@ -331,6 +331,49 @@ checks:
 	require.NotContains(t, string(out), "handoff checks deferred (advisory-glob)")
 }
 
+func TestSubagentStopSelectsRedactedOverlap(t *testing.T) {
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	runGit(t, repo, "init", "-q")
+	checks := filepath.Join(repo, ".punt-labs", "ethos", "checks")
+	sealed := filepath.Join(audit.SealedSessionsBase(repo), "2026-11-26-fixture")
+	require.NoError(t, os.MkdirAll(checks, 0o700))
+	require.NoError(t, os.MkdirAll(sealed, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".punt-labs/local/\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos.yaml"), []byte("checks: project\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(checks, "project.yaml"), []byte(`name: project
+checks:
+  - {name: selected, stage: handoff, files: ['**/*.txt'], run: [sh, -c, 'echo overlap selected; exit 1']}
+  - {name: unselected, stage: handoff, files: ['**/*.go'], run: [sh, -c, 'echo overlap unselected; exit 1']}
+`), 0o600))
+	file := filepath.Join(repo, "edited.txt")
+	require.NoError(t, os.WriteFile(file, nil, 0o600))
+	path, err := json.Marshal(file)
+	require.NoError(t, err)
+	line := `{"ts":"` + audit.FormatLineTS(100) + `","session":"fixture","agent_id":"worker","tool":"Edit","tool_input":{"file_path":` + string(path) + `}}` + "\n"
+	chunk := filepath.Join(sealed, audit.SessionChunkFile(100, 100))
+	require.NoError(t, os.WriteFile(chunk, []byte(strings.TrimSuffix(line, "\n")), 0o600))
+	_, err = audit.ReadChunkVerified(chunk, 100)
+	require.ErrorContains(t, err, "corrupt chunk")
+	policy, err := layout.NewRepository(repo, repo, layout.RecordBlame)
+	require.NoError(t, err)
+	stream := audit.Stream{Namespace: audit.SessionNS, Session: "fixture"}
+	require.NoError(t, audit.ReplaceLocalFile(policy, stream.LivePath(policy), []byte(line)))
+	runGit(t, repo, "add", "--", ".gitignore", ".punt-labs", "edited.txt")
+	runGit(t, repo, "commit", "-qm", "overlapping audit")
+
+	cmd := loggingProcess(t, t.TempDir(), repo, "hook", "subagent-stop")
+	cmd.Stdin = strings.NewReader(`{"session_id":"fixture","agent_id":"worker","agent_type":"implementer"}`)
+	out, err := cmd.Output()
+	require.NoError(t, err, "%s", out)
+	var feedback map[string]string
+	require.NoError(t, json.Unmarshal(out, &feedback), "%s", out)
+	require.Equal(t, "block", feedback["decision"])
+	require.Contains(t, feedback["reason"], "handoff checks deferred (selected): no declared snapshot profile")
+	require.NotContains(t, string(out), "overlap unselected")
+	require.NotContains(t, string(out), "handoff audit gap")
+}
+
 func TestSharedLoggingHookChecks(t *testing.T) {
 	repo := filepath.Join(t.TempDir(), "logging-project")
 	dir := filepath.Join(repo, ".punt-labs", "ethos", "checks")
