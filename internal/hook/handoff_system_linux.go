@@ -196,36 +196,47 @@ func fingerprintHandoffSystemInput(ctx context.Context, path string, directory b
 			if err != nil {
 				return err
 			}
-			var link string
+			var link, digest string
 			switch {
 			case info.Mode()&os.ModeSymlink != 0:
 				link, err = os.Readlink(name)
 				if err != nil {
 					return err
 				}
-			case info.IsDir(), info.Mode().IsRegular():
+			case info.Mode().IsRegular():
+				digest, err = fingerprintHandoffSystemFile(ctx, name, unix.O_NOFOLLOW)
+				if err != nil {
+					return err
+				}
+			case info.IsDir():
 			default:
 				return errors.New("special file in system input directory")
 			}
-			return enc.Encode([]any{strings.TrimPrefix(name, path), info.Size(), info.ModTime().UnixNano(), info.Mode(), link})
+			return enc.Encode([]any{strings.TrimPrefix(name, path), info.Size(), info.ModTime().UnixNano(), info.Mode(), link, digest})
 		})
 		if err != nil {
 			return "", err
 		}
 	} else {
-		fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
-		if err != nil {
-			return "", err
-		}
-		f := os.NewFile(uintptr(fd), path)
-		defer f.Close()
-		info, err := f.Stat()
-		if err != nil || !info.Mode().IsRegular() {
-			return "", errors.New("system input is not a regular file")
-		}
-		if _, err := io.Copy(&gateHashBudget{ctx: ctx, dst: h, remaining: math.MaxInt64}, f); err != nil {
-			return "", err
-		}
+		return fingerprintHandoffSystemFile(ctx, path, 0)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func fingerprintHandoffSystemFile(ctx context.Context, path string, flags int) (string, error) {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|flags, 0)
+	if err != nil {
+		return "", err
+	}
+	f := os.NewFile(uintptr(fd), path)
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return "", errors.New("system input is not a regular file")
+	}
+	h := sha256.New()
+	if _, err := io.Copy(&gateHashBudget{ctx: ctx, dst: h, remaining: math.MaxInt64}, f); err != nil {
+		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }

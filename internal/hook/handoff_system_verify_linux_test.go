@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/stretchr/testify/require"
@@ -44,6 +45,22 @@ func TestVerifyMountedHandoffSystemRejectsPathAndProofChanges(t *testing.T) {
 	require.ErrorContains(t, verifyMountedHandoffSystem(plan, env), "system input did not match")
 	require.NoError(t, os.Remove(file))
 	require.ErrorContains(t, verifyMountedHandoffSystem(plan, env), "system input did not match")
+}
+
+func TestHandoffSystemDirectoryProofIncludesFileContents(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "input")
+	mtime := time.Unix(1700000000, 0)
+	ctx := context.Background()
+	writeFile(t, file, "hello")
+	require.NoError(t, os.Chtimes(file, mtime, mtime))
+	initial, err := fingerprintHandoffSystemInput(ctx, dir, true)
+	require.NoError(t, err)
+	writeFile(t, file, "world")
+	require.NoError(t, os.Chtimes(file, mtime, mtime))
+	changed, err := fingerprintHandoffSystemInput(ctx, dir, true)
+	require.NoError(t, err)
+	require.NotEqual(t, initial, changed)
 }
 
 func TestHandoffSystemRejectsUncoveredToolsAndSpecialInputs(t *testing.T) {
