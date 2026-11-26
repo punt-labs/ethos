@@ -40,7 +40,7 @@ type recoveryPayload struct {
 // another chunk holds identically is kept: it is not a conflict and not a
 // loss. except names the chunk being recovered so its own bytes are not
 // counted as "other" evidence.
-func recoverLines(p layout.Policy, s Stream, damaged []byte, cn ChunkName, except string, guard LineGuard) (recovery, error) {
+func recoverLines(p layout.Policy, s Stream, damaged []byte, cn ChunkName, except string, guard LineGuard, readOnly bool) (recovery, error) {
 	var r recovery
 	r.lo, r.hi = cn.First, cn.Last
 	byTS := map[int64]Line{}
@@ -134,11 +134,6 @@ func recoverLines(p layout.Policy, s Stream, damaged []byte, cn ChunkName, excep
 		if l.TS > r.verifiedLast {
 			r.verifiedLast = l.TS
 		}
-		if want, ok := evidence[l.TS]; ok && !bytes.Equal(want, got) {
-			r.conflicts = append(r.conflicts, LiveConflict{TS: l.TS, ArchiveDigest: digest(want), LiveDigest: digest(got)})
-			continue
-		}
-		r.keep = append(r.keep, l)
 		original := got
 		if raw, ok := originals[l.TS]; ok {
 			original, err = CanonicalPayload(raw)
@@ -146,6 +141,13 @@ func recoverLines(p layout.Policy, s Stream, damaged []byte, cn ChunkName, excep
 				return r, err
 			}
 		}
+		if want, ok := evidence[l.TS]; ok && !bytes.Equal(want, got) {
+			if !readOnly || !bytes.Equal(want, original) {
+				r.conflicts = append(r.conflicts, LiveConflict{TS: l.TS, ArchiveDigest: digest(want), LiveDigest: digest(got)})
+			}
+			continue
+		}
+		r.keep = append(r.keep, l)
 		if r.payloads == nil {
 			r.payloads = map[int64]recoveryPayload{}
 		}

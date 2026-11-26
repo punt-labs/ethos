@@ -42,7 +42,7 @@ func ReadStreamWithSalvage(p layout.Policy, s Stream, guard LineGuard) (StreamDa
 		if kind != KindValid {
 			return nil, err
 		}
-		r, recoverErr := recoverLines(p, s, raw, cn, path, guard)
+		r, recoverErr := recoverLines(p, s, raw, cn, path, guard, true)
 		if recoverErr != nil {
 			return nil, errors.Join(err, recoverErr)
 		}
@@ -52,7 +52,12 @@ func ReadStreamWithSalvage(p layout.Policy, s Stream, guard LineGuard) (StreamDa
 		floor = max(floor, r.verifiedLast)
 		for ts, payload := range r.payloads {
 			if prior, ok := recovered[ts]; ok && !bytes.Equal(prior.original, payload.original) {
-				return nil, fmt.Errorf("audit identity conflict: session %q ts %d has divergent payloads in %s and %s", s.Session, ts, sources[ts], path)
+				if bytes.Equal(payload.original, payload.guarded) && bytes.Equal(payload.original, prior.guarded) {
+					continue
+				}
+				if !bytes.Equal(prior.original, prior.guarded) || !bytes.Equal(prior.original, payload.guarded) {
+					return nil, fmt.Errorf("audit identity conflict: session %q ts %d has divergent payloads in %s and %s", s.Session, ts, sources[ts], path)
+				}
 			}
 			recovered[ts], sources[ts] = payload, path
 		}
@@ -137,7 +142,7 @@ type salvageInput struct {
 func salvageBytes(p layout.Policy, s Stream, in salvageInput, guard LineGuard) (SalvageResult, error) {
 	var res SalvageResult
 	source, dir, cn := in.source, in.dir, in.cn
-	r, err := recoverLines(p, s, in.data, cn, source, guard)
+	r, err := recoverLines(p, s, in.data, cn, source, guard, false)
 	if err != nil {
 		return res, err
 	}

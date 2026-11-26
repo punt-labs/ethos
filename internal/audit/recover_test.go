@@ -104,6 +104,42 @@ func TestReadStreamWithSalvageConflictingRedactedCopies(t *testing.T) {
 	}
 }
 
+func TestReadStreamWithSalvageEquivalentCopies(t *testing.T) {
+	for _, intact := range []bool{false, true} {
+		name := "guarded damaged copy"
+		if intact {
+			name = "original intact copy"
+		}
+		t.Run(name, func(t *testing.T) {
+			p := repositoryPolicy(t, layout.RecordBlame)
+			s := Stream{Namespace: SessionNS, Session: "s"}
+			dir := filepath.Join(p.RecordRoot(), "sessions", "2026-11-04-s")
+			require.NoError(t, os.MkdirAll(dir, 0o700))
+			raw := sessLine(100, "Secret")
+			guarded := sessLine(100, "Masked")
+			require.NoError(t, os.WriteFile(filepath.Join(dir, SessionChunkFile(100, 100)), []byte(raw[:len(raw)-1]), 0o600))
+			copy := guarded + sessLine(200, "Read")
+			if intact {
+				copy = raw + sessLine(200, "Read")
+			} else {
+				copy = copy[:len(copy)-1]
+			}
+			require.NoError(t, os.WriteFile(filepath.Join(dir, SessionChunkFile(100, 200)), []byte(copy), 0o600))
+			require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), []byte(raw)))
+			guard := func(line []byte) ([]byte, string, bool) {
+				if string(line) == raw[:len(raw)-1] {
+					return []byte(guarded), "masked", false
+				}
+				return line, "", false
+			}
+			data, err := ReadStreamWithSalvage(p, s, guard)
+			require.NoError(t, err)
+			require.Len(t, data.Lines, 2)
+			require.Empty(t, data.Gaps)
+		})
+	}
+}
+
 // HIGH-2: QuarantineLocal keeps the decodable lines of the damaged bytes, as
 // SalvageChunk does, instead of recovering only from the live file.
 func TestQuarantineLocalKeepsDecodableDamagedLines(t *testing.T) {
