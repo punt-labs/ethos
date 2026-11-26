@@ -454,6 +454,9 @@ func removeSnapshotScratch(scratch string) error {
 }
 
 func unsupportedWorktreeField(profile *checkset.WorktreeSnapshot) string {
+	if len(profile.Cache) != 0 {
+		return "cache"
+	}
 	switch {
 	case runtime.GOOS != "linux" && len(profile.Scratch.Files) != 0:
 		return "scratch.files"

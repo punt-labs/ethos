@@ -26,6 +26,7 @@ type WorktreeSnapshot struct {
 	Env        map[string]string   `yaml:"env,omitempty" json:"env,omitempty"`
 	System     SnapshotSystem      `yaml:"system,omitempty" json:"system,omitempty"`
 	Data       []SnapshotData      `yaml:"data,omitempty" json:"data,omitempty"`
+	Cache      []SnapshotCache     `yaml:"cache,omitempty" json:"cache,omitempty"`
 	Scratch    SnapshotScratch     `yaml:"scratch" json:"scratch"`
 	Git        *SnapshotGit        `yaml:"git,omitempty" json:"git,omitempty"`
 	Network    string              `yaml:"network,omitempty" json:"network,omitempty"`
@@ -57,6 +58,11 @@ type SnapshotData struct {
 	URL         string `yaml:"url" json:"url"`
 	MaxAgeHours int    `yaml:"max_age_hours" json:"max_age_hours"`
 	Mount       string `yaml:"mount" json:"mount"`
+}
+
+type SnapshotCache struct {
+	Name string `yaml:"name" json:"name"`
+	Env  string `yaml:"env" json:"env"`
 }
 
 type SnapshotPlatform struct {
@@ -182,6 +188,14 @@ func (s WorktreeSnapshot) validate() error {
 	}
 	if err := validateSnapshotData(s.Data); err != nil {
 		return err
+	}
+	if len(s.Cache) != 0 {
+		if len(s.Cache) != 1 || s.Cache[0] != (SnapshotCache{Name: "gocache", Env: "GOCACHE"}) {
+			return errors.New("snapshot cache supports only one gocache entry with env GOCACHE")
+		}
+		if s.Runtime == nil {
+			return errors.New("snapshot cache needs a pinned runtime")
+		}
 	}
 	if s.Git != nil {
 		if s.Git.BaseRef != "" && !strings.HasPrefix(s.Git.BaseRef, "refs/") {

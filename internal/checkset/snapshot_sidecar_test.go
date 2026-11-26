@@ -1,6 +1,7 @@
 package checkset
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,7 @@ func TestSnapshotSidecarFollowsWinningCheckSet(t *testing.T) {
     profile: linux-worktree-v1
     epoch: test
     sources: {mode: worktree}
+    cache: [{name: gocache, env: GOCACHE}]
     runtime:
       platforms:
         linux-amd64:
@@ -41,6 +43,7 @@ func TestSnapshotSidecarFollowsWinningCheckSet(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, set.Checks[0].InvalidSnapshotSidecar)
 	require.NotNil(t, set.Checks[0].WorktreeSnapshot)
+	require.JSONEq(t, `[{"name":"gocache","env":"GOCACHE"}]`, snapshotCacheJSON(t, set.Checks[0].WorktreeSnapshot))
 	require.Equal(t, "test-darwin", set.Checks[0].WorktreeSnapshot.Runtime.Platforms["darwin-arm64"].Bundle)
 	require.Equal(t, "https://example.com/darwin.tar.gz", set.Checks[0].WorktreeSnapshot.Runtime.Platforms["darwin-arm64"].URL)
 	argv, err := set.Checks[0].Argv()
@@ -52,6 +55,15 @@ func TestSnapshotSidecarFollowsWinningCheckSet(t *testing.T) {
 	names, err := store.List()
 	require.NoError(t, err)
 	require.Equal(t, []string{"project"}, names)
+}
+
+func snapshotCacheJSON(t *testing.T, snapshot *WorktreeSnapshot) string {
+	t.Helper()
+	data, err := json.Marshal(snapshot)
+	require.NoError(t, err)
+	var fields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(data, &fields))
+	return string(fields["cache"])
 }
 
 func TestSnapshotSidecarAcceptsJSONWithDeclaredSystemTools(t *testing.T) {
@@ -147,6 +159,10 @@ func TestLoadSnapshotSidecarRejectsInvalidPolicy(t *testing.T) {
 		{"invalid data URL", "network: loopback", "data: [{name: vuln, url: 'http://example.com/db', mount: db, max_age_hours: 24}]", "public HTTPS URL"},
 		{"invalid max age", "network: loopback", "data: [{name: vuln, url: 'https://example.com/db', mount: db, max_age_hours: 0}]", "positive max_age_hours"},
 		{"duplicate data mount", "network: loopback", "data: [{name: a, url: 'https://example.com/a', mount: db, max_age_hours: 24}, {name: b, url: 'https://example.com/b', mount: db, max_age_hours: 24}]", "names and mounts must be unique"},
+		{"wrong cache name", "network: loopback", "cache: [{name: modules, env: GOCACHE}]", "only one gocache entry"},
+		{"wrong cache env", "network: loopback", "cache: [{name: gocache, env: GOMODCACHE}]", "only one gocache entry"},
+		{"duplicate caches", "network: loopback", "cache: [{name: gocache, env: GOCACHE}, {name: gocache, env: GOCACHE}]", "only one gocache entry"},
+		{"cache without runtime", valid, "checks: {full-gate: {profile: linux-worktree-v1, epoch: test, sources: {mode: worktree}, cache: [{name: gocache, env: GOCACHE}]}}", "cache needs a pinned runtime"},
 		{"ambiguous Git base", "refs/remotes/origin/main", "origin/main", "Git base must be a full ref"},
 		{"ambiguous Git ref", "refs/tags/v4.8.0", "v4.8.0", "git.refs entries must be full"},
 		{"Git ref glob", "refs/tags/v4.8.0", "refs/tags/v4.*", "git.refs entries must be full"},
