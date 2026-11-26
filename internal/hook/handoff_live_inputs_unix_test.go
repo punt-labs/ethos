@@ -48,6 +48,12 @@ func TestHandoffLiveGitFingerprint(t *testing.T) {
 	require.NoError(t, os.Symlink(refs+"-saved", refs))
 	_, err = captureLiveHandoffRefs(t.Context(), linked)
 	require.ErrorContains(t, err, "ref symlink leaves keyed Git metadata")
+
+	newlineRoot := filepath.Join(t.TempDir(), "embedded\nnewline")
+	require.NoError(t, os.Mkdir(newlineRoot, 0o700))
+	stageGit(t, newlineRoot, "init")
+	_, err = captureLiveHandoffRefs(t.Context(), newlineRoot)
+	require.ErrorContains(t, err, "cannot capture live-verified Git ref paths")
 }
 
 func TestHandoffLiveGitFingerprintRefTypes(t *testing.T) {
@@ -160,4 +166,28 @@ func TestHandoffSnapshotEnvironmentRejectsUnsafeOverrides(t *testing.T) {
 		_, err := roots.environment(profile, checkset.SnapshotPlatform{Env: map[string]string{key: "/wrong"}}, "/bin")
 		require.ErrorContains(t, err, "invalid snapshot runtime environment variable")
 	}
+}
+
+func TestHandoffSnapshotOperandAndScratchBoundaries(t *testing.T) {
+	snapshot := t.TempDir()
+	file := filepath.Join(snapshot, "tracked")
+	writeFile(t, file, "payload")
+	require.True(t, gatePlanInputsPresent(snapshot, []string{"/bin/true", gateRoot}))
+	require.False(t, gatePlanInputsPresent(file, []string{"/bin/true"}))
+	require.False(t, gatePlanInputsPresent(snapshot, []string{"/bin/true", gateRoot + "/../outside"}))
+
+	targets, err := handoffScratchTargets(snapshot, []string{"nested/cache", "out"})
+	require.NoError(t, err)
+	require.Equal(t, []string{filepath.Join(snapshot, "nested", "cache"), filepath.Join(snapshot, "out")}, targets)
+	for _, name := range []string{".", "../outside", ".git/state", "nested/../out"} {
+		_, err := handoffScratchTargets(snapshot, []string{name})
+		require.ErrorContains(t, err, "invalid checkout scratch path")
+	}
+	for _, paths := range [][]string{{"nested", "nested/cache"}, {"nested/cache", "nested"}} {
+		_, err := handoffScratchTargets(snapshot, paths)
+		require.ErrorContains(t, err, "overlapping checkout scratch paths")
+	}
+	_, err = handoffScratchTargets(snapshot, []string{"tracked"})
+	require.ErrorIs(t, err, errHandoffScratchShadowsInput)
+	require.ErrorContains(t, rejectHandoffSymlinkParents(snapshot, filepath.Dir(snapshot)), "snapshot path is outside its root")
 }
