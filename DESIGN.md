@@ -14490,3 +14490,16 @@ without blocking re-entry. No implementation is approved by this entry.
 See [Safe-by-default SubagentStop handoff gates](docs/design-safe-handoff-gates.md)
 for the measured spike, safety defaults, rejected alternatives and
 acceptance criteria.
+
+### Amendment 2026-11-25: Darwin live-verified handoff gates
+
+**Operator decision (Jim):** “Live check, tree must match”. Darwin checks
+that require CoreSimulator or app-hosted XCTest may explicitly opt into
+live verification. Keep a verdict only when the opening and closing tree
+keys match and independent FSEvents and kqueue guards establish that no
+keyed input changed through the cutoff. A change or uncertainty visibly
+defers. This is not snapshot isolation and does not relax the Darwin
+snapshot sandbox.
+
+See the [Darwin amendment](docs/design-darwin-live-verified.md) for the
+sidecar contract, evidence, and residual limitations.
