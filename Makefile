@@ -364,12 +364,19 @@ calibrate-tokens: ## Calibrate the offline tokenizer against Anthropic's API (op
 
 .PHONY: check-opencode doctor-opencode smoke-opencode smoke-opencode-children smoke-opencode-discovery smoke-opencode-health smoke-opencode-formatter
 
+OPENCODE_PROFILE ?= bifrost
+ifeq ($(OPENCODE_PROFILE),direct-openai)
+opencode_profile_flag := --nightly
+else ifneq ($(OPENCODE_PROFILE),bifrost)
+opencode_profile_flag = $(error Unknown OPENCODE_PROFILE: $(OPENCODE_PROFILE))
+endif
+
 check-opencode: ## Check native OpenCode configuration offline (CI-safe)
 	python3 -B scripts/opencode.py check
 	python3 -B -m unittest discover -s scripts -p 'opencode_test.py'
 
 doctor-opencode: ## Check live OpenCode discovery and six MCP connections
-	python3 -B scripts/opencode.py doctor
+	python3 -B scripts/opencode.py doctor $(opencode_profile_flag)
 
 smoke-opencode: ## Exercise real native child/tool execution (uses model credits)
 	python3 -B scripts/opencode.py smoke
@@ -378,7 +385,7 @@ smoke-opencode-children: ## Smoke all specialist child reads only (uses model cr
 	python3 -B scripts/opencode.py smoke --stage children
 
 smoke-opencode-discovery: ## Smoke maintained procedure discovery only (uses model credits)
-	python3 -B scripts/opencode.py smoke --stage discovery
+	python3 -B scripts/opencode.py smoke --stage discovery $(opencode_profile_flag)
 
 smoke-opencode-health: ## Smoke root Code Mode health calls only (uses model credits)
 	python3 -B scripts/opencode.py smoke --stage health

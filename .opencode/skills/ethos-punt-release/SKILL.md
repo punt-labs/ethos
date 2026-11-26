@@ -14,11 +14,11 @@ be the maintained workspace pair, not a copied giant plugin skill.
 
 For an approved release, execute that executor's protocol and playbook, including
 preconditions, background script steps, postconditions, bounded diagnosis and
-independent verification. Use `punt --help` / `punt release --help` to confirm
-the installed contract. All steps execute against the current target repository,
-NEVER in punt-kit. The engine needs the clean canonical target checkout on main;
-if invoked in a feature worktree, report the prerequisite and hand off rather
-than silently releasing a different checkout.
+independent verification. Use `punt --help` / `punt release run --help` to
+confirm the installed contract. All steps execute against the current target
+repository, NEVER in punt-kit. The engine needs the clean canonical target
+checkout on main; if invoked in a feature worktree, report the prerequisite
+and hand off rather than silently releasing a different checkout.
 
 Translate Claude Bash/Agent calls to native shell/subagent calls. The leader
 launches an independent verifier; specialists deny nested delegation. Preserve

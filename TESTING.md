@@ -35,7 +35,7 @@ Pre-push preserves Git's original remote arguments and input. Like the
 [Release] workflow's `v*` filter, the exemption applies only to tag names
 starting with `v` and containing no slash. Deletions also skip the local
 test suite; branch and other tag updates in the same push still run it.
-`punt release` can push a release tag that differs from checkout HEAD;
+`punt release run` can push a release tag that differs from checkout HEAD;
 the workflow tests that tagged candidate before publication. The opt-in is
 per checkout: other
 linked worktrees and branches without `.githooks` still run their existing
@@ -69,8 +69,10 @@ The trusted `main` Nightly uses a GitHub-hosted Ubuntu runner and installs
 checksum-pinned OpenCode 2.2.5 and the [OpenCode setup] dependencies. Configure
 Actions secrets `OPENAI_API_KEY` (with access to `gpt-6-astra`,
 `gpt-6.1-sol`, and `gpt-5.6-terra`) and `CONTEXT7_API_KEY`.
-The job uses OpenCode's native OpenAI provider; only the disposable Actions
-checkout switches model routes. Workstations still use Bifrost.
+The job uses OpenCode's native OpenAI provider in a disposable Actions checkout.
+Workstations default to Bifrost; for a direct OpenAI discovery demo, use
+`OPENCODE_PROFILE=direct-openai` in a disposable worktree as described in
+[OpenCode setup].
 Vox uses local eSpeak and Beadle uses a disposable loopback IMAP server;
 the other local MCP state is isolated as well. Missing live credentials fail
 the job and trigger the existing Nightly failure notification.

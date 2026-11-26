@@ -125,6 +125,12 @@ class ConfigTests(unittest.TestCase):
                              "allow" if name == "jms" else "deny")
             self.assertEqual(oc.effect(rules, "shell", "git push origin topic"), "deny")
 
+    def test_bwk_cannot_run_a_release(self):
+        config = oc.check(self.root)
+        info, _ = oc.frontmatter(self.root / ".opencode/agents/bwk.md")
+        rules = config["permissions"] + info["permissions"]
+        self.assertEqual(oc.effect(rules, "shell", "punt release run 1.0.0"), "deny")
+
     def test_qodo_adapter_is_required_and_review_cannot_bypass_router(self):
         command = self.root / ".opencode/commands/review.md"
         original = command.read_text()
@@ -1016,10 +1022,18 @@ class LiveHelperTests(unittest.TestCase):
         calls += [{"name": "shell", "state": {"status": "completed", "input": {"command": command},
                                               "metadata": {"status": "completed", "exit": 0}}}
                   for command in live.DISCOVERY_COMMANDS]
+        release_help = next(call for call in calls if call["state"]["input"].get("command") == "punt release run --help")
+        release_help["state"]["content"] = [{"type": "text", "text": "Usage: punt release run [OPTIONS] [VERSION]"}]
         calls += [self.read_tool(path) for path in paths]
         self.assertIn("z-spec --help", live.DISCOVERY_COMMANDS)
+        self.assertIn("punt release run --help", live.DISCOVERY_COMMANDS)
         with patch.object(live, "sources", return_value=paths):
             live.discovery_evidence(calls, oc.ROOT)
+            for output in ("Usage: punt release [OPTIONS] [version_arg]", "See punt release run --help", ""):
+                bad_help = copy.deepcopy(release_help)
+                bad_help["state"]["content"] = [{"type": "text", "text": output}]
+                with self.subTest(release_help=output), self.assertRaisesRegex(oc.CheckError, "release run usage"):
+                    live.discovery_evidence([bad_help, *calls], oc.ROOT)
             for index in range(len(calls) - len(paths), len(calls)):
                 for content in self.invalid_read_contents():
                     changed = copy.deepcopy(calls)
@@ -1102,6 +1116,13 @@ class LiveHelperTests(unittest.TestCase):
         with patch("sys.argv", ["opencode.py", "smoke", "--nightly"]), patch.object(live, "smoke") as smoke:
             oc.main()
         smoke.assert_called_once_with(oc.ROOT, None, nightly=True)
+
+    def test_doctor_cli_keeps_bifrost_default_and_accepts_nightly(self):
+        for flags, nightly in (([], False), (["--nightly"], True)):
+            with self.subTest(flags=flags), patch("sys.argv", ["opencode.py", "doctor", *flags]), \
+                    patch.object(live, "doctor") as doctor:
+                oc.main()
+                doctor.assert_called_once_with(oc.ROOT, **({"nightly": True} if nightly else {}))
 
     def test_api_failures_keep_safe_operation_exit_and_timeout(self):
         api = live.API(oc.ROOT)
