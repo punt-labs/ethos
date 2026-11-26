@@ -379,6 +379,14 @@ epoch on runtime changes. Compare the replacement against the explicit
 
 Use the same acceptance test for the other handoff gate policies:
 
+An explicit `ethos handoff refresh-data` fetches the selected policy's
+declared HTTPS data into repository-local state. Linux worktree checks see
+verified, fresh data read-only at `{runtime}/data/<mount>`. A URL naming the
+public Go vulnerability database root refreshes its `vulndb.zip` export as a
+directory; other URLs provide a single file. The gate never downloads data.
+Data digests participate in verdict keys; missing, expired or invalid data
+defers with the same required/advisory semantics as other unavailable inputs.
+
 | Consumers | Profile work to verify |
 | --- | --- |
 | Beadle, Biff, Cryptd, Ethos, MCP Proxy, Points, Quarry | Pin the Go and native tools; include module, build, quality gate, and baseline inputs; pre-provision dependencies offline. |

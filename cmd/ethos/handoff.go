@@ -44,6 +44,32 @@ func init() {
 	}
 	fetch.Flags().StringVar(&agent, "agent", "", "Select the handoff policy for this agent instead of the project default")
 	fetch.Flags().StringVar(&localFile, "file", "", "Install this local archive without downloading")
-	handoff.AddCommand(fetch)
+	var dataAgent string
+	refresh := &cobra.Command{
+		Use:   "refresh-data",
+		Short: "Refresh the handoff policy's read-only data snapshots",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if _, err := requireCheckout(cmd.ErrOrStderr(), "handoff refresh-data"); err != nil {
+				return err
+			}
+			refreshed, err := hook.RefreshHandoffData(cmd.Context(), currentRoots().Located, dataAgent)
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if jsonOutput {
+				return json.NewEncoder(out).Encode(refreshed)
+			}
+			for _, name := range refreshed {
+				if _, err := fmt.Fprintln(out, name); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}
+	refresh.Flags().StringVar(&dataAgent, "agent", "", "Select the handoff policy for this agent instead of the project default")
+	handoff.AddCommand(fetch, refresh)
 	rootCmd.AddCommand(handoff)
 }
