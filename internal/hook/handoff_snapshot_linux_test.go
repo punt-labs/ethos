@@ -343,12 +343,17 @@ func TestHandoffSandboxReportsMissingSnapshotCwd(t *testing.T) {
 	_, err = executeHandoffSnapshot(context.Background(), scratch, live, proof, inputs, editCheck{
 		argv: []string{"/bin/sh", "-c", "exit 0"}, cwd: gateRoot + "/not-declared", timeout: 5 * time.Second,
 	})
+	skipIfHandoffSandboxUnavailable(t, err)
+	require.ErrorContains(t, err, "check cwd missing from snapshot")
+}
+
+func skipIfHandoffSandboxUnavailable(t *testing.T, err error) {
+	t.Helper()
 	if err != nil && (strings.Contains(err.Error(), "isolation unavailable on this host") ||
 		strings.Contains(err.Error(), "make mount propagation private: permission denied") ||
 		strings.Contains(err.Error(), "make mount propagation private: operation not permitted")) {
 		t.Skip(err.Error())
 	}
-	require.ErrorContains(t, err, "check cwd missing from snapshot")
 }
 
 func TestHandoffSandboxReportsHighExitStatuses(t *testing.T) {
@@ -358,11 +363,12 @@ func TestHandoffSandboxReportsHighExitStatuses(t *testing.T) {
 	proof, err := digestGateInputs(context.Background(), live, "", inputs)
 	require.NoError(t, err)
 	for _, code := range []string{"126", "127", "128"} {
+		failure, err := executeHandoffSnapshot(context.Background(), t.TempDir(), live, proof, inputs, editCheck{
+			name: "gate", cwd: gateRoot, timeout: 5 * time.Second,
+			argv: []string{"/bin/sh", "-c", "echo gate-stdout; echo gate-stderr >&2; exit \"$1\"", "gate", code},
+		})
+		skipIfHandoffSandboxUnavailable(t, err)
 		t.Run(code, func(t *testing.T) {
-			failure, err := executeHandoffSnapshot(context.Background(), t.TempDir(), live, proof, inputs, editCheck{
-				name: "gate", cwd: gateRoot, timeout: 5 * time.Second,
-				argv: []string{"/bin/sh", "-c", "echo gate-stdout; echo gate-stderr >&2; exit \"$1\"", "gate", code},
-			})
 			require.NoError(t, err)
 			require.Contains(t, failure, "gate: exit status "+code)
 			require.Contains(t, failure, "\ngate-stdout\n")
