@@ -92,14 +92,15 @@ For an opted-in check, read the generation and include it in the
 verdict key before looking for a reusable verdict; hold the lock
 through the reuse decision. A running gate may publish artifacts and
 record a verdict only under the generation it opened with.
-For each verdict backed by a persisted cache, record the source
-generation directory and its identity: a fresh random ID written when
-the directory is created, never copied to its replacement. Reuse that
-verdict only if the recorded directory still exists with the same
-identity, checked under the namespace lock. Removing or replacing the
-directory invalidates its verdicts independently of the generation
-counter. If either required proof cannot be read reliably, do not
-reuse the verdict.
+For each verdict backed by a persisted cache, also record the ID of
+the generation that supplied it. At generation creation, write a fresh
+random ID to a host-owned file in the generation directory, outside the
+artifact tree that is copied and promoted. Promotions within that
+generation preserve the ID; clear and eviction start a generation
+with a new ID. Reuse the verdict only if the current ID equals the
+recorded ID, checked under the namespace lock. Manual deletion of the
+cache subtree also deletes the ID. If either the generation or its
+required ID is missing or unreadable, do not reuse the verdict.
 The prototype tests private copies and pass-only write-back; the clear
 command, eviction, and generation tracking are proposed, not implemented.
 
