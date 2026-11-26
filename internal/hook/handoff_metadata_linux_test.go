@@ -109,6 +109,9 @@ chmod 0555 %q
 	require.NoError(t, err)
 	require.Len(t, slots, 2)
 
+	writeFile(t, filepath.Join(root, "gate.sh"), "ls() { return 42; }\n"+emptyVarTmp)
+	require.Contains(t, run().Blocking, "exit status 42")
+
 	path := filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml")
 	profile, err := os.ReadFile(path)
 	require.NoError(t, err)
