@@ -151,6 +151,8 @@ var writerRegistry = map[string]writerEntry{
 	"internal/hook.handoffRuntime.fetch":         exempt("streams a published runtime archive to the digest-verified installer, not to a record"),
 	"internal/hook.InstallHandoffRuntimeFile":    exempt("streams a local runtime archive to the digest-verified installer, not to a record"),
 	"internal/hook.handoffRuntime.install":       exempt("installs the exact digest-pinned runtime archive in the machine-local store; it does not author a record"),
+	"internal/hook.handoffData.refresh":          exempt("streams public HTTPS data to the local data installer, not to a record"),
+	"internal/hook.handoffData.install":          exempt("installs exact public HTTPS data with freshness and digest metadata in local storage; redacting the payload would alter the mounted data"),
 	"internal/hook.mountHandoffProcAndDev":       exempt("creates empty mount targets for device files inside the private sandbox"),
 	"internal/hook.mountHandoffSystem":           exempt("writes synthetic passwd and group files and creates empty bind targets inside the private sandbox; it does not write records"),
 	"internal/hook.writeHandoffLoopbackHosts":    exempt("writes constant resolver files inside the private sandbox; it does not write records"),

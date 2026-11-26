@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"runtime/coverage"
 	"slices"
@@ -304,9 +305,16 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		detail = err.Error()
 	}
 	diagnostic.LogHookCheck(ctx, checkout, checkout, "handoff", check.name, "failed", time.Since(start))
-	lines := strings.Split(strings.TrimRight(string(bytes.Join([][]byte{stdout.data, stderr.data}, []byte("\n"))), "\n"), "\n")
+	output := string(bytes.Join([][]byte{stdout.data, stderr.data}, []byte("\n")))
+	if plan.Worktree != nil {
+		output = sandboxHomePath.ReplaceAllString(output, "${1}$$HOME${2}")
+	}
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
 	return fmt.Sprintf("%s: %s\ncommand: %s\n%s", check.name, detail, strings.Join(check.argv, " "), strings.Join(lines[max(0, len(lines)-40):], "\n")), nil
 }
+
+var sandboxHomePath = regexp.MustCompile(`(^|[^[:alnum:]_./-])` +
+	regexp.QuoteMeta(linuxHandoffRoots().home()) + `($|[^[:alnum:]_.-])`)
 
 func worktreeSandboxPath(checkout, value string) string {
 	if filepath.IsAbs(value) {
