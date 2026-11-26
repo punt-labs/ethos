@@ -26,8 +26,12 @@ on keble was not measured.
 
 ## 2. Separate eligibility, identity and admission
 
-1. Keep roster leave and the current read-only skip. Do not launch anything
-   unless a configured check matches the handoff inputs. Keep
+1. Keep roster leave and the current read-only skip for policies without a
+   worktree sidecar. A sidecar requires system and runtime proofs that are
+   not part of the checkout fingerprint, so even unchanged stops go through
+   admission for the whole policy, including its other checks. Admission can
+   still reuse a matching verified verdict. Do not launch anything unless a
+   configured check matches the handoff inputs. Keep
    `~/.punt-hooks-kill` ahead of input, storage, and scheduling.
 2. Record dispatch role at SubagentStart from the declared mission and
    validated binding: worker, non-worker or unknown. A seeded checklist
