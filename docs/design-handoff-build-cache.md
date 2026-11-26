@@ -65,7 +65,8 @@ of the repositories using the cache. Use `ethos handoff cache clear`
 to reclaim space. If that command is unavailable, stop all processes
 using the cache and remove only `.punt-labs/local/ethos/handoff-cache/`
 from the shared store. This subtree contains no audit logs or receipts.
-After removal, initialize a fresh, never-reused generation.
+No follow-up generation bump is required to invalidate verdicts that
+used the deleted cache.
 
 To publish, take a single repository-level budget lock covering every
 runtime digest while holding the namespace lock. Reserve space before
@@ -91,7 +92,14 @@ For an opted-in check, read the generation and include it in the
 verdict key before looking for a reusable verdict; hold the lock
 through the reuse decision. A running gate may publish artifacts and
 record a verdict only under the generation it opened with.
-If the generation cannot be read reliably, do not reuse a verdict.
+For each verdict backed by a persisted cache, record the source
+generation directory and its identity: a fresh random ID written when
+the directory is created, never copied to its replacement. Reuse that
+verdict only if the recorded directory still exists with the same
+identity, checked under the namespace lock. Removing or replacing the
+directory invalidates its verdicts independently of the generation
+counter. If either required proof cannot be read reliably, do not
+reuse the verdict.
 The prototype tests private copies and pass-only write-back; the clear
 command, eviction, and generation tracking are proposed, not implemented.
 
