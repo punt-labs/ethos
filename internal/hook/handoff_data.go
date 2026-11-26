@@ -19,7 +19,9 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/attribute"
+	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/checkset"
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
@@ -52,7 +54,50 @@ func (d handoffData) unavailable() error {
 	if d.agent != "" && attribute.ValidateSlug(d.agent) == nil {
 		cmd += " --agent " + d.agent
 	}
-	return fmt.Errorf("data-unavailable: %q is missing, expired or invalid; run (cd %s && %s)", d.Name, handoffShellPath(d.checkout), cmd)
+	dir := handoffShellPath(d.checkout)
+	if editRedact(dir) != dir {
+		if ref := handoffDataWorktreeRef(d.checkout); ref != "" {
+			return fmt.Errorf("data-unavailable: %q is missing, expired or invalid; run %s --worktree %s", d.Name, cmd, audit.ShellQuote(ref))
+		}
+	}
+	return fmt.Errorf("data-unavailable: %q is missing, expired or invalid; run (cd %s && %s)", d.Name, dir, cmd)
+}
+
+func handoffDataWorktreeRef(checkout string) string {
+	dir, common, err := resolve.HandGitDirs(checkout)
+	if err != nil {
+		return ""
+	}
+	if dir == common {
+		return "primary"
+	}
+	if filepath.Dir(dir) == filepath.Join(common, "worktrees") {
+		return "linked:" + filepath.Base(dir)
+	}
+	return ""
+}
+
+// HandoffDataCheckout selects a registered worktree in the current repository.
+func HandoffDataCheckout(loc resolve.Located, ref string) (resolve.Located, error) {
+	if ref == "" {
+		return loc, nil
+	}
+	list, err := gitenv.Output(loc.Checkout, "git", "worktree", "list", "--porcelain", "-z")
+	if err != nil {
+		return resolve.Located{}, errors.New("cannot list the repository worktrees for refresh-data")
+	}
+	for field := range strings.SplitSeq(string(list), "\x00") {
+		checkout, found := strings.CutPrefix(field, "worktree ")
+		if found && handoffDataWorktreeRef(checkout) == ref {
+			root, store, err := resolve.CheckoutAndStoreOf(checkout)
+			if err == nil && root != "" && store == loc.Store {
+				loc.Checkout = root
+				return loc, nil
+			}
+			break
+		}
+	}
+	return resolve.Located{}, fmt.Errorf("refresh-data worktree %q is not registered in this repository", ref)
 }
 
 // RefreshHandoffData fetches the selected policy's data outside the gate.

@@ -44,7 +44,7 @@ func init() {
 	}
 	fetch.Flags().StringVar(&agent, "agent", "", "Select the handoff policy for this agent instead of the project default")
 	fetch.Flags().StringVar(&localFile, "file", "", "Install this local archive without downloading")
-	var dataAgent string
+	var dataAgent, dataWorktree string
 	refresh := &cobra.Command{
 		Use:   "refresh-data",
 		Short: "Refresh the handoff policy's read-only data snapshots",
@@ -53,7 +53,11 @@ func init() {
 			if _, err := requireCheckout(cmd.ErrOrStderr(), "handoff refresh-data"); err != nil {
 				return err
 			}
-			refreshed, err := hook.RefreshHandoffData(cmd.Context(), currentRoots().Located, dataAgent)
+			loc, err := hook.HandoffDataCheckout(currentRoots().Located, dataWorktree)
+			if err != nil {
+				return err
+			}
+			refreshed, err := hook.RefreshHandoffData(cmd.Context(), loc, dataAgent)
 			if err != nil {
 				return err
 			}
@@ -70,6 +74,7 @@ func init() {
 		},
 	}
 	refresh.Flags().StringVar(&dataAgent, "agent", "", "Select the handoff policy for this agent instead of the project default")
+	refresh.Flags().StringVar(&dataWorktree, "worktree", "", "Select primary or linked:<Git worktree ID> in the current repository")
 	handoff.AddCommand(fetch, refresh)
 	rootCmd.AddCommand(handoff)
 }
