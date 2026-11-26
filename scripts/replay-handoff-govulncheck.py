@@ -91,6 +91,7 @@ checks:
 """)
         (source / "gate.sh").write_text('''set -eu
 test "$(cat "$ETHOS_HANDOFF_RUNTIME/data/bundle-marker")" = 'from runtime archive'
+if (printf changed >> "$ETHOS_HANDOFF_RUNTIME/data/bundle-marker") 2>/dev/null; then exit 91; fi
 if touch "$ETHOS_HANDOFF_RUNTIME/data/govulndb/write-probe" 2>/dev/null; then exit 92; fi
 exec govulncheck -db "file://$ETHOS_HANDOFF_RUNTIME/data/govulndb" ./...
 ''')
@@ -138,6 +139,7 @@ func main() {
             assert failure["decision"] == "block", failure
             assert "GO-2022-1059" in failure["reason"], failure
             assert "exit status 3" in failure["reason"], failure
+        print(f"{case}: bundled marker and refreshed DB coexisted read-only", flush=True)
 
     fixture("clean", "v0.42.0", "completed")
     fixture("vulnerable", "v0.3.7", "failed")
