@@ -182,9 +182,10 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		if profile.Git != nil && worktree.gitDir == "" {
 			return "", errors.New("git view was not prepared")
 		}
-		if worktree.gitDir != "" {
-			const discovery = "GIT_DISCOVERY_ACROSS_FILESYSTEM="
-			env = slices.DeleteFunc(env, func(entry string) bool { return strings.HasPrefix(entry, discovery) })
+		const discovery = "GIT_DISCOVERY_ACROSS_FILESYSTEM="
+		if worktree.gitDir != "" && !slices.ContainsFunc(env, func(entry string) bool {
+			return strings.HasPrefix(entry, discovery)
+		}) {
 			env = append(env, discovery+"1")
 		}
 		if profile.Runtime != nil && worktree.runtimeDir == "" {

@@ -220,14 +220,19 @@ func TestHandoffWorktreeGitDiscoveryAcrossScratchOverlay(t *testing.T) {
 	data, err := os.ReadFile(sidecar)
 	require.NoError(t, err)
 	profile := string(data) + "    git: {}\n    scratch: {files: [output.tmp]}\n"
-	writeFile(t, sidecar, profile)
+	writeFile(t, sidecar, profile+"    prehydrate: {run: [git, -C, source, rev-parse, --git-dir]}\n")
 	feedback := run()
 	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
 	require.Empty(t, feedback.Blocking)
 
-	writeFile(t, sidecar, profile+"    env: {GIT_DISCOVERY_ACROSS_FILESYSTEM: \"0\"}\n"+
-		"    prehydrate: {run: [git, -C, source, rev-parse, --git-dir]}\n")
-	require.Empty(t, run().Blocking)
+	for _, value := range []string{"0", "false"} {
+		t.Run(value, func(t *testing.T) {
+			writeFile(t, filepath.Join(root, "gate.sh"), `test "$GIT_DISCOVERY_ACROSS_FILESYSTEM" = `+value)
+			writeFile(t, sidecar, profile+"    env: {GIT_DISCOVERY_ACROSS_FILESYSTEM: \""+value+"\"}\n"+
+				"    prehydrate: {run: [sh, -e, gate.sh]}\n")
+			require.Empty(t, run().Blocking)
+		})
+	}
 }
 
 func TestHandoffWorktreeValidatesPrivateGitOperand(t *testing.T) {
