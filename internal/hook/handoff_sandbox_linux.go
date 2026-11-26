@@ -440,9 +440,8 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 		return unix.ENOTDIR
 	}
 	env := sandboxEnvironment
-	var checkoutScratch []string
+	var generatedCheckoutScratch []string
 	if plan.Worktree != nil {
-		checkoutScratch = plan.Worktree.CheckoutScratch
 		if plan.Worktree.RuntimeDir != "" {
 			phase = "mount verified runtime bundle"
 			if err := mountGateReadOnly(plan.Worktree.RuntimeDir, filepath.Join(root, linuxHandoffRoots().runtime)); err != nil {
@@ -450,11 +449,14 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 			}
 		}
 		phase = "mount private worktree scratch"
-		if err := mountHandoffWorktreeScratch(root, checkout, checkoutScratch); err != nil {
+		if err := mountHandoffWorktreeScratch(root, checkout, plan.Worktree.CheckoutScratch); err != nil {
 			if errors.Is(err, errHandoffScratchShadowsInput) {
 				phase = errHandoffScratchShadowsInput.Error()
 			}
 			return err
+		}
+		if len(plan.Worktree.Prehydrate) != 0 {
+			generatedCheckoutScratch = plan.Worktree.CheckoutScratch
 		}
 		phase = "copy private scratch.seed"
 		if err := seedHandoffScratch(root, plan.Worktree.ScratchSeed); err != nil {
@@ -473,7 +475,7 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 		env = plan.Worktree.Environment
 	}
 	phase = handoffMaterializePhase
-	if !gatePlanInputsPresent(checkout, argv, checkoutScratch) {
+	if !gatePlanInputsPresent(checkout, argv, generatedCheckoutScratch) {
 		return errors.New("snapshot inputs did not match the invocation")
 	}
 	if err := unix.Mount("", checkout, "", unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV, ""); err != nil {
