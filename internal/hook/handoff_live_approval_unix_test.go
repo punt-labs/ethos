@@ -31,6 +31,13 @@ func TestHandoffLiveApprovalRevisionAndLinkedWorktree(t *testing.T) {
 	}
 	local := selected(root)
 	linked := selected(sibling)
+	description, err := local.Description()
+	require.NoError(t, err)
+	require.Contains(t, description, "live")
+	_, err = ResolveHandoffLivePolicy(sibling, "Explore", "project")
+	require.Error(t, err)
+	_, err = ResolveHandoffLivePolicy(sibling, "", "other")
+	require.ErrorContains(t, err, "has no valid live-verified check")
 	require.Equal(t, local.Repo, linked.Repo)
 	require.Equal(t, local.Revision, linked.Revision)
 	require.Empty(t, local.approval())
@@ -46,10 +53,15 @@ func TestHandoffLiveApprovalRevisionAndLinkedWorktree(t *testing.T) {
 	writeFile(t, policyPath, string(policyYAML)+"# edit makes a new revision\n")
 	require.Empty(t, selected(sibling).approval())
 	require.Equal(t, nonce, selected(root).approval())
+	revocation, err := ResolveHandoffLiveRevocation(sibling, "project")
+	require.NoError(t, err)
+	require.Empty(t, revocation.approval())
 	require.NoError(t, linked.Revoke())
 	require.Empty(t, local.approval())
 	require.NoError(t, local.Approve())
 	require.NotEqual(t, nonce, local.approval())
+	require.NoError(t, revocation.Revoke())
+	require.Empty(t, local.approval())
 }
 
 func TestHandoffLiveApprovalRejectsUnsafePins(t *testing.T) {
@@ -73,6 +85,18 @@ func TestHandoffLiveApprovalRejectsUnsafePins(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, busy)
 	require.NoError(t, policy.Revoke())
+	require.NoError(t, policy.Revoke())
+	require.NoError(t, os.Chmod(filepath.Dir(path), 0o755))
+	require.ErrorContains(t, policy.Revoke(), "live approval directory is not private")
+	require.ErrorContains(t, policy.Approve(), "live approval directory is not private")
+	t.Setenv("HOME", "relative")
+	require.ErrorContains(t, policy.Approve(), "home directory must be absolute")
+	require.Empty(t, policy.approval())
+	t.Setenv("HOME", t.TempDir())
+	machineRoot := filepath.Join(os.Getenv("HOME"), ".punt-labs", "ethos")
+	require.NoError(t, os.MkdirAll(machineRoot, 0o700))
+	require.NoError(t, os.Symlink(filepath.Join(machineRoot, "live-approvals"), filepath.Join(machineRoot, "live-approvals")))
+	require.Error(t, policy.Approve(), "an approval directory must not follow a symlink loop")
 
 	for _, slot := range []string{".", "../escape"} {
 		_, err := newLiveApprovalPolicy(root, slot, "policy-sha")

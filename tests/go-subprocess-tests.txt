@@ -1224,6 +1224,7 @@ internal/hook TestHandoffConcurrentAgents
 internal/hook TestHandoffFallbackIsolation
 internal/hook TestHandoffFileFailurePolicySelection
 internal/hook TestHandoffLinkedWorktree
+internal/hook TestHandoffLiveGitFingerprint
 internal/hook TestHandoffReadOnlyStop
 internal/hook TestHandoffRenameIndexUsesCanonicalLocalTemp
 internal/hook TestHandoffRenameUntrackedBudget
