@@ -93,9 +93,16 @@ func prepareHandoffSystem(ctx context.Context, checkout string, profile *checkse
 				return plan, fmt.Errorf("cannot safely resolve system input %s", path)
 			}
 			input := handoffSystemInput{Path: path, Directory: group.dir}
-			input.Digest, err = fingerprintHandoffSystemInput(ctx, source, group.dir)
+			var memo *handoffSystemMemo
+			if group.dir {
+				memo = loadHandoffSystemMemo(source)
+			}
+			input.Digest, err = fingerprintHandoffSystemInputMemo(ctx, source, group.dir, memo)
 			if err != nil {
 				return plan, fmt.Errorf("cannot fingerprint system input %s", path)
+			}
+			if memo != nil {
+				memo.save()
 			}
 			plan.Inputs = append(plan.Inputs, input)
 			if !handoffSystemCovers(plan.Mounts, path) {
@@ -203,8 +210,12 @@ func handoffSystemSourceCovers(mounts []handoffSystemMount, path string) bool {
 }
 
 func fingerprintHandoffSystemInput(ctx context.Context, path string, directory bool) (string, error) {
+	return fingerprintHandoffSystemInputMemo(ctx, path, directory, nil)
+}
+
+func fingerprintHandoffSystemInputMemo(ctx context.Context, path string, directory bool, memo *handoffSystemMemo) (string, error) {
 	if !directory {
-		return fingerprintHandoffSystemFile(ctx, path, 0, make([]byte, handoffSystemReadBuffer))
+		return fingerprintHandoffSystemFile(ctx, path, 0, make([]byte, handoffSystemReadBuffer), nil)
 	}
 	path, err := filepath.EvalSymlinks(path)
 	if err != nil {
@@ -242,7 +253,7 @@ func fingerprintHandoffSystemInput(ctx context.Context, path string, directory b
 		}
 		batch = append(batch, item)
 		if len(batch) == cap(batch) {
-			err := writeHandoffSystemProofBatch(ctx, enc, path, batch, buffers)
+			err := writeHandoffSystemProofBatch(ctx, enc, path, batch, buffers, memo)
 			batch = batch[:0]
 			return err
 		}
@@ -251,7 +262,7 @@ func fingerprintHandoffSystemInput(ctx context.Context, path string, directory b
 	if err != nil {
 		return "", err
 	}
-	if err := writeHandoffSystemProofBatch(ctx, enc, path, batch, buffers); err != nil {
+	if err := writeHandoffSystemProofBatch(ctx, enc, path, batch, buffers, memo); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
@@ -265,7 +276,7 @@ type handoffSystemProofEntry struct {
 	err    error
 }
 
-func writeHandoffSystemProofBatch(ctx context.Context, enc *json.Encoder, root string, batch []handoffSystemProofEntry, buffers [][handoffSystemReadBuffer]byte) error {
+func writeHandoffSystemProofBatch(ctx context.Context, enc *json.Encoder, root string, batch []handoffSystemProofEntry, buffers [][handoffSystemReadBuffer]byte, memo *handoffSystemMemo) error {
 	var workers sync.WaitGroup
 	var next atomic.Int32
 	for i := range min(len(buffers), len(batch)) {
@@ -276,7 +287,7 @@ func writeHandoffSystemProofBatch(ctx context.Context, enc *json.Encoder, root s
 				}
 				entry := &batch[index]
 				if entry.info.Mode().IsRegular() {
-					entry.digest, entry.err = fingerprintHandoffSystemFile(ctx, entry.path, unix.O_NOFOLLOW, buffers[i][:])
+					entry.digest, entry.err = fingerprintHandoffSystemFile(ctx, entry.path, unix.O_NOFOLLOW, buffers[i][:], memo)
 				}
 			}
 		})
@@ -296,7 +307,7 @@ func writeHandoffSystemProofBatch(ctx context.Context, enc *json.Encoder, root s
 	return ctx.Err()
 }
 
-func fingerprintHandoffSystemFile(ctx context.Context, path string, flags int, buffer []byte) (string, error) {
+func fingerprintHandoffSystemFile(ctx context.Context, path string, flags int, buffer []byte, memo *handoffSystemMemo) (string, error) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|flags, 0)
 	if err != nil {
 		return "", err
@@ -307,11 +318,26 @@ func fingerprintHandoffSystemFile(ctx context.Context, path string, flags int, b
 	if err != nil || !info.Mode().IsRegular() {
 		return "", errors.New("system input is not a regular file")
 	}
+	var key handoffMemoKey
+	if memo != nil {
+		key = handoffMemoIdentity(info)
+		if digest, ok := memo.get(path, key); ok {
+			return digest, nil
+		}
+	}
 	h := sha256.New()
 	if _, err := io.CopyBuffer(&gateHashBudget{ctx: ctx, dst: h, remaining: math.MaxInt64}, struct{ io.Reader }{f}, buffer); err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	digest := hex.EncodeToString(h.Sum(nil))
+	if memo != nil {
+		final, err := f.Stat()
+		if err != nil || handoffMemoIdentity(final) != key {
+			return "", errors.New("system input changed while hashing")
+		}
+		memo.put(path, handoffMemoRecord{Key: key, Digest: digest})
+	}
+	return digest, nil
 }
 
 func mountHandoffSystem(root string, plan handoffSystemPlan) error {
