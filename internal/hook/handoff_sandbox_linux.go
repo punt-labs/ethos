@@ -44,6 +44,7 @@ type handoffSandboxWorktree struct {
 	Environment     []string
 	CheckoutScratch []string
 	System          handoffSystemPlan
+	Loopback        bool
 }
 
 // RunHandoffSandbox dispatches the private namespace child before CLI setup.
@@ -153,7 +154,10 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		}
 		cwd = worktreeSandboxPath(checkout, cwd)
 		env = append(env, "ETHOS_HANDOFF_CHECKOUT_NAME="+filepath.Base(checkout))
-		plan.Worktree = &handoffSandboxWorktree{Environment: env, CheckoutScratch: profile.Scratch.Checkout, System: system}
+		plan.Worktree = &handoffSandboxWorktree{
+			Environment: env, CheckoutScratch: profile.Scratch.Checkout, System: system,
+			Loopback: profile.Network == "loopback",
+		}
 	}
 	manifest, err := json.Marshal(plan)
 	if err != nil {
@@ -176,6 +180,9 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		GidMappings: []syscall.SysProcIDMap{{ContainerID: os.Getegid(), HostID: os.Getegid(), Size: 1}},
 		AmbientCaps: []uintptr{unix.CAP_SYS_ADMIN, unix.CAP_SETPCAP},
 		Pdeathsig:   unix.SIGKILL,
+	}
+	if plan.Worktree != nil && plan.Worktree.Loopback {
+		cmd.SysProcAttr.AmbientCaps = append(cmd.SysProcAttr.AmbientCaps, unix.CAP_NET_ADMIN)
 	}
 	var stdout, stderr editTail
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -341,6 +348,12 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 		if err := mountHandoffProcAndDev(root); err != nil {
 			return err
 		}
+		if plan.Worktree.Loopback {
+			phase = "enable IPv4 and IPv6 loopback"
+			if err := enableHandoffLoopback(); err != nil {
+				return err
+			}
+		}
 	} else {
 		for _, runtimeDir := range sandboxRuntime {
 			if _, err := os.Stat(runtimeDir); errors.Is(err, os.ErrNotExist) {
@@ -417,6 +430,34 @@ func mountGateReadOnly(source, target string) error {
 		return err
 	}
 	return bindHandoffReadOnly(source, target)
+}
+
+func enableHandoffLoopback() error {
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+	req, err := unix.NewIfreq("lo")
+	if err != nil {
+		return err
+	}
+	if err := unix.IoctlIfreq(fd, unix.SIOCGIFFLAGS, req); err != nil {
+		return err
+	}
+	req.SetUint16(req.Uint16() | unix.IFF_UP)
+	if err := unix.IoctlIfreq(fd, unix.SIOCSIFFLAGS, req); err != nil {
+		return err
+	}
+	if err := unix.Bind(fd, &unix.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}); err != nil {
+		return err
+	}
+	fd6, err := unix.Socket(unix.AF_INET6, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd6)
+	return unix.Bind(fd6, &unix.SockaddrInet6{Addr: [16]byte{15: 1}})
 }
 
 func bindHandoffReadOnly(source, target string) error {
