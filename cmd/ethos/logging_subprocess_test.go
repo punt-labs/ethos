@@ -289,10 +289,15 @@ func TestSubagentStopSalvagesDamagedAuditReadOnly(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(checks, "project.yaml"), []byte(`name: project
 checks:
   - {name: probe, stage: handoff, files: all, run: [sh, -c, 'exit 0']}
+  - {name: lost-glob, stage: handoff, files: ['**/*.go'], run: [sh, -c, 'echo missing scope; exit 1']}
+  - {name: advisory-glob, stage: handoff, files: ['**/*.go'], on_fail: advisory, run: [sh, -c, 'echo advisory scope; exit 1']}
 `), 0o600))
 	chunk := filepath.Join(sealed, audit.SessionChunkFile(100, 100))
-	require.NoError(t, os.WriteFile(chunk, []byte("torn json line\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "surviving.txt"), nil, 0o600))
+	line := `{"ts":"` + audit.FormatLineTS(100) + `","session":"fixture","agent_id":"worker","tool":"Edit","tool_input":{"file_path":"<repo>/surviving.txt"},"path_format":2}` + "\n"
+	require.NoError(t, os.WriteFile(chunk, []byte(line+"torn json line\n"), 0o600))
 	runGit(t, repo, "add", "--", ".gitignore", ".punt-labs")
+	runGit(t, repo, "add", "--", "surviving.txt")
 	runGit(t, repo, "commit", "-qm", "damaged audit checkout")
 	policy, err := layout.NewRepository(repo, repo, layout.RecordBlame)
 	require.NoError(t, err)
@@ -315,6 +320,8 @@ checks:
 	require.NotContains(t, string(out), "corrupt chunk")
 	require.Regexp(t, "Check finished .*stage=handoff check=probe outcome=completed", diagnosticLog(t, home))
 	require.Contains(t, string(out), "handoff audit gap in "+strings.TrimSuffix(filepath.Base(chunk), ".jsonl"))
+	require.Contains(t, string(out), "missing scope")
+	require.NotContains(t, string(out), "advisory scope")
 }
 
 func TestSharedLoggingHookChecks(t *testing.T) {
