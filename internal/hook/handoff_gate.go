@@ -154,6 +154,9 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		return deferGate("cannot resolve physical checkout")
 	}
 	rawArgs, _ := check.Argv()
+	if check.WorktreeSnapshot != nil && check.WorktreeSnapshot.Prehydrate != nil {
+		rawArgs = slices.Concat(rawArgs, check.WorktreeSnapshot.Prehydrate.Run)
+	}
 	for _, arg := range rawArgs {
 		if strings.Contains(arg, root) {
 			return deferGate("a literal argument refers to the live checkout")
@@ -369,8 +372,6 @@ func unsupportedWorktreeField(profile *checkset.WorktreeSnapshot) string {
 	switch {
 	case len(profile.Scratch.Files) != 0:
 		return "scratch.files"
-	case profile.Prehydrate != nil:
-		return "prehydrate"
 	case len(profile.Data) != 0:
 		return "data"
 	default:
