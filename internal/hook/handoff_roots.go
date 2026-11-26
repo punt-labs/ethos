@@ -2,6 +2,7 @@ package hook
 
 import (
 	"errors"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -26,16 +27,19 @@ func (roots handoffRoots) expandArgs(argv []string) []string {
 	return expanded
 }
 
-func (roots handoffRoots) environment(platform checkset.SnapshotPlatform, defaultPath string) ([]string, error) {
-	paths := roots.expandArgs(platform.Path)
+func (roots handoffRoots) environment(profile *checkset.WorktreeSnapshot, platform checkset.SnapshotPlatform, defaultPath string) ([]string, error) {
+	paths := roots.expandArgs(slices.Concat(profile.Path, platform.Path))
 	for _, dir := range paths {
 		if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || strings.ContainsAny(dir, ":\x00") {
 			return nil, errors.New("invalid snapshot runtime PATH entry")
 		}
 	}
 	if len(paths) != 0 {
-		defaultPath = strings.Join(paths, string(filepath.ListSeparator))
+		defaultPath = strings.Join(append(paths, defaultPath), string(filepath.ListSeparator))
 	}
+	values := make(map[string]string, len(profile.Env)+len(platform.Env))
+	maps.Copy(values, profile.Env)
+	maps.Copy(values, platform.Env)
 	env := []string{
 		"PATH=" + defaultPath, "TZ=UTC",
 		"HOME=" + filepath.Join(roots.scratch, "home"), "TMPDIR=" + roots.temp,
@@ -43,12 +47,12 @@ func (roots handoffRoots) environment(platform checkset.SnapshotPlatform, defaul
 		"ETHOS_HANDOFF_RUNTIME=" + roots.runtime,
 		"ETHOS_HANDOFF_SCRATCH=" + roots.scratch,
 	}
-	if _, ok := platform.Env["LANG"]; !ok {
+	if _, ok := values["LANG"]; !ok {
 		env = append(env, "LANG=C")
 	}
 	replace := roots.replacer()
 	var extra []string
-	for key, value := range platform.Env {
+	for key, value := range values {
 		switch key {
 		case "PATH", "HOME", "TMPDIR", "TZ", "GOCOVERDIR":
 			return nil, errors.New("snapshot runtime environment overrides a runner variable")

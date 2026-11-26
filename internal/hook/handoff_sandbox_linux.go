@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"golang.org/x/sys/unix"
 )
@@ -27,6 +28,7 @@ const handoffSandboxReady = "ready\n"
 var sandboxRuntime = []string{"/bin", "/lib", "/lib64", "/usr/bin", "/usr/lib", "/usr/lib64"}
 
 const sandboxPATH = "/usr/bin:/bin"
+const worktreeSandboxPATH = "/usr/local/bin:/usr/bin:/bin"
 
 var sandboxEnvironment = []string{"PATH=" + sandboxPATH, "LC_ALL=C", "TZ=UTC", "HOME=/nonexistent"}
 
@@ -131,7 +133,11 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 	if check.policy != nil && check.policy.WorktreeSnapshot != nil {
 		profile := check.policy.WorktreeSnapshot
 		roots := linuxHandoffRoots()
-		env, err := roots.environment(profile.Runtime.Platforms[runtime.GOOS+"-"+runtime.GOARCH], sandboxPATH)
+		var platform checkset.SnapshotPlatform
+		if profile.Runtime != nil {
+			platform = profile.Runtime.Platforms[runtime.GOOS+"-"+runtime.GOARCH]
+		}
+		env, err := roots.environment(profile, platform, worktreeSandboxPATH)
 		if err != nil {
 			return "", err
 		}
