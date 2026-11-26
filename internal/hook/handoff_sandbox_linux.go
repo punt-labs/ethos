@@ -203,6 +203,24 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		cmd.Env = append(cmd.Env, "GOCOVERDIR="+dir)
 	}
 	cmd.ExtraFiles = []*os.File{w, manifestReader}
+	var prehydrateOutput editTail
+	var prehydrateDrained chan struct{}
+	var prehydrateWriter *os.File
+	if plan.Worktree != nil && len(plan.Worktree.Prehydrate) != 0 {
+		reader, writer, err := os.Pipe()
+		if err != nil {
+			return "", errors.New("cannot create the snapshot runner prehydrate output pipe")
+		}
+		defer reader.Close()
+		defer writer.Close()
+		cmd.ExtraFiles = append(cmd.ExtraFiles, writer)
+		prehydrateWriter = writer
+		prehydrateDrained = make(chan struct{})
+		go func() {
+			defer close(prehydrateDrained)
+			_, _ = io.Copy(&prehydrateOutput, reader)
+		}()
+	}
 	cmd.WaitDelay = time.Second
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: unix.CLONE_NEWUSER | unix.CLONE_NEWNS | unix.CLONE_NEWPID | unix.CLONE_NEWNET | unix.CLONE_NEWIPC,
@@ -227,6 +245,9 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 	_ = manifestReader.Close()
 	_, manifestErr := manifestWriter.Write(manifest)
 	_ = manifestWriter.Close()
+	if prehydrateWriter != nil {
+		_ = prehydrateWriter.Close()
+	}
 	setup, setupErr := io.ReadAll(io.LimitReader(r, 4096))
 	status, prehydrating := strings.CutPrefix(string(setup), handoffSandboxPrehydrating)
 	ready := setupErr == nil && status == handoffSandboxReady
@@ -234,6 +255,9 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		diagnostic.LogHookCheck(ctx, checkout, checkout, "handoff", check.name, "launched", time.Since(start))
 	}
 	err = cmd.Wait()
+	if prehydrateDrained != nil {
+		<-prehydrateDrained
+	}
 	if ctx.Err() != nil {
 		if prehydrating && !ready {
 			return "", errors.New("prehydrate-failed: timed out or interrupted")
@@ -246,7 +270,7 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 	if !ready {
 		if prehydrating && strings.HasPrefix(status, "prehydrate-failed") {
 			const previewBytes = 2048
-			preview := strings.TrimSpace(string(stderr.data[max(0, len(stderr.data)-previewBytes):]))
+			preview := strings.TrimSpace(string(prehydrateOutput.data[max(0, len(prehydrateOutput.data)-previewBytes):]))
 			if preview != "" {
 				return "", fmt.Errorf("%s:\n%s", strings.TrimSpace(status), preview)
 			}
@@ -552,48 +576,12 @@ func runHandoffPrehydrate(argv, env []string) error {
 	if err != nil {
 		return err
 	}
-	r, w, err := os.Pipe()
-	if err != nil {
-		return err
-	}
-	defer r.Close()
-	var output editTail
-	drained := make(chan struct{})
-	go func() {
-		defer close(drained)
-		_, _ = io.Copy(&output, r)
-	}()
-	cmd := &exec.Cmd{Path: path, Args: argv, Env: env, Stdout: w, Stderr: w}
-	runErr := cmd.Run()
-	_ = w.Close()
-	if err := reapHandoffPrehydrate(); err != nil {
-		return errors.Join(runErr, err)
-	}
-	<-drained
-	if runErr != nil {
-		_, _ = os.Stderr.Write(output.data)
-	}
-	return runErr
-}
-
-func reapHandoffPrehydrate() error {
-	// PID 1 adopts descendants even if they create a new process group.
-	for {
-		if err := unix.Kill(-1, unix.SIGKILL); err != nil && !errors.Is(err, unix.ESRCH) {
-			return err
-		}
-		pid, err := unix.Wait4(-1, nil, unix.WNOHANG, nil)
-		switch {
-		case errors.Is(err, unix.ECHILD):
-			return nil
-		case errors.Is(err, unix.EINTR):
-			continue
-		case err != nil:
-			return err
-		case pid == 0:
-			time.Sleep(time.Millisecond)
-		}
-	}
+	const prehydrateOutputFD = 5
+	output := os.NewFile(prehydrateOutputFD, "handoff prehydrate output")
+	unix.CloseOnExec(prehydrateOutputFD)
+	defer output.Close()
+	cmd := &exec.Cmd{Path: path, Args: argv, Env: env, Stdout: output, Stderr: output}
+	return cmd.Run()
 }
 
 func mountGateReadOnly(source, target string) error {
