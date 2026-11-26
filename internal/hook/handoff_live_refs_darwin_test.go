@@ -22,7 +22,7 @@ func TestDarwinHandoffLiveGitRefSymlink(t *testing.T) {
 	require.NoError(t, os.Remove(ref))
 	require.NoError(t, os.Symlink("../../../../outside-ref", ref))
 	ctx, _ = diagnostic.WithHookInvocation(t.Context())
-	require.Contains(t, RunStageChecks(ctx, root, "worker", "handoff").Notice, "Git ref symlink leaves keyed metadata")
+	require.Contains(t, RunStageChecks(ctx, root, "worker", "handoff").Notice, "ref symlink leaves keyed Git metadata")
 }
 
 func TestDarwinHandoffLiveTagChangeInvalidatesVerdict(t *testing.T) {

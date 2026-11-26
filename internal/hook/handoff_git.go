@@ -139,7 +139,7 @@ func digestLiveGitRefSymlink(budget *gateHashBudget, root *os.Root, path string)
 		target = filepath.Join(filepath.Dir(path), target)
 	}
 	if err != nil || path == "refs" || hasHandoffLinkBacktrack(link) || !strings.HasPrefix(target, "refs/") {
-		return fmt.Errorf("Git ref symlink leaves keyed metadata at %q", path)
+		return fmt.Errorf("ref symlink leaves keyed Git metadata at %q", path)
 	}
 	_, err = fmt.Fprintf(budget, "%q\x00symlink\x00%d\x00%s", path, len(link), link)
 	return err
