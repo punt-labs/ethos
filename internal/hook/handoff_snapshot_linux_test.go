@@ -500,6 +500,50 @@ test ! -w .`},
 	require.ErrorContains(t, err, "checkout scratch shadows snapshot content")
 }
 
+func TestHandoffWorktreeRunsDirectCommands(t *testing.T) {
+	for _, tc := range []struct{ name, check, path, good, broken string }{
+		{"make adapter", "    files: all\n    adapter: make\n    target: check\n", "Makefile",
+			"check:\n\t@test \"$$PWD\" = /checkout\n",
+			"check:\n\t@echo broken-make >&2; exit 23\n"},
+		{"bare shell", "    files: ['**/input.txt']\n    cwd: file_dir\n    run: [sh, -ec, 'test \"$1\" = \"$PWD/input.txt\" && test \"$PWD\" != /checkout && grep -qx clean \"$1\" || (echo broken-shell >&2; exit 23)', probe, '{files}']\n", "sub/input.txt",
+			"clean\n", "broken\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, _ := postEditFixture(t)
+			t.Setenv("HOME", t.TempDir())
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+			checkPolicy(t, root, "project", "  - name: full-gate\n    stage: handoff\n"+tc.check)
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml"), `checks:
+  full-gate:
+    profile: linux-worktree-v1
+    epoch: direct-argv
+    sources: {mode: worktree}
+`)
+			path := filepath.Join(root, tc.path)
+			files := []string{path}
+			if tc.name == "bare shell" {
+				other := filepath.Join(root, "second", "input.txt")
+				writeFile(t, other, tc.good)
+				files = append(files, other)
+			}
+			run := func() StageFeedback {
+				return runStageChecks(context.Background(), root, "worker", "handoff", func() ([]string, error) {
+					return files, nil
+				})
+			}
+			writeFile(t, path, tc.good)
+			feedback := run()
+			skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+			require.Empty(t, feedback.Blocking)
+			writeFile(t, path, tc.broken)
+			feedback = run()
+			require.Contains(t, feedback.Blocking, "exit status")
+			require.Contains(t, feedback.Blocking, "broken-")
+			require.NotContains(t, feedback.Blocking, "deferred")
+		})
+	}
+}
+
 func skipIfHandoffSandboxUnavailable(t *testing.T, err error) {
 	t.Helper()
 	if err != nil && (strings.Contains(err.Error(), "isolation unavailable on this host") ||

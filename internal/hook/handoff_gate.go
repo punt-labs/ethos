@@ -41,6 +41,20 @@ type gateResult struct {
 
 func runHandoffGate(ctx context.Context, root, agent string, files []string, check checkset.Check, policy []checkset.Check) StageFeedback {
 	manualRoot := root
+	if check.WorktreeSnapshot != nil {
+		relative := make([]string, 0, len(files))
+		for _, file := range files {
+			if filepath.IsAbs(file) {
+				path, err := filepath.Rel(root, file)
+				if err != nil || !filepath.IsLocal(path) {
+					continue
+				}
+				file = path
+			}
+			relative = append(relative, file)
+		}
+		files = relative
+	}
 	plan := stageInvocationsAt(gateRoot, files, check, true)
 	if len(plan) == 0 {
 		return StageFeedback{}
@@ -205,7 +219,15 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 			}()
 			var failures []string
 			for _, invocation := range plan {
-				failure, err := executeHandoffSnapshot(ctx, scratch, root, proof, check.Snapshot.Inputs, invocation)
+				checkScratch := scratch
+				if check.WorktreeSnapshot != nil {
+					checkScratch, err = os.MkdirTemp(scratch, layout.ScratchDirPattern("check"))
+					if err != nil {
+						result = deferGate("cannot materialize the invocation snapshot")
+						return nil
+					}
+				}
+				failure, err := executeHandoffSnapshot(ctx, checkScratch, root, proof, check.Snapshot.Inputs, invocation)
 				if err != nil {
 					result = deferGate(err.Error())
 					return nil
