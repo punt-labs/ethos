@@ -441,13 +441,29 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  darwin-handoff:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+      - name: Race-test Darwin handoff guards and the built CLI
+        run: |
+          export TMPDIR="$(cd "$RUNNER_TEMP" && pwd -P)"
+          go test -race -count=1 -v -run '^TestDarwin' ./internal/hook
+          go test -race -count=1 -v -run '^TestHandoff(AgentApprovalLeavesCheckoutUnchanged|ApprovalLeavesCheckoutUnchanged|SnapshotLaunchVerdicts)$' ./cmd/ethos
+
   test:
-    needs: [test-suite, quality, coverage, installed-smoke, legacy-corpus]
+    needs: [test-suite, quality, coverage, installed-smoke, legacy-corpus, darwin-handoff]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - name: Require all test, coverage, quality installed smoke and legacy corpus jobs
+      - name: Require all prerequisite jobs to succeed
         env:
           RESULTS: ${{ toJSON(needs) }}
         run: |
