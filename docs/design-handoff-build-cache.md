@@ -97,12 +97,13 @@ and add files in its private copy without changing the published tree.
    at `e0db489`. Install each sidecar's pinned Linux amd64 archive with
    `ethos handoff fetch-runtime`, or use `fetch-runtime --file <archive>`
    for the digest-matching Cryptd archive.
-2. Add the opt-in to the existing sidecar check and build the local
-   prototype with `go build -o ethos-build-cache ./cmd/ethos`. With an
-   empty build-cache scope, run `ethos-build-cache hook subagent-stop`
-   from the checkout with a payload containing `session_id`,
-   `agent_id`, and `agent_type`. Record wall time, JSON, and the gate
-   launch and verdict in the hook log.
+2. Add the opt-in to the existing sidecar check. In the local Ethos
+   prototype worktree, run `mkdir -p .tmp/opencode` and
+   `go build -o .tmp/opencode/ethos-build-cache ./cmd/ethos`. With an
+   empty build-cache scope, invoke the binary by absolute path with
+   `hook subagent-stop` from the consumer checkout. Use a payload with
+   `session_id`, `agent_id`, and `agent_type`. Record wall time, JSON,
+   and the gate launch and verdict in the hook log.
 3. For the clean warm run, keep the cache published by the clean pass
    and add a harmless comment to tracked `README.md` to change the
    snapshot key without changing the Go inputs. For the broken runs,
