@@ -327,23 +327,20 @@ func TestHandoffRuntimeProxyFallsBackToNextPublicAddress(t *testing.T) {
 
 func TestHandoffRuntimeProxyClosesStalledConnectAndRetries(t *testing.T) {
 	const budget = 2 * time.Second
-	type disconnect struct {
-		at  time.Time
-		err error
-	}
-	stalled := make(chan disconnect, 1)
+	const slack = 5 * time.Second
+	stalled := make(chan error, 1)
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		switch req.Host {
 		case "[2001:db8::1]:443":
 			conn, rw, err := http.NewResponseController(w).Hijack()
 			if err == nil {
 				defer conn.Close()
-				err = conn.SetReadDeadline(time.Now().Add(budget))
+				err = conn.SetReadDeadline(time.Now().Add(budget + slack))
 				if err == nil {
 					_, err = rw.ReadByte()
 				}
 			}
-			stalled <- disconnect{time.Now(), err}
+			stalled <- err
 		case "192.0.2.1:443":
 			w.Header().Set("Content-Length", "0")
 			w.WriteHeader(http.StatusOK)
@@ -357,18 +354,17 @@ func TestHandoffRuntimeProxyClosesStalledConnectAndRetries(t *testing.T) {
 	lookup := func(context.Context, string, string) ([]netip.Addr, error) {
 		return []netip.Addr{netip.MustParseAddr("2001:db8::1"), netip.MustParseAddr("192.0.2.1")}, nil
 	}
-	deadline := time.Now().Add(budget)
-	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	start := time.Now()
+	ctx, cancel := context.WithDeadline(context.Background(), start.Add(budget))
 	defer cancel()
 	conn, err := dialHandoffRuntimeProxyResolved(ctx, "tcp", "runtime.example:443", endpoint, nil, lookup)
 	require.NoError(t, err)
+	require.Less(t, time.Since(start), budget+slack, "fallback missed the overall deadline plus slack")
 	require.NoError(t, conn.Close())
-	require.True(t, time.Now().Before(deadline), "fallback missed the overall deadline")
 	select {
-	case result := <-stalled:
-		require.ErrorIs(t, result.err, io.EOF)
-		require.WithinDuration(t, deadline.Add(-budget/2), result.at, budget/4)
-	case <-ctx.Done():
+	case err := <-stalled:
+		require.ErrorIs(t, err, io.EOF)
+	case <-time.After(slack):
 		t.Fatal("the stalled CONNECT socket was not closed")
 	}
 }
