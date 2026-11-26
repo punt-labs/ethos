@@ -230,6 +230,27 @@ func TestHandoffWorktreeGitDiscoveryAcrossScratchOverlay(t *testing.T) {
 	require.Empty(t, run().Blocking)
 }
 
+func TestHandoffWorktreeValidatesPrivateGitOperand(t *testing.T) {
+	root, run := handoffMetadataFixture(t, "")
+	sidecar := filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml")
+	data, err := os.ReadFile(sidecar)
+	require.NoError(t, err)
+	writeFile(t, sidecar, string(data)+"    git: {}\n    scratch: {files: [output.tmp]}\n")
+	check := func(operand string) {
+		t.Helper()
+		checkPolicy(t, root, "project", "  - name: metadata\n    stage: handoff\n    files: all\n"+
+			"    run: [sh, -ec, 'test -s \"$1\"', git-operand, '{root}/.git/"+operand+"']\n")
+	}
+	check("HEAD")
+	feedback := run()
+	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+	require.Empty(t, feedback.Blocking)
+
+	writeFile(t, filepath.Join(root, ".git", "live-only"), "not in the private view\n")
+	check("live-only")
+	require.Contains(t, run().Blocking, "snapshot inputs did not match the invocation")
+}
+
 func TestHandoffWorktreeOmitsUndeclaredGitView(t *testing.T) {
 	_, run := handoffMetadataFixture(t, "test ! -e .git")
 	feedback := run()

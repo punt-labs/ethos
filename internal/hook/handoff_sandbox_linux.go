@@ -377,6 +377,7 @@ func gatePlanInputsPresent(snapshot string, argv []string, worktree *handoffSand
 		return false
 	}
 	defer checkout.Close()
+	var gitView *os.Root
 	script := gateScriptOperand(argv)
 operands:
 	for i, arg := range argv {
@@ -400,7 +401,21 @@ operands:
 				continue operands
 			}
 		}
-		if _, err := checkout.Lstat(rel); err != nil {
+		source := checkout
+		if worktree != nil && worktree.GitDir != "" {
+			if gitRel, err := filepath.Rel(".git", rel); err == nil && filepath.IsLocal(gitRel) {
+				if gitView == nil {
+					view, err := os.OpenRoot(worktree.GitDir)
+					if err != nil {
+						return false
+					}
+					defer view.Close()
+					gitView = view
+				}
+				source, rel = gitView, gitRel
+			}
+		}
+		if _, err := source.Lstat(rel); err != nil {
 			return false
 		}
 	}
