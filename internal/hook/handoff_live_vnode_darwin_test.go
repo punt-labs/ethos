@@ -1,0 +1,78 @@
+package hook
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
+)
+
+func TestDarwinLiveVnodeGuard(t *testing.T) {
+	for _, name := range []string{"clean", "write", "revert", "chmod", "HEAD", "index", "ref", "transient source", "nested transient source"} {
+		t.Run(name, func(t *testing.T) {
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			require.NoError(t, err)
+			for _, path := range []string{"sub/source", ".git/HEAD", ".git/index", ".git/refs/heads/main"} {
+				writeFile(t, filepath.Join(root, path), "original")
+			}
+			guard, err := armDarwinLiveVnodes(context.Background(), root, []string{"sub/source"}, 20)
+			require.NoError(t, err)
+			defer guard.close()
+			source := filepath.Join(root, "sub/source")
+			switch name {
+			case "clean":
+				_, err := os.ReadFile(source)
+				require.NoError(t, err)
+			case "write", "revert":
+				require.NoError(t, os.WriteFile(source, []byte("changed"), 0o600))
+				if name == "revert" {
+					require.NoError(t, os.WriteFile(source, []byte("original"), 0o600))
+				}
+			case "chmod":
+				require.NoError(t, os.Chmod(source, 0o400))
+			case "HEAD", "index", "ref":
+				target := name
+				if name == "ref" {
+					target = "refs/heads/main"
+				}
+				tmp := filepath.Join(root, ".git", "replacement")
+				require.NoError(t, os.WriteFile(tmp, []byte("original"), 0o600))
+				require.NoError(t, os.Rename(tmp, filepath.Join(root, ".git", target)))
+			default:
+				path := filepath.Join(root, "transient")
+				if name == "nested transient source" {
+					path = filepath.Join(root, "sub", "transient")
+				}
+				require.NoError(t, os.WriteFile(path, nil, 0o600))
+				require.NoError(t, os.Remove(path))
+			}
+			if name == "clean" {
+				require.NoError(t, guard.drain())
+			} else {
+				require.Error(t, guard.drain())
+			}
+		})
+	}
+}
+
+func TestDarwinLiveVnodeFDBudget(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	writeFile(t, filepath.Join(root, ".git/HEAD"), "ref")
+	writeFile(t, filepath.Join(root, "nested/source"), "data")
+	_, err = armDarwinLiveVnodes(context.Background(), root, []string{"nested/source"}, 4)
+	require.ErrorContains(t, err, "fd budget")
+}
+
+func TestDarwinLiveVnodeAtimeException(t *testing.T) {
+	var before unix.Stat_t
+	after := before
+	after.Atim.Sec++
+	require.True(t, darwinAtimeOnly(before, after))
+	after.Ctim.Sec++
+	require.False(t, darwinAtimeOnly(before, after))
+	require.False(t, darwinAtimeOnly(before, before))
+}
