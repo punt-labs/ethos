@@ -350,6 +350,23 @@ func TestHandoffSandboxReportsMissingSnapshotCwd(t *testing.T) {
 	require.ErrorContains(t, err, "check cwd missing from snapshot")
 }
 
+func TestHandoffWorktreeSandboxBashProcessSubstitution(t *testing.T) {
+	live := t.TempDir()
+	writeFile(t, filepath.Join(live, "README"), "snapshot input\n")
+	inputs := []string{"README"}
+	ctx := context.Background()
+	proof, err := digestGateInputsWithMode(ctx, live, "", inputs, true)
+	require.NoError(t, err)
+	failure, err := executeHandoffSnapshot(ctx, t.TempDir(), live, proof, inputs, editCheck{
+		name: "process-substitution", cwd: gateRoot, timeout: 5 * time.Second,
+		policy: &checkset.Check{WorktreeSnapshot: &checkset.WorktreeSnapshot{}},
+		argv:   []string{"/bin/bash", "-ec", `test "$(cat <(echo ok))" = ok`},
+	})
+	skipIfHandoffSandboxUnavailable(t, err)
+	require.NoError(t, err)
+	require.Empty(t, failure)
+}
+
 func TestHandoffWorktreeSandboxKeepsSocketTMPDIRShortAndPrivate(t *testing.T) {
 	if _, err := os.Stat("/usr/bin/python3"); err != nil {
 		t.Skip("test requires system python3")

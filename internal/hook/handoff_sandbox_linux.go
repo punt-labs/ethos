@@ -540,6 +540,9 @@ func mountHandoffProcAndDev(root string) error {
 			return err
 		}
 	}
+	if err := os.Symlink("/proc/self/fd", filepath.Join(root, "dev/fd")); err != nil {
+		return err
+	}
 	shm := filepath.Join(root, "dev/shm")
 	if err := os.Mkdir(shm, 0o755); err != nil {
 		return err
