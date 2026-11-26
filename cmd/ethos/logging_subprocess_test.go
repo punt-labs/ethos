@@ -288,10 +288,15 @@ func TestSubagentStopSalvagesDamagedAuditReadOnly(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(checks, "project.yaml"), []byte(`name: project
 checks:
   - {name: probe, stage: handoff, files: all, run: [sh, -c, 'exit 0']}
+  - {name: lost-glob, stage: handoff, files: ['**/*.go'], run: [sh, -c, 'echo missing scope; exit 1']}
+  - {name: advisory-glob, stage: handoff, files: ['**/*.go'], on_fail: advisory, run: [sh, -c, 'echo advisory scope; exit 1']}
 `), 0o600))
 	chunk := filepath.Join(sealed, audit.SessionChunkFile(100, 100))
-	require.NoError(t, os.WriteFile(chunk, []byte("torn json line\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "surviving.txt"), nil, 0o600))
+	line := `{"ts":"` + audit.FormatLineTS(100) + `","session":"fixture","agent_id":"worker","tool":"Edit","tool_input":{"file_path":"<repo>/surviving.txt"},"path_format":2}` + "\n"
+	require.NoError(t, os.WriteFile(chunk, []byte(line+"torn json line\n"), 0o600))
 	runGit(t, repo, "add", "--", ".gitignore", ".punt-labs")
+	runGit(t, repo, "add", "--", "surviving.txt")
 	runGit(t, repo, "commit", "-qm", "damaged audit checkout")
 	policy, err := layout.NewRepository(repo, repo, layout.RecordBlame)
 	require.NoError(t, err)
@@ -304,15 +309,83 @@ checks:
 		return string(out)
 	}
 	require.Empty(t, status())
-	cmd := loggingProcess(t, t.TempDir(), repo, "hook", "subagent-stop")
+	home := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(home, ".punt-labs", "ethos"), 0o700))
+	wrapper, err := filepath.Abs(filepath.Join("..", "..", "plugin", "hooks", "subagent-stop.sh"))
+	require.NoError(t, err)
+	cmd := loggingProcess(t, home, repo)
+	cmd.Path = wrapper
+	cmd.Args = []string{wrapper}
+	cmd.Env = append(cmd.Env, "PATH="+filepath.Dir(ethosBinary)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	cmd.Stdin = strings.NewReader(`{"session_id":"fixture","agent_id":"worker","agent_type":"implementer"}`)
-	out, err := cmd.CombinedOutput()
+	out, err := cmd.Output()
 	require.NoError(t, err, "%s", out)
 	require.Empty(t, status())
 	require.NoFileExists(t, stamp)
 	require.NotContains(t, string(out), "corrupt chunk")
 	require.Contains(t, string(out), "handoff checks deferred (probe): no declared snapshot profile")
-	require.Contains(t, string(out), "handoff audit gap in "+strings.TrimSuffix(filepath.Base(chunk), ".jsonl"))
+	var feedback map[string]string
+	require.NoError(t, json.Unmarshal(out, &feedback), "%s", out)
+	require.Contains(t, feedback["systemMessage"], "handoff audit gap in "+strings.TrimSuffix(filepath.Base(chunk), ".jsonl"))
+	// As in v5.2.3, checks scope to surviving audit rows. The gap is surfaced
+	// separately; fail-safe scoping is tracked in PL-1650.
+	require.NotContains(t, string(out), "handoff checks deferred (lost-glob)")
+	require.NotContains(t, string(out), "handoff checks deferred (advisory-glob)")
+}
+
+func TestSubagentStopSelectsRedactedOverlap(t *testing.T) {
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	runGit(t, repo, "init", "-q")
+	checks := filepath.Join(repo, ".punt-labs", "ethos", "checks")
+	sealed := filepath.Join(audit.SealedSessionsBase(repo), "2026-11-26-fixture")
+	require.NoError(t, os.MkdirAll(checks, 0o700))
+	require.NoError(t, os.MkdirAll(sealed, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".punt-labs/local/\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos.yaml"), []byte("checks: project\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(checks, "project.yaml"), []byte(`name: project
+checks:
+  - name: selected
+    stage: handoff
+    files: ['**/*.txt']
+    run: [/bin/sh, -c, 'echo overlap selected; exit 1']
+    snapshot: {profile: linux-shell-v1, inputs: [edited.txt], epoch: v1}
+  - {name: unselected, stage: handoff, files: ['**/*.go'], run: [sh, -c, 'echo overlap unselected; exit 1']}
+`), 0o600))
+	file := filepath.Join(repo, "edited.txt")
+	require.NoError(t, os.WriteFile(file, nil, 0o600))
+	path, err := json.Marshal(file)
+	require.NoError(t, err)
+	line := `{"ts":"` + audit.FormatLineTS(100) + `","session":"fixture","agent_id":"worker","tool":"Edit","tool_input":{"file_path":` + string(path) + `}}` + "\n"
+	chunk := filepath.Join(sealed, audit.SessionChunkFile(100, 100))
+	require.NoError(t, os.WriteFile(chunk, []byte(strings.TrimSuffix(line, "\n")), 0o600))
+	_, err = audit.ReadChunkVerified(chunk, 100)
+	require.ErrorContains(t, err, "corrupt chunk")
+	policy, err := layout.NewRepository(repo, repo, layout.RecordBlame)
+	require.NoError(t, err)
+	stream := audit.Stream{Namespace: audit.SessionNS, Session: "fixture"}
+	require.NoError(t, audit.ReplaceLocalFile(policy, stream.LivePath(policy), []byte(line)))
+	runGit(t, repo, "add", "--", ".gitignore", ".punt-labs", "edited.txt")
+	runGit(t, repo, "commit", "-qm", "overlapping audit")
+
+	cmd := loggingProcess(t, t.TempDir(), repo, "hook", "subagent-stop")
+	cmd.Stdin = strings.NewReader(`{"session_id":"fixture","agent_id":"worker","agent_type":"implementer"}`)
+	out, err := cmd.Output()
+	require.NoError(t, err, "%s", out)
+	var feedback map[string]string
+	require.NoError(t, json.Unmarshal(out, &feedback), "%s", out)
+	require.Equal(t, "block", feedback["decision"])
+	if strings.Contains(feedback["reason"], "handoff checks deferred (selected)") &&
+		(strings.Contains(feedback["reason"], "isolation unavailable on this host") ||
+			strings.Contains(feedback["reason"], "make mount propagation private: permission denied") ||
+			strings.Contains(feedback["reason"], "make mount propagation private: operation not permitted")) {
+		t.Skip(feedback["reason"])
+	}
+	require.NotContains(t, feedback["reason"], "handoff checks deferred")
+	require.Contains(t, feedback["reason"], "selected: exit status 1")
+	require.Contains(t, feedback["reason"], "\noverlap selected")
+	require.NotContains(t, string(out), "overlap unselected")
+	require.NotContains(t, string(out), "handoff audit gap")
 }
 
 func TestSharedLoggingHookChecks(t *testing.T) {

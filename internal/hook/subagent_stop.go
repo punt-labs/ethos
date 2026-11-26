@@ -59,11 +59,21 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 		return nil
 	}
 	var notes []string
+	var renameNotes []string
 	feedback := runStageRootChecks(ctx, checkout, agent, "handoff", func() (map[string][]string, error) {
-		return handoffFilesWithAdvice(checkout, sessionID, agentID, func(note string) { notes = append(notes, note) })
+		return handoffFilesWithAdvice(checkout, sessionID, agentID, func(note string) {
+			renameNotes = append(renameNotes, note)
+		}, func(gap audit.Gap) {
+			notes = append(notes, fmt.Sprintf("ethos: handoff audit gap in %s (%s through %s)", gap.Chunk, audit.FormatLineTS(gap.First), audit.FormatLineTS(gap.Last)))
+		})
 	})
-	if len(notes) != 0 && handoffPolicySelected(checkout, agent) {
-		fmt.Fprintln(errOut, editRedact(strings.Join(notes, "\n")))
+	if len(notes)+len(renameNotes) != 0 && handoffPolicySelected(checkout, agent) {
+		if len(renameNotes) != 0 {
+			fmt.Fprintln(errOut, editRedact(strings.Join(renameNotes, "\n")))
+		}
+		if len(notes) != 0 {
+			feedback.Advisory = strings.TrimSpace(strings.Join(append(notes, feedback.Advisory), "\n"))
+		}
 	}
 	stopFeedback(out, feedback, active)
 	return nil
@@ -95,10 +105,10 @@ func stopFeedback(out io.Writer, feedback StageFeedback, active bool) {
 }
 
 func handoffFiles(checkout, sessionID, agentID string) (map[string][]string, error) {
-	return handoffFilesWithAdvice(checkout, sessionID, agentID, nil)
+	return handoffFilesWithAdvice(checkout, sessionID, agentID, nil, nil)
 }
 
-func handoffFilesWithAdvice(checkout, sessionID, agentID string, advice func(string)) (map[string][]string, error) {
+func handoffFilesWithAdvice(checkout, sessionID, agentID string, advice func(string), reportGap func(audit.Gap)) (map[string][]string, error) {
 	store, err := resolve.StoreOf(checkout)
 	if err != nil {
 		return nil, err
@@ -120,9 +130,9 @@ func handoffFilesWithAdvice(checkout, sessionID, agentID string, advice func(str
 	if err != nil {
 		return nil, err
 	}
-	if advice != nil {
+	if reportGap != nil {
 		for _, gap := range data.Gaps {
-			advice(fmt.Sprintf("ethos: handoff audit gap in %s (%s through %s)", gap.Chunk, audit.FormatLineTS(gap.First), audit.FormatLineTS(gap.Last)))
+			reportGap(gap)
 		}
 	}
 	type auditPath struct {
