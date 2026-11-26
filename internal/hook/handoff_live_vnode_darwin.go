@@ -25,7 +25,7 @@ type darwinLiveVnodes struct {
 	nodes map[int]darwinLiveVnode
 }
 
-func armDarwinLiveVnodes(ctx context.Context, root string, inputs []string, budget int) (*darwinLiveVnodes, error) {
+func armDarwinLiveVnodes(ctx context.Context, root string, git darwinLiveGit, inputs []string, budget int) (*darwinLiveVnodes, error) {
 	var limit unix.Rlimit
 	if err := unix.Getrlimit(unix.RLIMIT_NOFILE, &limit); err != nil {
 		return nil, fmt.Errorf("live-verified cannot determine vnode fd limit: %w", err)
@@ -43,7 +43,7 @@ func armDarwinLiveVnodes(ctx context.Context, root string, inputs []string, budg
 		return nil, errors.New("live-verified vnode fd budget exceeded")
 	}
 	budget = int(min(limit.Cur-uint64(len(open)+reserve), uint64(max(0, budget))))
-	paths, err := darwinLiveVnodePaths(ctx, root, inputs, budget)
+	paths, err := darwinLiveVnodePaths(ctx, root, git, inputs, budget)
 	if err != nil {
 		return nil, err
 	}
@@ -62,9 +62,9 @@ func armDarwinLiveVnodes(ctx context.Context, root string, inputs []string, budg
 	return guard, nil
 }
 
-func darwinLiveVnodePaths(ctx context.Context, root string, inputs []string, budget int) ([]string, error) {
+func darwinLiveVnodePaths(ctx context.Context, root string, git darwinLiveGit, inputs []string, budget int) ([]string, error) {
 	paths := map[string]bool{}
-	add := func(path string) error {
+	add := func(path, boundary string) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -73,7 +73,7 @@ func darwinLiveVnodePaths(ctx context.Context, root string, inputs []string, bud
 			if len(paths) >= budget {
 				return errors.New("live-verified vnode fd budget exceeded")
 			}
-			if path == root {
+			if path == boundary {
 				break
 			}
 		}
@@ -83,25 +83,41 @@ func darwinLiveVnodePaths(ctx context.Context, root string, inputs []string, bud
 		if !filepath.IsLocal(input) {
 			return nil, errors.New("live-verified vnode input is outside checkout")
 		}
-		if err := add(filepath.Join(root, input)); err != nil {
+		if err := add(filepath.Join(root, input), root); err != nil {
 			return nil, err
 		}
 	}
-	git := filepath.Join(root, ".git")
-	info, err := os.Lstat(git)
-	if err != nil || !info.IsDir() {
-		return nil, errors.New("live-verified vnode guard needs local .git directory")
-	}
-	if err := add(filepath.Join(git, "HEAD")); err != nil {
+	if err := add(filepath.Join(root, ".git"), root); err != nil {
 		return nil, err
 	}
-	for _, name := range []string{"commondir", "reftable"} {
-		if _, err := os.Lstat(filepath.Join(git, name)); !errors.Is(err, os.ErrNotExist) {
+	localBoundary := git.local
+	if darwinLiveContains(git.common, git.local) {
+		localBoundary = git.common
+	}
+	if err := add(filepath.Join(git.local, "HEAD"), localBoundary); err != nil {
+		return nil, err
+	}
+	for _, dir := range []string{git.local, git.common} {
+		if _, err := os.Lstat(filepath.Join(dir, "reftable")); !errors.Is(err, os.ErrNotExist) {
 			return nil, errors.New("live-verified vnode guard cannot cover Git metadata layout")
 		}
 	}
-	for _, name := range []string{"index", "packed-refs", "refs"} {
-		path := filepath.Join(git, name)
+	type watchPath struct{ path, boundary string }
+	metadata := []watchPath{
+		{filepath.Join(git.local, "index"), localBoundary},
+		{filepath.Join(git.common, "packed-refs"), git.common},
+		{filepath.Join(git.common, "refs"), git.common},
+	}
+	if git.local != git.common {
+		for _, name := range []string{"commondir", "gitdir", "refs"} {
+			metadata = append(metadata, watchPath{filepath.Join(git.local, name), localBoundary})
+		}
+	}
+	if err := add(git.common, git.common); err != nil {
+		return nil, err
+	}
+	for _, target := range metadata {
+		path := target.path
 		if err := filepath.WalkDir(path, func(entry string, node fs.DirEntry, err error) error {
 			if entry == path && node == nil && errors.Is(err, os.ErrNotExist) {
 				return nil
@@ -109,7 +125,7 @@ func darwinLiveVnodePaths(ctx context.Context, root string, inputs []string, bud
 			if err != nil {
 				return err
 			}
-			return add(entry)
+			return add(entry, target.boundary)
 		}); err != nil {
 			return nil, fmt.Errorf("live-verified cannot enumerate vnode paths: %w", err)
 		}

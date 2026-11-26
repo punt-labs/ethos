@@ -15,6 +15,7 @@ import (
 	"unsafe"
 
 	"github.com/ebitengine/purego"
+	"golang.org/x/sys/unix"
 )
 
 type liveEventsAPI struct {
@@ -79,6 +80,7 @@ var loadLiveEventsAPI = sync.OnceValues(func() (*liveEventsAPI, error) {
 
 type darwinLiveEvents struct {
 	root, dir, marker string
+	git               darwinLiveGit
 	api               *liveEventsAPI
 	stream, queue     uintptr
 	started           bool
@@ -89,16 +91,59 @@ type darwinLiveEvents struct {
 	err               error
 }
 
-func armDarwinLiveEvents(root string) (*darwinLiveEvents, error) {
+type darwinLiveGit struct {
+	local, common string
+}
+
+func resolveDarwinLiveGit(ctx context.Context, root string) (darwinLiveGit, error) {
+	ctx, cancel := context.WithTimeout(ctx, gateInputTime)
+	defer cancel()
+	out, err := handoffGitOutput(ctx, root, "rev-parse", "--absolute-git-dir", "--git-common-dir")
+	if err != nil {
+		return darwinLiveGit{}, fmt.Errorf("cannot resolve Git metadata: %w", err)
+	}
+	local, common, found := strings.Cut(strings.TrimSuffix(string(out), "\n"), "\n")
+	if !found || !filepath.IsAbs(local) || common == "" || strings.Contains(common, "\n") {
+		return darwinLiveGit{}, errors.New("cannot resolve Git metadata paths")
+	}
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(root, common)
+	}
+	local, err = filepath.EvalSymlinks(local)
+	if err != nil {
+		return darwinLiveGit{}, err
+	}
+	common, err = filepath.EvalSymlinks(common)
+	if err != nil {
+		return darwinLiveGit{}, err
+	}
+	return darwinLiveGit{local: local, common: common}, nil
+}
+
+func darwinLiveContains(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && filepath.IsLocal(rel)
+}
+
+func armDarwinLiveEvents(root string, git darwinLiveGit) (*darwinLiveEvents, error) {
 	api, err := loadLiveEventsAPI()
 	if err != nil {
 		return nil, err
 	}
-	git := filepath.Join(root, ".git")
-	if info, err := os.Lstat(git); err != nil || !info.IsDir() {
-		return nil, errors.New("live-verified sentinel needs a local .git directory")
+	var checkout unix.Stat_t
+	if err := unix.Stat(root, &checkout); err != nil {
+		return nil, err
 	}
-	sentinels := filepath.Join(git, "ethos-live")
+	for _, dir := range []string{git.local, git.common} {
+		var stat unix.Stat_t
+		if err := unix.Stat(dir, &stat); err != nil {
+			return nil, err
+		}
+		if stat.Dev != checkout.Dev {
+			return nil, errors.New("cannot verify FSEvents cutoff across Git and checkout volumes")
+		}
+	}
+	sentinels := filepath.Join(git.local, "ethos-live")
 	if err := os.Mkdir(sentinels, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 		return nil, err
 	}
@@ -109,7 +154,7 @@ func armDarwinLiveEvents(root string) (*darwinLiveEvents, error) {
 	if err != nil {
 		return nil, err
 	}
-	e := &darwinLiveEvents{root: root, dir: dir, api: api, marker: filepath.Join(dir, "opening"), cutoff: make(chan struct{}), paths: make(map[string]bool)}
+	e := &darwinLiveEvents{root: root, git: git, dir: dir, api: api, marker: filepath.Join(dir, "opening"), cutoff: make(chan struct{}), paths: make(map[string]bool)}
 	if err := e.start(); err != nil {
 		e.close()
 		return nil, err
@@ -119,12 +164,20 @@ func armDarwinLiveEvents(root string) (*darwinLiveEvents, error) {
 
 func (e *darwinLiveEvents) start() error {
 	a := e.api
-	path := a.stringCreate(0, e.root, 0x08000100)
-	if path == 0 {
-		return errors.New("cannot create FSEvents root")
+	roots := []string{e.root, e.git.common, e.git.local}
+	paths := make([]uintptr, 0, len(roots))
+	for i, root := range roots {
+		if slices.ContainsFunc(roots[:i], func(parent string) bool { return darwinLiveContains(parent, root) }) {
+			continue
+		}
+		path := a.stringCreate(0, root, 0x08000100)
+		if path == 0 {
+			return errors.New("cannot create FSEvents root")
+		}
+		defer a.release(path)
+		paths = append(paths, path)
 	}
-	defer a.release(path)
-	watched := a.arrayCreate(0, &path, 1, 0)
+	watched := a.arrayCreate(0, &paths[0], len(paths), 0)
 	if watched == 0 {
 		return errors.New("cannot create FSEvents watch list")
 	}
@@ -255,7 +308,7 @@ func (e *darwinLiveEvents) finish(ctx context.Context, inputs []string) error {
 	slices.Sort(paths)
 	var nonKeyed []string
 	for _, path := range paths {
-		if keyed[path] || path == git || strings.HasPrefix(path, git+"/") {
+		if keyed[path] || path == git || darwinLiveContains(e.git.local, path) || darwinLiveContains(e.git.common, path) {
 			return fmt.Errorf("FSEvents observed a change at %q", path)
 		}
 		rel, err := filepath.Rel(e.root, path)
@@ -294,7 +347,11 @@ type darwinHandoffLive struct {
 }
 
 func armHandoffLive(ctx context.Context, root string, inputs []string) (handoffLiveGuard, error) {
-	events, err := armDarwinLiveEvents(root)
+	git, err := resolveDarwinLiveGit(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	events, err := armDarwinLiveEvents(root, git)
 	if err != nil {
 		return nil, fmt.Errorf("live-verified FSEvents unavailable: %w", err)
 	}
@@ -302,10 +359,15 @@ func armHandoffLive(ctx context.Context, root string, inputs []string) (handoffL
 		events.close()
 		return nil, err
 	}
-	vnodes, err := armDarwinLiveVnodes(ctx, root, inputs, 4096)
+	vnodes, err := armDarwinLiveVnodes(ctx, root, git, inputs, 4096)
 	if err != nil {
 		events.close()
 		return nil, err
+	}
+	if current, err := resolveDarwinLiveGit(ctx, root); err != nil || current != git {
+		vnodes.close()
+		events.close()
+		return nil, errors.New("live-verified Git metadata paths changed or could not be revalidated")
 	}
 	return &darwinHandoffLive{events: events, vnodes: vnodes}, nil
 }

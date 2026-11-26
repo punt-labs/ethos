@@ -2,6 +2,7 @@ package hook
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -27,6 +28,52 @@ func TestDarwinLiveSentinelCutoff(t *testing.T) {
 		} else {
 			require.NoError(t, guard.finish(context.Background(), []string{"input"}))
 		}
+	}
+}
+
+func TestDarwinLiveLinkedWorktree(t *testing.T) {
+	parent, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	root := filepath.Join(parent, "linked")
+	main := filepath.Join(parent, "main")
+	require.NoError(t, os.Mkdir(main, 0o700))
+	initGitRepo(t, main)
+	writeFile(t, filepath.Join(main, "input"), "clean")
+	stageGit(t, main, "add", "input")
+	stageGit(t, main, "-c", "user.name=T", "-c", "user.email=t@t", "commit", "-qm", "input")
+	stageGit(t, main, "worktree", "add", "--detach", root)
+	stageGit(t, main, "pack-refs", "--all")
+
+	for _, change := range []string{"", "input", "HEAD", "index", "refs/heads/transient", "packed-refs"} {
+		t.Run(change, func(t *testing.T) {
+			guard, err := armHandoffLive(t.Context(), root, []string{"input"})
+			require.NoError(t, err)
+			defer guard.close()
+			gitDir := filepath.Join(main, ".git", "worktrees", "linked")
+			require.Equal(t, filepath.Join(gitDir, "ethos-live"), filepath.Dir(guard.(*darwinHandoffLive).events.dir))
+			if change == "" {
+				require.NoError(t, guard.finish(t.Context(), []string{"input"}))
+				return
+			}
+			dir := gitDir
+			if change == "input" {
+				dir = root
+			} else if change == "packed-refs" || change == "refs/heads/transient" {
+				dir = filepath.Join(main, ".git")
+			}
+			path := filepath.Join(dir, change)
+			original, err := os.ReadFile(path)
+			if errors.Is(err, os.ErrNotExist) {
+				require.NoError(t, os.WriteFile(path, []byte("changed"), 0o600))
+				require.NoError(t, os.Remove(path))
+			} else {
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(path, []byte("changed"), 0o600))
+				require.NoError(t, os.WriteFile(path, original, 0o600))
+			}
+			require.ErrorContains(t, guard.(*darwinHandoffLive).events.finish(t.Context(), []string{"input"}), "FSEvents observed a change")
+			require.ErrorContains(t, guard.(*darwinHandoffLive).vnodes.drain(), "vnode")
+		})
 	}
 }
 

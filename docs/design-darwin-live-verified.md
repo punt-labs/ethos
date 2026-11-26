@@ -67,8 +67,10 @@ it as a terminal result. The verdict log uses
 
 1. **FSEvents:** enable file-level events and watch keyed paths and Git
    metadata through the event ID of a unique sentinel written after the
-   closing key. Create its private Git subdirectory before arming either
-   guard, exclude only the sentinel subtree from the Git event watch,
+   closing key. Create its private subdirectory in the worktree-local
+   Git directory before arming either guard. Watch the checkout and both
+   Git directories in one stream; defer if they span volumes. Exclude
+   only the sentinel subtree from the Git event watch,
    and remove the run's directory after verification. Unkeyed ignored
    paths are not themselves vetoes, and cannot explain away a vnode
    event. A sentinel timeout is unresolved coverage.
@@ -77,9 +79,11 @@ it as a terminal result. The verdict log uses
    and `RootChanged` as vetoes. If the stream cannot establish coverage
    through the cutoff, defer.
 2. **kqueue:** arm an independent `EVFILT_VNODE` guard for every keyed
-   file and Git metadata including `HEAD`, `index`, and refs.
+   file and Git metadata, including the worktree-local `HEAD` and
+   `index` and the common Git directory's refs and `packed-refs`.
    Also open `EVFILT_VNODE` on each directory containing a keyed path,
-   up to and including the checkout root and `.git`. Include existing
+   up to and including the checkout root, and on the containing
+   directories of Git metadata. Include existing
    directories where a newly created file could enter the keyed set,
    even if they contain no keyed files yet.
    On every watched file and directory, register `NOTE_WRITE`,

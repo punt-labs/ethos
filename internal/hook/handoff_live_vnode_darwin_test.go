@@ -18,7 +18,8 @@ func TestDarwinLiveVnodeGuard(t *testing.T) {
 			for _, path := range []string{"sub/source", ".git/HEAD", ".git/index", ".git/refs/heads/main"} {
 				writeFile(t, filepath.Join(root, path), "original")
 			}
-			guard, err := armDarwinLiveVnodes(context.Background(), root, []string{"sub/source"}, 20)
+			git := filepath.Join(root, ".git")
+			guard, err := armDarwinLiveVnodes(context.Background(), root, darwinLiveGit{local: git, common: git}, []string{"sub/source"}, 20)
 			require.NoError(t, err)
 			defer guard.close()
 			source := filepath.Join(root, "sub/source")
@@ -63,7 +64,8 @@ func TestDarwinLiveVnodeFDBudget(t *testing.T) {
 	require.NoError(t, err)
 	writeFile(t, filepath.Join(root, ".git/HEAD"), "ref")
 	writeFile(t, filepath.Join(root, "nested/source"), "data")
-	_, err = armDarwinLiveVnodes(context.Background(), root, []string{"nested/source"}, 4)
+	git := filepath.Join(root, ".git")
+	_, err = armDarwinLiveVnodes(context.Background(), root, darwinLiveGit{local: git, common: git}, []string{"nested/source"}, 4)
 	require.ErrorContains(t, err, "fd budget")
 }
 
@@ -84,7 +86,8 @@ func TestDarwinLiveVnodeIgnoresPrivateSentinelWrite(t *testing.T) {
 	writeFile(t, filepath.Join(root, "nested/source"), "data")
 	sentinel := filepath.Join(root, ".git", "ethos-live", "proof")
 	require.NoError(t, os.MkdirAll(sentinel, 0o700))
-	guard, err := armDarwinLiveVnodes(t.Context(), root, []string{"nested/source"}, 20)
+	git := filepath.Join(root, ".git")
+	guard, err := armDarwinLiveVnodes(t.Context(), root, darwinLiveGit{local: git, common: git}, []string{"nested/source"}, 20)
 	require.NoError(t, err)
 	defer guard.close()
 	require.NoError(t, os.WriteFile(filepath.Join(sentinel, "marker"), []byte("cutoff"), 0o600))
