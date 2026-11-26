@@ -45,6 +45,7 @@ type handoffSandboxWorktree struct {
 	CheckoutScratch []string
 	System          handoffSystemPlan
 	Loopback        bool
+	GitDir          string
 }
 
 // RunHandoffSandbox dispatches the private namespace child before CLI setup.
@@ -108,7 +109,7 @@ func handoffSandboxIdentity(root string) (string, error) {
 	return fmt.Sprintf("%s:%d:%d", strings.TrimSpace(string(boot)), physical.Dev, physical.Ino), nil
 }
 
-func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string, inputs []string, check editCheck, prepared ...handoffSystemPlan) (string, error) {
+func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string, inputs []string, check editCheck, prepared ...handoffWorktreePlan) (string, error) {
 	for _, root := range sandboxRuntime {
 		physical, err := filepath.EvalSymlinks(root)
 		if err == nil && (insideGatePath(physical, checkout) || insideGatePath(checkout, physical)) {
@@ -139,14 +140,17 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		if err != nil {
 			return "", err
 		}
-		var system handoffSystemPlan
+		var worktree handoffWorktreePlan
 		if len(prepared) > 0 {
-			system = prepared[0]
+			worktree = prepared[0]
 		} else {
-			system, err = prepareHandoffSystem(ctx, checkout, profile)
+			worktree.system, err = prepareHandoffSystem(ctx, checkout, profile)
 			if err != nil {
 				return "", err
 			}
+		}
+		if profile.Git != nil && worktree.gitDir == "" {
+			return "", errors.New("Git view was not prepared")
 		}
 		argv = roots.expandArgs(argv)
 		for i := 1; i < len(argv); i++ {
@@ -155,8 +159,8 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		cwd = worktreeSandboxPath(checkout, cwd)
 		env = append(env, "ETHOS_HANDOFF_CHECKOUT_NAME="+filepath.Base(checkout))
 		plan.Worktree = &handoffSandboxWorktree{
-			Environment: env, CheckoutScratch: profile.Scratch.Checkout, System: system,
-			Loopback: profile.Network == "loopback",
+			Environment: env, CheckoutScratch: profile.Scratch.Checkout, System: worktree.system,
+			Loopback: profile.Network == "loopback", GitDir: worktree.gitDir,
 		}
 	}
 	manifest, err := json.Marshal(plan)
@@ -329,6 +333,16 @@ func enterHandoffSandbox(root, live, cwd, proof, manifest string, argv []string,
 				phase = errHandoffScratchShadowsInput.Error()
 			}
 			return err
+		}
+		if plan.Worktree.GitDir != "" {
+			phase = "mount private Git view"
+			gitDir := filepath.Join(checkout, ".git")
+			if err := mountGateReadOnly(plan.Worktree.GitDir, gitDir); err != nil {
+				return err
+			}
+			if err := unix.Mount("tmpfs", filepath.Join(gitDir, "worktrees"), "tmpfs", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, "mode=0700,size=16m"); err != nil {
+				return err
+			}
 		}
 		env = plan.Worktree.Environment
 	}
