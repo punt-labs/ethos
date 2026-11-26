@@ -49,6 +49,40 @@ func TestReadStreamWithSalvage(t *testing.T) {
 	require.ErrorContains(t, err, s.LivePath(p))
 }
 
+func TestReadStreamWithSalvageRedactedOverlap(t *testing.T) {
+	for _, liveTool := range []string{"Secret", "DifferentSecret"} {
+		t.Run(liveTool, func(t *testing.T) {
+			p := repositoryPolicy(t, layout.RecordBlame)
+			s := Stream{Namespace: SessionNS, Session: "s"}
+			dir := filepath.Join(p.RecordRoot(), "sessions", "2026-11-04-s")
+			require.NoError(t, os.MkdirAll(dir, 0o700))
+			source := filepath.Join(dir, SessionChunkFile(100, 100))
+			damaged := []byte(sessLine(100, "Secret") + "garbage\n")
+			require.NoError(t, os.WriteFile(source, damaged, 0o600))
+			live := []byte(sessLine(100, liveTool))
+			require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), live))
+
+			guard := func(_ []byte) ([]byte, string, bool) {
+				return []byte(sessLine(100, "Masked")), "masked", false
+			}
+			data, err := ReadStreamWithSalvage(p, s, guard)
+			if liveTool == "Secret" {
+				require.NoError(t, err)
+				require.Len(t, data.Lines, 1)
+				require.JSONEq(t, sessLine(100, "Masked"), string(data.Lines[0].Raw))
+				require.Len(t, data.Gaps, 1)
+			} else {
+				require.ErrorContains(t, err, "audit identity conflict")
+			}
+			for path, want := range map[string][]byte{source: damaged, s.LivePath(p): live} {
+				raw, err := os.ReadFile(path)
+				require.NoError(t, err)
+				require.Equal(t, want, raw)
+			}
+		})
+	}
+}
+
 // HIGH-2: QuarantineLocal keeps the decodable lines of the damaged bytes, as
 // SalvageChunk does, instead of recovering only from the live file.
 func TestQuarantineLocalKeepsDecodableDamagedLines(t *testing.T) {
