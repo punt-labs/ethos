@@ -19,6 +19,18 @@ func TestDarwinHandoffLiveDefersUnkeyedSymlink(t *testing.T) {
 	require.Contains(t, result.Advisory, "symlink target is outside the keyed inputs", "%+v", result)
 }
 
+func TestDarwinHandoffLiveApprovalHintUsesValidSelector(t *testing.T) {
+	root := approvedDarwinLiveGate(t, "[/usr/bin/true]", "")
+	policy, err := ResolveHandoffLiveRevocation(root, "project")
+	require.NoError(t, err)
+	require.NoError(t, policy.Revoke())
+	ctx, _ := diagnostic.WithHookInvocation(t.Context())
+	result := RunStageChecks(ctx, root, "Explore", "handoff")
+	require.Contains(t, result.Advisory, "run: ethos handoff approve-live project)")
+	_, err = ResolveHandoffLivePolicy(root, "", "project")
+	require.NoError(t, err)
+}
+
 func TestDarwinHandoffLiveExit127Blocks(t *testing.T) {
 	root := approvedDarwinLiveGate(t, "[/bin/sh, -c, missing-ethos-test-command]", "")
 	ctx, _ := diagnostic.WithHookInvocation(t.Context())

@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"github.com/punt-labs/ethos/v4/internal/diagnostic"
@@ -148,7 +149,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	var approval liveApprovalPolicy
 	var grant string
 	approveCommand := "ethos handoff approve-live " + check.HandoffPolicySlug
-	if agent != "" {
+	if agent != "" && attribute.ValidateSlug(agent) == nil {
 		approveCommand += " --agent " + audit.ShellQuote(agent)
 	}
 	unapproved := "live-verified not approved (run: " + approveCommand + ")"
