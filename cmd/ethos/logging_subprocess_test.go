@@ -311,15 +311,23 @@ checks:
 	}
 	require.Empty(t, status())
 	home := t.TempDir()
-	cmd := loggingProcess(t, home, repo, "hook", "subagent-stop")
+	require.NoError(t, os.MkdirAll(filepath.Join(home, ".punt-labs", "ethos"), 0o700))
+	wrapper, err := filepath.Abs(filepath.Join("..", "..", "plugin", "hooks", "subagent-stop.sh"))
+	require.NoError(t, err)
+	cmd := loggingProcess(t, home, repo)
+	cmd.Path = wrapper
+	cmd.Args = []string{wrapper}
+	cmd.Env = append(cmd.Env, "PATH="+filepath.Dir(ethosBinary)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	cmd.Stdin = strings.NewReader(`{"session_id":"fixture","agent_id":"worker","agent_type":"implementer"}`)
-	out, err := cmd.CombinedOutput()
+	out, err := cmd.Output()
 	require.NoError(t, err, "%s", out)
 	require.Empty(t, status())
 	require.NoFileExists(t, stamp)
 	require.NotContains(t, string(out), "corrupt chunk")
 	require.Regexp(t, "Check finished .*stage=handoff check=probe outcome=completed", diagnosticLog(t, home))
-	require.Contains(t, string(out), "handoff audit gap in "+strings.TrimSuffix(filepath.Base(chunk), ".jsonl"))
+	var feedback map[string]string
+	require.NoError(t, json.Unmarshal(out, &feedback), "%s", out)
+	require.Contains(t, feedback["systemMessage"], "handoff audit gap in "+strings.TrimSuffix(filepath.Base(chunk), ".jsonl"))
 	require.Contains(t, string(out), "missing scope")
 	require.NotContains(t, string(out), "advisory scope")
 }

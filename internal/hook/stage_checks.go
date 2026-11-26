@@ -18,6 +18,7 @@ import (
 type StageFeedback struct {
 	Advisory string
 	Blocking string
+	Notice   string
 }
 
 // RunStageChecks runs configured commit or handoff checks, without marker defaults.

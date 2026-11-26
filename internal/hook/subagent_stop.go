@@ -68,23 +68,32 @@ func HandleSubagentStopWithIO(ctx context.Context, r io.Reader, ss *session.Stor
 		}
 		return stageScope{filesByRoot: files, auditGap: len(notes) != 0}, err
 	})
-	feedback.Advisory = strings.TrimSpace(strings.Join(append(notes, feedback.Advisory), "\n"))
+	if len(notes) != 0 && handoffPolicySelected(checkout, agent) {
+		feedback.Notice = strings.Join(notes, "\n")
+	}
 	stopFeedback(out, errOut, feedback, active)
 	return nil
 }
 
 func stopFeedback(out, errOut io.Writer, feedback StageFeedback, active bool) {
+	response := map[string]string{}
+	if feedback.Notice != "" {
+		response["systemMessage"] = editRedact(feedback.Notice)
+	}
 	if feedback.Advisory != "" {
 		fmt.Fprintln(errOut, editRedact(feedback.Advisory))
 	}
-	if feedback.Blocking == "" {
-		return
+	if feedback.Blocking != "" {
+		if active {
+			fmt.Fprintln(errOut, editRedact(feedback.Blocking))
+		} else {
+			response["decision"] = "block"
+			response["reason"] = editRedact(feedback.Blocking)
+		}
 	}
-	if active {
-		fmt.Fprintln(errOut, editRedact(feedback.Blocking))
-		return
+	if len(response) > 0 {
+		_ = json.NewEncoder(out).Encode(response)
 	}
-	_ = json.NewEncoder(out).Encode(map[string]string{"decision": "block", "reason": editRedact(feedback.Blocking)})
 }
 
 func handoffFiles(checkout, sessionID, agentID string) (map[string][]string, error) {
