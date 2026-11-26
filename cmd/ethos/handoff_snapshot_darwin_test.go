@@ -26,13 +26,14 @@ func TestHandoffSnapshotLaunchVerdicts(t *testing.T) {
 		require.True(t, race, "ethos subprocess binary was not built with -race")
 	}
 	for _, tc := range []struct {
-		name, run, script, verdict, outcome string
-		launches                            int
+		name, run, script, verdict, outcome, env string
+		launches                                 int
 	}{
-		{"clean", "[/bin/sh, -c, 'exit 0']", "", "", "completed", 1},
-		{"broken", "[/bin/sh, -c, 'exit 127']", "", "exit status 127", "failed", 1},
-		{"missing-executable", "['./gate-script']", "", "sandbox launch did not complete", "deferred", 0},
-		{"not-executable", "['./gate-script']", "exit 0\n", "sandbox launch did not complete", "deferred", 0},
+		{"clean", "[/bin/sh, -c, 'exit 0']", "", "", "completed", "", 1},
+		{"broken", "[/bin/sh, -c, 'exit 127']", "", "exit status 127", "failed", "", 1},
+		{"missing-executable", "['./gate-script']", "", "sandbox launch did not complete", "deferred", "", 0},
+		{"not-executable", "['./gate-script']", "exit 0\n", "sandbox launch did not complete", "deferred", "", 0},
+		{"perl-unicode", `[/bin/sh, -c, 'test "$PERL_UNICODE" = D']`, "", "", "completed", "    env: {PERL_UNICODE: D}\n", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, home := t.TempDir(), t.TempDir()
@@ -41,7 +42,7 @@ func TestHandoffSnapshotLaunchVerdicts(t *testing.T) {
 				".gitignore":                                     ".punt-labs/ethos/sessions/\n.punt-labs/local/\n",
 				".punt-labs/ethos.yaml":                          "checks: project\n",
 				".punt-labs/ethos/checks/project.yaml":           "name: project\nchecks:\n  - {name: snapshot, stage: handoff, files: all, run: " + tc.run + "}\n",
-				".punt-labs/ethos/checks/snapshots/project.yaml": "checks:\n  snapshot:\n    profile: linux-worktree-v1\n    epoch: proof\n    sources: {mode: worktree}\n",
+				".punt-labs/ethos/checks/snapshots/project.yaml": "checks:\n  snapshot:\n    profile: linux-worktree-v1\n    epoch: proof\n    sources: {mode: worktree}\n" + tc.env,
 			} {
 				path := filepath.Join(root, name)
 				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
