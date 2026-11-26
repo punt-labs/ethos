@@ -153,7 +153,6 @@ func TestHandoffWorktreeDefersUnimplementedFields(t *testing.T) {
 	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(archive)))
 	for _, tc := range []struct{ field, yaml string }{
 		{"scratch.files", "scratch: {files: [output.tmp]}"},
-		{"prehydrate", "prehydrate: {run: [sh, seed.sh]}"},
 		{"data", "data: [{name: fixture, url: 'https://example.com/data', max_age_hours: 1, mount: fixture}]"},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
