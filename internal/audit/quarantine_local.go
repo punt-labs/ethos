@@ -217,7 +217,7 @@ func QuarantineLocal(p layout.Policy, s Stream, source, dir string, cn ChunkName
 	// Recover from the damaged bytes themselves (when they are still held) and
 	// the live lines of the range, the same way SalvageChunk does. With the raw
 	// bytes gone, recovery can only draw on the live file.
-	r, err := recoverLines(p, s, raw, ChunkName{Namespace: cn.Namespace, Session: cn.Session, First: lo, Last: hi}, source, guard)
+	r, err := recoverLines(p, s, raw, ChunkName{Namespace: cn.Namespace, Session: cn.Session, First: lo, Last: hi}, source, guard, false)
 	if err != nil {
 		return Marker{}, err
 	}
