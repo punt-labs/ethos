@@ -114,7 +114,7 @@ func TestLoadSnapshotSidecarRejectsInvalidPolicy(t *testing.T) {
     profile: linux-worktree-v1
     epoch: test
     sources: {mode: worktree}
-    git: {base_ref: refs/remotes/origin/main}
+    git: {base_ref: refs/remotes/origin/main, refs: [refs/heads/release, refs/remotes/origin/release, refs/tags/v4.8.0]}
     network: loopback
     prehydrate: {run: [uv, sync, --offline]}
     runtime:
@@ -143,6 +143,9 @@ func TestLoadSnapshotSidecarRejectsInvalidPolicy(t *testing.T) {
 		{"invalid max age", "network: loopback", "data: [{name: vuln, url: 'https://example.com/db', mount: db, max_age_hours: 0}]", "positive max_age_hours"},
 		{"duplicate data mount", "network: loopback", "data: [{name: a, url: 'https://example.com/a', mount: db, max_age_hours: 24}, {name: b, url: 'https://example.com/b', mount: db, max_age_hours: 24}]", "names and mounts must be unique"},
 		{"ambiguous Git base", "refs/remotes/origin/main", "origin/main", "Git base must be a full ref"},
+		{"ambiguous Git ref", "refs/tags/v4.8.0", "v4.8.0", "git.refs entries must be full"},
+		{"Git ref glob", "refs/tags/v4.8.0", "refs/tags/v4.*", "git.refs entries must be full"},
+		{"unsupported Git ref", "refs/tags/v4.8.0", "refs/notes/review", "git.refs entries must be full"},
 		{"empty prehydrate", "run: [uv, sync, --offline]", "run: []", "prehydrate needs a command"},
 		{"no platforms", "runtime:", "disabled_runtime:", "field disabled_runtime not found"},
 		{"empty platforms", valid, "checks: {full-gate: {profile: linux-worktree-v1, epoch: test, sources: {mode: worktree}, runtime: {platforms: {}}}}", "runtime needs at least one platform"},
