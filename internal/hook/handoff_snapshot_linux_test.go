@@ -651,6 +651,81 @@ assert os.read(master, 7) == b"private"
 	require.Empty(t, failure)
 }
 
+func TestHandoffWorktreeNetwork(t *testing.T) {
+	if _, err := os.Stat("/usr/bin/python3"); err != nil {
+		t.Skip(err)
+	}
+	hostNetwork, err := os.Readlink("/proc/self/ns/net")
+	require.NoError(t, err)
+	for _, mode := range []string{"off", "loopback"} {
+		t.Run(mode, func(t *testing.T) {
+			root, _ := postEditFixture(t)
+			t.Setenv("HOME", t.TempDir())
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+			checkPolicy(t, root, "project", fmt.Sprintf("  - name: network-probe\n    stage: handoff\n    files: all\n    fail_on_output: true\n    run: [python3, gate.py, %q, %q]\n", mode, hostNetwork))
+			sidecar := `checks:
+  network-probe:
+    profile: linux-worktree-v1
+    epoch: network-probe
+    sources: {mode: worktree}
+`
+			if mode == "loopback" {
+				sidecar += "    network: loopback\n"
+			}
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml"), sidecar)
+			writeFile(t, filepath.Join(root, "gate.py"), `import errno
+import fcntl
+import os
+import socket
+import struct
+import sys
+
+mode, host_ns = sys.argv[1:]
+assert os.readlink("/proc/self/ns/net") != host_ns
+assert [name for _, name in socket.if_nameindex()] == ["lo"]
+with open("/proc/self/status") as status:
+    caps = dict(line.split(":", 1) for line in status)
+    assert int(caps["CapEff"], 16) == int(caps["CapAmb"], 16) == 0
+with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+    flags = fcntl.ioctl(sock, 0x8913, struct.pack("16s24x", b"lo"))
+    assert bool(struct.unpack_from("H", flags, 16)[0] & 1) == (mode == "loopback")
+
+for family, local, remote in [
+    (socket.AF_INET, "127.0.0.1", "192.0.2.1"),
+    (socket.AF_INET6, "::1", "2001:db8::1"),
+]:
+    with socket.socket(family, socket.SOCK_DGRAM) as sock:
+        try:
+            sock.connect((remote, 12345))
+        except OSError as error:
+            allowed = (errno.ENETUNREACH, errno.EADDRNOTAVAIL) if mode == "off" else (errno.ENETUNREACH,)
+            assert error.errno in allowed, error
+        else:
+            raise AssertionError("non-loopback route is present: " + remote)
+
+    if mode == "off":
+        continue
+    with socket.socket(family) as listener:
+        listener.settimeout(2)
+        listener.bind((local, 0))
+        listener.listen()
+        with socket.socket(family) as client:
+            client.settimeout(2)
+            client.connect(listener.getsockname())
+            with listener.accept()[0] as peer:
+                client.sendall(b"ok")
+                assert peer.recv(2) == b"ok"
+
+print("network proof: " + mode)
+`)
+			feedback := RunStageChecks(context.Background(), root, "worker", "handoff")
+			skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+			require.Contains(t, feedback.Blocking, "non-empty formatting output")
+			require.Contains(t, feedback.Blocking, "network proof: "+mode)
+		})
+	}
+}
+
 func skipIfHandoffSandboxUnavailable(t *testing.T, err error) {
 	t.Helper()
 	if err != nil && (strings.Contains(err.Error(), "isolation unavailable on this host") ||

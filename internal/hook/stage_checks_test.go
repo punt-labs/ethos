@@ -155,7 +155,6 @@ func TestHandoffWorktreeDefersUnimplementedFields(t *testing.T) {
 		{"scratch.files", "scratch: {files: [output.tmp]}"},
 		{"prehydrate", "prehydrate: {run: [sh, seed.sh]}"},
 		{"git", "git: {}"},
-		{"network", "network: loopback"},
 		{"data", "data: [{name: fixture, url: 'https://example.com/data', max_age_hours: 1, mount: fixture}]"},
 	} {
 		t.Run(tc.field, func(t *testing.T) {

@@ -315,8 +315,6 @@ func unsupportedWorktreeField(profile *checkset.WorktreeSnapshot) string {
 		return "prehydrate"
 	case profile.Git != nil:
 		return "git"
-	case profile.Network != "":
-		return "network"
 	case len(profile.Data) != 0:
 		return "data"
 	default:
