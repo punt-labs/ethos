@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -140,19 +143,56 @@ func TestExportSessionEnv(t *testing.T) {
 	})
 }
 
-func TestRepoEnabledMarker(t *testing.T) {
-	dir := t.TempDir()
-	assert.False(t, repoEnabled(""), "empty checkout is not enabled")
-	assert.False(t, repoEnabled(dir), "repo without marker is not enabled")
+func TestHandleSessionStart_EnvExportGate(t *testing.T) {
+	run := func(t *testing.T, checkout string) string {
+		t.Helper()
+		envFile := filepath.Join(t.TempDir(), "claude-env.sh")
+		t.Setenv("CLAUDE_ENV_FILE", envFile)
+		unsetEnv(t, "GIT_OPTIONAL_LOCKS")
 
-	marker := filepath.Join(dir, enabledMarkerRel)
-	require.NoError(t, os.MkdirAll(filepath.Dir(marker), 0o755))
-	require.NoError(t, os.WriteFile(marker, nil, 0o644))
-	assert.True(t, repoEnabled(dir), "repo with regular marker is enabled")
+		storeRoot := t.TempDir()
+		deps := SessionStartDeps{
+			Located:  &resolve.Located{Checkout: checkout, Store: checkout},
+			Store:    identity.NewStore(filepath.Join(storeRoot, "identities")),
+			Sessions: session.NewStore(filepath.Join(storeRoot, "sessions")),
+		}
+		err := HandleSessionStart(strings.NewReader(`{"session_id":"test-env-gate"}`), deps)
+		require.NoError(t, err)
+		return envFile
+	}
 
-	// After ethos disable removes the marker, SessionStart must not export.
-	require.NoError(t, os.Remove(marker))
-	assert.False(t, repoEnabled(dir), "disabled repo must not be treated as enabled")
+	t.Run("disabled checkout skips CLAUDE_ENV_FILE", func(t *testing.T) {
+		checkout := t.TempDir()
+		envFile := run(t, checkout)
+		_, err := os.Stat(envFile)
+		assert.ErrorIs(t, err, os.ErrNotExist)
+	})
+
+	t.Run("enabled checkout writes CLAUDE_ENV_FILE", func(t *testing.T) {
+		checkout := t.TempDir()
+		marker := filepath.Join(checkout, ".punt-labs", "ethos", "enabled")
+		require.NoError(t, os.MkdirAll(filepath.Dir(marker), 0o755))
+		require.NoError(t, os.WriteFile(marker, nil, 0o644))
+
+		envFile := run(t, checkout)
+		data, err := os.ReadFile(envFile)
+		require.NoError(t, err)
+		assert.Equal(t, "export GIT_OPTIONAL_LOCKS=0\n", string(data))
+	})
+
+	t.Run("symlinked regular enabled marker writes CLAUDE_ENV_FILE", func(t *testing.T) {
+		checkout := t.TempDir()
+		target := filepath.Join(t.TempDir(), "enabled-target")
+		require.NoError(t, os.WriteFile(target, nil, 0o644))
+		marker := filepath.Join(checkout, ".punt-labs", "ethos", "enabled")
+		require.NoError(t, os.MkdirAll(filepath.Dir(marker), 0o755))
+		require.NoError(t, os.Symlink(target, marker))
+
+		envFile := run(t, checkout)
+		data, err := os.ReadFile(envFile)
+		require.NoError(t, err)
+		assert.Equal(t, "export GIT_OPTIONAL_LOCKS=0\n", string(data))
+	})
 }
 
 func TestBuildWorkingContext_DoesNotRefreshIndex(t *testing.T) {
