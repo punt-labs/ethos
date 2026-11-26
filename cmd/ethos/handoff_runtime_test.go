@@ -102,4 +102,24 @@ checks:
 	require.NoError(t, err)
 	require.Equal(t, archive, string(bytes))
 	require.EqualValues(t, 2, requests.Load())
+
+	setInProcessEnv(t, se)
+	command, _, err := rootCmd.Find([]string{"handoff", "fetch-runtime"})
+	require.NoError(t, err)
+	fileFlag := command.Flags().Lookup("file")
+	t.Cleanup(func() {
+		require.NoError(t, fileFlag.Value.Set(""))
+		fileFlag.Changed = false
+	})
+	out, _, err = execHandler(t, "handoff", "fetch-runtime", "--file", local)
+	require.ErrorContains(t, err, actual)
+	require.Empty(t, out)
+	require.NoError(t, os.WriteFile(local, []byte(archive), 0o600))
+	out, _, err = execHandler(t, "handoff", "fetch-runtime", "--file", local)
+	require.NoError(t, err)
+	require.Equal(t, path+"\n", out)
+	out, _, err = execHandler(t, "handoff", "fetch-runtime", "--file", local, "--json")
+	require.NoError(t, err)
+	require.JSONEq(t, fmt.Sprintf("[%q]", path), out)
+	require.EqualValues(t, 2, requests.Load())
 }
