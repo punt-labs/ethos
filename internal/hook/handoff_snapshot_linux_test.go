@@ -616,6 +616,86 @@ test ! -w .`},
 	require.ErrorContains(t, err, "checkout scratch shadows snapshot content")
 }
 
+func TestHandoffPlanScratchFileOperands(t *testing.T) {
+	dest := t.TempDir()
+	const output = "/checkout/build/output.tmp"
+	worktree := &handoffSandboxWorktree{ScratchFiles: []string{"build/output.tmp"}}
+	for _, argv := range [][]string{{output}, {"sh", "--", output}, {"python3", "-I", output}, {"touch", output + ".other"}, {"touch", output + "/child"}} {
+		require.False(t, gatePlanInputsPresent(dest, argv, worktree), "%v", argv)
+	}
+	require.True(t, gatePlanInputsPresent(dest, []string{"touch", output}, worktree))
+	require.True(t, gatePlanInputsPresent(dest, []string{"touch", "/checkout/build/./output.tmp"}, worktree))
+	worktree.Prehydrate = []string{"hydrate"}
+	require.True(t, gatePlanInputsPresent(dest, []string{output}, worktree))
+	require.True(t, gatePlanInputsPresent(dest, []string{"sh", output}, worktree))
+	require.False(t, gatePlanInputsPresent(dest, []string{"sh", "/checkout/../checkout/build/output.tmp"}, worktree))
+}
+
+func TestHandoffWorktreeRunsWithPrivateScratchFile(t *testing.T) {
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	checkPolicy(t, root, "project", "  - name: full-gate\n    stage: handoff\n    files: all\n    adapter: make\n    target: check\n")
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml"), `checks:
+  full-gate:
+    profile: linux-worktree-v1
+    epoch: scratch-files
+    sources: {mode: worktree}
+    scratch: {files: [output.tmp, nested/output.tmp], checkout: [.venv]}
+`)
+	makefile := filepath.Join(root, "Makefile")
+	writeFile(t, makefile, `check:
+	@test ! -e output.tmp && test ! -e nested/output.tmp
+	@echo first > output.tmp && grep -qx first output.tmp
+	@rm -f output.tmp && test ! -e output.tmp
+	@echo second > output.tmp && grep -qx second output.tmp
+	@touch nested/output.tmp .venv/created
+`)
+	run := func() StageFeedback {
+		return runStageChecks(context.Background(), root, "worker", "handoff", func() ([]string, error) {
+			return []string{makefile}, nil
+		})
+	}
+	feedback := run()
+	skipIfHandoffSandboxUnavailable(t, errors.New(feedback.Blocking))
+	require.Empty(t, feedback.Blocking)
+	require.NoFileExists(t, filepath.Join(root, "output.tmp"))
+	require.NoFileExists(t, filepath.Join(root, "undeclared.tmp"))
+
+	results := func() []string {
+		t.Helper()
+		files, err := filepath.Glob(filepath.Join(root, ".punt-labs", "local", "ethos", "handoff-v1", "*", "*.json"))
+		require.NoError(t, err)
+		return files
+	}
+	before := results()
+	require.NotEmpty(t, before)
+	for _, tc := range []struct{ cmd, path string }{
+		{"touch undeclared.tmp", "/checkout/undeclared.tmp"},
+		{"chmod 400 Makefile", "/checkout/Makefile"},
+		{"rm Makefile", "/checkout/Makefile"},
+	} {
+		writeFile(t, makefile, "check:\n\t@"+tc.cmd+"\n")
+		feedback = run()
+		require.Contains(t, feedback.Blocking, "scratch-violation")
+		require.Contains(t, feedback.Blocking, tc.path)
+		require.Contains(t, feedback.Blocking, "make check")
+		require.Equal(t, before, results())
+	}
+	require.NoFileExists(t, filepath.Join(root, "undeclared.tmp"))
+
+	writeFile(t, makefile, "check:\n\t@echo intentionally-broken >&2; exit 23\n")
+	feedback = run()
+	require.Contains(t, feedback.Blocking, "intentionally-broken")
+	require.NotContains(t, feedback.Blocking, "deferred")
+
+	writeFile(t, filepath.Join(root, "output.tmp"), "must not be hidden\n")
+	stageGit(t, root, "add", "output.tmp")
+	feedback = run()
+	require.Contains(t, feedback.Blocking, "checkout scratch shadows snapshot content")
+	require.NotContains(t, feedback.Blocking, "intentionally-broken")
+}
+
 func TestHandoffWorktreeRunsDirectCommands(t *testing.T) {
 	for _, tc := range []struct{ name, check, path, good, broken string }{
 		{"make adapter", "    files: all\n    adapter: make\n    target: check\n", "Makefile",

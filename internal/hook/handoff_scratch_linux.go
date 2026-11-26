@@ -14,7 +14,7 @@ import (
 
 var errHandoffScratchShadowsInput = errors.New("checkout scratch shadows snapshot content")
 
-func mountHandoffWorktreeScratch(root, checkout string, paths []string) error {
+func prepareHandoffWorktreeScratch(root string) error {
 	roots := linuxHandoffRoots()
 	scratch := filepath.Join(root, roots.scratch)
 	for _, relative := range []string{roots.temp, roots.scratch} {
@@ -26,20 +26,21 @@ func mountHandoffWorktreeScratch(root, checkout string, paths []string) error {
 			return err
 		}
 	}
-	if err := os.Mkdir(filepath.Join(scratch, "home"), 0o700); err != nil {
-		return err
-	}
-	targets, err := handoffScratchTargets(checkout, paths)
-	if err != nil {
-		return err
-	}
+	return os.Mkdir(filepath.Join(scratch, "home"), 0o700)
+}
+
+func prepareHandoffCheckoutScratch(targets []string) error {
 	for _, target := range targets {
-		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		if err := os.MkdirAll(target, 0o700); err != nil {
 			return err
 		}
-		if err := os.Mkdir(target, 0o700); err != nil {
-			return err
-		}
+	}
+	return nil
+}
+
+func mountHandoffCheckoutScratch(root string, targets []string) error {
+	scratch := filepath.Join(root, linuxHandoffRoots().scratch)
+	for _, target := range targets {
 		backing, err := os.MkdirTemp(scratch, layout.ScratchDirPattern(".checkout"))
 		if err != nil {
 			return err

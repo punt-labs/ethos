@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/diagnostic"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/redact"
 	"golang.org/x/sys/unix"
 )
@@ -48,6 +49,8 @@ type handoffSandboxManifest struct {
 type handoffSandboxWorktree struct {
 	Environment     []string
 	CheckoutScratch []string
+	ScratchFiles    []string
+	ScratchOverlay  string
 	ScratchSeed     map[string]string
 	System          handoffSystemPlan
 	Loopback        bool
@@ -94,7 +97,7 @@ func runHandoffSandbox(writeCoverage func(string) error) {
 	var setup *handoffSetupError
 	if errors.As(err, &setup) {
 		var errno unix.Errno
-		if setup.phase == handoffMaterializePhase {
+		if setup.phase == handoffMaterializePhase || setup.phase == handoffScratchOverlayPhase {
 			_, _ = fmt.Fprintf(status, "%s: %.1024s\n", setup.phase, redact.Prose(setup.cause.Error()))
 		} else if errors.As(setup.cause, &errno) {
 			_, _ = fmt.Fprintf(status, "%s: %s\n", setup.phase, errno)
@@ -179,8 +182,18 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		cwd = worktreeSandboxPath(checkout, cwd)
 		env = append(env, "ETHOS_HANDOFF_CHECKOUT_NAME="+filepath.Base(checkout))
 		plan.Worktree = &handoffSandboxWorktree{
-			Environment: env, CheckoutScratch: profile.Scratch.Checkout, ScratchSeed: profile.Scratch.Seed, System: worktree.system,
+			Environment: env, CheckoutScratch: profile.Scratch.Checkout, ScratchFiles: profile.Scratch.Files,
+			ScratchSeed: profile.Scratch.Seed, System: worktree.system,
 			Loopback: profile.Network == "loopback", GitDir: worktree.gitDir, RuntimeDir: worktree.runtimeDir,
+		}
+		if len(profile.Scratch.Files) != 0 {
+			// Keep the overlay backing outside the root exposed by pivot_root.
+			overlay, err := os.MkdirTemp(filepath.Dir(scratch), layout.ScratchDirPattern("scratch-files"))
+			if err != nil {
+				return "", errors.New("cannot prepare scratch.files overlay")
+			}
+			defer removeHandoffScratchFiles(overlay)
+			plan.Worktree.ScratchOverlay = overlay
 		}
 		if profile.Prehydrate != nil {
 			plan.Worktree.Prehydrate = roots.expandArgs(profile.Prehydrate.Run)
@@ -238,6 +251,10 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 	if plan.Worktree != nil && plan.Worktree.Loopback {
 		cmd.SysProcAttr.AmbientCaps = append(cmd.SysProcAttr.AmbientCaps, unix.CAP_NET_ADMIN)
 	}
+	if plan.Worktree != nil && len(plan.Worktree.ScratchFiles) != 0 {
+		// Overlayfs uses its mounter's credentials to access its private workdir.
+		cmd.SysProcAttr.AmbientCaps = append(cmd.SysProcAttr.AmbientCaps, unix.CAP_DAC_OVERRIDE)
+	}
 	var stdout, stderr editTail
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Start(); err != nil {
@@ -285,6 +302,11 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 			reason += " (" + detail + ")"
 		}
 		return "", errors.New(reason)
+	}
+	if worktree := plan.Worktree; worktree != nil && len(worktree.ScratchFiles) != 0 {
+		if auditErr := auditHandoffScratchFiles(worktree.ScratchOverlay, handoffScratchFileOverlays(worktree.ScratchFiles)); auditErr != nil {
+			return "", auditErr
+		}
 	}
 	if err != nil {
 		var exit *exec.ExitError
@@ -349,6 +371,9 @@ operands:
 					i != 0 && i != script && insideGatePath(scratch, path.Dir(rel)) {
 					continue operands
 				}
+			}
+			if slices.Contains(worktree.ScratchFiles, rel) && (len(worktree.Prehydrate) != 0 || i != 0 && i != script) {
+				continue operands
 			}
 		}
 		if _, err := checkout.Lstat(rel); err != nil {
@@ -495,6 +520,8 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 		return unix.ENOTDIR
 	}
 	env := sandboxEnvironment
+	var scratchDirs []string
+	var scratchOverlays []handoffScratchFileOverlay
 	if plan.Worktree != nil {
 		if plan.Worktree.RuntimeDir != "" {
 			phase = "mount verified runtime bundle"
@@ -503,14 +530,52 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 			}
 		}
 		phase = "mount private worktree scratch"
-		if err := mountHandoffWorktreeScratch(root, checkout, plan.Worktree.CheckoutScratch); err != nil {
+		if err := prepareHandoffWorktreeScratch(root); err != nil {
+			return err
+		}
+		targets, err := handoffScratchTargets(checkout, slices.Concat(plan.Worktree.CheckoutScratch, plan.Worktree.ScratchFiles))
+		if err != nil {
 			if errors.Is(err, errHandoffScratchShadowsInput) {
 				phase = errHandoffScratchShadowsInput.Error()
 			}
 			return err
 		}
+		scratchDirs = targets[:len(plan.Worktree.CheckoutScratch)]
+		if err := prepareHandoffCheckoutScratch(scratchDirs); err != nil {
+			return err
+		}
+		scratchOverlays = handoffScratchFileOverlays(plan.Worktree.ScratchFiles)
+		for _, overlay := range scratchOverlays {
+			if err := os.MkdirAll(filepath.Join(checkout, overlay.parent), 0o700); err != nil {
+				return err
+			}
+		}
 		phase = "copy private scratch.seed"
 		if err := seedHandoffScratch(root, plan.Worktree.ScratchSeed); err != nil {
+			return err
+		}
+		if plan.Worktree.GitDir != "" {
+			phase = "prepare private Git view"
+			if err := os.Mkdir(filepath.Join(checkout, ".git"), 0o700); err != nil {
+				return err
+			}
+		}
+		env = plan.Worktree.Environment
+	}
+	phase = handoffMaterializePhase
+	if !gatePlanInputsPresent(checkout, argv, plan.Worktree) {
+		return errors.New("snapshot inputs did not match the invocation")
+	}
+	if err := unix.Mount("", checkout, "", unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV, ""); err != nil {
+		return err
+	}
+	if plan.Worktree != nil {
+		phase = handoffScratchOverlayPhase
+		if err := mountHandoffScratchFiles(checkout, plan.Worktree.ScratchOverlay, scratchOverlays); err != nil {
+			return err
+		}
+		phase = "mount private worktree scratch"
+		if err := mountHandoffCheckoutScratch(root, scratchDirs); err != nil {
 			return err
 		}
 		if plan.Worktree.GitDir != "" {
@@ -523,14 +588,6 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 				return err
 			}
 		}
-		env = plan.Worktree.Environment
-	}
-	phase = handoffMaterializePhase
-	if !gatePlanInputsPresent(checkout, argv, plan.Worktree) {
-		return errors.New("snapshot inputs did not match the invocation")
-	}
-	if err := unix.Mount("", checkout, "", unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV, ""); err != nil {
-		return err
 	}
 	phase = "mount read-only system runtime"
 	if plan.Worktree != nil {

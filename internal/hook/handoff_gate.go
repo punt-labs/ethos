@@ -408,7 +408,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 
 func unsupportedWorktreeField(profile *checkset.WorktreeSnapshot) string {
 	switch {
-	case len(profile.Scratch.Files) != 0:
+	case runtime.GOOS != "linux" && len(profile.Scratch.Files) != 0:
 		return "scratch.files"
 	default:
 		return ""
