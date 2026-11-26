@@ -5,11 +5,13 @@ package hook
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -90,6 +92,92 @@ func TestStageFileSelection(t *testing.T) {
 	files, err = stageFiles(root, "commit")
 	require.NoError(t, err)
 	require.Equal(t, []string{"unstaged.go"}, files)
+}
+
+func TestHandoffInvalidSnapshotSidecarPreservesBasePolicy(t *testing.T) {
+	root, _ := postEditFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	checkPolicy(t, root, "project", "  - name: full-gate\n    stage: handoff\n    files: all\n    adapter: make\n    target: check\n    on_fail: advisory\n"+
+		"  - name: commit-gate\n    stage: commit\n    files: all\n    run: [/bin/true]\n")
+	writeFile(t, filepath.Join(root, ".punt-labs", "ethos", "checks", "snapshots", "project.yaml"), "checks: {full-gate: {unknown: true}}\n")
+	got := RunStageChecks(context.Background(), root, "worker", "handoff")
+	require.Empty(t, got.Blocking)
+	require.Contains(t, got.Advisory, "invalid snapshot sidecar")
+	require.Contains(t, got.Advisory, "make check")
+	_, err := handoffState(root, "worker")
+	require.Error(t, err)
+	checks, selected, err := configuredStageChecks(root, "worker", "commit")
+	require.NoError(t, err)
+	require.True(t, selected)
+	require.Len(t, checks, 1)
+	require.Equal(t, "commit-gate", checks[0].Name)
+}
+
+func TestHandoffSnapshotRuntimeDefersWithoutVerifiedArchive(t *testing.T) {
+	root, _ := postEditFixture(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+	checkPolicy(t, root, "project", "  - name: full-gate\n    stage: handoff\n    files: all\n    adapter: make\n    target: check\n")
+	digest := strings.Repeat("1", 64)
+	writeFile(t, filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml"), fmt.Sprintf(`checks:
+  full-gate:
+    profile: linux-worktree-v1
+    epoch: test
+    sources: {mode: worktree}
+    runtime:
+      platforms:
+        %s-%s:
+          bundle: project-test
+          sha256: "%s"
+          url: https://example.com/project-test.tar.gz
+`, runtime.GOOS, runtime.GOARCH, digest))
+	run := func() StageFeedback {
+		return RunStageChecks(context.Background(), root, "worker", "handoff")
+	}
+	feedback := run()
+	require.Contains(t, feedback.Blocking, "runtime-missing")
+	require.Contains(t, feedback.Blocking, "https://example.com/project-test.tar.gz")
+	require.Contains(t, feedback.Notice, "ethos handoff fetch-runtime")
+	require.Contains(t, feedback.Notice, "make check")
+	writeFile(t, filepath.Join(home, ".punt-labs/ethos/runtimes", digest+".tar.gz"), "unverified archive")
+	feedback = run()
+	require.Contains(t, feedback.Blocking, "runtime-digest-mismatch")
+	require.Contains(t, feedback.Notice, "ethos handoff fetch-runtime")
+	require.Contains(t, feedback.Notice, "make check")
+}
+
+func TestHandoffWorktreeDefersUnimplementedFields(t *testing.T) {
+	const archive = "fixture bundle"
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(archive)))
+	for _, tc := range []struct{ field, yaml string }{
+		{"scratch.files", "scratch: {files: [output.tmp]}"},
+		{"prehydrate", "prehydrate: {run: [sh, seed.sh]}"},
+		{"data", "data: [{name: fixture, url: 'https://example.com/data', max_age_hours: 1, mount: fixture}]"},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			root, _ := postEditFixture(t)
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			writeFile(t, filepath.Join(home, ".punt-labs/ethos/runtimes", digest+".tar.gz"), archive)
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos.yaml"), "checks: project\n")
+			writeFile(t, filepath.Join(root, ".punt-labs/ethos/checks/snapshots/project.yaml"), "checks:\n  full-gate:\n    profile: linux-worktree-v1\n    epoch: test\n    sources: {mode: worktree}\n    "+tc.yaml+"\n")
+			writeFile(t, filepath.Join(root, "Makefile"), "check:\n\t@echo must-not-run; exit 23\n")
+			check := "  - name: full-gate\n    stage: handoff\n    files: all\n    adapter: make\n    target: check\n"
+			reason := "worktree profile field " + tc.field + " not supported by this runner yet"
+			checkPolicy(t, root, "project", check)
+			feedback := RunStageChecks(context.Background(), root, "worker", "handoff")
+			require.Contains(t, feedback.Blocking, reason)
+			require.Contains(t, feedback.Notice, "make check")
+			require.NotContains(t, feedback.Blocking, "must-not-run")
+			checkPolicy(t, root, "project", check+"    on_fail: advisory\n")
+			feedback = RunStageChecks(context.Background(), root, "worker", "handoff")
+			require.Empty(t, feedback.Blocking)
+			require.Contains(t, feedback.Advisory, reason)
+			require.Contains(t, feedback.Advisory, "make check")
+		})
+	}
 }
 
 func TestHandoffChecks(t *testing.T) {
@@ -265,6 +353,35 @@ func TestHandoffManualCommandMapsDeclaredSnapshotPaths(t *testing.T) {
 	require.Equal(t, "live gate\n", string(out))
 }
 
+func TestHandoffManualCommandExpandsWorktreeRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := filepath.Join(home, "checkout with spaces")
+	require.NoError(t, os.Mkdir(root, 0o700))
+	writeFile(t, filepath.Join(root, "gate.sh"), "printf '%s\\n' \"$@\"\n")
+	check := checkset.Check{
+		Name: "manual", Stage: "handoff", Files: checkset.Patterns{Globs: []string{"**"}}, Cwd: "root",
+		Run:              []string{"/bin/sh", "{root}/gate.sh", "--input={root}/input", "{files}"},
+		WorktreeSnapshot: &checkset.WorktreeSnapshot{},
+	}
+	manual := handoffManualCommand(root, []string{"{root}.txt"}, check)
+	require.NotContains(t, manual, home)
+	out, err := exec.Command("/bin/sh", "-c", manual).CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	require.Equal(t, "--input="+filepath.Join(root, "input")+"\n"+filepath.Join(root, "{root}.txt")+"\n", string(out))
+}
+
+func TestHandoffManualCommandKeepsLiveRootUnderCheckout(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	check := checkset.Check{
+		Name: "manual", Stage: "handoff", Files: checkset.Patterns{Globs: []string{"**"}}, Cwd: "file_dir",
+		Run:              []string{"/bin/sh", "/checkout/gate.sh", "{root}", "{package_dir}", "{files}", "--input={root}/input"},
+		WorktreeSnapshot: &checkset.WorktreeSnapshot{},
+	}
+	manual := handoffManualCommand("/checkout/project", []string{"nested/report.txt"}, check)
+	require.Equal(t, "(cd /checkout/project/nested && /bin/sh /checkout/project/gate.sh /checkout/project /checkout/project/nested /checkout/project/nested/report.txt --input=/checkout/project/input)", manual)
+}
+
 func TestHandoffRootOperandIsNotLive(t *testing.T) {
 	root, _ := postEditFixture(t)
 	t.Setenv("HOME", t.TempDir())
@@ -315,14 +432,17 @@ func TestHandoffRepeatedAuditPaths(t *testing.T) {
 	root, err := filepath.EvalSymlinks(root)
 	require.NoError(t, err)
 	git := filepath.Join(bin, "git")
-	require.NoError(t, os.Rename(git, filepath.Join(bin, "real-git")))
+	realGit, err := os.Readlink(git)
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(git))
 	log := filepath.Join(t.TempDir(), "lookups")
 	t.Setenv("LOOKUP_LOG", log)
 	dir := filepath.Join(root, "src")
 	t.Setenv("LOOKUP_DIR", dir)
 	postEditTool(t, bin, "git", `if [ "$1" = -C ] && [ "$2" = "$LOOKUP_DIR" ] && [ "$3" = rev-parse ]; then printf 'lookup\n' >> "$LOOKUP_LOG"; fi
-exec "${0%/*}/real-git" "$@"
+exec "$REAL_GIT" "$@"
 `)
+	t.Setenv("REAL_GIT", realGit)
 	writeFile(t, filepath.Join(dir, "file.go"), "package example\n")
 	var entries []auditEntry
 	for i := range 6 {

@@ -12,6 +12,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func TestDecodeWorktreeHandoffRootPlaceholders(t *testing.T) {
+	const policy = "name: test\nchecks:\n  - {name: test, stage: handoff, files: all, run: ['{runtime}/bin/tool', '{scratch}', '--input={root}/file']}\n"
+	_, err := Decode([]byte(policy))
+	require.NoError(t, err)
+	_, err = Decode([]byte(strings.Replace(policy, "{scratch}", "{unknown}", 1)))
+	require.Error(t, err)
+}
+
 func TestDecode(t *testing.T) {
 	valid := "name: test\nchecks:\n  - name: test\n    stage: edit\n    files: ['**/*.go']\n    run: [go, vet, '{package_dir}']\n"
 	for _, tc := range []struct{ name, old, replacement string }{

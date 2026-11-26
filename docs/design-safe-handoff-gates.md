@@ -26,8 +26,12 @@ on keble was not measured.
 
 ## 2. Separate eligibility, identity and admission
 
-1. Keep roster leave and the current read-only skip. Do not launch anything
-   unless a configured check matches the handoff inputs. Keep
+1. Keep roster leave and the current read-only skip for policies without a
+   worktree sidecar. A sidecar requires system and runtime proofs that are
+   not part of the checkout fingerprint, so even unchanged stops go through
+   admission for the whole policy, including its other checks. Admission can
+   still reuse a matching verified verdict. Do not launch anything unless a
+   configured check matches the handoff inputs. Keep
    `~/.punt-hooks-kill` ahead of input, storage, and scheduling.
 2. Record dispatch role at SubagentStart from the declared mission and
    validated binding: worker, non-worker or unknown. A seeded checklist
@@ -46,7 +50,8 @@ on keble was not measured.
 4. Admission is per checkout and execution plan, not per reply, agent ID
    or session. Use a versioned key over the physical checkout identity,
    HEAD, index and effective dirty content, resolved policy, logical argv
-   and cwd, and the enforced execution profile. Represent the checkout
+   and cwd, the enforced execution profile, and the running executable's
+   digest. A changed runner build cannot reuse a verdict. Represent the checkout
    root symbolically and file and directory operands relative to it;
    the key never includes the temporary snapshot path. Policy may select
    different commands for different roles; two genuinely different plans
@@ -217,7 +222,31 @@ stop allowed on re-entry was a verified pass.
 
 ### Snapshot check profile
 
-A handoff check can opt into the Linux snapshot runner, for example:
+The Linux worktree profile is declared in
+`.punt-labs/ethos/checks/snapshots/<check-set>.yaml` beside the selected
+check set. There is no separate `handoff-worktree.yaml` to install.
+
+For a selected check set named `project`, define a handoff check such as
+`verify-manifest` in `.punt-labs/ethos/checks/project.yaml`. Configure it in
+`.punt-labs/ethos/checks/snapshots/project.yaml`:
+
+```yaml
+checks:
+  verify-manifest:
+    profile: linux-worktree-v1
+    epoch: v1
+    sources: {mode: worktree}
+```
+
+The worktree profile selects Git-visible checkout files.
+
+Explicit `ethos handoff fetch-runtime` downloads honor the operator's
+`HTTPS_PROXY` and `NO_PROXY` settings. For a tunnel the fetcher resolves
+the asset hostname locally and sends CONNECT only to a checked public IP,
+while TLS still verifies the original asset identity. The operator's HTTP
+or HTTPS proxy can be local; the checkout cannot choose the proxy endpoint.
+
+The older inline `linux-shell-v1` profile instead lists its inputs:
 
 ```yaml
 - name: verify-manifest
