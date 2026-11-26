@@ -411,7 +411,7 @@ func TestHandoffWorktreeSandboxExpandsLogicalPathPrefixes(t *testing.T) {
 				},
 			}},
 		}},
-		argv: []string{"/bin/sh", "-c", `test "$#" = 3 &&
+		argv: []string{"/bin/sh", "-c", `test "$#" = 4 &&
 test "$1" = "/scratch/socket test" &&
 test "$2" = "/runtime/bin" &&
 test "$3" = "/checkout/sub" &&
@@ -422,8 +422,10 @@ test "$PATH" = "/scratch/bin:/runtime/bin:/usr/local/bin:/usr/bin:/bin" &&
 test "$(/usr/bin/locale charmap)" = "UTF-8" &&
 test "$ETHOS_HANDOFF_ROOT" = "/checkout" &&
 test "$ETHOS_HANDOFF_RUNTIME" = "/runtime" &&
-test "$ETHOS_HANDOFF_SCRATCH" = "/scratch"`,
-			"paths", "{scratch}/socket test", "{runtime}/bin", "{root}/sub"},
+test "$ETHOS_HANDOFF_SCRATCH" = "/scratch" &&
+test "$HOME" = "$ETHOS_HANDOFF_SCRATCH/home" &&
+test "$ETHOS_HANDOFF_CHECKOUT_NAME" = "$4"`,
+			"paths", "{scratch}/socket test", "{runtime}/bin", "{root}/sub", filepath.Base(live)},
 	})
 	skipIfHandoffSandboxUnavailable(t, err)
 	require.NoError(t, err)
