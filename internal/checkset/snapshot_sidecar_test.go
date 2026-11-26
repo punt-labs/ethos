@@ -80,6 +80,29 @@ func TestSnapshotSidecarAcceptsJSONWithDeclaredSystemTools(t *testing.T) {
 	require.True(t, check.InvalidSnapshotSidecar)
 }
 
+func TestSnapshotSidecarAllowsSystemOnlyProfileWithGitIndex(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "checks", "snapshots")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "project.yaml"), []byte(`checks:
+  full-gate:
+    profile: linux-worktree-v1
+    epoch: test
+    sources: {mode: worktree}
+    env: {PYTHONDONTWRITEBYTECODE: "1"}
+    path: ["{scratch}/bin"]
+    git: {}
+`), 0o600))
+	set := &Set{Checks: []Check{{Name: "full-gate", Stage: "handoff"}}}
+	require.NoError(t, loadSnapshotSidecar(root, "project", set))
+	snapshot := set.Checks[0].WorktreeSnapshot
+	require.NotNil(t, snapshot)
+	require.Nil(t, snapshot.Runtime)
+	require.Equal(t, []string{"{scratch}/bin"}, snapshot.Path)
+	require.Equal(t, map[string]string{"PYTHONDONTWRITEBYTECODE": "1"}, snapshot.Env)
+	require.Equal(t, &SnapshotGit{}, snapshot.Git)
+}
+
 func TestLoadSnapshotSidecarRejectsInvalidPolicy(t *testing.T) {
 	const valid = `checks:
   full-gate:

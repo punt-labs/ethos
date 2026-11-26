@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 var errHandoffScratchShadowsInput = errors.New("checkout scratch shadows snapshot content")
@@ -38,7 +40,7 @@ func mountHandoffWorktreeScratch(root, checkout string, paths []string) error {
 		if err := os.Mkdir(target, 0o700); err != nil {
 			return err
 		}
-		backing, err := os.MkdirTemp(scratch, ".checkout-")
+		backing, err := os.MkdirTemp(scratch, layout.ScratchDirPattern(".checkout"))
 		if err != nil {
 			return err
 		}

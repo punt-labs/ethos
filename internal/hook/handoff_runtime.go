@@ -17,6 +17,9 @@ import (
 )
 
 func validateHandoffRuntime(ctx context.Context, snapshot *checkset.WorktreeSnapshot) error {
+	if snapshot.Runtime == nil {
+		return nil
+	}
 	key := runtime.GOOS + "-" + runtime.GOARCH
 	platform, ok := snapshot.Runtime.Platforms[key]
 	if !ok {
