@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Handoff snapshot sidecars can select isolation by OS. A policy can opt
   into live verification on macOS while retaining snapshot reuse on Linux.
+  Before a live-verified gate can run, an operator must approve the selected
+  policy with `ethos handoff approve-live <slug>` (add `--agent <handle>`
+  for policies selected by an agent or its role).
   ([#724](https://github.com/punt-labs/ethos/pull/724))
 
 ### Fixed
