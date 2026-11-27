@@ -38,12 +38,19 @@ class PluginCacheTests(unittest.TestCase):
             self.assertEqual(result.stdout.strip(), "go1.999.0")
 
     def test_make_disables_go_telemetry_in_fixture(self):
-        with tempfile.TemporaryDirectory() as home:
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as outer:
             makefile = Path(home) / "Makefile"
-            makefile.write_text("telemetry-mode:\n\t@go env GOTELEMETRY\n", encoding="utf-8")
-            result = run_make(home, "telemetry-mode", "-f", str(makefile))
+            makefile.write_text("telemetry-mode:\n\t@go env GOTELEMETRY GOTELEMETRYDIR\n", encoding="utf-8")
+            with patch.dict(os.environ, {
+                "XDG_CONFIG_HOME": outer,
+                "TEST_TELEMETRY_DIR": str(Path(outer) / "test-telemetry"),
+            }):
+                result = run_make(home, "telemetry-mode", "-f", str(makefile))
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.strip(), "off")
+            mode, directory = result.stdout.splitlines()
+            self.assertTrue(Path(directory).resolve().is_relative_to(Path(home).resolve()), directory)
+            self.assertEqual(mode, "off")
+            self.assertEqual(list(Path(outer).iterdir()), [])
 
     def test_bad_registry_is_only_reported_by_cache_targets(self):
         with tempfile.TemporaryDirectory() as home:
