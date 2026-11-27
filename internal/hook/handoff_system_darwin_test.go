@@ -121,6 +121,33 @@ func TestDarwinHandoffSystemInputRejectsSymlinkAcrossRoots(t *testing.T) {
 	}
 }
 
+func TestDarwinHomebrewIntelBrewSymlink(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	repository := filepath.Join(dir, "Homebrew")
+	target := filepath.Join(repository, "bin", "brew")
+	writeFile(t, target, "#!/bin/bash\n")
+	link := filepath.Join(dir, "bin", "brew")
+	require.NoError(t, os.MkdirAll(filepath.Dir(link), 0o700))
+	require.NoError(t, os.Symlink("../Homebrew/bin/brew", link))
+	allowDarwinSystemFixtureRoot(t, repository)
+	allowDarwinSystemFixtureRoot(t, link)
+	checkout := filepath.Join(dir, "checkout")
+
+	for _, snapshot := range []bool{true, false} {
+		t.Run(fmt.Sprintf("snapshot=%t", snapshot), func(t *testing.T) {
+			var plan handoffSystemPlan
+			source, err := addDarwinSystemInput(t.Context(), &plan, checkout, link, "brew", false, snapshot)
+			require.NoError(t, err)
+			require.Equal(t, target, source)
+			require.Equal(t, []handoffSystemMount{{Source: target, Target: link}}, plan.Mounts)
+			require.Len(t, plan.Inputs, 1)
+			require.Equal(t, link, plan.Inputs[0].Path)
+			require.NotEmpty(t, plan.Inputs[0].Digest)
+		})
+	}
+}
+
 func allowDarwinSystemFixtureRoot(t *testing.T, dir string) {
 	t.Helper()
 	roots := darwinSystemRoots
