@@ -37,11 +37,19 @@ func AddStub(content string) string {
 
 // Has reports whether content carries the marker.
 func Has(content string) bool {
-	if strings.HasPrefix(content, stubComment+"\n") || strings.HasPrefix(content, stubComment+"\r\n") {
+	if WithoutStubComment(content) != content {
 		return true
 	}
 	nl := newline(content)
 	return nl != "" && strings.HasPrefix(content, "---"+nl+Line+nl)
+}
+
+// WithoutStubComment removes only the leading ownership comment on a Markdown stub.
+func WithoutStubComment(content string) string {
+	if body, found := strings.CutPrefix(content, stubComment+"\n"); found {
+		return body
+	}
+	return strings.TrimPrefix(content, stubComment+"\r\n")
 }
 
 // newline returns the line ending of the opening frontmatter fence, or ""

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/agentmark"
 	"github.com/punt-labs/ethos/v4/internal/bundle"
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/identity"
@@ -102,7 +103,12 @@ func CheckAgentCurrencyFromConfig(checkout, storeRoot string, cfg *resolve.RepoC
 		if err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("reading %s: %w", path, err)
 		}
-		if err != nil || string(data) != file.Content {
+		actual, expected := string(data), file.Content
+		if !seeded {
+			actual = agentmark.WithoutStubComment(actual)
+			expected = agentmark.WithoutStubComment(expected)
+		}
+		if err != nil || actual != expected {
 			if seeded {
 				warnings = append(warnings, file.Handle+".md")
 			} else {
