@@ -191,9 +191,10 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		if !live && !handoffSandboxSupported() {
 			return deferGate("snapshot isolation unavailable on this host")
 		}
+		scanStarted := time.Now()
 		inputs, err := worktreeSnapshotInputs(ctx, root)
 		if err != nil {
-			return deferGate("cannot list the worktree snapshot inputs")
+			return deferGate(keyDeferral("cannot list the worktree snapshot inputs", err, scanStarted))
 		}
 		check.Snapshot = &checkset.Snapshot{Profile: check.WorktreeSnapshot.Profile, Inputs: inputs, Epoch: check.WorktreeSnapshot.Epoch}
 	}

@@ -54,6 +54,26 @@ func TestDarwinHandoffLiveReportsClosingKeyError(t *testing.T) {
 	require.NotContains(t, logs.String(), "outcome=reused")
 }
 
+func TestDarwinHandoffLiveReportsInitialInputScanError(t *testing.T) {
+	root := approvedDarwinLiveGate(t, "[/usr/bin/true]", "")
+	realGit, err := exec.LookPath("git")
+	require.NoError(t, err)
+	bin := t.TempDir()
+	postEditTool(t, bin, "git", "if [ \"$4\" = ls-files ] && [ \"$6\" = --cached ] && [ \"$7\" = --others ]; then exit 42; fi\n"+
+		"exec "+audit.ShellQuote(realGit)+" \"$@\"\n")
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	var logs bytes.Buffer
+	ctx, _ := diagnostic.WithHookInvocation(diagnostic.WithLogger(t.Context(), slog.New(slog.NewTextHandler(&logs, nil))))
+	result := RunStageChecks(ctx, root, "worker", "handoff")
+	require.Contains(t, result.Blocking, "cannot list the worktree snapshot inputs: exit status 42")
+	require.Contains(t, logs.String(), "outcome=deferred")
+	require.Contains(t, logs.String(), "deferral_reason=")
+	require.Contains(t, logs.String(), "cannot list the worktree snapshot inputs: exit status 42")
+	require.Contains(t, logs.String(), "key_verification_ms=")
+	require.NotContains(t, logs.String(), "outcome=launched")
+}
+
 func TestDarwinHandoffLiveNormalizesKeyedSymlink(t *testing.T) {
 	root := approvedDarwinLiveGate(t, `[/bin/sh, -c, 'test "$(cat gate-input)" = pass']`, "")
 	writeFile(t, filepath.Join(root, "config.txt"), "pass")
