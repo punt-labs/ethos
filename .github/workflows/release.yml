@@ -5,6 +5,7 @@ on:
     tags: ["v*"]
   pull_request:
     paths:
+      - .github/actions/enable-sandbox-mounts/action.yml
       - .github/workflows/release.yml
       - Makefile
       - go.mod
@@ -58,6 +59,28 @@ jobs:
       - name: Install tools
         if: github.event_name == 'push'
         run: make tools
+
+      - name: Enable and verify unprivileged sandbox mounts
+        uses: ./.github/actions/enable-sandbox-mounts
+
+      - name: Verify handoff snapshot tests on the release runner
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          handoff_tests=(
+            TestHandoffSnapshotLeaseAndProof
+            TestHandoffDoesNotReturnStaleSnapshotVerdict
+            TestHandoffRootOperandIsNotLive
+          )
+          pattern="^($(IFS='|'; echo "${handoff_tests[*]}"))\\z"
+          log="$RUNNER_TEMP/release-handoff-tests.log"
+          make test "TEST_PACKAGES=./internal/hook -v -run '$pattern'" | tee "$log"
+          for test in "${handoff_tests[@]}"; do
+            if ! grep -Fq -- "--- PASS: $test " "$log"; then
+              echo "Required handoff snapshot test did not pass: $test" >&2
+              exit 1
+            fi
+          done
 
       - name: Run quality gates
         if: github.event_name == 'push'
