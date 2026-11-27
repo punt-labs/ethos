@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -50,4 +51,15 @@ func TestIs(t *testing.T) {
 	assert.False(t, Is("my-skill"), "a user skill is not an ethos-plugin skill")
 	assert.False(t, Is("lux:scene"), "an already-namespaced foreign skill is not an ethos-plugin skill")
 	assert.False(t, Is(""), "the empty slug is not a skill")
+}
+
+func TestOptimizeTeamRequiresExplicitActivationBeforeRefresh(t *testing.T) {
+	skill, err := os.ReadFile(filepath.Join("..", "..", "plugin", "skills", "optimize-team", "SKILL.md"))
+	require.NoError(t, err)
+	flow := strings.SplitN(string(skill), "## The propose-then-ratify-then-write flow", 2)
+	require.Len(t, flow, 2)
+	preflight, _, found := strings.Cut(flow[1], "2. **Interview**")
+	require.True(t, found)
+	assert.Contains(t, preflight, "`.punt-labs/ethos/enabled`")
+	assert.Contains(t, preflight, "do not run `ethos enable` or `ethos enable --refresh`")
 }

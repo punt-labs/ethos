@@ -228,6 +228,13 @@ Strictly propose-first. Writing is gated on an explicit ratification.
 1. **Detect the starting state.** Read `.punt-labs/ethos.yaml` and
    `.punt-labs/ethos/teams/`. No team configured is greenfield; an
    existing team is optimize-in-place (see below).
+   For an inline store, check that `.punt-labs/ethos/enabled` is a regular
+   file. If not, stop before making any changes: do not run `ethos enable` or `ethos enable --refresh`
+   on the user's behalf. Explain that the latter also enables the repo
+   (including hooks and permissions), and ask the user to enable the repo
+   explicitly before retrying this skill. A legacy team gitlink (index mode
+   160000 for `.punt-labs/ethos`) does not need this marker: its refresh
+   path generates definitions without enabling the checkout.
 2. **Interview** via `AskUserQuestion`, one question per decision-table
    axis.
 3. **Compose** the proposed roster from the answers, applying the
