@@ -141,6 +141,8 @@ own repo is unaffected; the hazard is fleet-wide.
 
 Run from inside a repo. Re-running leaves deposited guides pinned. Use
 `ethos enable --refresh` to update them and reconcile Claude agent definitions.
+Use `ethos enable --agents-only` to reconcile those definitions without
+changing the guides, hooks, grants, or enablement marker.
 Steps, in order:
 
 1. **Resolve the repo root** (`resolve.FindRepoRoot`). Not in a work tree

@@ -51,7 +51,7 @@ install; optimize-team runs whenever the repo's tooling profile changes.
 ## The central constraint: per-session context
 
 Every agent-kind team member produces a `.claude/agents/<handle>.md` at
-`ethos enable --refresh` (`internal/hook/generate_agents.go`). Claude Code loads all of
+`ethos enable --agents-only` (`internal/hook/generate_agents.go`). Claude Code loads all of
 them. The roster size is therefore the dominant per-session context lever,
 and shrinking it is this skill's whole reason to exist.
 
@@ -222,7 +222,7 @@ prunes *down* from, never a floor it adds *up* to.
   re-running the interview and answering yes — it does not linger.
 - **Principle 9 — the ethos tree is source; `.claude/agents/` is output.**
   The skill writes only role/identity/team YAML and `ethos.yaml`, then uses
-  `ethos enable --refresh` to regenerate the agent files. It never hand-edits any
+  `ethos enable --agents-only` to regenerate the agent files. It never hand-edits any
   file under `.claude/agents/`. In a `resolution: repo-only` repo the design
   lives in the vendored tree and the skill records
   `resolution: repo-only` in `ethos.yaml`.
@@ -290,9 +290,7 @@ ratification.
 1. **Detect the starting state.** Read `.punt-labs/ethos.yaml` and
    `.punt-labs/ethos/teams/`. Greenfield if no team is configured;
    optimize-in-place if one exists (see next section).
-   For a disabled inline store, the skill stops without making changes;
-   enable the repo explicitly before retrying. Legacy team gitlinks
-   support refresh without enabling the checkout.
+   The skill leaves checkout enablement unchanged.
 2. **Interview** via `AskUserQuestion`, one question per decision-table axis.
 3. **Compose** the proposed roster from the answers, applying the decision
    table. Validate the review edges: every edge is worker -> reviewer with
@@ -302,7 +300,8 @@ ratification.
 5. **Ratify the YAML writes** via a final `AskUserQuestion`: "Write this
    team?" with choices ratify / adjust / cancel. On "adjust," re-open the
    relevant interview question; on "cancel," write nothing. This ratification
-   covers only the non-destructive YAML writes in step 6.
+   covers the YAML writes and regeneration of managed agent definitions,
+   not the destructive reconcile in step 8.
 6. **Back up, then write atomically, only after ratification.** The prior
    team closure (the existing `roles/`, `identities/`, `teams/<name>.yaml`,
    and `ethos.yaml` the team references) is copied to a timestamped backup
@@ -322,13 +321,10 @@ ratification.
      `to: <reviewer-role>`; the skill does not emit a bidirectional edge.
    - `ethos.yaml` — `agent`, `team`, and `resolution` keys.
 7. **Validate, swap, refresh, then run doctor.** The skill checks the staged
-   references and asks separately for consent to refresh, including pruning
-   stale managed definitions and, for inline stores, updating guides and
-   enablement wiring. It then swaps the staged files into place and runs
-   `ethos enable --refresh` before `ethos doctor`, which validates the live
+   references, swaps the ratified staged files into place and runs
+   `ethos enable --agents-only` before `ethos doctor`, which validates the live
    checkout and would otherwise reject stale agent files. On either failure,
-   restore the prior team closure and agent files and report any remaining
-   guide or wiring changes.
+   restore the prior team closure and agent files and report the failure.
 8. **Destructive reconcile — a SEPARATE, explicitly-consented step.**
    `ethos vendor --team <t> --apply --prune` removes
    files from the vendored closure. These are destructive and are NOT covered

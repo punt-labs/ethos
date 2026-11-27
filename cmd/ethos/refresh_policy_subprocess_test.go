@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCLI_EnableRefreshRefusesGlobalBundleInRepoOnlyMode(t *testing.T) {
+func TestCLI_EnableRefreshSkipsGlobalBundleInRepoOnlyMode(t *testing.T) {
 	se := freshCLIEnv(t, "refresh-human")
 	_, stderr, code := runCLI(t, se, "enable")
 	require.Zero(t, code, stderr)
@@ -28,7 +28,8 @@ func TestCLI_EnableRefreshRefusesGlobalBundleInRepoOnlyMode(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
 	}
 	_, stderr, code = runCLI(t, se, "enable", "--refresh")
-	assert.Equal(t, 1, code, stderr)
+	assert.Zero(t, code, stderr)
 	assert.Contains(t, stderr, "repo-only cannot use the global bundle")
+	assert.Contains(t, stderr, "agent definitions left unchanged")
 	assert.NoFileExists(t, filepath.Join(se.repo, ".claude", "agents", "worker.md"))
 }

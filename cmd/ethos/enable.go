@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/enable"
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -19,7 +20,8 @@ var enableCmd = &cobra.Command{
 Deposits the vendored agent guide and its manifest, writes the enabled
 marker, adds the @.punt-labs/ethos/CLAUDE.md import line to the repo
 CLAUDE.md, and chains the audit-seal and trailer git hooks. Use --refresh
-to update Claude agent definitions after team changes. Run 'ethos setup'
+to update vendored content and Claude agent definitions, or --agents-only
+to update definitions without changing enablement. Run 'ethos setup'
 separately to configure identities.`,
 	GroupID:      "admin",
 	Args:         cobra.NoArgs,
@@ -31,6 +33,8 @@ separately to configure identities.`,
 
 func init() {
 	enableCmd.Flags().Bool("refresh", false, "Refresh vendored content and Claude agent definitions")
+	enableCmd.Flags().Bool("agents-only", false, "Refresh Claude agent definitions without changing enablement or guides")
+	enableCmd.MarkFlagsMutuallyExclusive("refresh", "agents-only")
 	rootCmd.AddCommand(enableCmd)
 }
 
@@ -42,6 +46,17 @@ func runEnable(cmd *cobra.Command) error {
 	refresh, err := cmd.Flags().GetBool("refresh")
 	if err != nil {
 		return err
+	}
+	agentsOnly, err := cmd.Flags().GetBool("agents-only")
+	if err != nil {
+		return err
+	}
+	if agentsOnly {
+		rep := &enable.Report{RepoRoot: repoRoot}
+		if err := refreshClaudeAgents(rep, false, true); err != nil {
+			return err
+		}
+		return finishEnable(cmd, rep, agentRefreshAction(len(rep.Warnings) != 0))
 	}
 	// Deposit (guide/marker/import/hooks) is per-checkout (repoRoot); the
 	// "has setup been run?" config read resolves the shared store (#370).
@@ -59,31 +74,62 @@ func runEnable(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	if refresh {
-		if err := currentRoots().configIssue(); err != nil {
-			return fmt.Errorf("refreshing Claude agent definitions: %w", err)
-		}
-	}
 	rep, err := enable.EnableTo(repoRoot, storeRoot, enable.Options{Refresh: refresh})
 	action := "enabled"
-	if refresh && errors.Is(err, enable.ErrGitlinkMount) {
-		r := currentRoots()
-		if r.Config == nil && r.ConfigErr == nil {
-			return fmt.Errorf("refreshing Claude agent definitions: no repository configuration found for the team gitlink; if the team submodule is not initialized, run git submodule update --init -- .punt-labs/ethos")
-		}
+	gitlinkRefresh := refresh && errors.Is(err, enable.ErrGitlinkMount)
+	if gitlinkRefresh {
 		rep.Warnings = append(rep.Warnings, err.Error())
-		action = "refreshed Claude agent definitions"
 	} else if err != nil {
 		emitPartialReport(cmd, rep)
 		return err
 	}
 	if refresh {
-		identities := identityStore()
-		if err := hook.RefreshAgentDefinitions(currentRoots().Located, identities, layeredTeamStore(identities), layeredRoleStore(identities)); err != nil {
+		warningsBefore := len(rep.Warnings)
+		if err := refreshClaudeAgents(rep, gitlinkRefresh, false); err != nil {
 			emitPartialReport(cmd, rep)
-			return fmt.Errorf("refreshing Claude agent definitions: %w", err)
+			return err
+		}
+		if gitlinkRefresh {
+			action = agentRefreshAction(len(rep.Warnings) != warningsBefore)
 		}
 	}
+	return finishEnable(cmd, rep, action)
+}
+
+func agentRefreshAction(skipped bool) string {
+	if skipped {
+		return "left Claude agent definitions unchanged"
+	}
+	return "refreshed Claude agent definitions"
+}
+
+func refreshClaudeAgents(rep *enable.Report, gitlink, checkGitlink bool) error {
+	r := currentRoots()
+	if err := r.configIssue(); err != nil {
+		rep.Warnings = append(rep.Warnings, fmt.Sprintf("agent definitions left unchanged: %v", err))
+		return nil
+	}
+	if r.Config == nil && r.ConfigErr == nil {
+		if checkGitlink {
+			var err error
+			gitlink, err = audit.IsGitlinkMount(rep.RepoRoot)
+			if err != nil {
+				return fmt.Errorf("checking team gitlink: %w", err)
+			}
+		}
+		if gitlink {
+			rep.Warnings = append(rep.Warnings, "agent definitions left unchanged: no repository configuration found for the team gitlink; if the team submodule is not initialized, run git submodule update --init -- .punt-labs/ethos")
+			return nil
+		}
+	}
+	identities := identityStore()
+	if err := hook.RefreshAgentDefinitions(r.Located, identities, layeredTeamStore(identities), layeredRoleStore(identities)); err != nil {
+		return fmt.Errorf("refreshing Claude agent definitions: %w", err)
+	}
+	return nil
+}
+
+func finishEnable(cmd *cobra.Command, rep *enable.Report, action string) error {
 	if jsonOutput {
 		return writeJSON(cmd.OutOrStdout(), rep)
 	}

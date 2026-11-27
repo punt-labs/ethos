@@ -87,6 +87,26 @@ func TestCLI_EnablePinsDepositedGuideUntilRefresh(t *testing.T) {
 	require.NotEqual(t, pinned, after)
 }
 
+func TestCLI_EnableAgentsOnlyLeavesDisabledRepoDisabled(t *testing.T) {
+	se := freshCLIEnv(t, "refresh-human")
+	store := filepath.Join(se.repo, ".punt-labs", "ethos")
+	writeRefreshTeam(t, se.repo, store)
+	guide := filepath.Join(store, "CLAUDE.md")
+	const custom = "# Team-owned guide\n"
+	require.NoError(t, os.WriteFile(guide, []byte(custom), 0o644))
+
+	_, stderr, code := runCLI(t, se, "enable", "--agents-only")
+	require.Zero(t, code, stderr)
+	assert.FileExists(t, filepath.Join(se.repo, ".claude", "agents", "worker.md"))
+	assert.NoFileExists(t, filepath.Join(store, "enabled"))
+	assert.NoFileExists(t, filepath.Join(se.repo, "CLAUDE.md"))
+	assert.NoFileExists(t, filepath.Join(se.repo, ".claude", "settings.json"))
+	assert.NoFileExists(t, filepath.Join(se.repo, ".git", "hooks", "pre-commit"))
+	after, err := os.ReadFile(guide)
+	require.NoError(t, err)
+	assert.Equal(t, custom, string(after))
+}
+
 func TestCLI_EnableRefreshGeneratesAgentsFromLegacyGitlink(t *testing.T) {
 	se := freshCLIEnv(t, "refresh-human")
 	store := filepath.Join(se.repo, ".punt-labs", "ethos")
@@ -116,6 +136,7 @@ func TestCLI_EnableRefreshGeneratesAgentsFromLegacyGitlink(t *testing.T) {
 
 func writeRefreshTeam(t *testing.T, repo, store string) {
 	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos.yaml"), []byte("team: legacy\n"), 0o644))
 	for path, body := range map[string]string{
 		"teams/legacy.yaml":       "name: legacy\nmembers:\n  - identity: worker\n    role: reviewer\n",

@@ -29,7 +29,7 @@ that), and not a CLI subcommand — this skill drives the existing
 ## The central constraint: per-session context
 
 Every agent-kind team member produces a `.claude/agents/<handle>.md`
-on `ethos enable --refresh`. Claude Code loads all of them every session. Roster
+on `ethos enable --agents-only`. Claude Code loads all of them every session. Roster
 **size** is therefore the dominant per-session context lever — pruning
 a whole agent file removes everything that file would have loaded:
 persona and writing-style prose, the output-format body,
@@ -154,7 +154,7 @@ skill prunes **down** from, never a floor it adds **up** to.
   interview and answering yes — it does not linger.
 - **The ethos tree is source; `.claude/agents/` is output.** This skill
   writes only role/identity/team YAML and `ethos.yaml`, then delegates
-  agent generation to `ethos enable --refresh`. Do not hand-edit the
+  agent generation to `ethos enable --agents-only`. Do not hand-edit the
   content of files under `.claude/agents/`.
 
 ## The context-budget estimate
@@ -228,13 +228,8 @@ Strictly propose-first. Writing is gated on an explicit ratification.
 1. **Detect the starting state.** Read `.punt-labs/ethos.yaml` and
    `.punt-labs/ethos/teams/`. No team configured is greenfield; an
    existing team is optimize-in-place (see below).
-   For an inline store, check that `.punt-labs/ethos/enabled` is a regular
-   file. If not, stop before making any changes: do not run `ethos enable` or `ethos enable --refresh`
-   on the user's behalf. Explain that the latter also enables the repo
-   (including hooks and permissions), and ask the user to enable the repo
-   explicitly before retrying this skill. A legacy team gitlink (index mode
-   160000 for `.punt-labs/ethos`) does not need this marker: its refresh
-   path generates definitions without enabling the checkout.
+   Keep the existing enablement state. Do not run plain `ethos enable`
+   or `ethos enable --refresh` for this workflow.
 2. **Interview** via `AskUserQuestion`, one question per decision-table
    axis.
 3. **Compose** the proposed roster from the answers, applying the
@@ -243,11 +238,11 @@ Strictly propose-first. Writing is gated on an explicit ratification.
    `tier(reviewer) > tier(worker)`, strictly. Refuse to proceed if any
    edge fails this check or omits `type`.
 4. **Present** the proposed team plus the context-budget table above.
-5. **Ratify the YAML writes** via a final `AskUserQuestion`: "Write
+5. **Ratify the roster update** via a final `AskUserQuestion`: "Write
    this team?" with choices ratify / adjust / cancel. On "adjust,"
    re-open the relevant interview question. On "cancel," write
-   nothing. This ratification covers only the non-destructive YAML
-   writes in step 6 — not step 8's reconcile.
+   nothing. This ratification covers the YAML writes and regeneration
+   of managed agent definitions — not step 8's reconcile.
 6. **Back up, then write atomically, only after ratification.** Copy
    the prior team closure (the existing `roles/`, `identities/`,
    `teams/<name>.yaml`, and the `ethos.yaml` the team references) and
@@ -313,17 +308,13 @@ Strictly propose-first. Writing is gated on an explicit ratification.
    `.md` file (the gap named in step 6 above) — in a repo-only repo an
    unresolved slug makes agent generation fail and name the member, so
    catch it here to fail fast before the write rather than after.
-   Separately ask for consent to refresh, naming the stale managed
-   definitions that will be pruned and explaining that an inline refresh
-   also updates vendored guides and enablement wiring. Declining stops
-   before cutover. On consent, swap the staged files into place.
-   Run `ethos enable --refresh` before doctor: missing or stale agent
+   Swap the ratified staged files into place.
+   Run `ethos enable --agents-only` before doctor: missing or stale agent
    definitions are expected between the swap and refresh, not a reason
    to reject the roster. After refresh, run `ethos doctor` against the
    live result. If refresh fails or doctor reports a FAIL, immediately
    restore the team closure and agent files from the backup, removing
-   newly created files from the cutover. Report the failure and any
-   remaining guide or wiring changes, then stop.
+   newly created files from the cutover. Report the failure, then stop.
 8. **Destructive reconcile — a SEPARATE, explicitly-consented step.**
    `ethos vendor` has no `--yes` flag and prompts for nothing itself
    (`cmd/ethos/vendor.go`); its own safety model is `--dry-run`
@@ -342,7 +333,7 @@ Strictly propose-first. Writing is gated on an explicit ratification.
       and stop here.
 
    This reconcile is destructive and is NOT covered by the step-5
-   ratification — that one covers only the non-destructive YAML writes
+   ratification — that one covers the YAML and managed agent definitions
    in step 6. Run it only when re-shaping left obsolete residue, and
    the prune only in a `resolution: repo-only` repo.
 9. **Review the generated diff.** Tell the user to restart Claude Code

@@ -53,15 +53,13 @@ func TestIs(t *testing.T) {
 	assert.False(t, Is(""), "the empty slug is not a skill")
 }
 
-func TestOptimizeTeamRequiresExplicitActivationBeforeRefresh(t *testing.T) {
+func TestOptimizeTeamUsesAgentOnlyRefresh(t *testing.T) {
 	skill, err := os.ReadFile(filepath.Join("..", "..", "plugin", "skills", "optimize-team", "SKILL.md"))
 	require.NoError(t, err)
 	flow := strings.SplitN(string(skill), "## The propose-then-ratify-then-write flow", 2)
 	require.Len(t, flow, 2)
-	preflight, _, found := strings.Cut(flow[1], "2. **Interview**")
-	require.True(t, found)
-	assert.Contains(t, preflight, "`.punt-labs/ethos/enabled`")
-	assert.Contains(t, preflight, "do not run `ethos enable` or `ethos enable --refresh`")
+	assert.Contains(t, flow[1], "Keep the existing enablement state")
+	assert.Contains(t, flow[1], "Run `ethos enable --agents-only`")
 }
 
 func TestOptimizeTeamRefreshesBeforeLiveDoctor(t *testing.T) {
@@ -71,10 +69,11 @@ func TestOptimizeTeamRefreshesBeforeLiveDoctor(t *testing.T) {
 	require.True(t, found)
 	cutover, _, found := strings.Cut(step7, "8. **")
 	require.True(t, found)
-	refresh := strings.Index(cutover, "Run `ethos enable --refresh`")
+	refresh := strings.Index(cutover, "Run `ethos enable --agents-only`")
 	doctor := strings.Index(cutover, "run `ethos doctor`")
 	require.GreaterOrEqual(t, refresh, 0, "refresh must be in the cutover step")
 	require.GreaterOrEqual(t, doctor, 0, "doctor must validate the live cutover")
 	assert.Less(t, refresh, doctor, "doctor would reject the stale intermediate state")
 	assert.Contains(t, cutover, "restore the team closure and agent files")
+	assert.NotContains(t, cutover, "ask for consent", "use the existing ratification, not another prompt")
 }
