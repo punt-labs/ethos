@@ -1,10 +1,14 @@
 package hook
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/stretchr/testify/require"
 )
@@ -14,9 +18,63 @@ func TestDarwinHandoffLiveDefersUnkeyedSymlink(t *testing.T) {
 	target := filepath.Join(root, "ignored-scratch", "value")
 	writeFile(t, target, "pass")
 	require.NoError(t, os.Symlink("ignored-scratch/value", filepath.Join(root, "gate-input")))
-	ctx, _ := diagnostic.WithHookInvocation(t.Context())
+	var logs bytes.Buffer
+	ctx, _ := diagnostic.WithHookInvocation(diagnostic.WithLogger(t.Context(), slog.New(slog.NewTextHandler(&logs, nil))))
 	result := RunStageChecks(ctx, root, "worker", "handoff")
 	require.Contains(t, result.Advisory, "symlink target is outside the keyed inputs", "%+v", result)
+	require.Contains(t, logs.String(), "deferral_reason=")
+	require.Contains(t, logs.String(), "symlink target is outside the keyed inputs")
+	require.NotContains(t, logs.String(), "outcome=launched")
+}
+
+func TestDarwinHandoffLiveReportsClosingKeyError(t *testing.T) {
+	root := approvedDarwinLiveGate(t, "[/bin/sh, -c, 'touch ignored-scratch/launched']", "")
+	scratch := filepath.Join(root, "ignored-scratch")
+	require.NoError(t, os.Mkdir(scratch, 0o700))
+	realGit, err := exec.LookPath("git")
+	require.NoError(t, err)
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\n"+
+		"if [ \"$1\" = --no-optional-locks ] && [ \"$2\" = status ] && [ -f ignored-scratch/launched ]; then exit 42; fi\n"+
+		"exec "+audit.ShellQuote(realGit)+" \"$@\"\n"), 0o700))
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	var logs bytes.Buffer
+	ctx, _ := diagnostic.WithHookInvocation(diagnostic.WithLogger(t.Context(), slog.New(slog.NewTextHandler(&logs, nil))))
+	result := RunStageChecks(ctx, root, "worker", "handoff")
+	require.Empty(t, result.Blocking)
+	require.Contains(t, result.Advisory, "cannot verify checkout key during the live-verified check")
+	require.Contains(t, result.Advisory, "git status: exit status 42")
+	require.Contains(t, logs.String(), "outcome=launched")
+	require.Contains(t, logs.String(), "outcome=deferred")
+	require.Contains(t, logs.String(), "deferral_reason=")
+	require.Contains(t, logs.String(), "git status: exit status 42")
+	require.Contains(t, logs.String(), "key_verification_ms=")
+	require.NotContains(t, logs.String(), "outcome=completed")
+	require.NotContains(t, logs.String(), "outcome=reused")
+	slots, err := filepath.Glob(filepath.Join(root, ".punt-labs", "local", "ethos", "handoff-v1", "*", "*.json"))
+	require.NoError(t, err)
+	require.Empty(t, slots, "closing-key deferral must remove its pending cache record")
+}
+
+func TestDarwinHandoffLiveReportsInitialInputScanError(t *testing.T) {
+	root := approvedDarwinLiveGate(t, "[/usr/bin/true]", "")
+	realGit, err := exec.LookPath("git")
+	require.NoError(t, err)
+	bin := t.TempDir()
+	postEditTool(t, bin, "git", "if [ \"$4\" = ls-files ] && [ \"$6\" = --cached ] && [ \"$7\" = --others ]; then exit 42; fi\n"+
+		"exec "+audit.ShellQuote(realGit)+" \"$@\"\n")
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	var logs bytes.Buffer
+	ctx, _ := diagnostic.WithHookInvocation(diagnostic.WithLogger(t.Context(), slog.New(slog.NewTextHandler(&logs, nil))))
+	result := RunStageChecks(ctx, root, "worker", "handoff")
+	require.Contains(t, result.Blocking, "cannot list the worktree snapshot inputs: exit status 42")
+	require.Contains(t, logs.String(), "outcome=deferred")
+	require.Contains(t, logs.String(), "deferral_reason=")
+	require.Contains(t, logs.String(), "cannot list the worktree snapshot inputs: exit status 42")
+	require.Contains(t, logs.String(), "key_verification_ms=")
+	require.NotContains(t, logs.String(), "outcome=launched")
 }
 
 func TestDarwinHandoffLiveNormalizesKeyedSymlink(t *testing.T) {
