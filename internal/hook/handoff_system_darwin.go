@@ -33,6 +33,7 @@ var darwinSystemRoots = []string{
 	"/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/lib", "/usr/libexec", "/usr/share",
 	"/System/Library", "/System/Volumes/Preboot/Cryptexes/OS", "/Library/Apple/usr", darwinCLT,
 	"/private/var/db/timezone",
+	"/opt/homebrew", "/usr/local/Homebrew", "/usr/local/Cellar", "/usr/local/opt",
 }
 
 func darwinXcodeTool(path string) bool {
@@ -302,20 +303,8 @@ func addDarwinSystemInput(ctx context.Context, plan *handoffSystemPlan, checkout
 }
 
 func darwinSnapshotSystemPath(path string) bool {
-	return darwinHomebrewSystemPath(runtime.GOARCH, path) ||
+	return path == "/usr/local/bin/brew" ||
 		slices.ContainsFunc(darwinSystemRoots, func(root string) bool { return insideGatePath(root, path) })
-}
-
-func darwinHomebrewSystemPath(goarch, path string) bool {
-	switch goarch {
-	case "arm64":
-		return insideGatePath("/opt/homebrew", path)
-	case "amd64":
-		return path == "/usr/local/bin/brew" || insideGatePath("/usr/local/Homebrew", path) ||
-			insideGatePath("/usr/local/Cellar", path) || insideGatePath("/usr/local/opt", path)
-	default:
-		return false
-	}
 }
 
 func safeDarwinSystemPath(path, checkout string) bool {

@@ -22,7 +22,7 @@ import (
 func TestDarwinHandoffSystemPathAllowlist(t *testing.T) {
 	const checkout = "/opt/homebrew/Cellar/checkout"
 	for _, path := range []string{
-		"/usr/bin/xcode-select", "/Library/Developer/CommandLineTools/usr/bin/make",
+		"/opt/homebrew/bin/jq", "/usr/bin/xcode-select", "/Library/Developer/CommandLineTools/usr/bin/make",
 		"/Applications/Xcode.app/Contents/Developer", "/Applications/Xcode-26.6.app/Contents/Info.plist",
 		"/System/Library/CoreServices/SystemVersion.plist", darwinDeveloperSelector,
 	} {
@@ -44,32 +44,41 @@ func TestDarwinHandoffSystemPathAllowlist(t *testing.T) {
 }
 
 func TestDarwinHomebrewSystemRoots(t *testing.T) {
-	arm64 := []string{"/opt/homebrew", "/opt/homebrew/Library/Homebrew/brew.sh", "/opt/homebrew/bin/jq"}
-	amd64 := []string{
+	for _, path := range []string{
+		"/opt/homebrew", "/opt/homebrew/Library/Homebrew/brew.sh", "/opt/homebrew/bin/jq",
 		"/usr/local/Homebrew", "/usr/local/Homebrew/bin/brew", "/usr/local/Cellar",
 		"/usr/local/Cellar/ruby/3.4/bin/ruby", "/usr/local/opt", "/usr/local/opt/ruby/bin/ruby", "/usr/local/bin/brew",
+	} {
+		t.Run(path, func(t *testing.T) {
+			require.True(t, safeDarwinSystemPath(path, "/checkout-fixture"))
+			require.True(t, darwinSnapshotSystemPath(path))
+			require.False(t, safeDarwinSystemPath(path, path))
+		})
 	}
 	for _, path := range []string{
 		"/usr/local", "/usr/local/bin", "/usr/local/bin/git", "/usr/local/bin/brew.backup", "/usr/local/bin/brew/child",
 		"/usr/local/Cellar-old/ruby", "/usr/localx/Homebrew", "/opt/homebrew-evil/bin/brew",
 	} {
 		t.Run(path, func(t *testing.T) {
-			require.False(t, darwinHomebrewSystemPath("arm64", path))
-			require.False(t, darwinHomebrewSystemPath("amd64", path))
 			require.False(t, safeDarwinSystemPath(path, "/checkout-fixture"))
 			require.False(t, darwinSnapshotSystemPath(path))
 		})
 	}
-	for arch, paths := range map[string][]string{"arm64": arm64, "amd64": amd64} {
-		for _, path := range paths {
-			t.Run(arch+path, func(t *testing.T) {
-				require.Equal(t, arch == "arm64", darwinHomebrewSystemPath("arm64", path))
-				require.Equal(t, arch == "amd64", darwinHomebrewSystemPath("amd64", path))
-				require.Equal(t, arch == runtime.GOARCH, safeDarwinSystemPath(path, "/checkout-fixture"))
-				require.Equal(t, arch == runtime.GOARCH, darwinSnapshotSystemPath(path))
-				require.False(t, safeDarwinSystemPath(path, path))
-			})
-		}
+}
+
+func TestDarwinLiveHomebrewSystemRoots(t *testing.T) {
+	for _, prefix := range []string{"/opt/homebrew", "/usr/local/Homebrew"} {
+		t.Run(prefix, func(t *testing.T) {
+			path := filepath.Join(prefix, "ethos-nonexistent-"+filepath.Base(t.TempDir()))
+			_, err := os.Lstat(path)
+			require.ErrorIs(t, err, os.ErrNotExist)
+			profile := &checkset.WorktreeSnapshot{
+				Isolation: checkset.IsolationLiveVerified,
+				System:    checkset.SnapshotSystem{SnapshotSystemInputs: checkset.SnapshotSystemInputs{Files: []string{path}}},
+			}
+			_, err = prepareHandoffSystem(t.Context(), t.TempDir(), profile)
+			require.ErrorContains(t, err, "cannot safely resolve system input")
+		})
 	}
 }
 
