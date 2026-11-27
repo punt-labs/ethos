@@ -59,6 +59,11 @@ func runEnable(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
+	if refresh {
+		if err := currentRoots().configIssue(); err != nil {
+			return fmt.Errorf("refreshing Claude agent definitions: %w", err)
+		}
+	}
 	rep, err := enable.EnableTo(repoRoot, storeRoot, enable.Options{Refresh: refresh})
 	action := "enabled"
 	if refresh && errors.Is(err, enable.ErrGitlinkMount) {
