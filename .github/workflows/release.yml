@@ -7,6 +7,7 @@ on:
     paths:
       - .github/actions/enable-sandbox-mounts/action.yml
       - .github/workflows/release.yml
+      - CHANGELOG.md
       - Makefile
       - go.mod
       - go.sum
@@ -116,12 +117,33 @@ jobs:
         working-directory: dist
         run: sha256sum ethos-* > checksums.txt
 
+      - name: Extract versioned release notes
+        env:
+          VERSION: ${{ steps.dist.outputs.version }}
+        run: |
+          if ! awk -v version="$VERSION" '
+            /^## / {
+              if (section) exit
+              section = index($0, "## [" version "]") == 1
+              next
+            }
+            section && (content || NF) {
+              content = 1
+              print
+            }
+            END { if (!content) exit 1 }
+          ' CHANGELOG.md > dist/release-notes.md; then
+            echo "::error::Missing or empty CHANGELOG.md section for [$VERSION]"
+            exit 1
+          fi
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-candidate
           path: |
             dist/ethos-*
             dist/checksums.txt
+            dist/release-notes.md
           if-no-files-found: error
 
   candidate-smoke:
@@ -232,7 +254,7 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2
         with:
-          generate_release_notes: true
+          body_path: dist/release-notes.md
           fail_on_unmatched_files: true
           files: |
             dist/ethos-*
