@@ -72,9 +72,9 @@ jobs:
             TestHandoffDoesNotReturnStaleSnapshotVerdict
             TestHandoffRootOperandIsNotLive
           )
-          pattern="^($(IFS='|'; echo "${handoff_tests[*]}"))$"
+          pattern="^($(IFS='|'; echo "${handoff_tests[*]}"))\\z"
           log="$RUNNER_TEMP/release-handoff-tests.log"
-          go test -race -count=1 -v -run "$pattern" ./internal/hook | tee "$log"
+          make test "TEST_PACKAGES=./internal/hook -v -run '$pattern'" | tee "$log"
           for test in "${handoff_tests[@]}"; do
             if ! grep -Fq -- "--- PASS: $test " "$log"; then
               echo "Required handoff snapshot test did not pass: $test" >&2
