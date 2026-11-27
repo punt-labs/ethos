@@ -12,13 +12,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def run_make(home, target, *options):
     env = os.environ.copy()
-    for name in ("MAKEFLAGS", "MAKEOVERRIDES", "MFLAGS", "GNUMAKEFLAGS", "PLUGIN_CACHE"):
+    for name in ("MAKEFLAGS", "MAKEOVERRIDES", "MFLAGS", "GNUMAKEFLAGS", "PLUGIN_CACHE", "TEST_TELEMETRY_DIR"):
         env.pop(name, None)
+    env.update(HOME=str(home), XDG_CONFIG_HOME=str(Path(home) / ".config"))
+    subprocess.run(["go", "telemetry", "off"], cwd=ROOT, env={**env, "GOTOOLCHAIN": "local"}, check=True)
     return subprocess.run(
         ["make", "--no-print-directory", "-o", "install", *options,
          f"HOME={home}", f"GOBIN={Path(home) / 'bin'}", target],
         cwd=ROOT,
-        env={**env, "HOME": str(home)},
+        env=env,
         capture_output=True,
         text=True,
         check=False,
@@ -26,6 +28,30 @@ def run_make(home, target, *options):
 
 
 class PluginCacheTests(unittest.TestCase):
+    def test_telemetry_setup_uses_local_go_toolchain(self):
+        with tempfile.TemporaryDirectory() as home:
+            makefile = Path(home) / "Makefile"
+            makefile.write_text("probe:\n\t@printf '%s\\n' \"$$GOTOOLCHAIN\"\n", encoding="utf-8")
+            with patch.dict(os.environ, {"GOTOOLCHAIN": "go1.999.0", "GOPROXY": "off"}):
+                result = run_make(home, "probe", "-f", str(makefile))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "go1.999.0")
+
+    def test_make_disables_go_telemetry_in_fixture(self):
+        with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as outer:
+            makefile = Path(home) / "Makefile"
+            makefile.write_text("telemetry-mode:\n\t@go env GOTELEMETRY GOTELEMETRYDIR\n", encoding="utf-8")
+            with patch.dict(os.environ, {
+                "XDG_CONFIG_HOME": outer,
+                "TEST_TELEMETRY_DIR": str(Path(outer) / "test-telemetry"),
+            }):
+                result = run_make(home, "telemetry-mode", "-f", str(makefile))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            mode, directory = result.stdout.splitlines()
+            self.assertTrue(Path(directory).resolve().is_relative_to(Path(home).resolve()), directory)
+            self.assertEqual(mode, "off")
+            self.assertEqual(list(Path(outer).iterdir()), [])
+
     def test_bad_registry_is_only_reported_by_cache_targets(self):
         with tempfile.TemporaryDirectory() as home:
             cache = Path(home) / ".claude/plugins/cache/punt-labs"
