@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agent definitions. Run `ethos enable --refresh` to reconcile them and
   update the repository's pinned guides.
 - Ignore Claude's personal instructions and import/settings lock files.
+- `ethos enable` allows the Ethos CLI, MCP tools, and skills without adding
+  approval prompts. Enable and disable remove old Ethos ask rules without
+  changing other tools' permissions or any deny rules.
 
 ## [5.3.2] - 2026-11-27
 
