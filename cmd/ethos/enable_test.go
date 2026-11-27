@@ -29,6 +29,9 @@ func runEnableCmd(t *testing.T, args ...string) (string, string, error) {
 		rootCmd.SetArgs(nil)
 		jsonOutput = false
 		disableForce = false
+		refresh := enableCmd.Flags().Lookup("refresh")
+		assert.NoError(t, refresh.Value.Set(refresh.DefValue))
+		refresh.Changed = false
 	}()
 	err := rootCmd.Execute()
 	return outBuf.String(), errBuf.String(), err
