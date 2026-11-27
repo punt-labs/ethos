@@ -44,6 +44,39 @@ func TestHandoffScratchSeedAvailability(t *testing.T) {
 	}
 }
 
+func TestHandoffSnapshotPlatformFieldAvailability(t *testing.T) {
+	profiles := map[string]checkset.WorktreeSnapshot{
+		"scratch.files": {Scratch: checkset.SnapshotScratch{Files: []string{"state"}}},
+		"prehydrate":    {Prehydrate: &checkset.SnapshotPrehydrate{}},
+		"data":          {Data: []checkset.SnapshotData{{Name: "data", URL: "https://example.com/data", Mount: "input", MaxAgeHours: 1}}},
+	}
+	for field, profile := range profiles {
+		t.Run(field, func(t *testing.T) {
+			if runtime.GOOS == "darwin" {
+				require.Equal(t, field, unsupportedWorktreeField(&profile))
+			} else {
+				require.Empty(t, unsupportedWorktreeField(&profile))
+			}
+		})
+	}
+}
+
+func TestHandoffSnapshotDefersUnavailableCapabilityBeforeLaunch(t *testing.T) {
+	var logs bytes.Buffer
+	ctx := diagnostic.WithLogger(t.Context(), slog.New(slog.NewTextHandler(&logs, nil)))
+	ctx, _ = diagnostic.WithHookInvocation(ctx)
+	root := t.TempDir()
+	check := checkset.Check{
+		Name: "mach", Stage: "handoff", Run: []string{"/bin/false"}, Files: checkset.Patterns{All: true},
+		WorktreeSnapshot: &checkset.WorktreeSnapshot{Requires: []string{"mach_lookup"}},
+	}
+	got := runHandoffGate(ctx, root, "worker", []string{"file"}, check, nil)
+	require.Contains(t, got.Blocking, "mach_lookup unavailable in "+runtime.GOOS+" snapshot")
+	require.Equal(t, got.Blocking, got.Notice)
+	require.Contains(t, logs.String(), "outcome=deferred")
+	require.NotContains(t, logs.String(), "outcome=launched")
+}
+
 func TestHandoffCheckoutScratchRejectsSymlinkParent(t *testing.T) {
 	checkout := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(checkout, "dir"), 0o700))

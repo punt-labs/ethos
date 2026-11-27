@@ -106,3 +106,28 @@ func TestHandoffLiveApprovalRejectsUnsafePins(t *testing.T) {
 	require.ErrorContains(t, policy.Approve(), "live approval directory must be outside the checkout")
 	require.ErrorContains(t, (liveApprovalPolicy{}).Approve(), "no resolved live policy revision")
 }
+
+func TestHandoffLiveApprovalRejectsRedirectedDirectory(t *testing.T) {
+	checkout, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	policy := liveApprovalPolicy{Repo: filepath.Join(checkout, ".git"), Slug: "project", Revision: "proof", checkout: checkout}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	require.NoError(t, policy.Approve())
+	pin, err := policy.pinPath(false)
+	require.NoError(t, err)
+	require.NotEmpty(t, policy.approval())
+
+	dir := filepath.Join(home, ".punt-labs", "ethos", "live-approvals")
+	inCheckout := filepath.Join(checkout, "pins")
+	require.NoError(t, os.Rename(dir, inCheckout))
+	require.NoError(t, os.Symlink(inCheckout, dir))
+	require.Empty(t, policy.approval())
+	require.ErrorContains(t, policy.Revoke(), "live approval directory must be outside the checkout")
+	require.FileExists(t, filepath.Join(inCheckout, filepath.Base(pin)))
+
+	require.NoError(t, os.Remove(dir))
+	require.NoError(t, os.Symlink(filepath.Join(home, "missing"), dir))
+	require.ErrorContains(t, policy.Approve(), "cannot resolve live approval directory")
+	require.NoDirExists(t, filepath.Join(home, "missing"))
+}

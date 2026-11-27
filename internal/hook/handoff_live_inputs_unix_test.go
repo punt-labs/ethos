@@ -72,6 +72,12 @@ func TestHandoffLiveGitFingerprintRefTypes(t *testing.T) {
 	require.ErrorContains(t, digest(dir, 1), "exceeds byte budget")
 	require.ErrorIs(t, digest(filepath.Join(dir, "missing"), 4096), os.ErrNotExist)
 
+	require.NoError(t, os.Remove(head))
+	require.NoError(t, os.Symlink(filepath.Join(dir, "config"), head))
+	require.ErrorContains(t, digest(dir, 4096), `ref symlink leaves keyed Git metadata at "HEAD"`)
+	require.NoError(t, os.Remove(head))
+	require.NoError(t, os.Symlink(branch, head))
+
 	require.NoError(t, os.Remove(alias))
 	require.NoError(t, os.Symlink("../config", alias))
 	require.ErrorContains(t, digest(dir, 4096), "ref symlink leaves keyed Git metadata")
@@ -87,6 +93,42 @@ func TestHandoffLiveGitFingerprintRefTypes(t *testing.T) {
 	defer root.Close()
 	budget := &gateHashBudget{ctx: t.Context(), dst: io.Discard, remaining: 4096}
 	require.ErrorIs(t, digestLiveGitRefSymlink(budget, root, "HEAD"), os.ErrNotExist)
+}
+
+func TestHandoffLiveRefFingerprintKeysSymbolicTarget(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "refs", "heads", "main"), "oid\n")
+	writeFile(t, filepath.Join(dir, "refs", "heads", "other"), "oid\n")
+	head := filepath.Join(dir, "HEAD")
+	fingerprint := func(target string) [sha256.Size]byte {
+		t.Helper()
+		require.NoError(t, os.Symlink(target, head))
+		defer func() { require.NoError(t, os.Remove(head)) }()
+		h := sha256.New()
+		budget := &gateHashBudget{ctx: t.Context(), dst: h, remaining: 4096}
+		require.NoError(t, digestLiveGitRefs(budget, dir, []string{"HEAD", "refs"}))
+		return [sha256.Size]byte(h.Sum(nil))
+	}
+	before := fingerprint("refs/heads/main")
+	require.Equal(t, before, fingerprint("refs/heads/main"))
+	require.NotEqual(t, before, fingerprint("refs/heads/other"), "changing the symbolic target must invalidate proof even if both refs have the same contents")
+}
+
+func TestHandoffLiveRefFingerprintRejectsOversizedMetadata(t *testing.T) {
+	dir := t.TempDir()
+	head := filepath.Join(dir, "HEAD")
+	writeFile(t, head, "ref: refs/heads/main\n")
+	ref := filepath.Join(dir, "refs", "heads", "main")
+	writeFile(t, ref, "oid\n")
+	require.NoError(t, os.Truncate(ref, (8<<20)+1))
+	budget := &gateHashBudget{ctx: t.Context(), dst: io.Discard, remaining: 16 << 20}
+	err := digestLiveGitRefs(budget, dir, []string{"HEAD", "refs"})
+	require.ErrorContains(t, err, "exceeds byte budget")
+
+	_, err = readHandoffGitFile(t.Context(), filepath.Join(dir, "absent", "HEAD"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = readHandoffGitFile(t.Context(), filepath.Join(dir, "refs"))
+	require.ErrorContains(t, err, "git metadata is not a regular file")
 }
 
 func TestHandoffLiveInputFingerprints(t *testing.T) {
@@ -128,6 +170,8 @@ func TestHandoffLiveInputFingerprints(t *testing.T) {
 	cancel()
 	_, err = digestGateInputPaths(ctx, dir, "", []string{target}, true, edited)
 	require.ErrorIs(t, err, context.Canceled)
+	_, err = digestGateInputPaths(ctx, dir, "", nil, true, edited)
+	require.ErrorIs(t, err, context.Canceled, "a cancelled scan must not publish the empty fingerprint")
 	_, err = digestGateInputPaths(t.Context(), filepath.Join(dir, "missing-root"), "", nil, true, edited)
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
@@ -137,6 +181,51 @@ func TestHandoffChangedInputNames(t *testing.T) {
 	require.Equal(t, "z", changedHandoffInput([]string{"z", "same"}, []string{"same"}))
 	require.Equal(t, "z", changedHandoffInput([]string{"same"}, []string{"z", "same"}))
 	require.Empty(t, changedHandoffInput([]string{"z", "same"}, []string{"same", "z"}))
+}
+
+func TestHandoffSnapshotMaterializesModeAndLinks(t *testing.T) {
+	checkout := t.TempDir()
+	target := filepath.Join("nested", "input")
+	link := filepath.Join("nested", "alias")
+	writeFile(t, filepath.Join(checkout, target), "payload")
+	require.NoError(t, os.Chmod(filepath.Join(checkout, target), 0o751))
+	require.NoError(t, os.Symlink("./input", filepath.Join(checkout, link)))
+
+	inputs := []string{target, link}
+	proof, err := digestGateInputsWithMode(t.Context(), checkout, "", inputs, true)
+	require.NoError(t, err)
+	snapshot := t.TempDir()
+	copied, err := digestGateInputsWithMode(t.Context(), checkout, snapshot, inputs, true)
+	require.NoError(t, err)
+	require.Equal(t, proof, copied)
+	info, err := os.Stat(filepath.Join(snapshot, target))
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o751), info.Mode().Perm())
+	spelling, err := os.Readlink(filepath.Join(snapshot, link))
+	require.NoError(t, err)
+	require.Equal(t, "./input", spelling)
+	for _, input := range inputs {
+		_, err := digestGateInputsWithMode(t.Context(), checkout, snapshot, []string{input}, true)
+		require.ErrorIs(t, err, os.ErrExist, "an input must not replace a previously materialized entry")
+	}
+
+	blocked, outside := t.TempDir(), t.TempDir()
+	require.NoError(t, os.Symlink(outside, filepath.Join(blocked, "nested")))
+	for _, input := range inputs {
+		_, err := digestGateInputsWithMode(t.Context(), checkout, blocked, []string{input}, true)
+		require.ErrorContains(t, err, "snapshot parent is not a directory")
+	}
+	require.NoFileExists(t, filepath.Join(outside, "input"))
+	_, err = os.Lstat(filepath.Join(outside, "alias"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	src, err := os.OpenRoot(checkout)
+	require.NoError(t, err)
+	defer src.Close()
+	_, err = copyGateInput(t.Context(), io.Discard, src, "", link, len("./input")-1, true)
+	require.ErrorContains(t, err, "snapshot link exceeds the input budget")
+	_, err = copyGateInput(t.Context(), io.Discard, src, "", target, len("payload")-1, true)
+	require.ErrorContains(t, err, "snapshot input is not a regular file within budget")
 }
 
 func TestHandoffSnapshotEnvironmentRejectsUnsafeOverrides(t *testing.T) {
