@@ -20,7 +20,7 @@ import (
 
 func mutationWarningStore(t *testing.T) (*mission.Store, layout.Policy) {
 	t.Helper()
-	p, err := layout.NewRepository(t.TempDir(), t.TempDir(), layout.RecordBlame)
+	p, err := layout.NewRepository(testRepoRoot(t), testRepoRoot(t), layout.RecordBlame)
 	require.NoError(t, err)
 	return mission.NewRepositoryStore(p, t.TempDir()).WithSessionID("mutation-warning"), p
 }

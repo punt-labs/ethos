@@ -18,7 +18,7 @@ import (
 
 func TestHandleMissionLogMissingCorrectionAuthority(t *testing.T) {
 	h := testHandlerWithMissions(t)
-	root := t.TempDir()
+	root := testRepoRoot(t)
 	p, err := layout.NewRepository(root, root, layout.RecordBlame)
 	require.NoError(t, err)
 	h.missionStore = mission.NewRepositoryStore(p, h.missionStore.Root()).WithSessionID("s-log-authority")

@@ -100,7 +100,8 @@ func setupMCPTestEnv(t *testing.T) *mcpTestEnv {
 	t.Helper()
 
 	home := t.TempDir()
-	repo := t.TempDir()
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
 
 	// Global identity store.
 	globalEthos := filepath.Join(home, ".punt-labs", "ethos")
