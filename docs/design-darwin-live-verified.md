@@ -17,11 +17,17 @@ in the snapshot sidecar at `.punt-labs/ethos/checks/snapshots/<slug>.yaml`
 has a top-level `isolation` field next to `profile`. Use the existing
 worktree profile value `linux-worktree-v1`: it is the sidecar schema
 version, not a host name, and is used on both Linux and Darwin. The new
-field, not another profile name, selects the mode. The allowed values are
-`snapshot` (the default) and `live-verified`; any other value is a
-validation error. The resolved mode is part of the key, cache record,
-and verdict log. A Linux runner seeing `live-verified` visibly defers;
-it neither rejects the sidecar nor executes the gate in snapshot mode.
+field, not another profile name, selects the mode. Use a scalar
+`snapshot` or `live-verified` for all hosts, or a map keyed by OS
+(`darwin` or `linux`, without an architecture suffix). For example,
+`isolation: {darwin: live-verified}` selects live verification on macOS
+while keeping Linux in snapshot mode. Omitting the field or the current
+OS's map entry defaults to `snapshot`. Unknown or duplicate OS keys and
+invalid values are validation errors, even for entries not selected on
+the current host. The resolved mode is part of the key, cache record,
+and verdict log. A Linux runner that explicitly resolves to
+`live-verified` visibly defers; it neither rejects the sidecar nor
+executes the gate in snapshot mode.
 
 Because live verification runs unsandboxed, selecting a policy is not
 approval, even when the policy is in the canonical checkout. An operator
