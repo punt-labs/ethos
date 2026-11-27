@@ -35,7 +35,9 @@ func TestMCPMissionCorrectCapturedPolicy(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(storeRoot, "source.txt"), []byte("base\n"), 0o600))
 			git("add", "source.txt")
 			git("commit", "-m", "base")
-			checkout := filepath.Join(t.TempDir(), "linked")
+			checkoutRoot, err := filepath.EvalSymlinks(t.TempDir())
+			require.NoError(t, err)
+			checkout := filepath.Join(checkoutRoot, "linked")
 			git("worktree", "add", "-b", "feature", checkout)
 			env.repo = checkout
 			require.NoError(t, os.WriteFile(filepath.Join(storeRoot, ".punt-labs", "ethos.yaml"), []byte("record: full\nagent: test-agent\n"), 0o600))

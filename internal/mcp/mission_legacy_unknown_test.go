@@ -22,7 +22,7 @@ func TestRegisteredMissionLegacyUnknown(t *testing.T) {
 		detail string
 	}{{1, "missing"}, {1, "empty"}, {3, "missing"}, {3, "empty"}, {3, "prefix"}, {3, "later"}} {
 		t.Run(fmt.Sprintf("round=%d/%s", tc.round, tc.detail), func(t *testing.T) {
-			root, global := t.TempDir(), t.TempDir()
+			root, global := testRepoRoot(t), t.TempDir()
 			p, err := layout.NewRepository(root, root, layout.RecordBlame)
 			require.NoError(t, err)
 			s := mission.NewRepositoryStore(p, global)

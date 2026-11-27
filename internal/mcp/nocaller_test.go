@@ -208,7 +208,7 @@ func TestNoCaller_MissionBindingRefusedUnderClaudeCode(t *testing.T) {
 
 	h := testHandlerWithSessions(t)
 	seedSessionRoster(t, h.sessionStore, sess)
-	h.missionStore = h.missionStore.WithRepoRoot(t.TempDir())
+	h.missionStore = h.missionStore.WithRepoRoot(testRepoRoot(t))
 	t.Cleanup(func() { h.missionStore = h.missionStore.WithRepoRoot("") })
 	create := func(yaml string) mission.Contract {
 		result, err := h.handleMission(context.Background(), callTool(map[string]any{"method": "create", "contract": yaml}))

@@ -68,6 +68,13 @@ budget:
 `
 }
 
+func testRepoRoot(t *testing.T) string {
+	t.Helper()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	return root
+}
+
 func testHandlerWithMissions(t *testing.T) *Handler {
 	t.Helper()
 	dir := t.TempDir()
@@ -1119,7 +1126,7 @@ func TestHandleMission_AbandonErrorsWhenBindingsNotCleared(t *testing.T) {
 	h := testHandlerWithSessions(t)
 	seedSessionRoster(t, h.sessionStore, sess)
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
-	h.missionStore = h.missionStore.WithRepoRoot(t.TempDir())
+	h.missionStore = h.missionStore.WithRepoRoot(testRepoRoot(t))
 	t.Cleanup(func() { h.missionStore = h.missionStore.WithRepoRoot("") })
 
 	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
@@ -1219,7 +1226,7 @@ func TestHandleMission_Abandon(t *testing.T) {
 	var created mission.Contract
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
 
-	h.missionStore = h.missionStore.WithRepoRoot(t.TempDir())
+	h.missionStore = h.missionStore.WithRepoRoot(testRepoRoot(t))
 	t.Cleanup(func() { h.missionStore = h.missionStore.WithRepoRoot("") })
 	abandonResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "abandon",
@@ -1319,7 +1326,7 @@ func TestHandleMission_AbandonRefusesWithResult(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
 	submitResultForMCP(t, h, created.MissionID)
 
-	h.missionStore = h.missionStore.WithRepoRoot(t.TempDir())
+	h.missionStore = h.missionStore.WithRepoRoot(testRepoRoot(t))
 	t.Cleanup(func() { h.missionStore = h.missionStore.WithRepoRoot("") })
 	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "abandon",
@@ -1347,7 +1354,7 @@ func TestHandleMission_AbandonDisclaim(t *testing.T) {
 	var created mission.Contract
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
 
-	repoRoot := t.TempDir()
+	repoRoot := testRepoRoot(t)
 	h.missionStore = h.missionStore.WithRepoRoot(repoRoot)
 	t.Cleanup(func() { h.missionStore = h.missionStore.WithRepoRoot("") })
 
@@ -1404,7 +1411,7 @@ func TestHandleMission_AbandonDisclaimRefusesWrongProvenance(t *testing.T) {
 	var created mission.Contract
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
 
-	repoRoot := t.TempDir()
+	repoRoot := testRepoRoot(t)
 	h.missionStore = h.missionStore.WithRepoRoot(repoRoot)
 	t.Cleanup(func() { h.missionStore = h.missionStore.WithRepoRoot("") })
 
@@ -1456,7 +1463,7 @@ func TestHandleMission_AbandonDisclaimPartialFailureNamesCommitted(t *testing.T)
 	var created mission.Contract
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
 
-	repoRoot := t.TempDir()
+	repoRoot := testRepoRoot(t)
 	h.missionStore = h.missionStore.WithRepoRoot(repoRoot)
 	t.Cleanup(func() { h.missionStore = h.missionStore.WithRepoRoot("") })
 
@@ -1509,7 +1516,7 @@ func TestHandleMission_AbandonDisclaimSucceedsButAbandonFailsNamesCommitted(t *t
 	var created mission.Contract
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
 
-	repoRoot := t.TempDir()
+	repoRoot := testRepoRoot(t)
 	h.missionStore = h.missionStore.WithRepoRoot(repoRoot)
 	t.Cleanup(func() { h.missionStore = h.missionStore.WithRepoRoot("") })
 
