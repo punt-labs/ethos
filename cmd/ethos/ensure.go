@@ -46,7 +46,7 @@ func takeRepairNotice() (string, int) {
 
 // noEnsure are the commands, by top-level name, that never read storage.
 // cobra's own completion requests are completion.
-var noEnsure = []string{"version", "completion", "help", "uninstall",
+var noEnsure = []string{"version", "completion", "help", "uninstall", "status",
 	cobra.ShellCompRequestCmd, cobra.ShellCompNoDescRequestCmd}
 
 func exemptFromEnsure(cmd *cobra.Command) bool {

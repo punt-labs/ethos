@@ -77,7 +77,7 @@ func TestEveryCommandPassesEnsure(t *testing.T) {
 	// stick, and later tests that read a command's stderr would see nothing.
 	rootCmd.SetErr(&bytes.Buffer{})
 	t.Cleanup(func() { rootCmd.SetErr(nil) })
-	exempt := map[string]bool{"version": true, "completion": true, "help": true, "uninstall": true}
+	exempt := map[string]bool{"version": true, "completion": true, "help": true, "uninstall": true, "status": true}
 	var walk func(c *cobra.Command)
 	walk = func(c *cobra.Command) {
 		if c != rootCmd {
@@ -158,7 +158,7 @@ func TestOnlyDoctorRepairsUnbounded(t *testing.T) {
 	rootCmd.SetErr(&bytes.Buffer{})
 	t.Cleanup(func() { rootCmd.SetErr(nil) })
 	bounded, unbounded := fakeEnsureGates(t, autorepair.Result{})
-	exempt := map[string]bool{"version": true, "completion": true, "help": true, "uninstall": true}
+	exempt := map[string]bool{"version": true, "completion": true, "help": true, "uninstall": true, "status": true}
 	var walk func(c *cobra.Command)
 	walk = func(c *cobra.Command) {
 		if c != rootCmd && !exempt[topLevel(c)] {
