@@ -38,6 +38,11 @@ func TestCLI_SessionStartLeavesTrackedAgentsUnchanged(t *testing.T) {
 	stale := filepath.Join(se.repo, ".claude", "agents", "retired.md")
 	require.NoError(t, os.MkdirAll(filepath.Dir(stale), 0o755))
 	require.NoError(t, os.WriteFile(stale, []byte(agentmark.Add("---\nname: retired\n---\n")), 0o644))
+	store := filepath.Join(se.repo, ".punt-labs", "ethos")
+	writeRefreshTeam(t, se.repo, store)
+	stub := filepath.Join(store, "agents", "legacy-only.md")
+	require.NoError(t, os.MkdirAll(filepath.Dir(stub), 0o755))
+	require.NoError(t, os.WriteFile(stub, []byte("---\nname: legacy-only\n---\n"), 0o644))
 	git := func(args ...string) string {
 		cmd := exec.Command("git", args...)
 		cmd.Dir, cmd.Env = se.repo, se.env
@@ -46,15 +51,21 @@ func TestCLI_SessionStartLeavesTrackedAgentsUnchanged(t *testing.T) {
 		return string(out)
 	}
 	git("add", "-f", "--", ".claude/agents/retired.md")
-	git("add", "--", ".gitignore", "CLAUDE.md", ".claude/settings.json", ".punt-labs/ethos")
+	git("add", "--", ".gitignore", "CLAUDE.md", ".claude/settings.json", ".punt-labs/ethos", ".punt-labs/ethos.yaml")
 	git("-c", "core.hooksPath=/dev/null", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "Enable ethos with declared agent")
 	require.Empty(t, git("status", "--porcelain"), "fixture must begin clean")
 
 	execHookSessionStart(t, se)
+	generated := filepath.Join(se.repo, ".claude", "agents", "worker.md")
+	installed := filepath.Join(se.repo, ".claude", "agents", "legacy-only.md")
+	assert.NoFileExists(t, generated, "startup must not generate agent definitions")
+	assert.NoFileExists(t, installed, "startup must not install legacy stubs")
 	require.Empty(t, git("status", "--porcelain"), "startup must not rewrite or prune tracked agents")
 	_, stderr, code = runCLI(t, se, "enable", "--refresh")
 	require.Zero(t, code, stderr)
 	require.NoFileExists(t, stale, "explicit refresh must still prune retired agents")
+	assert.FileExists(t, generated, "explicit refresh must generate the configured worker")
+	assert.FileExists(t, installed, "explicit refresh must install the legacy stub")
 }
 
 func TestCLI_EnablePinsDepositedGuideUntilRefresh(t *testing.T) {
@@ -80,18 +91,8 @@ func TestCLI_EnableRefreshGeneratesAgentsFromLegacyGitlink(t *testing.T) {
 	se := freshCLIEnv(t, "refresh-human")
 	store := filepath.Join(se.repo, ".punt-labs", "ethos")
 	require.NoError(t, os.MkdirAll(store, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(se.repo, ".punt-labs", "ethos.yaml"), []byte("team: legacy\n"), 0o644))
-	for path, body := range map[string]string{
-		"teams/legacy.yaml":       "name: legacy\nmembers:\n  - identity: worker\n    role: reviewer\n",
-		"identities/worker.yaml":  "name: Legacy Worker\nhandle: worker\nkind: agent\npersonality: worker\n",
-		"personalities/worker.md": "# Legacy Worker\n\nReview the implementation.\n",
-		"roles/reviewer.yaml":     "name: reviewer\ntools: [Read]\n",
-		"CLAUDE.md":               "# Team-owned guide\n",
-	} {
-		p := filepath.Join(store, path)
-		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
-		require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
-	}
+	writeRefreshTeam(t, se.repo, store)
+	require.NoError(t, os.WriteFile(filepath.Join(store, "CLAUDE.md"), []byte("# Team-owned guide\n"), 0o644))
 	cmd := exec.Command("git", "update-index", "--add", "--cacheinfo",
 		"160000,0000000000000000000000000000000000000001,.punt-labs/ethos")
 	cmd.Dir, cmd.Env = se.repo, se.env
@@ -111,6 +112,21 @@ func TestCLI_EnableRefreshGeneratesAgentsFromLegacyGitlink(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(store, "enabled"))
 	assert.NoFileExists(t, filepath.Join(se.repo, "CLAUDE.md"))
 	assert.NoFileExists(t, filepath.Join(se.repo, ".claude", "settings.json"))
+}
+
+func writeRefreshTeam(t *testing.T, repo, store string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos.yaml"), []byte("team: legacy\n"), 0o644))
+	for path, body := range map[string]string{
+		"teams/legacy.yaml":       "name: legacy\nmembers:\n  - identity: worker\n    role: reviewer\n",
+		"identities/worker.yaml":  "name: Legacy Worker\nhandle: worker\nkind: agent\npersonality: worker\n",
+		"personalities/worker.md": "# Legacy Worker\n\nReview the implementation.\n",
+		"roles/reviewer.yaml":     "name: reviewer\ntools: [Read]\n",
+	} {
+		p := filepath.Join(store, path)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
+	}
 }
 
 // A stale seal section in an enabled repo is rewritten by SessionStart, and
