@@ -3,6 +3,7 @@ package checkset
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -143,6 +144,10 @@ func TestLoadSnapshotSidecarRejectsInvalidPolicy(t *testing.T) {
 		{"unknown isolation", "network: loopback", "isolation: other", "isolation must be snapshot or live-verified"},
 		{"empty isolation", "network: loopback", "isolation: ''", "isolation must be snapshot or live-verified"},
 		{"null isolation", "network: loopback", "isolation: null", "isolation must be snapshot or live-verified"},
+		{"unknown isolation OS", "network: loopback", "isolation: {darwin: live-verified, unknown: snapshot}", "unsupported isolation OS \"unknown\""},
+		{"architecture in isolation OS", "network: loopback", "isolation: {darwin-arm64: live-verified}", "unsupported isolation OS \"darwin-arm64\""},
+		{"invalid isolation for another OS", "network: loopback", "isolation: {darwin: snapshot, linux: null}", "isolation for \"linux\" must be snapshot or live-verified"},
+		{"duplicate isolation OS", "network: loopback", "isolation: {darwin: live-verified, darwin: snapshot}", "duplicate isolation OS \"darwin\""},
 		{"relative system directory", "network: loopback", "system: {dirs: [var/lib/texmf]}", "clean absolute paths"},
 		{"invalid system platform", "network: loopback", "system: {platforms: {linux: {tools: [make]}}}", "invalid snapshot system platform"},
 		{"invalid platform input", "network: loopback", "system: {platforms: {linux-amd64: {files: [/etc/../etc/group]}}}", "clean absolute paths"},
@@ -176,10 +181,20 @@ func TestLoadSnapshotSidecarRejectsInvalidPolicy(t *testing.T) {
 }
 
 func TestSnapshotSidecarIsolation(t *testing.T) {
+	darwinOnly := "snapshot"
+	if runtime.GOOS == "darwin" {
+		darwinOnly = "live-verified"
+	}
+	linuxOnly := "snapshot"
+	if runtime.GOOS == "linux" {
+		linuxOnly = "live-verified"
+	}
 	for _, tc := range []struct{ field, want string }{
 		{"", "snapshot"},
 		{"    isolation: snapshot\n", "snapshot"},
 		{"    isolation: live-verified\n", "live-verified"},
+		{"    isolation: {darwin: live-verified}\n", darwinOnly},
+		{"    isolation:\n      linux: live-verified\n", linuxOnly},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			root := t.TempDir()
@@ -195,6 +210,34 @@ func TestSnapshotSidecarIsolation(t *testing.T) {
 			require.NoError(t, loadSnapshotSidecar(root, "project", set))
 			require.Equal(t, tc.want, set.Checks[0].WorktreeSnapshot.Isolation)
 		})
+	}
+}
+
+func TestSnapshotSidecarIsolationAlias(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "checks", "snapshots")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "project.yaml"), []byte(`checks:
+  first:
+    profile: linux-worktree-v1
+    epoch: test
+    sources: {mode: worktree}
+    isolation: &iso {darwin: live-verified}
+  second:
+    profile: linux-worktree-v1
+    epoch: test
+    sources: {mode: worktree}
+    isolation: *iso
+`), 0o600))
+	set := &Set{Checks: []Check{{Name: "first", Stage: "handoff"}, {Name: "second", Stage: "handoff"}}}
+	require.NoError(t, loadSnapshotSidecar(root, "project", set))
+	want := IsolationSnapshot
+	if runtime.GOOS == "darwin" {
+		want = IsolationLiveVerified
+	}
+	for _, check := range set.Checks {
+		require.NotNil(t, check.WorktreeSnapshot, check.Name)
+		require.Equal(t, want, check.WorktreeSnapshot.Isolation, check.Name)
 	}
 }
 

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Handoff snapshot sidecars can select isolation by OS. A policy can opt
+  into live verification on macOS while retaining snapshot reuse on Linux.
+
 ## [5.3.1] - 2026-11-27
 
 v5.3.0 was tagged but never published. This release includes its changes
