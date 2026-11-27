@@ -52,6 +52,9 @@ const CanonicalImport = "@.punt-labs/ethos/CLAUDE.md"
 
 const markerRel = ".punt-labs/ethos/enabled"
 
+// ErrGitlinkMount indicates that enable cannot deposit into the team submodule.
+var ErrGitlinkMount = errors.New(".punt-labs/ethos is a git submodule (gitlink); the vendored guide cannot be written into a foreign git repo — convert it to an inline directory first (ethos-e29s)")
+
 // StepResult is one line of the per-step report.
 type StepResult struct {
 	Step   string `json:"step"`
@@ -130,8 +133,7 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO, options ...Options) (*
 		return rep, fmt.Errorf("checking for a gitlink mount: %w", err)
 	}
 	if gitlink {
-		return rep, fmt.Errorf(
-			".punt-labs/ethos is a git submodule (gitlink); the vendored guide cannot be written into a foreign git repo — convert it to an inline directory first (ethos-e29s)")
+		return rep, ErrGitlinkMount
 	}
 
 	// A marker that exists but is not a regular file (a directory, a FIFO, a

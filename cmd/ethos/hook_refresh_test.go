@@ -76,6 +76,43 @@ func TestCLI_EnablePinsDepositedGuideUntilRefresh(t *testing.T) {
 	require.NotEqual(t, pinned, after)
 }
 
+func TestCLI_EnableRefreshGeneratesAgentsFromLegacyGitlink(t *testing.T) {
+	se := freshCLIEnv(t, "refresh-human")
+	store := filepath.Join(se.repo, ".punt-labs", "ethos")
+	require.NoError(t, os.MkdirAll(store, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(se.repo, ".punt-labs", "ethos.yaml"), []byte("team: legacy\n"), 0o644))
+	for path, body := range map[string]string{
+		"teams/legacy.yaml":       "name: legacy\nmembers:\n  - identity: worker\n    role: reviewer\n",
+		"identities/worker.yaml":  "name: Legacy Worker\nhandle: worker\nkind: agent\npersonality: worker\n",
+		"personalities/worker.md": "# Legacy Worker\n\nReview the implementation.\n",
+		"roles/reviewer.yaml":     "name: reviewer\ntools: [Read]\n",
+		"CLAUDE.md":               "# Team-owned guide\n",
+	} {
+		p := filepath.Join(store, path)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
+	}
+	cmd := exec.Command("git", "update-index", "--add", "--cacheinfo",
+		"160000,0000000000000000000000000000000000000001,.punt-labs/ethos")
+	cmd.Dir, cmd.Env = se.repo, se.env
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", output)
+
+	stdout, stderr, code := runCLI(t, se, "enable", "--refresh")
+	require.Zero(t, code, stderr)
+	assert.Contains(t, stdout, "refreshed Claude agent definitions")
+	assert.Contains(t, stderr, "convert it to an inline directory")
+	generated, err := os.ReadFile(filepath.Join(se.repo, ".claude", "agents", "worker.md"))
+	require.NoError(t, err, stderr)
+	assert.Contains(t, string(generated), "Legacy Worker")
+	guide, err := os.ReadFile(filepath.Join(store, "CLAUDE.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "# Team-owned guide\n", string(guide))
+	assert.NoFileExists(t, filepath.Join(store, "enabled"))
+	assert.NoFileExists(t, filepath.Join(se.repo, "CLAUDE.md"))
+	assert.NoFileExists(t, filepath.Join(se.repo, ".claude", "settings.json"))
+}
+
 // A stale seal section in an enabled repo is rewritten by SessionStart, and
 // the session is told; a dormant repo and a current section are left alone.
 func TestCLI_SessionStartRefreshesStaleHook(t *testing.T) {

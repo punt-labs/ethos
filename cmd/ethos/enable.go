@@ -60,7 +60,11 @@ func runEnable(cmd *cobra.Command) error {
 		return err
 	}
 	rep, err := enable.EnableTo(repoRoot, storeRoot, enable.Options{Refresh: refresh})
-	if err != nil {
+	action := "enabled"
+	if refresh && errors.Is(err, enable.ErrGitlinkMount) {
+		rep.Warnings = append(rep.Warnings, err.Error())
+		action = "refreshed Claude agent definitions"
+	} else if err != nil {
 		emitPartialReport(cmd, rep)
 		return err
 	}
@@ -74,7 +78,7 @@ func runEnable(cmd *cobra.Command) error {
 	if jsonOutput {
 		return writeJSON(cmd.OutOrStdout(), rep)
 	}
-	printEnableReport(cmd.OutOrStdout(), cmd.ErrOrStderr(), rep, "enabled")
+	printEnableReport(cmd.OutOrStdout(), cmd.ErrOrStderr(), rep, action)
 	return nil
 }
 

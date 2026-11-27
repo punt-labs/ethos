@@ -188,7 +188,9 @@ No conversion is needed: the resolver falls back to two-layer behavior
 (repo-local → global) when `active_bundle` is unset in
 `.punt-labs/ethos.yaml`, so a legacy submodule keeps working as-is.
 
-Run `ethos enable --refresh`, then restart Claude Code. Verify with
+Run `ethos enable --refresh`, then restart Claude Code. For a legacy team
+submodule, this refreshes only the agent definitions in the checkout; it
+does not enable Ethos or rewrite the submodule's guides. Verify with
 `ls .claude/agents/` — you should see one `.md` file per agent identity
 in the resolved team.
 
