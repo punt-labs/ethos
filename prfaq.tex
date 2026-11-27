@@ -532,7 +532,7 @@ Three scenarios would cause ethos to fail:
   \featureitem{Identity CRUD}{create, read, update, delete personas: same schema for humans and agents}\label{feat:crud}
   \featureitem{Persona animation}{SessionStart, PreCompact, and SubagentStart hooks inject personality, writing style, and talents automatically}\label{feat:animation}
   \featureitem{Teams and roles}{team graph with collaboration edges, role-based tool restrictions, anti-responsibility derivation from reports\_to edges}\label{feat:teams}
-  \featureitem{Agent file generation}{SessionStart generates .claude/agents/<handle>.md from identity, personality, role, and team data. Today this repository commits {\small\texttt{.claude/agents/}}. Decided in DES-079 and not shipped: committing the generated files in every repo so a fresh clone has its agents before the first session, deterministic generation, and an {\small\texttt{ethos doctor}} check that fails when the committed files differ from the generator's output}\label{feat:agentgen}
+  \featureitem{Agent file generation}{{\small\texttt{ethos enable --refresh}} generates .claude/agents/<handle>.md from identity, personality, role, and team data without changing files at SessionStart. Repositories can commit the generated definitions so fresh clones have agents immediately.}\label{feat:agentgen}
   \featureitem{Mission contracts}{typed delegation with leader, worker, evaluator, write-set, success criteria, and round budget}\label{feat:missions}
   \featureitem{Write-set admission}{segment-prefix conflict scan refuses overlapping file claims between open missions}\label{feat:writeset}
   \featureitem{Frozen evaluator}{sha256 content hash pinned at mission launch; SubagentStart refuses verifier spawns if the hash drifts}\label{feat:frozen}

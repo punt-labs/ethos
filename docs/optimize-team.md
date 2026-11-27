@@ -51,7 +51,7 @@ install; optimize-team runs whenever the repo's tooling profile changes.
 ## The central constraint: per-session context
 
 Every agent-kind team member produces a `.claude/agents/<handle>.md` at
-SessionStart (`internal/hook/generate_agents.go`). Claude Code loads all of
+`ethos enable --refresh` (`internal/hook/generate_agents.go`). Claude Code loads all of
 them. The roster size is therefore the dominant per-session context lever,
 and shrinking it is this skill's whole reason to exist.
 
@@ -221,8 +221,8 @@ prunes *down* from, never a floor it adds *up* to.
   "none"/"no" answer prunes a seat. A pruned seat returns only by
   re-running the interview and answering yes — it does not linger.
 - **Principle 9 — the ethos tree is source; `.claude/agents/` is output.**
-  The skill writes only role/identity/team YAML and `ethos.yaml`, then lets
-  SessionStart regenerate the agent files. It never writes or hand-edits any
+  The skill writes only role/identity/team YAML and `ethos.yaml`, then uses
+  `ethos enable --refresh` to regenerate the agent files. It never hand-edits any
   file under `.claude/agents/`. In a `resolution: repo-only` repo the design
   lives in the vendored tree and the skill records
   `resolution: repo-only` in `ethos.yaml`.
@@ -334,10 +334,9 @@ ratification.
    prunes vendored files") before invoking either. Repair runs only when
    re-shaping left obsolete residue; `vendor --prune` runs only in a
    `resolution: repo-only` repo. On "no," the skill leaves both to the user.
-9. **Regenerate is not the skill's job.** The skill tells the user to
-   restart Claude Code; SessionStart regenerates `.claude/agents/` from the
-   YAML the skill wrote. The skill never touches those generated files
-   (principle 9).
+9. **Refresh definitions.** Run `ethos enable --refresh` to reconcile
+   `.claude/agents/` from the new YAML. Review the changes and tell the user
+   to restart Claude Code to load them.
 
 ## Greenfield vs optimize-in-place
 
@@ -351,7 +350,7 @@ roles, runs the interview, and produces a **diff**: seats to keep, seats to
 add, seats to prune, and model-tier changes. The budget table shows current
 cost, proposed cost, and the delta. Pruning removes the member from the team
 YAML (and optionally the role/identity files, on an explicit confirm); the
-agent file disappears on the next SessionStart regeneration. The skill never
+agent file disappears on the next explicit refresh. The skill never
 deletes a generated `.claude/agents/` file directly — removing the source
 and regenerating is the only path (principle 9). After any prune in a
 `resolution: repo-only` repo, `ethos vendor --apply --prune` reconciles the

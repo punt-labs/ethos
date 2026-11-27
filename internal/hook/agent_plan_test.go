@@ -14,7 +14,6 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/role"
-	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -72,7 +71,7 @@ func TestAgentPlanCountsIncompleteDestinationsOnce(t *testing.T) {
 }
 
 func TestAgentPlanProblemsVisibleAtEntryPoints(t *testing.T) {
-	for _, entry := range []string{"compatibility writer", "direct plan and apply", "SessionStart"} {
+	for _, entry := range []string{"compatibility writer", "direct plan and apply", "explicit refresh"} {
 		t.Run(entry, func(t *testing.T) {
 			root, ids, teams, roles := setupTestRepo(t)
 			isolateGitConfig(t, "test-human")
@@ -98,13 +97,8 @@ func TestAgentPlanProblemsVisibleAtEntryPoints(t *testing.T) {
 					p, err := loc.Layout()
 					require.NoError(t, err)
 					require.NoError(t, ApplyAgentPlan(p, plan))
-				case "SessionStart":
-					deps := SessionStartDeps{Located: &loc, Store: ids, Sessions: session.NewStore(physicalAgentTempDir(t)), Teams: teams, Roles: roles}
-					out, err := captureStdout(t, func() error {
-						return HandleSessionStart(strings.NewReader(`{"session_id":"agent-plan-warning"}`), deps)
-					})
-					require.NoError(t, err)
-					assert.Contains(t, out, "Claude Agento", "exercise the real agent generation branch")
+				case "explicit refresh":
+					require.NoError(t, RefreshAgentDefinitions(loc, ids, teams, roles))
 				}
 			})
 			assert.Equal(t, 1, strings.Count(stderr, "ethos: generate-agents: skipping bwk: no personality content"), stderr)

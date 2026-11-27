@@ -1647,10 +1647,16 @@ that was wrong most of the time.
 
 ### Decision
 
-The SessionStart hook generates `.claude/agents/<handle>.md` for every
+The original SessionStart hook generated `.claude/agents/<handle>.md` for every
 agent team member from ethos component data (identity, personality,
 writing-style, role). The main session agent (from `ethos.yaml` config)
 and human identities are skipped.
+
+PL-1759 moves generation, legacy stub installation, and stale generated-file
+pruning to explicit `ethos enable --refresh`. SessionStart still resolves
+identity and emits persona context, but never edits checkout agent files.
+The refresh reads team sources from the shared store and writes definitions
+to the invoking worktree, so they can be reviewed and committed there.
 
 ### Reasoning
 
@@ -13224,7 +13230,8 @@ retention belong to S; checkout deposits and Git publication/index effects to C.
   inline round decisions; optional local prose availability cannot alter permission.
 - **DES-057** moves repository extension overlays physically into S's local zone,
   preserving base-only writes and local precedence; global layout is unchanged.
-- **DES-026** generates `.claude/agents/<handle>.md` at SessionStart and
+- **DES-026** generates `.claude/agents/<handle>.md` (now only on explicit
+  refresh; see PL-1759 above) and
   compares content before writing. DES-079 adds three requirements: the
   output is committed, it is deterministic, and `ethos doctor` fails on
   drift. The content comparison stays.
@@ -13662,7 +13669,7 @@ submodule writes
   `.punt-labs/ethos/ETHOS-SETUP.md`, `.punt-labs/ethos/enabled`, the
   `@`-import line in the repository's root `CLAUDE.md`, and its rules in
   the root `.gitignore`.
-- `.claude/agents/<name>.md`, from three writers: the SessionStart
+- `.claude/agents/<name>.md`, from three writers: the explicit refresh
   generator (DES-026), the review agents `ethos seed` writes (DES-070:
   `code-reviewer.md`, `silent-failure-hunter.md`,
   `invariant-completeness-reviewer.md`), and `InstallAgentDefinitions`

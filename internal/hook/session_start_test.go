@@ -531,31 +531,9 @@ func TestHandleSessionStart_LegacyConfigPath(t *testing.T) {
 	assert.Contains(t, ctx, "Active identity: Claude Agento (claude)")
 }
 
-// TestHandleSessionStart_GenerateAgentsErrorPropagates covers ethos-9ai.6
-// C1: the only production caller of GenerateAgentFiles (HandleSessionStart)
-// must return the wrapped error, not log-and-continue. Before the fix,
-// a broken team reference (or any GenerateAgentFiles failure) was logged
-// to stderr and swallowed; `ethos hook session-start` exited zero and
-// `ethos doctor` had no signal to gate on.
-//
-// Exercise path: a valid config that names a team file that doesn't
-// exist. ResolveAgent succeeds (cfg parses), store.Load(agentPersona)
-// succeeds (identity exists), then GenerateAgentFiles calls
-// teams.Load(teamName) which returns a not-found error. That error
-// wraps as "loading team %q: %w"; HandleSessionStart's wrap
-// "generating agents: %w" sits on top.
-//
-// The companion test TestHandleSessionStart_ResolveAgentErrorPropagates
-// (ethos-dc0) covers the malformed-ethos.yaml path that was unreachable
-// from HandleSessionStart before dc0 — at the time 9ai.6 r2 landed,
-// resolve.ResolveAgent silently swallowed LoadRepoConfig errors and
-// returned "", so the agentPersona == "" branch fell back to the human
-// one-liner before GenerateAgentFiles was reached. Post-dc0 that path
-// IS reachable and the dc0 test exercises it directly.
-func TestHandleSessionStart_GenerateAgentsErrorPropagates(t *testing.T) {
+func TestRefreshAgentDefinitions_GenerateAgentsErrorPropagates(t *testing.T) {
 	dir := t.TempDir()
 	s := identity.NewStore(dir)
-	ss := session.NewStore(dir)
 	rs := role.NewLayeredStore("", dir)
 	ts := team.NewLayeredStore("", dir)
 
@@ -609,31 +587,11 @@ func TestHandleSessionStart_GenerateAgentsErrorPropagates(t *testing.T) {
 
 	isolateGitConfig(t, "test-human")
 
-	deps := SessionStartDeps{
-		Store:    s,
-		Sessions: ss,
-		Teams:    ts,
-		Roles:    rs,
-	}
-
-	// Direct call — captureSessionStartOutput asserts NoError, which
-	// is the exact opposite of what we want to verify here. Suppress
-	// stdout so an unexpected JSON write in a regression path does
-	// not leak into test output.
-	oldStdout := os.Stdout
-	devNull, openErr := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	require.NoError(t, openErr)
-	os.Stdout = devNull
-	t.Cleanup(func() {
-		os.Stdout = oldStdout
-		devNull.Close()
-	})
-
-	err = HandleSessionStart(bytes.NewReader([]byte(`{"session_id":"s-propagate"}`)), deps)
+	err = RefreshAgentDefinitions(resolve.Roots(), s, ts, rs)
 	require.Error(t, err,
-		"HandleSessionStart must return the wrapped GenerateAgentFiles error, not swallow it")
+		"refresh must return the wrapped GenerateAgentFiles error, not swallow it")
 	assert.Contains(t, err.Error(), "generating agents",
-		"HandleSessionStart must wrap the downstream error with its operation context")
+		"refresh must wrap the downstream error with its operation context")
 	assert.Contains(t, err.Error(), "loading team",
 		"the wrapped chain must include GenerateAgentFiles's teams.Load wrap")
 	assert.Contains(t, err.Error(), "missing-team",
@@ -645,20 +603,12 @@ func TestHandleSessionStart_GenerateAgentsErrorPropagates(t *testing.T) {
 	// would return nil at depth 1. Guard against that.
 	inner := errors.Unwrap(err)
 	require.NotNil(t, inner,
-		"HandleSessionStart wrap must use %%w; errors.Unwrap returned nil")
+		"refresh wrap must use %%w; errors.Unwrap returned nil")
 	assert.Contains(t, inner.Error(), "loading team",
 		"depth-1 error must be GenerateAgentFiles's teams.Load wrap")
 }
 
-// TestHandleSessionStart_NoAgentStillGreetsOnPipelineError pins the fix for
-// the code-review finding on the PL-878 full-retirement reorder: hoisting the
-// agent pipeline above the persona branch must NOT let a pipeline error rob the
-// human-fallback path of its greeting. Config has NO agent: (so agentPersona ==
-// "", the human path) but team: missing-team (so the pipeline errors loading
-// the team). The greeting must still be emitted, and the pipeline error must
-// still be returned as the hook's exit status — greeting first, error after,
-// never in place of it (the pre-PL-878 guarantee that this path always greets).
-func TestHandleSessionStart_NoAgentStillGreetsOnPipelineError(t *testing.T) {
+func TestHandleSessionStart_GreetsWithoutRefreshingAgents(t *testing.T) {
 	dir := t.TempDir()
 	s := identity.NewStore(dir)
 	ss := session.NewStore(dir)
@@ -704,14 +654,10 @@ func TestHandleSessionStart_NoAgentStillGreetsOnPipelineError(t *testing.T) {
 	_, _ = out.ReadFrom(rPipe)
 	rPipe.Close()
 
-	// The pipeline error is still the hook's exit status.
-	require.Error(t, err, "a pipeline error on the no-agent path must still be returned")
-	assert.Contains(t, err.Error(), "missing-team",
-		"the returned error must name the team that failed to load")
-	// But the human greeting was emitted FIRST, not suppressed by that error.
+	require.NoError(t, err, "startup must not try to refresh the missing team")
 	var result SessionStartResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &result),
-		"the human fallback must still emit its SessionStart JSON despite the pipeline error")
+		"the human fallback must still emit its SessionStart JSON")
 	assert.Contains(t, result.HookSpecificOutput.AdditionalContext, "Active identity: Test Human (test-human)",
 		"the retired repo must still get its human greeting")
 }
@@ -1168,14 +1114,12 @@ func TestHandleSessionStart_RepairNote(t *testing.T) {
 	}
 }
 
-// TestHandleSessionStart_PrunesStaleGeneratedAgents drives the real
-// HandleSessionStart path: a marked agent file for a handle off the active
+// A marked agent file for a handle off the active
 // team is deleted, an unmarked file is left alone whatever its handle (the
 // safety boundary), and the active team's own generated file survives.
-func TestHandleSessionStart_PrunesStaleGeneratedAgents(t *testing.T) {
+func TestRefreshAgentDefinitions_PrunesStaleGeneratedAgents(t *testing.T) {
 	dir := t.TempDir()
 	s := identity.NewStore(dir)
-	ss := session.NewStore(dir)
 	rs := role.NewLayeredStore("", dir)
 	ts := team.NewLayeredStore("", dir)
 
@@ -1235,13 +1179,7 @@ func TestHandleSessionStart_PrunesStaleGeneratedAgents(t *testing.T) {
 	// never ethos's to touch.
 	writeAgentsDirFile(t, repoRoot, "hand-authored", "---\nname: hand-authored\n---\nbody\n")
 
-	deps := SessionStartDeps{
-		Store:    s,
-		Sessions: ss,
-		Teams:    ts,
-		Roles:    rs,
-	}
-	captureSessionStartOutput(t, `{"session_id": "s-prune"}`, deps)
+	require.NoError(t, RefreshAgentDefinitions(resolve.Roots(), s, ts, rs))
 
 	assert.NoFileExists(t, filepath.Join(repoRoot, ".claude", "agents", "retired-specialist.md"),
 		"a marked agent file for a handle off the active team must be pruned")
@@ -1251,17 +1189,9 @@ func TestHandleSessionStart_PrunesStaleGeneratedAgents(t *testing.T) {
 		"the active team's own generated agent file must survive its own generation run")
 }
 
-// TestHandleSessionStart_PrunesStaleAgentsWithNoRosterConfigured covers
-// PL-878: a repo that has retired its whole roster — neither agent: nor
-// team: set in .punt-labs/ethos.yaml — still prunes its orphaned generated
-// agent files. Before the fix, agentPersona == "" made HandleSessionStart
-// return early via emitHumanFallback before the generate/install/prune
-// pipeline ran at all, so a fully-retired repo's stale marked files were
-// never cleaned up.
-func TestHandleSessionStart_PrunesStaleAgentsWithNoRosterConfigured(t *testing.T) {
+func TestRefreshAgentDefinitions_PrunesStaleAgentsWithNoRosterConfigured(t *testing.T) {
 	dir := t.TempDir()
 	s := identity.NewStore(dir)
-	ss := session.NewStore(dir)
 	rs := role.NewLayeredStore("", dir)
 	ts := team.NewLayeredStore("", dir)
 
@@ -1291,13 +1221,7 @@ func TestHandleSessionStart_PrunesStaleAgentsWithNoRosterConfigured(t *testing.T
 	// An unmarked file is never ethos's to delete, whatever its handle.
 	writeAgentsDirFile(t, repoRoot, "hand-authored", "---\nname: hand-authored\n---\nbody\n")
 
-	deps := SessionStartDeps{
-		Store:    s,
-		Sessions: ss,
-		Teams:    ts,
-		Roles:    rs,
-	}
-	captureSessionStartOutput(t, `{"session_id": "s-prune-no-roster"}`, deps)
+	require.NoError(t, RefreshAgentDefinitions(resolve.Roots(), s, ts, rs))
 
 	assert.NoFileExists(t, filepath.Join(repoRoot, ".claude", "agents", "retired-specialist.md"),
 		"a marked agent file must be pruned even with no agent or team configured")
@@ -1305,14 +1229,12 @@ func TestHandleSessionStart_PrunesStaleAgentsWithNoRosterConfigured(t *testing.T
 		"an unmarked file is never ethos's to delete, whatever its handle")
 }
 
-// TestHandleSessionStart_TeamsWithoutRolesPrunesNothing pins invariant (c):
-// a Teams store with no Roles store is a partial dependency set — ownership
+// A Teams store without a Roles store is a partial dependency set — ownership
 // is unavailable, so pruning must not run even though planErr is nil (no
 // team was even attempted). A marked orphan must survive this state.
-func TestHandleSessionStart_TeamsWithoutRolesPrunesNothing(t *testing.T) {
+func TestRefreshAgentDefinitions_TeamsWithoutRolesPrunesNothing(t *testing.T) {
 	dir := t.TempDir()
 	s := identity.NewStore(dir)
-	ss := session.NewStore(dir)
 	ts := team.NewLayeredStore("", dir)
 
 	require.NoError(t, s.Save(&identity.Identity{
@@ -1337,13 +1259,7 @@ func TestHandleSessionStart_TeamsWithoutRolesPrunesNothing(t *testing.T) {
 
 	writeAgentsDirFile(t, repoRoot, "orphan", agentmark.Add("---\nname: orphan\n---\nbody\n"))
 
-	deps := SessionStartDeps{
-		Store:    s,
-		Sessions: ss,
-		Teams:    ts,
-		Roles:    nil,
-	}
-	captureSessionStartOutput(t, `{"session_id": "s-teams-no-roles"}`, deps)
+	require.NoError(t, RefreshAgentDefinitions(resolve.Roots(), s, ts, nil))
 
 	assert.FileExists(t, filepath.Join(repoRoot, ".claude", "agents", "orphan.md"),
 		"a Teams-without-Roles partial dependency set must prune nothing: ownership is unavailable")

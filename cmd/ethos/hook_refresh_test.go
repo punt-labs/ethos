@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/punt-labs/ethos/v4/internal/agentmark"
 	"github.com/punt-labs/ethos/v4/plugin/hooks"
 )
 
@@ -28,6 +29,51 @@ func execHookSessionStart(t *testing.T, se *cliSubprocessEnv) (stdout, stderr st
 	cmd.Stderr = &errOut
 	require.NoError(t, cmd.Run(), "stdout: %s\nstderr: %s", out.String(), errOut.String())
 	return out.String(), errOut.String()
+}
+
+func TestCLI_SessionStartLeavesTrackedAgentsUnchanged(t *testing.T) {
+	se := freshCLIEnv(t, "refresh-human")
+	_, stderr, code := runCLI(t, se, "enable")
+	require.Zero(t, code, stderr)
+	stale := filepath.Join(se.repo, ".claude", "agents", "retired.md")
+	require.NoError(t, os.MkdirAll(filepath.Dir(stale), 0o755))
+	require.NoError(t, os.WriteFile(stale, []byte(agentmark.Add("---\nname: retired\n---\n")), 0o644))
+	git := func(args ...string) string {
+		cmd := exec.Command("git", args...)
+		cmd.Dir, cmd.Env = se.repo, se.env
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s: %s", args, out)
+		return string(out)
+	}
+	git("add", "-f", "--", ".claude/agents/retired.md")
+	git("add", "--", ".gitignore", "CLAUDE.md", ".claude/settings.json", ".punt-labs/ethos")
+	git("-c", "core.hooksPath=/dev/null", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "Enable ethos with declared agent")
+	require.Empty(t, git("status", "--porcelain"), "fixture must begin clean")
+
+	execHookSessionStart(t, se)
+	require.Empty(t, git("status", "--porcelain"), "startup must not rewrite or prune tracked agents")
+	_, stderr, code = runCLI(t, se, "enable", "--refresh")
+	require.Zero(t, code, stderr)
+	require.NoFileExists(t, stale, "explicit refresh must still prune retired agents")
+}
+
+func TestCLI_EnablePinsDepositedGuideUntilRefresh(t *testing.T) {
+	se := freshCLIEnv(t, "refresh-human")
+	_, stderr, code := runCLI(t, se, "enable")
+	require.Zero(t, code, stderr)
+	guide := filepath.Join(se.repo, ".punt-labs", "ethos", "CLAUDE.md")
+	pinned := []byte("guide deposited by another version\n")
+	require.NoError(t, os.WriteFile(guide, pinned, 0o644))
+	_, stderr, code = runCLI(t, se, "enable")
+	require.Zero(t, code, stderr)
+	after, err := os.ReadFile(guide)
+	require.NoError(t, err)
+	require.Equal(t, pinned, after)
+	_, stderr, code = runCLI(t, se, "enable", "--refresh")
+	require.Zero(t, code, stderr)
+	after, err = os.ReadFile(guide)
+	require.NoError(t, err)
+	require.NotEqual(t, pinned, after)
 }
 
 // A stale seal section in an enabled repo is rewritten by SessionStart, and

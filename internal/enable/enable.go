@@ -78,8 +78,8 @@ func (r *Report) stepCause(name, status, detail, cause string) {
 	r.Steps = append(r.Steps, StepResult{Step: name, Status: status, Detail: detail, Cause: cause})
 }
 
-// Enable turns ethos on in the repo at repoRoot. It is idempotent;
-// re-running is the upgrade path. Steps run in order: gitlink guard,
+// Enable turns ethos on in the repo at repoRoot without updating existing
+// guides. Steps run in order: gitlink guard,
 // legacy-ignore preflight (a refusal still chains the hooks), vendored deposit,
 // hook chaining, gitignore protection, marker (written only after a complete
 // deposit and verified protection), import line. It ends with a next-step hint
@@ -95,13 +95,18 @@ func Enable(repoRoot string) (*Report, error) {
 // store, so configStatus must read it there or it spuriously hints "run
 // setup" (#370 reader-side). Enable(repoRoot) passes repoRoot for both, so
 // existing callers and the single-tree case are unchanged.
-func EnableTo(repoRoot, storeRoot string) (*Report, error) {
-	return enableTo(repoRoot, storeRoot, defaultGitignoreIO())
+func EnableTo(repoRoot, storeRoot string, options ...Options) (*Report, error) {
+	return enableTo(repoRoot, storeRoot, defaultGitignoreIO(), options...)
+}
+
+// Options controls whether enable updates an existing vendored deposit.
+type Options struct {
+	Refresh bool
 }
 
 // enableTo carries per-request ignore I/O so persistence failures can be tested
 // through the orchestration boundary without replacing process-wide hooks.
-func enableTo(repoRoot, storeRoot string, io gitignoreIO) (*Report, error) {
+func enableTo(repoRoot, storeRoot string, io gitignoreIO, options ...Options) (*Report, error) {
 	rep := &Report{RepoRoot: repoRoot}
 	// Host staging does not depend on the recording mode. These roots are
 	// supplied by the caller's resolver, never independently rediscovered here.
@@ -162,7 +167,12 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO) (*Report, error) {
 		}
 	}
 
-	depositWarns, err := deposit(repoRoot, Guide, Setup, p)
+	var depositWarns []string
+	if len(options) > 0 && options[0].Refresh {
+		depositWarns, err = deposit(repoRoot, Guide, Setup, p)
+	} else {
+		depositWarns, err = depositVendored(repoRoot, Guide, Setup, false, p)
+	}
 	if err != nil {
 		return rep, err
 	}

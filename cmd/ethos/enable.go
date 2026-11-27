@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/punt-labs/ethos/v4/internal/enable"
+	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/spf13/cobra"
 )
@@ -17,9 +18,9 @@ var enableCmd = &cobra.Command{
 
 Deposits the vendored agent guide and its manifest, writes the enabled
 marker, adds the @.punt-labs/ethos/CLAUDE.md import line to the repo
-CLAUDE.md, and chains the audit-seal and trailer git hooks. Idempotent —
-re-running is the upgrade path. Run 'ethos setup' separately to configure
-identities.`,
+CLAUDE.md, and chains the audit-seal and trailer git hooks. Use --refresh
+to update Claude agent definitions after team changes. Run 'ethos setup'
+separately to configure identities.`,
 	GroupID:      "admin",
 	Args:         cobra.NoArgs,
 	SilenceUsage: true,
@@ -29,6 +30,7 @@ identities.`,
 }
 
 func init() {
+	enableCmd.Flags().Bool("refresh", false, "Refresh vendored content and Claude agent definitions")
 	rootCmd.AddCommand(enableCmd)
 }
 
@@ -36,6 +38,10 @@ func runEnable(cmd *cobra.Command) error {
 	repoRoot := locateForCommand(cmd, "enable")
 	if repoRoot == "" {
 		return failClosed{}
+	}
+	refresh, err := cmd.Flags().GetBool("refresh")
+	if err != nil {
+		return err
 	}
 	// Deposit (guide/marker/import/hooks) is per-checkout (repoRoot); the
 	// "has setup been run?" config read resolves the shared store (#370).
@@ -53,10 +59,17 @@ func runEnable(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	rep, err := enable.EnableTo(repoRoot, storeRoot)
+	rep, err := enable.EnableTo(repoRoot, storeRoot, enable.Options{Refresh: refresh})
 	if err != nil {
 		emitPartialReport(cmd, rep)
 		return err
+	}
+	if refresh {
+		identities := identityStore()
+		if err := hook.RefreshAgentDefinitions(currentRoots().Located, identities, layeredTeamStore(identities), layeredRoleStore(identities)); err != nil {
+			emitPartialReport(cmd, rep)
+			return fmt.Errorf("refreshing Claude agent definitions: %w", err)
+		}
 	}
 	if jsonOutput {
 		return writeJSON(cmd.OutOrStdout(), rep)

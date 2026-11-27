@@ -139,7 +139,8 @@ own repo is unaffected; the hazard is fleet-wide.
 
 ### `ethos enable`
 
-Run from inside a repo. Idempotent; re-running is the upgrade path (§2.3).
+Run from inside a repo. Re-running leaves deposited guides pinned. Use
+`ethos enable --refresh` to update them and reconcile Claude agent definitions.
 Steps, in order:
 
 1. **Resolve the repo root** (`resolve.FindRepoRoot`). Not in a work tree

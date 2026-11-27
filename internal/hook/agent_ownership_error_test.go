@@ -29,13 +29,13 @@ func breakAgentOwnershipIdentity(t *testing.T, path, failure string) {
 	}
 }
 
-func TestSessionStartRefusesStubsWhenMemberClassificationFails(t *testing.T) {
+func TestRefreshAgentDefinitionsRefusesStubsWhenMemberClassificationFails(t *testing.T) {
 	for _, failure := range []string{"malformed", "unreadable", "missing"} {
 		t.Run(failure, func(t *testing.T) {
 			root, ids, teams, roles := setupTestRepo(t)
 			isolateGitConfig(t, "test-human")
 			// Use a distinct checkout to exercise the same S/C split as a
-			// linked worktree without rediscovering roots during the hook.
+			// linked worktree without rediscovering roots during the refresh.
 			checkout := physicalAgentTempDir(t)
 			require.NoError(t, GenerateAgentFilesTo(root, checkout, ids, teams, roles))
 			path := filepath.Join(checkout, ".claude", "agents", "bwk.md")
@@ -47,8 +47,7 @@ func TestSessionStartRefusesStubsWhenMemberClassificationFails(t *testing.T) {
 			writeFile(t, filepath.Join(ethos, "agents", "bwk.md"), "conflicting legacy stub\n")
 			writeFile(t, filepath.Join(ethos, "agents", "legacy-only.md"), "unowned legacy stub\n")
 			breakAgentOwnershipIdentity(t, filepath.Join(ethos, "identities", "bwk.yaml"), failure)
-			// Only the member identity is broken: SessionStart must reach
-			// planning, not stop at its main-persona fallback.
+			// Only the member identity is broken.
 			main, err := ids.Load("claude")
 			require.NoError(t, err)
 			require.Equal(t, "Claude Agento", main.Name)
@@ -56,14 +55,11 @@ func TestSessionStartRefusesStubsWhenMemberClassificationFails(t *testing.T) {
 			cfg, err := resolve.ConfigOf(root)
 			require.NoError(t, err)
 			loc := resolve.Located{Store: root, Checkout: checkout, Ethos: ethos, Config: cfg}
-			deps := SessionStartDeps{Located: &loc, Store: ids, Sessions: session.NewStore(physicalAgentTempDir(t)), Teams: teams, Roles: roles}
 			var hookErr error
 			stderr := captureStderr(t, func() {
-				_, hookErr = captureStdout(t, func() error {
-					return HandleSessionStart(strings.NewReader(`{"session_id":"ownership-error"}`), deps)
-				})
+				hookErr = RefreshAgentDefinitions(loc, ids, teams, roles)
 			})
-			t.Logf("SessionStart error: %v\nstderr:\n%s", hookErr, stderr)
+			t.Logf("Refresh error: %v\nstderr:\n%s", hookErr, stderr)
 
 			assert.ErrorContains(t, hookErr, `classifying team member "bwk" for generated agent ownership`)
 			assert.Contains(t, stderr, `classifying team member "bwk" for generated agent ownership`)
@@ -99,7 +95,7 @@ func TestGeneratedAgentHandlesRefusesUnavailableIdentityStore(t *testing.T) {
 	assert.ErrorContains(t, err, `classifying team member "bwk" for generated agent ownership: identity store is unavailable`)
 }
 
-func TestSessionStartKeepsOwnershipForRenderingSkips(t *testing.T) {
+func TestRefreshAgentDefinitionsKeepsOwnershipForRenderingSkips(t *testing.T) {
 	for _, skipped := range []string{"missing role", "no tools", "empty personality"} {
 		t.Run(skipped, func(t *testing.T) {
 			root, ids, teams, roles := setupTestRepo(t)
@@ -128,6 +124,7 @@ func TestSessionStartKeepsOwnershipForRenderingSkips(t *testing.T) {
 			})
 			require.NoError(t, err, "rendering skips after classification remain intentional")
 			assert.Contains(t, out, "Claude Agento")
+			require.NoError(t, RefreshAgentDefinitions(loc, ids, teams, roles))
 			after, err := os.ReadFile(path)
 			require.NoError(t, err)
 			assert.Equal(t, before, after)

@@ -132,8 +132,7 @@ func HandleSessionStartContext(ctx context.Context, r io.Reader, deps SessionSta
 	// bare empty path. Fold it into storeFailure, which routes the session to
 	// the human fallback with the failure noted — the same degraded greeting a
 	// bad store gives — and keeps loc.Checkout used only on the storeFailure ==
-	// nil (checkout-resolved) path below. The agent pipeline consults
-	// loc.CheckoutErr again, authoritatively, in runAgentPipeline.
+	// nil (checkout-resolved) path below.
 	if storeFailure == nil && loc.CheckoutErr != nil {
 		storeFailure = loc.CheckoutErr
 	}
@@ -160,7 +159,6 @@ func HandleSessionStartContext(ctx context.Context, r io.Reader, deps SessionSta
 	// The shell wrapper's `|| true` keeps Claude Code session startup
 	// fail-open (cli.md §Hook Architecture); the non-zero exit code is
 	// the signal for direct CLI invocation and `ethos doctor`.
-	repoRoot := loc.Store
 	note := storeUnlocatedNote(storeFailure)
 	if issueNote := storeUnlocatedNote(deps.Issue); issueNote != "" && !errors.Is(storeFailure, deps.Issue) {
 		if note != "" {
@@ -206,38 +204,17 @@ func HandleSessionStartContext(ctx context.Context, r io.Reader, deps SessionSta
 		note += rosterNotice
 	}
 
-	// Run the agent-file pipeline (generate, install, prune) whenever the
-	// checkout and store resolved — a storeFailure forces agentPersona to ""
-	// and leaves nothing below trustworthy, so the block is skipped and the
-	// human fallback runs as before. runAgentPipeline returns its first fatal
-	// error rather than returning from the hook, so the persona branches below
-	// decide whether it preempts emission (agent-configured) or is reported
-	// only after the human greeting (retired repo). See runAgentPipeline.
-	var pipelineErr error
-	if storeFailure == nil {
-		if loc.Checkout != "" {
-			if enabled, err := resolve.EnabledMarker(loc.Checkout); err == nil && enabled {
-				exportSessionEnv()
-			}
+	if storeFailure == nil && loc.Checkout != "" {
+		if enabled, err := resolve.EnabledMarker(loc.Checkout); err == nil && enabled {
+			exportSessionEnv()
 		}
-		pipelineErr = runAgentPipeline(loc, store, deps, repoRoot)
 	}
 
 	// Emit the agent's persona block (not the human's).
 	// The agent persona comes from repo config (.punt-labs/ethos.yaml).
 	if agentPersona == "" {
-		// The human-fallback path greets the caller regardless of the agent
-		// pipeline's outcome: a retired repo (no agent persona) must still get
-		// its greeting even if, say, the checkout could not be located for the
-		// best-effort prune. The pipeline error is surfaced to stderr inside
-		// runAgentPipeline and reported here as the hook's exit status (for
-		// `ethos doctor` and a direct CLI run) AFTER the greeting, never in
-		// place of it — the pre-PL-878 guarantee that this path always greets.
 		if err := emitHumanFallback(resolvedID, note); err != nil {
 			return err
-		}
-		if pipelineErr != nil {
-			return pipelineErr
 		}
 		// An unreadable config is also the hook's exit status: the session was
 		// told above, and a direct invocation or doctor sees the failure.
@@ -246,13 +223,6 @@ func HandleSessionStartContext(ctx context.Context, r io.Reader, deps SessionSta
 		}
 		return nil
 	}
-	// The agent-configured path keeps the pre-PL-878 behavior: a pipeline error
-	// preempts emitAgentContext, exactly as the generate/install block did when
-	// it sat here before the hoist.
-	if pipelineErr != nil {
-		return pipelineErr
-	}
-
 	agentID, agentLoadErr := store.Load(agentPersona)
 	if agentLoadErr != nil {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: failed to load agent identity %q: %v\n", agentPersona, agentLoadErr)
@@ -278,38 +248,20 @@ func HandleSessionStartContext(ctx context.Context, r io.Reader, deps SessionSta
 	return emitAgentContext(agentID, agentPersona, store, deps, loc.Checkout, note)
 }
 
-// runAgentPipeline generates .claude/agents/<handle>.md from ethos identity
-// data, installs legacy stubs for handles the generator does not own, and
-// prunes stale generated files. The caller runs it whenever the checkout and
-// store resolved (storeFailure == nil), independent of whether this repo
-// configures an agent persona: a repo that has retired its whole roster (no
-// agent, no team) still has its orphaned generated files pruned, not just one
-// that still names an agent (PL-878).
-//
-// It returns the first fatal error (unlocatable checkout, unbuildable storage
-// policy, generation, install) rather than returning from the hook directly,
-// so the caller can decide whether that error preempts persona emission (the
-// agent-configured path) or is reported only after the human greeting (the
-// retired-repo path). Non-fatal conditions — a plan error, a missing role
-// store, a prune error — are logged to stderr here and never returned.
-//
-// Two roots: the config/team selection resolves from the shared store
-// (repoRoot = StoreRootIfAny), while the agent files are written to the CURRENT
-// checkout (CheckoutRootIfAny) — the tree the worktree's Claude reads and where
-// InstallAgentDefinitions writes. A single root would generate a worktree's
-// agents into the main tree, invisible to that worktree (Bugbot HIGH on
-// PR #370).
-func runAgentPipeline(loc resolve.Located, store identity.IdentityStore, deps SessionStartDeps, repoRoot string) error {
+// RefreshAgentDefinitions reconciles the invoking checkout's Claude agents
+// using the shared store's team and identity data.
+func RefreshAgentDefinitions(loc resolve.Located, store identity.IdentityStore, teams *team.LayeredStore, roles *role.LayeredStore) error {
 	if loc.CheckoutErr != nil {
 		return fmt.Errorf("locating the checkout for agent generation: %w", loc.CheckoutErr)
 	}
 	checkoutRoot := loc.Checkout
+	repoRoot := loc.Store
 	plan := AgentPlan{}
 	var planErr error
-	if deps.Teams != nil && deps.Roles != nil {
-		plan, planErr = planSessionAgents(loc, store, deps.Teams, deps.Roles)
+	if teams != nil && roles != nil {
+		plan, planErr = planSessionAgents(loc, store, teams, roles)
 		if planErr != nil {
-			fmt.Fprintf(os.Stderr, "ethos: session-start: resolving generated agents: %v; installing no stubs\n", planErr)
+			fmt.Fprintf(os.Stderr, "ethos: agent refresh: resolving generated agents: %v; installing no stubs\n", planErr)
 		}
 	}
 	var installErr error
@@ -318,13 +270,13 @@ func runAgentPipeline(loc resolve.Located, store identity.IdentityStore, deps Se
 	// a plan and establish its ownership. Never pass nil as if the generator
 	// owned nothing, and never trust the keep-set it would leave pruneStaleAgents
 	// below.
-	teamsWithoutRoles := deps.Teams != nil && deps.Roles == nil
+	teamsWithoutRoles := teams != nil && roles == nil
 	if teamsWithoutRoles {
-		fmt.Fprintln(os.Stderr, "ethos: session-start: Roles store missing; installing no stubs because generator ownership is unavailable")
+		fmt.Fprintln(os.Stderr, "ethos: agent refresh: Roles store missing; installing no stubs because generator ownership is unavailable")
 	} else if planErr == nil {
 		installed, installErr = installAgentDefsFor(loc, plan.Owned)
 	}
-	if repoRoot != "" && checkoutRoot != "" && deps.Teams != nil && deps.Roles != nil {
+	if repoRoot != "" && checkoutRoot != "" && teams != nil && roles != nil {
 		policy, err := loc.Layout()
 		if err != nil {
 			return fmt.Errorf("constructing agent storage: %w", err)
@@ -429,12 +381,12 @@ func hasEnvAssignment(content, key string) bool {
 	return false
 }
 
-// pruneStaleAgents deletes a generated agent file this session no longer
+// pruneStaleAgents deletes a generated agent file the active team no longer
 // owns: its keep-set is the handles the plan generated, the handles the
 // stub installer just deployed, and the seeded review-checklist handles
 // (code-reviewer, silent-failure-hunter, invariant-completeness-reviewer),
 // which carry no team membership and so appear in neither of the first two
-// sets. A prune error is logged, never fatal — the next SessionStart tries
+// sets. A prune error is logged, never fatal — the next explicit refresh tries
 // again.
 func pruneStaleAgents(checkoutRoot string, owned map[string]bool, installed []string) {
 	keep := make(map[string]bool, len(owned)+len(installed))
@@ -446,7 +398,7 @@ func pruneStaleAgents(checkoutRoot string, owned map[string]bool, installed []st
 	}
 	checklist, err := seed.ChecklistAgentNames(seed.Agents, "sidecar/agents")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: session-start: pruning stale agents: could not read seeded agent list: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ethos: agent refresh: pruning stale agents: could not read seeded agent list: %v\n", err)
 		return
 	}
 	for h := range checklist {
@@ -454,10 +406,10 @@ func pruneStaleAgents(checkoutRoot string, owned map[string]bool, installed []st
 	}
 	deleted, err := PruneOrphanedGeneratedAgents(checkoutRoot, keep)
 	for _, h := range deleted {
-		fmt.Fprintf(os.Stderr, "ethos: session-start: pruned stale agent %s.md\n", h)
+		fmt.Fprintf(os.Stderr, "ethos: agent refresh: pruned stale agent %s.md\n", h)
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: session-start: pruning stale agents: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ethos: agent refresh: pruning stale agents: %v\n", err)
 	}
 }
 

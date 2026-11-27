@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Claude SessionStart no longer generates, installs, or prunes tracked
+  agent definitions. Run `ethos enable --refresh` to reconcile them and
+  update the repository's pinned guides.
+- Ignore Claude's personal instructions and import/settings lock files.
+
 ## [5.3.2] - 2026-11-27
 
 ### Added

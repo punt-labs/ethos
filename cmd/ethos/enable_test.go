@@ -120,7 +120,7 @@ func TestEnableSurfacesWarningsOnErrorPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(dir)
-	_, errOut, err := runEnableCmd(t, "enable")
+	_, errOut, err := runEnableCmd(t, "enable", "--refresh")
 	if err == nil {
 		t.Fatal("expected enable to fail on the non-directory .git/hooks")
 	}

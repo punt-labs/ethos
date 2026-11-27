@@ -35,7 +35,7 @@ All three core layers are implemented and working:
 | SessionStart hook | Resolves identity, creates session roster, injects full persona block (personality, writing style, talents, role, team context) |
 | PreCompact hook | Re-injects full persona block + team context as plain text before compaction — prevents behavioral drift |
 | SubagentStart hook | Joins subagent to roster, auto-matches persona by agent_type, injects persona content |
-| Agent definitions (.claude/agents/*.md) | Generated from identity, personality, writing-style, and role data by SessionStart hook (DES-026) — define *what* the agent does |
+| Agent definitions (.claude/agents/*.md) | Generated from identity, personality, writing-style, and role data by `ethos enable --refresh` (DES-026) — define *what* the agent does |
 | MCP tools | Expose identity data (get, whoami, list), extensions, sessions, teams, roles |
 | Agent Teams | Teammates are separate Claude Code processes. All hooks fire independently. Each gets its own ethos session with full persona injection. |
 

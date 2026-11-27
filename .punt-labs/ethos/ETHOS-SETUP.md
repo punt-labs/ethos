@@ -14,7 +14,8 @@ on demand, close it when done.
    - **"No global content"**: run `ethos seed` first (below).
    - **"No identity resolved"**: run `ethos setup` (below).
 
-Seed, enable and setup below can be re-run to refresh integration/content.
+Re-run `ethos enable --refresh` to update pinned guides and Claude agent
+definitions. Plain `ethos enable` leaves existing guides unchanged.
 Older storage layouts need no step here: ethos upgrades them itself.
 
 ## `ethos seed` — populate global starter content (once per machine)

@@ -29,7 +29,7 @@ that), and not a CLI subcommand — this skill drives the existing
 ## The central constraint: per-session context
 
 Every agent-kind team member produces a `.claude/agents/<handle>.md`
-at SessionStart. Claude Code loads all of them every session. Roster
+on `ethos enable --refresh`. Claude Code loads all of them every session. Roster
 **size** is therefore the dominant per-session context lever — pruning
 a whole agent file removes everything that file would have loaded:
 persona and writing-style prose, the output-format body,
@@ -153,11 +153,9 @@ skill prunes **down** from, never a floor it adds **up** to.
   answer prunes a seat. A pruned seat returns only by re-running the
   interview and answering yes — it does not linger.
 - **The ethos tree is source; `.claude/agents/` is output.** This skill
-  writes only role/identity/team YAML and `ethos.yaml`, then lets
-  SessionStart regenerate the agent files. It never *writes or edits the
-  content* of a file under `.claude/agents/` — generation owns that. The
-  one exception is deletion of a pruned member's now-stale file, which
-  generation never does on its own (see Optimize-in-place below).
+  writes only role/identity/team YAML and `ethos.yaml`, then delegates
+  agent generation to `ethos enable --refresh`. Do not hand-edit the
+  content of files under `.claude/agents/`.
 
 ## The context-budget estimate
 
@@ -336,15 +334,9 @@ Strictly propose-first. Writing is gated on an explicit ratification.
    ratification — that one covers only the non-destructive YAML writes
    in step 6. Run it only when re-shaping left obsolete residue, and
    the prune only in a `resolution: repo-only` repo.
-9. **Regenerate for kept/added seats is not this skill's job, but
-   deleting pruned seats' stale files IS.** For kept and newly-added
-   members, tell the user to restart Claude Code; SessionStart
-   regenerates their `.claude/agents/` files from the YAML just written —
-   do not write that content by hand. For *pruned* members, `git rm`
-   their `.claude/agents/<handle>.md` as part of this change: generation
-   never deletes, so the stale file keeps loading and the budget saving
-   does not happen until it is removed (see Optimize-in-place below for
-   the guards and the post-delete `ethos doctor` check).
+9. **Refresh definitions.** Run `ethos enable --refresh` from the checkout
+   with the new roster. Review the generated diff, then tell the user to
+   restart Claude Code to load the new definitions.
 
 ## Greenfield vs optimize-in-place
 
@@ -370,33 +362,11 @@ current cost, proposed cost, and the delta. Pruning removes the member
 from the team YAML (and optionally the role/identity files, on an
 explicit confirm).
 
-**Delete the pruned member's `.claude/agents/<handle>.md` — this is the
-step that actually realizes the budget saving, and it is this skill's
-job, not the user's.** ethos generates `.claude/agents/` from the active
-team (`cfg.Team`) at SessionStart and only ever writes or updates there;
-it never deletes. So once a member leaves the active team, its generated
-file is a stale leftover that Claude Code still loads every session — the
-promised context reduction does not happen until the file is removed. For
-every pruned member, run `git rm .claude/agents/<handle>.md` (or `rm` then
-stage) as part of applying the roster, in the same change as the team-YAML
-edit.
-
-Two guards before deleting a `<handle>.md`:
-
-- **Only delete handles not on the active team.** The active team is the
-  one `cfg.Team` names in `.punt-labs/ethos.yaml` — that single team is
-  what generates agent files. A handle that is on *another* team in the
-  repo but not the active one is still a stale file for *this* repo's
-  generation, so it is still safe to delete here; do not keep it just
-  because some other team lists it.
-- **Confirm the count.** After deleting, the set of `.claude/agents/*.md`
-  files for team members must equal the kept-seat count (plus any
-  non-team review-checklist agents like `code-reviewer`,
-  `silent-failure-hunter`, `invariant-completeness-reviewer`, which are
-  seeded separately and are NOT pruned). Re-measure `.claude/agents/*.md`
-  total bytes and confirm it matches the budget table's "proposed cost",
-  so the number you showed the operator is the number the tree actually
-  has.
+The refresh prunes stale generated definitions for handles no longer in
+the active team. Review the deletions alongside the team-YAML edit and
+confirm the kept-seat count and total bytes still match the proposed
+budget. Seeded review-checklist agents and hand-authored files are not
+pruned.
 
 `ethos doctor`'s "Orphaned agent files" check flags a leftover you miss,
 and its "Agent file currency" check flags one you deleted that the active
@@ -412,9 +382,7 @@ orphaned role or identity remains there.
 ## What this skill does NOT do
 
 - Does not add a CLI subcommand to the `ethos` binary.
-- Does not write or edit the *content* of a file under `.claude/agents/`
-  — generation owns that. It does `git rm` a pruned member's stale file,
-  which generation never does on its own.
+- Does not edit or remove generated files by hand — refresh owns that.
 - Does not emit any value `ValidateModel` rejects.
 - Does not write any YAML before the user ratifies.
 - Does not invent seats the interview did not justify.

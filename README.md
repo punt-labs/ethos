@@ -272,7 +272,10 @@ import to the repository's `CLAUDE.md`, adds ethos steps to the `pre-commit`
 and `commit-msg` Git hooks, and allows the ethos CLI, MCP server and skills in
 `.claude/settings.json`, with `ask` rules that prompt before state-changing
 operations. `ethos disable` removes these and leaves your identities, missions
-and audit data in place. Both commands are safe to run again. Details:
+and audit data in place. Both commands are safe to run again. Use
+`ethos enable --refresh` to update the pinned guides and reconcile the
+checkout's Claude agent definitions after changing its team. SessionStart
+does not rewrite agent files. Details:
 [Enable / Disable](docs/enable-disable.md).
 
 ## How This Is Different
