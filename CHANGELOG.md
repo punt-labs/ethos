@@ -7,12 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+## [5.3.1] - 2026-11-27
 
-- Release CI now enables and verifies unprivileged sandbox mounts before
-  running Linux handoff tests, using the same setup as Test CI.
-
-## [5.3.0] - 2026-11-27
+v5.3.0 was tagged but never published. This release includes its changes
+and the fixes below.
 
 ### Added
 
@@ -50,6 +48,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Release CI enables and verifies unprivileged sandbox mounts before
+  running Linux handoff tests, using the same setup as Test CI. (#721)
+- On macOS, live-verified handoff checks report the reason when the initial
+  or final checkout key cannot be verified, instead of a generic deferral.
+  (#719)
 - Linux snapshot gates accept the declared Linuxbrew and TeX system roots.
   (#709)
 - Snapshot cleanup removes read-only scratch directories, recovers stale
@@ -68,6 +71,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they are not rendered into agent files.
 - OpenCode Nightly uses the Punt Kit release and playbook that support
   `punt release run`.
+
+## [5.3.0] - 2026-11-27
+
+Tagged but not published. See [5.3.1] for the changes.
 
 ## [5.2.4] - 2026-11-26
 
@@ -4451,6 +4458,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ShellCheck added to CI and `make lint`
 
 [Unreleased]: https://github.com/punt-labs/ethos/compare/v4.22.1...HEAD
+[5.3.1]: https://github.com/punt-labs/ethos/compare/v5.2.4...v5.3.1
 [5.3.0]: https://github.com/punt-labs/ethos/compare/v5.2.4...v5.3.0
 [5.2.3]: https://github.com/punt-labs/ethos/compare/v5.2.2...v5.2.3
 [4.22.1]: https://github.com/punt-labs/ethos/compare/v4.22.0...v4.22.1
