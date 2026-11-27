@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/agentmark"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
@@ -162,6 +163,10 @@ func reportAgentPlanProblems(plan AgentPlan) {
 // ApplyAgentPlan reports skipped members and installs a plan made from a validated
 // request snapshot. Roots and configuration are never rediscovered here.
 func ApplyAgentPlan(p layout.Policy, plan AgentPlan) error {
+	return applyAgentPlan(p, plan, nil)
+}
+
+func applyAgentPlan(p layout.Policy, plan AgentPlan, onUnmarked func(string)) error {
 	reportAgentPlanProblems(plan)
 	if p.CheckoutRecordRoot() == "" || p.LocalRoot() == "" {
 		return fmt.Errorf("agent plan requires a repository policy")
@@ -175,6 +180,10 @@ func ApplyAgentPlan(p layout.Policy, plan AgentPlan) error {
 			return err
 		}
 		data, err := os.ReadFile(path)
+		if err == nil && onUnmarked != nil && !agentmark.Has(string(data)) {
+			onUnmarked(path)
+			continue
+		}
 		if err == nil && string(data) == file.Content {
 			if err := syncAgentFileParents(checkout, path); err != nil {
 				return err

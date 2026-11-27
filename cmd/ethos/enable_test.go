@@ -139,9 +139,10 @@ func TestEnableAgentRefreshReports(t *testing.T) {
 		store := filepath.Join(dir, ".punt-labs", "ethos")
 		require.NoError(t, os.MkdirAll(filepath.Join(store, "agents"), 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(store, "agents", "reviewer.md"), []byte("# Legacy reviewer\n"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(store, "agents", "writer.md"), []byte("---\nname: writer\n---\n# Legacy writer\n"), 0o644))
 		for _, args := range [][]string{
 			{"-C", store, "init", "-q"},
-			{"-C", store, "add", "agents/reviewer.md"},
+			{"-C", store, "add", "agents/reviewer.md", "agents/writer.md"},
 			{"-C", store, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "Add reviewer"},
 			{"add", ".punt-labs/ethos"},
 		} {
@@ -155,6 +156,9 @@ func TestEnableAgentRefreshReports(t *testing.T) {
 		require.NoError(t, os.WriteFile(prior, []byte(priorAgent), 0o644))
 		for _, flag := range []string{"--refresh", "--agents-only"} {
 			t.Run(flag, func(t *testing.T) {
+				handAuthored := filepath.Join(dst, "writer.md")
+				const custom = "---\nname: writer\n---\n# Hand-authored writer\n"
+				require.NoError(t, os.WriteFile(handAuthored, []byte(custom), 0o644))
 				stub := filepath.Join(dst, "reviewer.md")
 				t.Cleanup(func() {
 					if _, err := os.Stat(stub); err == nil {
@@ -165,6 +169,11 @@ func TestEnableAgentRefreshReports(t *testing.T) {
 				require.NoError(t, err, stderr)
 				assert.Contains(t, out, "refreshed Claude agent definitions")
 				assert.NotContains(t, stderr, "git submodule update --init")
+				assert.Contains(t, stderr, "preserving hand-authored agent")
+				assert.Contains(t, stderr, "writer.md")
+				customAfter, err := os.ReadFile(handAuthored)
+				require.NoError(t, err)
+				assert.Equal(t, custom, string(customAfter))
 				content, err := os.ReadFile(stub)
 				require.NoError(t, err, stderr)
 				assert.Contains(t, string(content), "# Legacy reviewer")

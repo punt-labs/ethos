@@ -754,6 +754,10 @@ func installAgentDefs(ethosRoot string, generated map[string]bool) {
 // pruneStaleAgents needs, so a stub this run installs is never the same run's
 // prune target — whether or not that stub's content actually changed on disk.
 func installAgentDefsFor(loc resolve.Located, generated map[string]bool) ([]string, error) {
+	return installAgentDefsWithOwnership(loc, generated, nil)
+}
+
+func installAgentDefsWithOwnership(loc resolve.Located, generated map[string]bool, onUnmarked func(string)) ([]string, error) {
 	if err := loc.Err(); err != nil {
 		return nil, fmt.Errorf("locating agent installation paths: %w", err)
 	}
@@ -775,7 +779,7 @@ func installAgentDefsFor(loc resolve.Located, generated map[string]bool) ([]stri
 	if err != nil {
 		return handles, err
 	}
-	return handles, ApplyAgentPlan(policy, AgentPlan{Files: files})
+	return handles, applyAgentPlan(policy, AgentPlan{Files: files}, onUnmarked)
 }
 
 // emitAgentContext builds and emits the full agent persona block with

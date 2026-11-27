@@ -53,10 +53,11 @@ func runEnable(cmd *cobra.Command) error {
 	}
 	if agentsOnly {
 		rep := &enable.Report{RepoRoot: repoRoot}
-		if err := refreshClaudeAgents(rep, false, true); err != nil {
+		skipped, err := refreshClaudeAgents(rep, false, true)
+		if err != nil {
 			return err
 		}
-		return finishEnable(cmd, rep, agentRefreshAction(len(rep.Warnings) != 0))
+		return finishEnable(cmd, rep, agentRefreshAction(skipped))
 	}
 	// Deposit (guide/marker/import/hooks) is per-checkout (repoRoot); the
 	// "has setup been run?" config read resolves the shared store (#370).
@@ -84,13 +85,13 @@ func runEnable(cmd *cobra.Command) error {
 		return err
 	}
 	if refresh {
-		warningsBefore := len(rep.Warnings)
-		if err := refreshClaudeAgents(rep, gitlinkRefresh, false); err != nil {
+		skipped, err := refreshClaudeAgents(rep, gitlinkRefresh, false)
+		if err != nil {
 			emitPartialReport(cmd, rep)
 			return err
 		}
 		if gitlinkRefresh {
-			action = agentRefreshAction(len(rep.Warnings) != warningsBefore)
+			action = agentRefreshAction(skipped)
 		}
 	}
 	return finishEnable(cmd, rep, action)
@@ -103,38 +104,40 @@ func agentRefreshAction(skipped bool) string {
 	return "refreshed Claude agent definitions"
 }
 
-func refreshClaudeAgents(rep *enable.Report, gitlink, checkGitlink bool) error {
+func refreshClaudeAgents(rep *enable.Report, gitlink, checkGitlink bool) (skipped bool, err error) {
 	r := currentRoots()
 	if err := r.configIssue(); err != nil {
 		rep.Warnings = append(rep.Warnings, fmt.Sprintf("agent definitions left unchanged: %v", err))
-		return nil
+		return true, nil
 	}
 	if r.Config == nil && r.ConfigErr == nil {
 		if checkGitlink {
 			var err error
 			gitlink, err = audit.IsGitlinkMount(rep.RepoRoot)
 			if err != nil {
-				return fmt.Errorf("checking team gitlink: %w", err)
+				return false, fmt.Errorf("checking team gitlink: %w", err)
 			}
 		}
 		if gitlink {
-			hasStubs, err := hook.RefreshAgentStubs(r.Located)
+			warningsBefore := len(rep.Warnings)
+			hasStubs, err := hook.RefreshAgentStubs(r.Located, func(path string) {
+				rep.Warnings = append(rep.Warnings, fmt.Sprintf("preserving hand-authored agent %s", path))
+			})
 			if err != nil {
 				rep.Warnings = append(rep.Warnings, fmt.Sprintf("could not refresh agent stubs: %v", err))
-				return nil
+				return true, nil
 			}
-			if hasStubs {
-				return nil
+			if !hasStubs && len(rep.Warnings) == warningsBefore {
+				rep.Warnings = append(rep.Warnings, "agent definitions left unchanged: no repository configuration found for the team gitlink; if the team submodule is not initialized, run git submodule update --init -- .punt-labs/ethos")
 			}
-			rep.Warnings = append(rep.Warnings, "agent definitions left unchanged: no repository configuration found for the team gitlink; if the team submodule is not initialized, run git submodule update --init -- .punt-labs/ethos")
-			return nil
+			return !hasStubs, nil
 		}
 	}
 	identities := identityStore()
 	if err := hook.RefreshAgentDefinitions(r.Located, identities, layeredTeamStore(identities), layeredRoleStore(identities)); err != nil {
-		return fmt.Errorf("refreshing Claude agent definitions: %w", err)
+		return false, fmt.Errorf("refreshing Claude agent definitions: %w", err)
 	}
-	return nil
+	return false, nil
 }
 
 func finishEnable(cmd *cobra.Command, rep *enable.Report, action string) error {
