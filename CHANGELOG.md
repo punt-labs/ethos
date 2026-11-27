@@ -7,21 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.3.0] - 2026-11-27
+
 ### Added
 
+- Declared Linux handoff gates run automatically in verified worktree
+  snapshots. Stops reuse a verdict only when its key and proof match, and
+  concurrent stops for the same key share one run. If a configured gate
+  cannot prove isolation, a required gate blocks the initial stop and an
+  advisory gate shows a notice; both name the project gate to run instead.
+  Unconfigured stops remain quiet. (#707)
+- Linux profiles can run native prehydration before the gate, such as an
+  offline dependency install from a pinned runtime. (#710)
+- Linux snapshots support refreshed, read-only policy data, such as a
+  Govulncheck database. If the data is missing or stale, the deferral names
+  the `ethos handoff refresh-data` command to run in the checked checkout.
+  (#713)
 - Linux handoff snapshots support `scratch.files` and defer without caching
   when overlay events or the final overlay contents show undeclared changes.
-- Declare a Linux amd64 snapshot profile and offline runtime for the existing
-  handoff `make check` gate.
-- Declared handoff gates on macOS run in a private Darwin snapshot by default.
-  Projects that need the live checkout can opt in with
-  `isolation: live-verified`. Operators can authorize or revoke that mode with
-  `ethos handoff approve-live <slug>` and `ethos handoff revoke-live <slug>`.
-  On Darwin, gates that declare `scratch.seed`, `scratch.files`, `prehydrate`,
-  or `data` still defer and print the project command to run.
+  (#714)
+- Ethos runs its existing handoff `make check` in a Linux amd64 snapshot
+  with a pinned offline runtime. (#698)
+- macOS runs supported handoff gates in private, verified snapshots.
+  Projects can also opt into `live-verified` gates with explicit operator
+  approval through `ethos handoff approve-live <slug>`; operators can revoke
+  approval with `ethos handoff revoke-live <slug>`. Live verification detects
+  changes rather than preventing writes. It retains a verdict only when the
+  opening and closing proofs agree and neither watcher detects a change.
+  Darwin gates that declare `scratch.seed`, `scratch.files`, `prehydrate`,
+  or `data` still defer and name the project command to run. (#711)
+
+### Changed
+
+- Parallel system-input hashing and a bounded Linuxbrew file-digest memo
+  reduce handoff proof time. Reused verdicts still require a matching proof.
+  (#715)
 
 ### Fixed
 
+- Linux snapshot gates accept the declared Linuxbrew and TeX system roots.
+  (#709)
+- Snapshot cleanup removes read-only scratch directories, recovers stale
+  scratch left by a prior run, and reports cleanup errors. (#716)
+- Linux snapshots expose `/dev/stdin`, `/dev/stdout`, and `/dev/stderr`.
+  (#717)
+- Linux snapshots get a private, writable `/var/tmp` per launch, and set
+  `USER` and `LOGNAME` from the synthetic sandbox passwd entry unless the
+  profile supplies them. (#718)
 - Verifier writes accept macOS checkout path aliases such as `/var` without
   allowing symlinks to redirect writes outside the declared paths.
 - `ethos doctor` no longer reports a project check set
