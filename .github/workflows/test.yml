@@ -69,15 +69,7 @@ jobs:
           strace --version
       - name: Enable and verify unprivileged sandbox mounts
         if: matrix.shard == 'hook'
-        run: |
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-          sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone user.max_user_namespaces || true
-          if ! unshare --user --map-root-user --mount --pid --net --ipc --fork --propagation unchanged \
-            sh -ec 'mount --make-rprivate /'; then
-            sudo dmesg | grep -i apparmor | tail -n 30 || true
-            exit 1
-          fi
-          echo 'Handoff sandbox private-mount probe: PASS'
+        uses: ./.github/actions/enable-sandbox-mounts
       - name: Test
         shell: bash
         env:
@@ -347,15 +339,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Enable and verify unprivileged sandbox mounts
-        run: |
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-          sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone user.max_user_namespaces || true
-          if ! unshare --user --map-root-user --mount --pid --net --ipc --fork --propagation unchanged \
-            sh -ec 'mount --make-rprivate /'; then
-            sudo dmesg | grep -i apparmor | tail -n 30 || true
-            exit 1
-          fi
-          echo 'Handoff sandbox private-mount probe: PASS'
+        uses: ./.github/actions/enable-sandbox-mounts
       - name: Verify sandbox tests ran without skipping
         shell: bash
         run: |

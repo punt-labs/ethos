@@ -1,0 +1,15 @@
+name: Enable and verify unprivileged sandbox mounts
+description: Prepare the Ubuntu CI runner for Linux handoff sandbox tests.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+        sysctl kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone user.max_user_namespaces || true
+        if ! unshare --user --map-root-user --mount --pid --net --ipc --fork --propagation unchanged \
+          sh -ec 'mount --make-rprivate /'; then
+          sudo dmesg | grep -i apparmor | tail -n 30 || true
+          exit 1
+        fi
+        echo 'Handoff sandbox private-mount probe: PASS'
