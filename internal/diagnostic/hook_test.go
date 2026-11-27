@@ -29,4 +29,14 @@ func TestHandoffHookCheckDetails(t *testing.T) {
 	require.Contains(t, logs.String(), "outcome=deferred")
 	require.NotContains(t, logs.String(), "isolation=")
 	require.NotContains(t, logs.String(), "developer_fingerprint=")
+
+	logs.Reset()
+	LogHookCheck(ctx, checkout, "", "handoff", "gate", "deferred", 50*time.Millisecond, HookCheckDetails{
+		Isolation:           "live-verified",
+		KeyDeferralReason:   "git status: exit status 42",
+		KeyVerificationTime: 12 * time.Millisecond,
+	})
+	require.Contains(t, logs.String(), "outcome=deferred")
+	require.Contains(t, logs.String(), `deferral_reason="git status: exit status 42"`)
+	require.Contains(t, logs.String(), "key_verification_ms=12")
 }
