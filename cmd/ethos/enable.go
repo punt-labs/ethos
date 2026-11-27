@@ -121,7 +121,7 @@ func refreshClaudeAgents(rep *enable.Report, gitlink, checkGitlink bool) (skippe
 		if gitlink {
 			warningsBefore := len(rep.Warnings)
 			hasStubs, err := hook.RefreshAgentStubs(r.Located, func(path string) {
-				rep.Warnings = append(rep.Warnings, fmt.Sprintf("preserving hand-authored agent %s", path))
+				rep.Warnings = append(rep.Warnings, fmt.Sprintf("preserving existing agent without an ethos ownership marker: %s", path))
 			})
 			if err != nil {
 				rep.Warnings = append(rep.Warnings, fmt.Sprintf("could not refresh agent stubs: %v", err))
