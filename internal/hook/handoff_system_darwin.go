@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/checkset"
 	"golang.org/x/sys/unix"
@@ -26,11 +27,13 @@ import (
 
 const darwinDeveloperSelector = "/private/var/select/developer_dir"
 const darwinCLT = "/Library/Developer/CommandLineTools"
+const darwinSnapshotSystemProofTime = 5 * time.Second
 
 var darwinSystemRoots = []string{
 	"/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/lib", "/usr/libexec", "/usr/share",
 	"/System/Library", "/System/Volumes/Preboot/Cryptexes/OS", "/Library/Apple/usr", darwinCLT,
 	"/private/var/db/timezone",
+	"/opt/homebrew", "/usr/local/Homebrew", "/usr/local/Cellar", "/usr/local/opt",
 }
 
 func darwinXcodeTool(path string) bool {
@@ -54,11 +57,15 @@ func prepareHandoffSystem(ctx context.Context, checkout string, profile *checkse
 	if profile == nil {
 		return plan, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, gateInputTime)
-	defer cancel()
 	platformKey := runtime.GOOS + "-" + runtime.GOARCH
 	inputs := profile.System.Platforms[platformKey]
 	live := profile.Isolation == checkset.IsolationLiveVerified
+	budget := darwinSnapshotSystemProofTime
+	if live {
+		budget = gateInputTime
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
 	for _, group := range []struct {
 		paths []string
 		dir   bool
@@ -296,15 +303,8 @@ func addDarwinSystemInput(ctx context.Context, plan *handoffSystemPlan, checkout
 }
 
 func darwinSnapshotSystemPath(path string) bool {
-	if slices.ContainsFunc(darwinSystemRoots, func(root string) bool { return insideGatePath(root, path) }) {
-		return true
-	}
-	for _, dir := range []string{"bin", "sbin", "lib", "libexec", "include", "share", "opt", "Cellar", "Frameworks"} {
-		if insideGatePath(filepath.Join("/opt/homebrew", dir), path) {
-			return true
-		}
-	}
-	return false
+	return path == "/usr/local/bin/brew" ||
+		slices.ContainsFunc(darwinSystemRoots, func(root string) bool { return insideGatePath(root, path) })
 }
 
 func safeDarwinSystemPath(path, checkout string) bool {
@@ -316,8 +316,7 @@ func safeDarwinSystemPath(path, checkout string) bool {
 			return false
 		}
 	}
-	if path == darwinDeveloperSelector || insideGatePath("/opt/homebrew", path) ||
-		slices.ContainsFunc(darwinSystemRoots, func(root string) bool { return insideGatePath(root, path) }) {
+	if path == darwinDeveloperSelector || darwinSnapshotSystemPath(path) {
 		return true
 	}
 	rel, err := filepath.Rel("/Applications", path)

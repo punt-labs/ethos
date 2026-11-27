@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/checkset"
@@ -39,6 +40,45 @@ func TestDarwinHandoffSystemPathAllowlist(t *testing.T) {
 	} {
 		t.Run(path, func(t *testing.T) {
 			require.False(t, safeDarwinSystemPath(path, checkout))
+		})
+	}
+}
+
+func TestDarwinHomebrewSystemRoots(t *testing.T) {
+	for _, path := range []string{
+		"/opt/homebrew", "/opt/homebrew/Library/Homebrew/brew.sh", "/opt/homebrew/bin/jq",
+		"/usr/local/Homebrew", "/usr/local/Homebrew/bin/brew", "/usr/local/Cellar",
+		"/usr/local/Cellar/ruby/3.4/bin/ruby", "/usr/local/opt", "/usr/local/opt/ruby/bin/ruby", "/usr/local/bin/brew",
+	} {
+		t.Run(path, func(t *testing.T) {
+			require.True(t, safeDarwinSystemPath(path, "/checkout-fixture"))
+			require.True(t, darwinSnapshotSystemPath(path))
+			require.False(t, safeDarwinSystemPath(path, path))
+		})
+	}
+	for _, path := range []string{
+		"/usr/local", "/usr/local/bin", "/usr/local/bin/git", "/usr/local/bin/brew.backup", "/usr/local/bin/brew/child",
+		"/usr/local/Cellar-old/ruby", "/usr/localx/Homebrew", "/opt/homebrew-evil/bin/brew",
+	} {
+		t.Run(path, func(t *testing.T) {
+			require.False(t, safeDarwinSystemPath(path, "/checkout-fixture"))
+			require.False(t, darwinSnapshotSystemPath(path))
+		})
+	}
+}
+
+func TestDarwinLiveHomebrewSystemRoots(t *testing.T) {
+	for _, prefix := range []string{"/opt/homebrew", "/usr/local/Homebrew"} {
+		t.Run(prefix, func(t *testing.T) {
+			path := filepath.Join(prefix, "ethos-nonexistent-"+filepath.Base(t.TempDir()))
+			_, err := os.Lstat(path)
+			require.ErrorIs(t, err, os.ErrNotExist)
+			profile := &checkset.WorktreeSnapshot{
+				Isolation: checkset.IsolationLiveVerified,
+				System:    checkset.SnapshotSystem{SnapshotSystemInputs: checkset.SnapshotSystemInputs{Files: []string{path}}},
+			}
+			_, err = prepareHandoffSystem(t.Context(), t.TempDir(), profile)
+			require.ErrorContains(t, err, "cannot safely resolve system input")
 		})
 	}
 }
@@ -79,6 +119,40 @@ func TestDarwinHandoffSystemInputRejectsSymlinkAcrossRoots(t *testing.T) {
 			require.Empty(t, plan.Inputs)
 			require.Empty(t, plan.Mounts)
 		}
+	}
+}
+
+func TestDarwinHomebrewIntelBrewSymlink(t *testing.T) {
+	temp, err := exec.CommandContext(t.Context(), "/usr/bin/getconf", "DARWIN_USER_TEMP_DIR").Output()
+	require.NoError(t, err)
+	root := strings.TrimSpace(string(temp))
+	require.True(t, filepath.IsAbs(root))
+	fixture, err := os.MkdirTemp(root, "ethos-intel-brew-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(fixture) })
+	dir, err := filepath.EvalSymlinks(fixture)
+	require.NoError(t, err)
+	repository := filepath.Join(dir, "Homebrew")
+	target := filepath.Join(repository, "bin", "brew")
+	writeFile(t, target, "#!/bin/bash\n")
+	link := filepath.Join(dir, "bin", "brew")
+	require.NoError(t, os.MkdirAll(filepath.Dir(link), 0o700))
+	require.NoError(t, os.Symlink("../Homebrew/bin/brew", link))
+	allowDarwinSystemFixtureRoot(t, repository)
+	allowDarwinSystemFixtureRoot(t, link)
+	checkout := filepath.Join(dir, "checkout")
+
+	for _, snapshot := range []bool{true, false} {
+		t.Run(fmt.Sprintf("snapshot=%t", snapshot), func(t *testing.T) {
+			var plan handoffSystemPlan
+			source, err := addDarwinSystemInput(t.Context(), &plan, checkout, link, "brew", false, snapshot)
+			require.NoError(t, err)
+			require.Equal(t, target, source)
+			require.Equal(t, []handoffSystemMount{{Source: target, Target: link}}, plan.Mounts)
+			require.Len(t, plan.Inputs, 1)
+			require.Equal(t, link, plan.Inputs[0].Path)
+			require.NotEmpty(t, plan.Inputs[0].Digest)
+		})
 	}
 }
 
