@@ -35,6 +35,19 @@ func TestHas(t *testing.T) {
 	assert.False(t, Has("---\r\nname: x\r\n---\r\n"))
 }
 
+func TestAddStub(t *testing.T) {
+	for _, eol := range []string{"\n", "\r\n"} {
+		stub := "# Reviewer" + eol
+		marked := AddStub(stub)
+		assert.Equal(t, stubComment+eol+stub, marked)
+		assert.True(t, Has(marked))
+		assert.Equal(t, marked, AddStub(marked))
+		assert.False(t, Has(stub+stubComment+eol), "an embedded comment is not the ownership marker")
+	}
+	withFrontmatter := "---\nname: reviewer\n---\n"
+	assert.Equal(t, Add(withFrontmatter), AddStub(withFrontmatter))
+}
+
 func TestFrontmatterStaysValidYAML(t *testing.T) {
 	var m map[string]any
 	fm := Add("---\nname: x\n---\n")

@@ -138,7 +138,8 @@ func TestEnableAgentRefreshReports(t *testing.T) {
 		t.Chdir(dir)
 		store := filepath.Join(dir, ".punt-labs", "ethos")
 		require.NoError(t, os.MkdirAll(filepath.Join(store, "agents"), 0o755))
-		require.NoError(t, os.WriteFile(filepath.Join(store, "agents", "reviewer.md"), []byte("# Legacy reviewer\n"), 0o644))
+		reviewerSource := filepath.Join(store, "agents", "reviewer.md")
+		require.NoError(t, os.WriteFile(reviewerSource, []byte("# Legacy reviewer\n"), 0o644))
 		require.NoError(t, os.WriteFile(filepath.Join(store, "agents", "writer.md"), []byte("---\nname: writer\n---\n# Legacy writer\n"), 0o644))
 		for _, args := range [][]string{
 			{"-C", store, "init", "-q"},
@@ -157,6 +158,7 @@ func TestEnableAgentRefreshReports(t *testing.T) {
 		require.NoError(t, os.WriteFile(prior, []byte(priorAgent), 0o644))
 		for _, flag := range []string{"--refresh", "--agents-only"} {
 			t.Run(flag, func(t *testing.T) {
+				require.NoError(t, os.WriteFile(reviewerSource, []byte("# Legacy reviewer\n"), 0o644))
 				handAuthored := filepath.Join(dst, "writer.md")
 				const custom = "---\nname: writer\n---\n# Hand-authored writer\n"
 				require.NoError(t, os.WriteFile(handAuthored, []byte(custom), 0o644))
@@ -182,6 +184,20 @@ func TestEnableAgentRefreshReports(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, priorAgent, string(content))
 				assert.NoFileExists(t, filepath.Join(store, "enabled"))
+
+				require.NoError(t, os.WriteFile(reviewerSource, []byte("# Updated reviewer\n"), 0o644))
+				out, stderr, err = runEnableCmd(t, "enable", flag)
+				require.NoError(t, err, stderr)
+				assert.Contains(t, out, "refreshed Claude agent definitions")
+				assert.NotContains(t, stderr, "reviewer.md")
+				assert.Contains(t, stderr, "preserving hand-authored agent")
+				assert.Contains(t, stderr, "writer.md")
+				content, err = os.ReadFile(stub)
+				require.NoError(t, err)
+				assert.Contains(t, string(content), "# Updated reviewer")
+				customAfter, err = os.ReadFile(handAuthored)
+				require.NoError(t, err)
+				assert.Equal(t, custom, string(customAfter))
 			})
 		}
 	})

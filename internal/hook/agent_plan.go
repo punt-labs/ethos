@@ -180,9 +180,12 @@ func applyAgentPlan(p layout.Policy, plan AgentPlan, onUnmarked func(string)) er
 			return err
 		}
 		data, err := os.ReadFile(path)
-		if err == nil && onUnmarked != nil && !agentmark.Has(string(data)) {
-			onUnmarked(path)
-			continue
+		if onUnmarked != nil {
+			if err == nil && !agentmark.Has(string(data)) {
+				onUnmarked(path)
+				continue
+			}
+			file.Content = agentmark.AddStub(file.Content)
 		}
 		if err == nil && string(data) == file.Content {
 			if err := syncAgentFileParents(checkout, path); err != nil {
