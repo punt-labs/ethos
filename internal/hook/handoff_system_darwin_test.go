@@ -122,7 +122,12 @@ func TestDarwinHandoffSystemInputRejectsSymlinkAcrossRoots(t *testing.T) {
 }
 
 func TestDarwinHomebrewIntelBrewSymlink(t *testing.T) {
-	dir, err := filepath.EvalSymlinks(t.TempDir())
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	fixture, err := os.MkdirTemp(home, "ethos-intel-brew-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(fixture) })
+	dir, err := filepath.EvalSymlinks(fixture)
 	require.NoError(t, err)
 	repository := filepath.Join(dir, "Homebrew")
 	target := filepath.Join(repository, "bin", "brew")
