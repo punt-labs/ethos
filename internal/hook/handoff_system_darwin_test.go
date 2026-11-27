@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/checkset"
@@ -122,9 +123,11 @@ func TestDarwinHandoffSystemInputRejectsSymlinkAcrossRoots(t *testing.T) {
 }
 
 func TestDarwinHomebrewIntelBrewSymlink(t *testing.T) {
-	home, err := os.UserHomeDir()
+	temp, err := exec.CommandContext(t.Context(), "/usr/bin/getconf", "DARWIN_USER_TEMP_DIR").Output()
 	require.NoError(t, err)
-	fixture, err := os.MkdirTemp(home, "ethos-intel-brew-")
+	root := strings.TrimSpace(string(temp))
+	require.True(t, filepath.IsAbs(root))
+	fixture, err := os.MkdirTemp(root, "ethos-intel-brew-")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(fixture) })
 	dir, err := filepath.EvalSymlinks(fixture)
