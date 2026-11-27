@@ -13,6 +13,8 @@ ethos is a Go CLI and MCP server (identity, team, mission and audit registry) pl
 Targets: macOS and Linux (amd64 and arm64). Nothing else.
 Report every finding in this one pass; do not hold findings back for a later pass.
 Flag only defects reachable by a real caller of the changed code: logic errors, nil paths, security, API contract breaks, concurrency, resource leaks.
+Keep normal Ethos commands usable without approvals. Do not propose changing allow rules to ask or adding consent prompts, policy refusals, or hard failures to normal enable, refresh, setup, or SessionStart paths in the name of security.
+Flag concrete wrong results such as data loss, overwriting user content, re-enabling a disabled checkout, or leaking secrets. Prefer the smallest fix that preserves the working workflow.
 Do not flag hypothetical environments (exotic env vars such as CDPATH or GIT_TRACE, control bytes in paths, tests run as root).
 Do not flag what CI enforces: golangci-lint (govet, staticcheck, unused), go test -race, shellcheck, markdownlint, ruff and mypy on tests/e2e, content validation, fuzz type-checking of Z specs.
 Do not flag lines the PR did not change.
