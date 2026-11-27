@@ -104,6 +104,35 @@ func TestEnableCommandJSON(t *testing.T) {
 	}
 }
 
+func TestEnableAgentRefreshReports(t *testing.T) {
+	t.Run("inline agent-only refresh", func(t *testing.T) {
+		dir := enableGitRepo(t)
+		t.Chdir(dir)
+		out, stderr, err := runEnableCmd(t, "enable", "--agents-only")
+		require.NoError(t, err, stderr)
+		assert.Contains(t, out, "refreshed Claude agent definitions")
+		assert.NoFileExists(t, filepath.Join(dir, ".punt-labs", "ethos", "enabled"))
+	})
+
+	t.Run("uninitialized gitlink", func(t *testing.T) {
+		dir := enableGitRepo(t)
+		t.Chdir(dir)
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".punt-labs", "ethos"), 0o755))
+		cmd := testhelpers.GitCommand("update-index", "--add", "--cacheinfo",
+			"160000,0000000000000000000000000000000000000001,.punt-labs/ethos")
+		gitOutput, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", gitOutput)
+		for _, flag := range []string{"--refresh", "--agents-only"} {
+			t.Run(flag, func(t *testing.T) {
+				out, stderr, err := runEnableCmd(t, "enable", flag)
+				require.NoError(t, err, stderr)
+				assert.Contains(t, out, "left Claude agent definitions unchanged")
+				assert.Contains(t, stderr, "git submodule update --init")
+			})
+		}
+	})
+}
+
 func TestEnableSurfacesWarningsOnErrorPath(t *testing.T) {
 	// Repro: a hand-written guide (grandfather-overwritten with a warning) plus
 	// a regular file where .git/hooks belongs (so the hook-chaining step after
