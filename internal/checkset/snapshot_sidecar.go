@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -154,15 +155,11 @@ func loadSnapshotSidecar(root, slug string, set *Set, revision ...*[32]byte) err
 			return fmt.Errorf("snapshot sidecar check %q is unknown, not a handoff, or already has an inline snapshot", name)
 		}
 		snapshot := entry.WorktreeSnapshot
-		snapshot.Isolation = IsolationSnapshot
-		if entry.Isolation.Kind != 0 {
-			switch node := entry.Isolation; {
-			case node.Kind == yaml.ScalarNode && node.Tag == "!!str" && (node.Value == IsolationSnapshot || node.Value == IsolationLiveVerified):
-				snapshot.Isolation = node.Value
-			default:
-				return fmt.Errorf("snapshot sidecar check %q: isolation must be snapshot or live-verified", name)
-			}
+		isolation, err := snapshotIsolation(entry.Isolation, runtime.GOOS)
+		if err != nil {
+			return fmt.Errorf("snapshot sidecar check %q: %w", name, err)
 		}
+		snapshot.Isolation = isolation
 		if err := snapshot.validate(); err != nil {
 			return fmt.Errorf("snapshot sidecar check %q: %w", name, err)
 		}
@@ -172,6 +169,40 @@ func loadSnapshotSidecar(root, slug string, set *Set, revision ...*[32]byte) err
 		set.Checks[eligible[name]].WorktreeSnapshot = &snapshot
 	}
 	return nil
+}
+
+func snapshotIsolation(node yaml.Node, goos string) (string, error) {
+	validMode := func(node *yaml.Node) bool {
+		return node.Kind == yaml.ScalarNode && node.Tag == "!!str" &&
+			(node.Value == IsolationSnapshot || node.Value == IsolationLiveVerified)
+	}
+	switch {
+	case node.Kind == 0:
+		return IsolationSnapshot, nil
+	case validMode(&node):
+		return node.Value, nil
+	case node.Kind != yaml.MappingNode || node.Tag != "!!map":
+		return "", errors.New("isolation must be snapshot or live-verified, or a map keyed by OS")
+	}
+	mode := IsolationSnapshot
+	seen := make(map[string]bool, len(node.Content)/2)
+	for i := 0; i < len(node.Content); i += 2 {
+		key, value := node.Content[i], node.Content[i+1]
+		if key.Kind != yaml.ScalarNode || key.Tag != "!!str" || (key.Value != "darwin" && key.Value != "linux") {
+			return "", fmt.Errorf("unsupported isolation OS %q; expected darwin or linux", key.Value)
+		}
+		if seen[key.Value] {
+			return "", fmt.Errorf("duplicate isolation OS %q", key.Value)
+		}
+		seen[key.Value] = true
+		if !validMode(value) {
+			return "", fmt.Errorf("isolation for %q must be snapshot or live-verified", key.Value)
+		}
+		if key.Value == goos {
+			mode = value.Value
+		}
+	}
+	return mode, nil
 }
 
 func (s WorktreeSnapshot) validate() error {
