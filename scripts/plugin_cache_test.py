@@ -15,7 +15,7 @@ def run_make(home, target, *options):
     for name in ("MAKEFLAGS", "MAKEOVERRIDES", "MFLAGS", "GNUMAKEFLAGS", "PLUGIN_CACHE", "TEST_TELEMETRY_DIR"):
         env.pop(name, None)
     env.update(HOME=str(home), XDG_CONFIG_HOME=str(Path(home) / ".config"))
-    subprocess.run(["go", "telemetry", "off"], cwd=ROOT, env=env, check=True)
+    subprocess.run(["go", "telemetry", "off"], cwd=ROOT, env={**env, "GOTOOLCHAIN": "local"}, check=True)
     return subprocess.run(
         ["make", "--no-print-directory", "-o", "install", *options,
          f"HOME={home}", f"GOBIN={Path(home) / 'bin'}", target],
@@ -28,6 +28,15 @@ def run_make(home, target, *options):
 
 
 class PluginCacheTests(unittest.TestCase):
+    def test_telemetry_setup_uses_local_go_toolchain(self):
+        with tempfile.TemporaryDirectory() as home:
+            makefile = Path(home) / "Makefile"
+            makefile.write_text("probe:\n\t@printf '%s\\n' \"$$GOTOOLCHAIN\"\n", encoding="utf-8")
+            with patch.dict(os.environ, {"GOTOOLCHAIN": "go1.999.0", "GOPROXY": "off"}):
+                result = run_make(home, "probe", "-f", str(makefile))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "go1.999.0")
+
     def test_make_disables_go_telemetry_in_fixture(self):
         with tempfile.TemporaryDirectory() as home:
             makefile = Path(home) / "Makefile"
