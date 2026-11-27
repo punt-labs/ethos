@@ -7,10 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.3.2] - 2026-11-27
+
 ### Added
 
 - Handoff snapshot sidecars can select isolation by OS. A policy can opt
   into live verification on macOS while retaining snapshot reuse on Linux.
+  ([#724](https://github.com/punt-labs/ethos/pull/724))
+
+### Fixed
+
+- macOS handoff gates accept the Homebrew roots `/opt/homebrew`,
+  `/usr/local/Homebrew`, `/usr/local/Cellar`, and `/usr/local/opt`, plus
+  the exact path `/usr/local/bin/brew`, on both amd64 and arm64. Darwin
+  snapshots now have five seconds to verify system inputs.
+  ([#723](https://github.com/punt-labs/ethos/pull/723))
 
 ## [5.3.1] - 2026-11-27
 
@@ -4463,6 +4474,7 @@ Tagged but not published. See [5.3.1] for the changes.
 - ShellCheck added to CI and `make lint`
 
 [Unreleased]: https://github.com/punt-labs/ethos/compare/v4.22.1...HEAD
+[5.3.2]: https://github.com/punt-labs/ethos/compare/v5.3.1...v5.3.2
 [5.3.1]: https://github.com/punt-labs/ethos/compare/v5.2.4...v5.3.1
 [5.3.0]: https://github.com/punt-labs/ethos/compare/v5.2.4...v5.3.0
 [5.2.3]: https://github.com/punt-labs/ethos/compare/v5.2.2...v5.2.3
