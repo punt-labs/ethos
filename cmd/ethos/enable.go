@@ -118,6 +118,14 @@ func refreshClaudeAgents(rep *enable.Report, gitlink, checkGitlink bool) error {
 			}
 		}
 		if gitlink {
+			hasStubs, err := hook.RefreshAgentStubs(r.Located)
+			if err != nil {
+				rep.Warnings = append(rep.Warnings, fmt.Sprintf("could not refresh agent stubs: %v", err))
+				return nil
+			}
+			if hasStubs {
+				return nil
+			}
 			rep.Warnings = append(rep.Warnings, "agent definitions left unchanged: no repository configuration found for the team gitlink; if the team submodule is not initialized, run git submodule update --init -- .punt-labs/ethos")
 			return nil
 		}

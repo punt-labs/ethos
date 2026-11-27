@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/agentmark"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
@@ -128,6 +129,49 @@ func TestEnableAgentRefreshReports(t *testing.T) {
 				require.NoError(t, err, stderr)
 				assert.Contains(t, out, "left Claude agent definitions unchanged")
 				assert.Contains(t, stderr, "git submodule update --init")
+			})
+		}
+	})
+
+	t.Run("initialized gitlink with stubs only", func(t *testing.T) {
+		dir := enableGitRepo(t)
+		t.Chdir(dir)
+		store := filepath.Join(dir, ".punt-labs", "ethos")
+		require.NoError(t, os.MkdirAll(filepath.Join(store, "agents"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(store, "agents", "reviewer.md"), []byte("# Legacy reviewer\n"), 0o644))
+		for _, args := range [][]string{
+			{"-C", store, "init", "-q"},
+			{"-C", store, "add", "agents/reviewer.md"},
+			{"-C", store, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "Add reviewer"},
+			{"add", ".punt-labs/ethos"},
+		} {
+			gitOutput, err := testhelpers.GitCommand(args...).CombinedOutput()
+			require.NoError(t, err, "%s", gitOutput)
+		}
+		dst := filepath.Join(dir, ".claude", "agents")
+		require.NoError(t, os.MkdirAll(dst, 0o755))
+		prior := filepath.Join(dst, "worker.md")
+		priorAgent := agentmark.Add("# Existing worker\n")
+		require.NoError(t, os.WriteFile(prior, []byte(priorAgent), 0o644))
+		for _, flag := range []string{"--refresh", "--agents-only"} {
+			t.Run(flag, func(t *testing.T) {
+				stub := filepath.Join(dst, "reviewer.md")
+				t.Cleanup(func() {
+					if _, err := os.Stat(stub); err == nil {
+						assert.NoError(t, os.Remove(stub))
+					}
+				})
+				out, stderr, err := runEnableCmd(t, "enable", flag)
+				require.NoError(t, err, stderr)
+				assert.Contains(t, out, "refreshed Claude agent definitions")
+				assert.NotContains(t, stderr, "git submodule update --init")
+				content, err := os.ReadFile(stub)
+				require.NoError(t, err, stderr)
+				assert.Contains(t, string(content), "# Legacy reviewer")
+				content, err = os.ReadFile(prior)
+				require.NoError(t, err)
+				assert.Equal(t, priorAgent, string(content))
+				assert.NoFileExists(t, filepath.Join(store, "enabled"))
 			})
 		}
 	})

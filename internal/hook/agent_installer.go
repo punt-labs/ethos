@@ -10,6 +10,13 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
+// RefreshAgentStubs installs available stubs without generating or pruning
+// agents. Use it when no roster is configured, not when roster lookup fails.
+func RefreshAgentStubs(loc resolve.Located) (bool, error) {
+	handles, err := installAgentDefsFor(loc, nil)
+	return len(handles) > 0, err
+}
+
 // InstallAgentDefinitions copies agent .md files from the ethos agents
 // directory to .claude/agents/. Only copies files that are missing or
 // have different content. Returns the list of deployed filenames.
