@@ -152,7 +152,8 @@ func TestEnableAgentRefreshReports(t *testing.T) {
 		dst := filepath.Join(dir, ".claude", "agents")
 		require.NoError(t, os.MkdirAll(dst, 0o755))
 		prior := filepath.Join(dst, "worker.md")
-		priorAgent := agentmark.Add("# Existing worker\n")
+		priorAgent := agentmark.Add("---\nname: worker\n---\n# Existing worker\n")
+		require.True(t, agentmark.Has(priorAgent), "fixture must be eligible for pruning")
 		require.NoError(t, os.WriteFile(prior, []byte(priorAgent), 0o644))
 		for _, flag := range []string{"--refresh", "--agents-only"} {
 			t.Run(flag, func(t *testing.T) {
