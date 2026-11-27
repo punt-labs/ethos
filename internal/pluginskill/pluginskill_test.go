@@ -63,3 +63,18 @@ func TestOptimizeTeamRequiresExplicitActivationBeforeRefresh(t *testing.T) {
 	assert.Contains(t, preflight, "`.punt-labs/ethos/enabled`")
 	assert.Contains(t, preflight, "do not run `ethos enable` or `ethos enable --refresh`")
 }
+
+func TestOptimizeTeamRefreshesBeforeLiveDoctor(t *testing.T) {
+	skill, err := os.ReadFile(filepath.Join("..", "..", "plugin", "skills", "optimize-team", "SKILL.md"))
+	require.NoError(t, err)
+	_, step7, found := strings.Cut(string(skill), "7. **")
+	require.True(t, found)
+	cutover, _, found := strings.Cut(step7, "8. **")
+	require.True(t, found)
+	refresh := strings.Index(cutover, "Run `ethos enable --refresh`")
+	doctor := strings.Index(cutover, "run `ethos doctor`")
+	require.GreaterOrEqual(t, refresh, 0, "refresh must be in the cutover step")
+	require.GreaterOrEqual(t, doctor, 0, "doctor must validate the live cutover")
+	assert.Less(t, refresh, doctor, "doctor would reject the stale intermediate state")
+	assert.Contains(t, cutover, "restore the team closure and agent files")
+}

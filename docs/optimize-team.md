@@ -290,6 +290,9 @@ ratification.
 1. **Detect the starting state.** Read `.punt-labs/ethos.yaml` and
    `.punt-labs/ethos/teams/`. Greenfield if no team is configured;
    optimize-in-place if one exists (see next section).
+   For a disabled inline store, the skill stops without making changes;
+   enable the repo explicitly before retrying. Legacy team gitlinks
+   support refresh without enabling the checkout.
 2. **Interview** via `AskUserQuestion`, one question per decision-table axis.
 3. **Compose** the proposed roster from the answers, applying the decision
    table. Validate the review edges: every edge is worker -> reviewer with
@@ -318,13 +321,14 @@ ratification.
      review edge is written with explicit direction `from: <worker-role>`,
      `to: <reviewer-role>`; the skill does not emit a bidirectional edge.
    - `ethos.yaml` — `agent`, `team`, and `resolution` keys.
-7. **Validate the staged set, then swap.** Run `ethos doctor` against the
-   staged closure. On a clean result, swap the staged files into place as the
-   last step (an all-or-nothing cutover). On any `doctor` failure, leave the
-   working tree untouched, restore from the backup if a partial write already
-   happened, report the failure, and stop. The operator's existing working
-   team survives a mid-write error — there is no window where the team
-   references files that do not exist.
+7. **Validate, swap, refresh, then run doctor.** The skill checks the staged
+   references and asks separately for consent to refresh, including pruning
+   stale managed definitions and, for inline stores, updating guides and
+   enablement wiring. It then swaps the staged files into place and runs
+   `ethos enable --refresh` before `ethos doctor`, which validates the live
+   checkout and would otherwise reject stale agent files. On either failure,
+   restore the prior team closure and agent files and report any remaining
+   guide or wiring changes.
 8. **Destructive reconcile — a SEPARATE, explicitly-consented step.**
    `ethos vendor --team <t> --apply --prune` removes
    files from the vendored closure. These are destructive and are NOT covered
@@ -334,9 +338,8 @@ ratification.
    prunes vendored files") before invoking either. Repair runs only when
    re-shaping left obsolete residue; `vendor --prune` runs only in a
    `resolution: repo-only` repo. On "no," the skill leaves both to the user.
-9. **Refresh definitions.** Run `ethos enable --refresh` to reconcile
-   `.claude/agents/` from the new YAML. Review the changes and tell the user
-   to restart Claude Code to load them.
+9. **Review the generated diff.** Tell the user to restart Claude Code
+   to load the definitions validated in step 7.
 
 ## Greenfield vs optimize-in-place
 

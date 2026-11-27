@@ -250,9 +250,11 @@ Strictly propose-first. Writing is gated on an explicit ratification.
    writes in step 6 — not step 8's reconcile.
 6. **Back up, then write atomically, only after ratification.** Copy
    the prior team closure (the existing `roles/`, `identities/`,
-   `teams/<name>.yaml`, and the `ethos.yaml` the team references) to a
-   timestamped backup under `.tmp/optimize-team-backup-<ts>/` before
-   any mutation. Stage the full new closure to a temp directory, not
+   `teams/<name>.yaml`, and the `ethos.yaml` the team references) and
+   the checkout's `.claude/agents/` to a timestamped backup under
+   `.tmp/optimize-team-backup-<ts>/` before any mutation. Record which
+   paths did not exist so rollback can remove newly created files.
+   Stage the full new closure to a temp directory, not
    in place, and write each file there:
    - `roles/<name>.yaml` — one per seat, with `model:`,
      `responsibilities`, `permissions`, `tools`. A review role's
@@ -297,8 +299,8 @@ Strictly propose-first. Writing is gated on an explicit ratification.
      Never a bidirectional edge, and never an edge with `from`/`to`
      only.
    - `ethos.yaml` — `agent`, `team`, and `resolution` keys.
-7. **Validate the staged set with the checks this skill can run, then
-   swap, then confirm with `ethos doctor`.** `ethos doctor` checks the
+7. **Validate the staged set, swap, refresh, then confirm with
+   `ethos doctor`.** `ethos doctor` checks the
    *live* repo — it takes no staged-root argument (`cmd/ethos/main.go`
    `doctorCmd`/`runDoctor`) — so it cannot be pointed at the temp
    staging directory from step 6. Before swapping, validate the staged
@@ -310,16 +312,18 @@ Strictly propose-first. Writing is gated on an explicit ratification.
    `writing_style` slug resolves against a staged or existing
    `.md` file (the gap named in step 6 above) — in a repo-only repo an
    unresolved slug makes agent generation fail and name the member, so
-   catch it here to fail fast before the write rather than after. On a clean result, swap the staged files into
-   place as the last step — an all-or-nothing cutover — then run
-   `ethos doctor` against the now-live result to confirm it resolves
-   end-to-end (identity/role/team cross-references, orphaned files,
-   hook currency). If `doctor` reports a FAIL on the live result,
-   restore the backup from step 6 immediately, report the failure, and
-   stop. The backup-and-restore is the real safety net here, not a
-   pre-write doctor run: the operator's existing working team survives
-   a bad write because the backup is restored the moment `doctor`
-   catches it, not because `doctor` ever saw the staged files first.
+   catch it here to fail fast before the write rather than after.
+   Separately ask for consent to refresh, naming the stale managed
+   definitions that will be pruned and explaining that an inline refresh
+   also updates vendored guides and enablement wiring. Declining stops
+   before cutover. On consent, swap the staged files into place.
+   Run `ethos enable --refresh` before doctor: missing or stale agent
+   definitions are expected between the swap and refresh, not a reason
+   to reject the roster. After refresh, run `ethos doctor` against the
+   live result. If refresh fails or doctor reports a FAIL, immediately
+   restore the team closure and agent files from the backup, removing
+   newly created files from the cutover. Report the failure and any
+   remaining guide or wiring changes, then stop.
 8. **Destructive reconcile — a SEPARATE, explicitly-consented step.**
    `ethos vendor` has no `--yes` flag and prompts for nothing itself
    (`cmd/ethos/vendor.go`); its own safety model is `--dry-run`
@@ -341,9 +345,8 @@ Strictly propose-first. Writing is gated on an explicit ratification.
    ratification — that one covers only the non-destructive YAML writes
    in step 6. Run it only when re-shaping left obsolete residue, and
    the prune only in a `resolution: repo-only` repo.
-9. **Refresh definitions.** Run `ethos enable --refresh` from the checkout
-   with the new roster. Review the generated diff, then tell the user to
-   restart Claude Code to load the new definitions.
+9. **Review the generated diff.** Tell the user to restart Claude Code
+   to load the new definitions validated in step 7.
 
 ## Greenfield vs optimize-in-place
 
