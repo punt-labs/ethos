@@ -14,7 +14,7 @@ import (
 
 var enableCmd = &cobra.Command{
 	Use:   "enable",
-	Short: "Enable ethos in the current repo",
+	Short: "Enable ethos in the current repo, or refresh with --refresh or --agents-only",
 	Long: `Enable ethos in the current repo.
 
 Deposits the vendored agent guide and its manifest, writes the enabled
