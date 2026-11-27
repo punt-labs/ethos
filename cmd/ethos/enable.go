@@ -67,6 +67,10 @@ func runEnable(cmd *cobra.Command) error {
 	rep, err := enable.EnableTo(repoRoot, storeRoot, enable.Options{Refresh: refresh})
 	action := "enabled"
 	if refresh && errors.Is(err, enable.ErrGitlinkMount) {
+		r := currentRoots()
+		if r.Config == nil && r.ConfigErr == nil {
+			return fmt.Errorf("refreshing Claude agent definitions: no repository configuration found for the team gitlink; if the team submodule is not initialized, run git submodule update --init -- .punt-labs/ethos")
+		}
 		rep.Warnings = append(rep.Warnings, err.Error())
 		action = "refreshed Claude agent definitions"
 	} else if err != nil {
