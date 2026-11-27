@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Release CI now enables and verifies unprivileged sandbox mounts before
+  running Linux handoff tests, using the same setup as Test CI.
+
 ## [5.3.0] - 2026-11-27
 
 ### Added
