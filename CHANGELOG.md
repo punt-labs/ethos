@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Linux handoff snapshots support `scratch.files` and defer without caching
   when overlay events or the final overlay contents show undeclared changes.
+- Declare a Linux amd64 snapshot profile and offline runtime for the existing
+  handoff `make check` gate.
 
 ### Fixed
 
