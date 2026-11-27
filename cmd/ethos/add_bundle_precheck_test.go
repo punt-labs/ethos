@@ -496,7 +496,9 @@ func TestAddBundleAdoptionFollowsGit(t *testing.T) {
 		ok, resolved, err := isOwnGitRepo(dir)
 		require.NoError(t, err)
 		assert.True(t, ok)
-		assert.Equal(t, filepath.Join(src, ".git"), resolved)
+		want, err := filepath.EvalSymlinks(filepath.Join(src, ".git"))
+		require.NoError(t, err)
+		assert.Equal(t, want, resolved)
 	})
 
 	t.Run("plain directory", func(t *testing.T) {
