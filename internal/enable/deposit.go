@@ -73,12 +73,14 @@ func depositVendored(repoRoot string, guide, setup []byte, refresh bool, policie
 			return nil, fmt.Errorf("enable: manifest path %s is not in the vendored zone — refusing to deposit", rel)
 		}
 		if contains(prevSet, rel) {
-			// Grandfathered on first contact: warn when we are about to
-			// overwrite differing content, so the clobber is visible.
-			if bootstrap && refresh {
+			if bootstrap {
 				if existing, err := os.ReadFile(filepath.Join(repoRoot, rel)); err == nil && !bytes.Equal(existing, want[rel]) {
-					warnings = append(warnings, fmt.Sprintf(
-						"%s existed with different content and was overwritten by the vendored guide (punt-labs-dir PLD-9 first-enable grandfather; the prior file is recoverable from git)", rel))
+					if refresh {
+						warnings = append(warnings, fmt.Sprintf(
+							"%s existed with different content and was overwritten by the vendored guide (punt-labs-dir PLD-9 first-enable grandfather; the prior file is recoverable from git)", rel))
+					} else {
+						warnings = append(warnings, fmt.Sprintf("%s has different content and was preserved; a future enable with --refresh can overwrite it", rel))
+					}
 				}
 			}
 			continue
