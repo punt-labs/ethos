@@ -213,6 +213,34 @@ func TestSnapshotSidecarIsolation(t *testing.T) {
 	}
 }
 
+func TestSnapshotSidecarIsolationAlias(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "checks", "snapshots")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "project.yaml"), []byte(`checks:
+  first:
+    profile: linux-worktree-v1
+    epoch: test
+    sources: {mode: worktree}
+    isolation: &iso {darwin: live-verified}
+  second:
+    profile: linux-worktree-v1
+    epoch: test
+    sources: {mode: worktree}
+    isolation: *iso
+`), 0o600))
+	set := &Set{Checks: []Check{{Name: "first", Stage: "handoff"}, {Name: "second", Stage: "handoff"}}}
+	require.NoError(t, loadSnapshotSidecar(root, "project", set))
+	want := IsolationSnapshot
+	if runtime.GOOS == "darwin" {
+		want = IsolationLiveVerified
+	}
+	for _, check := range set.Checks {
+		require.NotNil(t, check.WorktreeSnapshot, check.Name)
+		require.Equal(t, want, check.WorktreeSnapshot.Isolation, check.Name)
+	}
+}
+
 func TestLoadSnapshotSidecarRejectsUnsafeFiles(t *testing.T) {
 	storeRoot := t.TempDir()
 	store := NewLayeredStoreWithBundle(storeRoot, "", "", true)

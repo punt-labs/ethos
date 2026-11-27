@@ -172,6 +172,9 @@ func loadSnapshotSidecar(root, slug string, set *Set, revision ...*[32]byte) err
 }
 
 func snapshotIsolation(node yaml.Node, goos string) (string, error) {
+	for node.Kind == yaml.AliasNode && node.Alias != nil {
+		node = *node.Alias
+	}
 	validMode := func(node *yaml.Node) bool {
 		return node.Kind == yaml.ScalarNode && node.Tag == "!!str" &&
 			(node.Value == IsolationSnapshot || node.Value == IsolationLiveVerified)
