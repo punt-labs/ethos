@@ -52,6 +52,9 @@ func TestDarwinHandoffLiveReportsClosingKeyError(t *testing.T) {
 	require.Contains(t, logs.String(), "key_verification_ms=")
 	require.NotContains(t, logs.String(), "outcome=completed")
 	require.NotContains(t, logs.String(), "outcome=reused")
+	slots, err := filepath.Glob(filepath.Join(root, ".punt-labs", "local", "ethos", "handoff-v1", "*", "*.json"))
+	require.NoError(t, err)
+	require.Empty(t, slots, "closing-key deferral must remove its pending cache record")
 }
 
 func TestDarwinHandoffLiveReportsInitialInputScanError(t *testing.T) {
