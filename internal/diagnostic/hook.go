@@ -118,6 +118,8 @@ type HookCheckDetails struct {
 	Isolation            string
 	IsolationResidual    string
 	DeveloperFingerprint string
+	KeyDeferralReason    string
+	KeyVerificationTime  time.Duration
 }
 
 // LogHookCheck records a check's runtime without logging its arguments or output.
@@ -132,6 +134,9 @@ func LogHookCheck(ctx context.Context, checkout, cwd, stage, name, outcome strin
 			}
 			if detail.DeveloperFingerprint != "" {
 				attrs = append(attrs, "developer_fingerprint", detail.DeveloperFingerprint)
+			}
+			if detail.KeyDeferralReason != "" {
+				attrs = append(attrs, "deferral_reason", detail.KeyDeferralReason, "key_verification_ms", detail.KeyVerificationTime.Milliseconds())
 			}
 		}
 		if cwd == "" {

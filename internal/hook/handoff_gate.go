@@ -142,6 +142,11 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		}
 		return f
 	}
+	keyDeferral := func(reason string, err error, started time.Time) string {
+		baseDetails.KeyDeferralReason = handoffKeyDeferralReason(reason, err)
+		baseDetails.KeyVerificationTime = time.Since(started)
+		return baseDetails.KeyDeferralReason
+	}
 	if check.InvalidSnapshotSidecar {
 		return deferGate("invalid snapshot sidecar")
 	}
@@ -241,6 +246,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		}
 		defer guard.close()
 	}
+	inputStarted := time.Now()
 	inputCtx, cancel := context.WithTimeout(ctx, gateInputTime)
 	preserveMode := check.WorktreeSnapshot != nil
 	var scratchFiles []string
@@ -258,7 +264,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 	}
 	if err != nil {
 		if live {
-			return deferGate(fmt.Sprintf("cannot establish opening live-verified key at %q: %v", root, err), true)
+			return deferGate(keyDeferral(fmt.Sprintf("cannot establish opening live-verified key at %q", root), err, inputStarted), true)
 		}
 		return deferGate("cannot verify declared snapshot inputs within the key budget")
 	}
@@ -329,6 +335,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		return ""
 	}
 	verifyCurrent := func(when string) string {
+		verifyStarted := time.Now()
 		verify, cancel := context.WithTimeout(ctx, gateInputTime)
 		defer cancel()
 		reason := func(cause, path string) string {
@@ -344,7 +351,7 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 			}
 			inputs, err := worktreeSnapshotInputs(verify, root)
 			if err != nil {
-				return reason("cannot verify checkout input set", root)
+				return keyDeferral(reason("cannot verify checkout input set", root), err, verifyStarted)
 			}
 			if !slices.Equal(inputs, check.Snapshot.Inputs) {
 				if path := changedHandoffInput(check.Snapshot.Inputs, inputs); path != "" {
@@ -357,11 +364,12 @@ func runHandoffGate(ctx context.Context, root, agent string, files []string, che
 		currentState, currentProof, err := handoffGateInputs(verify, root, check.Snapshot.Inputs, preserveMode, closing, scratchFiles...)
 		if err != nil {
 			if live {
+				path := root
 				var inputErr *os.PathError
 				if errors.As(err, &inputErr) {
-					return reason("cannot verify checkout key", inputErr.Path)
+					path = inputErr.Path
 				}
-				return reason("cannot verify checkout key", root)
+				return keyDeferral(reason("cannot verify checkout key", path), err, verifyStarted)
 			}
 			return reason("checkout changed", root)
 		}
@@ -741,6 +749,21 @@ func retainHandoffResults(pin *os.File, slot string, waited bool, now time.Time)
 		return nil
 	})
 	return !busy || hasSlot || count < gateRecordsPerStripe, err
+}
+
+func handoffKeyDeferralReason(reason string, err error) string {
+	const maxBytes = 1024
+	const suffix = " [truncated]"
+	message := strings.ToValidUTF8(redact.Prose(reason+": "+err.Error()), "\uFFFD")
+	message = strings.Join(strings.Fields(message), " ")
+	if len(message) <= maxBytes {
+		return message
+	}
+	n := maxBytes - len(suffix)
+	for !utf8.RuneStart(message[n]) {
+		n--
+	}
+	return message[:n] + suffix
 }
 
 func unavailableSnapshotCapability(goos string, required []string) string {

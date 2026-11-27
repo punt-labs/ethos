@@ -3,6 +3,7 @@
 package hook
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,10 +11,25 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHandoffKeyDeferralReasonRedactsAndBoundsError(t *testing.T) {
+	token := "ghp_" + strings.Repeat("a1B2", 9)
+	err := errors.New("Git status failed\ncontact user@example.com in /Users/example/repo\n" + token + "\n" + strings.Repeat("界", 1024))
+	message := handoffKeyDeferralReason("cannot verify checkout key", err)
+	require.Contains(t, message, "cannot verify checkout key: Git status failed")
+	require.NotContains(t, message, token)
+	require.NotContains(t, message, "user@example.com")
+	require.NotContains(t, message, "/Users/example")
+	require.NotContains(t, message, "\n")
+	require.True(t, strings.HasSuffix(message, " [truncated]"))
+	require.True(t, utf8.ValidString(message))
+	require.LessOrEqual(t, len(message), 1024)
+}
 
 func TestHandoffRenameUntrackedBudget(t *testing.T) {
 	for _, mode := range []string{"count", "output", "timeout"} {
