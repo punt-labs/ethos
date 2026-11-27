@@ -17,8 +17,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	IsolationSnapshot     = "snapshot"
+	IsolationLiveVerified = "live-verified"
+)
+
 type WorktreeSnapshot struct {
 	Profile    string              `yaml:"profile" json:"profile"`
+	Isolation  string              `yaml:"-" json:"isolation"`
 	Epoch      string              `yaml:"epoch" json:"epoch"`
 	Sources    SnapshotSources     `yaml:"sources" json:"sources"`
 	Runtime    *SnapshotRuntime    `yaml:"runtime,omitempty" json:"runtime,omitempty"`
@@ -82,7 +88,7 @@ type SnapshotPrehydrate struct {
 	Run []string `yaml:"run" json:"run"`
 }
 
-func loadSnapshotSidecar(root, slug string, set *Set) error {
+func loadSnapshotSidecar(root, slug string, set *Set, revision ...*[32]byte) error {
 	dir, err := os.OpenRoot(root)
 	if err != nil {
 		return err
@@ -115,10 +121,16 @@ func loadSnapshotSidecar(root, slug string, set *Set) error {
 	if len(data) > maxSidecar {
 		return errors.New("snapshot sidecar is too large")
 	}
+	if len(revision) != 0 {
+		*revision[0] = sha256.Sum256(data)
+	}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	var sidecar struct {
-		Checks map[string]WorktreeSnapshot `yaml:"checks"`
+		Checks map[string]struct {
+			WorktreeSnapshot `yaml:",inline"`
+			Isolation        yaml.Node `yaml:"isolation"`
+		} `yaml:"checks"`
 	}
 	if err := dec.Decode(&sidecar); err != nil {
 		return err
@@ -136,15 +148,27 @@ func loadSnapshotSidecar(root, slug string, set *Set) error {
 			eligible[check.Name] = i
 		}
 	}
-	for name, snapshot := range sidecar.Checks {
+	snapshots := make(map[string]WorktreeSnapshot, len(sidecar.Checks))
+	for name, entry := range sidecar.Checks {
 		if _, ok := eligible[name]; !ok {
 			return fmt.Errorf("snapshot sidecar check %q is unknown, not a handoff, or already has an inline snapshot", name)
+		}
+		snapshot := entry.WorktreeSnapshot
+		snapshot.Isolation = IsolationSnapshot
+		if entry.Isolation.Kind != 0 {
+			switch node := entry.Isolation; {
+			case node.Kind == yaml.ScalarNode && node.Tag == "!!str" && (node.Value == IsolationSnapshot || node.Value == IsolationLiveVerified):
+				snapshot.Isolation = node.Value
+			default:
+				return fmt.Errorf("snapshot sidecar check %q: isolation must be snapshot or live-verified", name)
+			}
 		}
 		if err := snapshot.validate(); err != nil {
 			return fmt.Errorf("snapshot sidecar check %q: %w", name, err)
 		}
+		snapshots[name] = snapshot
 	}
-	for name, snapshot := range sidecar.Checks {
+	for name, snapshot := range snapshots {
 		set.Checks[eligible[name]].WorktreeSnapshot = &snapshot
 	}
 	return nil

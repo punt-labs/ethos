@@ -3,13 +3,18 @@
 package hook
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/sys/unix"
 )
 
 func openGateInput(root *os.Root, input string) (*os.File, error) {
+	if !filepath.IsLocal(input) || filepath.Clean(input) != input || input == "." {
+		return nil, fmt.Errorf("invalid gate input %q", input)
+	}
 	dir, err := root.Open(".")
 	if err != nil {
 		return nil, err

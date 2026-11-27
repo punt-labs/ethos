@@ -34,7 +34,6 @@ const prehydrateOutputFD = 5
 var sandboxRuntime = []string{"/bin", "/lib", "/lib64", "/usr/bin", "/usr/lib", "/usr/lib64"}
 
 const sandboxPATH = "/usr/bin:/bin"
-const worktreeSandboxPATH = "/usr/local/bin:/usr/bin:/bin"
 
 var sandboxEnvironment = []string{"PATH=" + sandboxPATH, "LC_ALL=C", "TZ=UTC", "HOME=/nonexistent"}
 
@@ -351,14 +350,12 @@ func executeHandoffSnapshot(ctx context.Context, scratch, checkout, proof string
 		}
 	}
 	if err == nil && (!check.failOnOutput || len(stdout.data) == 0) {
-		diagnostic.LogHookCheck(ctx, checkout, checkout, "handoff", check.name, "completed", time.Since(start))
 		return "", nil
 	}
 	detail := "non-empty formatting output"
 	if err != nil {
 		detail = err.Error()
 	}
-	diagnostic.LogHookCheck(ctx, checkout, checkout, "handoff", check.name, "failed", time.Since(start))
 	output := string(bytes.Join([][]byte{stdout.data, stderr.data}, []byte("\n")))
 	if plan.Worktree != nil {
 		output = sandboxHomePath.ReplaceAllString(output, "${1}$$HOME${2}")
@@ -379,7 +376,7 @@ func worktreeSandboxPath(checkout, value string) string {
 	return value
 }
 
-func gatePlanInputsPresent(snapshot string, argv []string, worktree *handoffSandboxWorktree) bool {
+func linuxGatePlanInputsPresent(snapshot string, argv []string, worktree *handoffSandboxWorktree) bool {
 	checkout, err := os.OpenRoot(snapshot)
 	if err != nil {
 		return false
@@ -499,11 +496,6 @@ func handoffExecutable(path string) bool {
 	return err == nil && info.Mode().IsRegular() && unix.Access(path, unix.X_OK) == nil
 }
 
-func insideGatePath(root, path string) bool {
-	rel, err := filepath.Rel(root, path)
-	return err == nil && filepath.IsLocal(rel)
-}
-
 type handoffSetupError struct {
 	phase string
 	cause error
@@ -610,7 +602,7 @@ func enterHandoffSandbox(root, live, cwd, proof string, manifest []byte, argv []
 		env = plan.Worktree.Environment
 	}
 	phase = handoffMaterializePhase
-	if !gatePlanInputsPresent(checkout, argv, plan.Worktree) {
+	if !linuxGatePlanInputsPresent(checkout, argv, plan.Worktree) {
 		return errors.New("snapshot inputs did not match the invocation")
 	}
 	if err := unix.Mount("", checkout, "", unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV, ""); err != nil {

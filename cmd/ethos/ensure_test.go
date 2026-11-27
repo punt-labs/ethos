@@ -61,7 +61,7 @@ func topLevel(cmd *cobra.Command) string {
 }
 
 // Every command passes the repair gate except the four that never read
-// storage and subagent-stop, which cannot repair the checkout before handoff.
+// storage, subagent-stop and approval commands, which cannot repair the checkout.
 // The walk is over the cobra tree, so a command added later is
 // covered or this test fails (DES-084 Wiring). Two properties per leaf: the
 // gate decides to run or not for the command (through the root hook), and
@@ -86,7 +86,8 @@ func TestEveryCommandPassesEnsure(t *testing.T) {
 			_ = establishRoots(c, nil)
 			called := *n > before
 			path := c.CommandPath()
-			if exempt[topLevel(c)] || path == "ethos hook post-edit" || path == "ethos hook stdin-watchdog" || path == "ethos hook subagent-stop" {
+			if exempt[topLevel(c)] || path == "ethos hook post-edit" || path == "ethos hook stdin-watchdog" || path == "ethos hook subagent-stop" ||
+				path == "ethos handoff approve-live" || path == "ethos handoff revoke-live" {
 				assert.False(t, called, "%s must not pass Ensure", c.CommandPath())
 			} else {
 				assert.True(t, called, "%s does not pass Ensure", c.CommandPath())
@@ -165,7 +166,8 @@ func TestOnlyDoctorRepairsUnbounded(t *testing.T) {
 			_ = establishRoots(c, nil)
 			cmdRoots.Store(nil)
 			path := c.CommandPath()
-			if path == "ethos hook post-edit" || path == "ethos hook stdin-watchdog" || path == "ethos hook subagent-stop" {
+			if path == "ethos hook post-edit" || path == "ethos hook stdin-watchdog" || path == "ethos hook subagent-stop" ||
+				path == "ethos handoff approve-live" || path == "ethos handoff revoke-live" {
 				assert.Equal(t, b0, *bounded, "%s must not run storage repair", path)
 				assert.Equal(t, u0, *unbounded, "%s must not run storage repair", path)
 			} else if c.CommandPath() == "ethos doctor" {

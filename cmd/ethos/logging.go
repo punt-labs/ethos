@@ -25,7 +25,7 @@ func startLogging() {
 		command = found
 	}
 	path := strings.TrimPrefix(command.CommandPath(), "ethos ")
-	if path == "hook stdin-watchdog" {
+	if path == "hook stdin-watchdog" || isLiveApprovalCommand(command.CommandPath()) {
 		processLogger = diagnostic.Discard()
 		processUsage = nil
 		finishProcess = func(int, error) {}

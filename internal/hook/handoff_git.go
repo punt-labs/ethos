@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -49,6 +50,99 @@ func handoffGitOutput(ctx context.Context, checkout string, args ...string) ([]b
 	var out bytes.Buffer
 	err := runHandoffGit(ctx, checkout, nil, &gateHashBudget{ctx: ctx, dst: &out, remaining: 8 << 20}, args...)
 	return out.Bytes(), err
+}
+
+func captureLiveHandoffRefs(ctx context.Context, checkout string) (handoffGitView, error) {
+	ctx, cancel := context.WithTimeout(ctx, gateInputTime)
+	defer cancel()
+	paths, err := handoffGitOutput(ctx, checkout, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir")
+	if err != nil {
+		return handoffGitView{}, errors.New("cannot capture live-verified Git refs")
+	}
+	local, common, ok := strings.Cut(strings.TrimSuffix(string(paths), "\n"), "\n")
+	if !ok || !filepath.IsAbs(local) || !filepath.IsAbs(common) || strings.Contains(common, "\n") {
+		return handoffGitView{}, errors.New("cannot capture live-verified Git ref paths")
+	}
+	h := sha256.New()
+	budget := &gateHashBudget{ctx: ctx, dst: h, remaining: 8 << 20}
+	if err := digestLiveGitRefs(budget, local, []string{"HEAD", "refs"}); err != nil {
+		return handoffGitView{}, fmt.Errorf("cannot capture live-verified Git refs: %w", err)
+	}
+	entries := []string{"packed-refs"}
+	if common != local {
+		entries = append(entries, "refs")
+	}
+	if err := digestLiveGitRefs(budget, common, entries); err != nil {
+		return handoffGitView{}, fmt.Errorf("cannot capture live-verified Git refs: %w", err)
+	}
+	return handoffGitView{fingerprint: hex.EncodeToString(h.Sum(nil))}, nil
+}
+
+func digestLiveGitRefs(budget *gateHashBudget, dir string, entries []string) error {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	for _, entry := range entries {
+		info, err := root.Lstat(entry)
+		if errors.Is(err, fs.ErrNotExist) && entry != "HEAD" {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			if err := digestLiveGitRefSymlink(budget, root, entry); err != nil {
+				return err
+			}
+			continue
+		}
+		err = fs.WalkDir(root.FS(), entry, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			mode := d.Type()
+			if mode&fs.ModeSymlink != 0 {
+				return digestLiveGitRefSymlink(budget, root, path)
+			}
+			if d.IsDir() {
+				_, err := fmt.Fprintf(budget, "%q\x00dir\x00", path)
+				return err
+			}
+			if !mode.IsRegular() {
+				return fmt.Errorf("unsupported Git ref type at %q", path)
+			}
+			data, err := readHandoffGitFile(budget.ctx, filepath.Join(dir, path))
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(budget, "%q\x00%d\x00%s", path, len(data), data)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func digestLiveGitRefSymlink(budget *gateHashBudget, root *os.Root, path string) error {
+	link, err := root.Readlink(path)
+	if err != nil {
+		return err
+	}
+	target := link
+	if filepath.IsAbs(target) {
+		target, err = filepath.Rel(root.Name(), target)
+	} else {
+		target = filepath.Join(filepath.Dir(path), target)
+	}
+	if err != nil || path == "refs" || hasHandoffLinkBacktrack(link) || !strings.HasPrefix(target, "refs/") {
+		return fmt.Errorf("ref symlink leaves keyed Git metadata at %q", path)
+	}
+	_, err = fmt.Fprintf(budget, "%q\x00symlink\x00%d\x00%s", path, len(link), link)
+	return err
 }
 
 func captureHandoffGit(ctx context.Context, checkout string, profile *checkset.WorktreeSnapshot) (handoffGitView, error) {

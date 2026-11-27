@@ -140,6 +140,9 @@ func TestLoadSnapshotSidecarRejectsInvalidPolicy(t *testing.T) {
 		{"unknown requirement", "network: loopback", "requires: [pty, unknown]", "unsupported snapshot requirement \"unknown\""},
 		{"scalar requirement", "network: loopback", "requires: pty", "expected a list of strings"},
 		{"null list item", "network: loopback", "requires: [pty, null]", "list elements must be strings"},
+		{"unknown isolation", "network: loopback", "isolation: other", "isolation must be snapshot or live-verified"},
+		{"empty isolation", "network: loopback", "isolation: ''", "isolation must be snapshot or live-verified"},
+		{"null isolation", "network: loopback", "isolation: null", "isolation must be snapshot or live-verified"},
 		{"relative system directory", "network: loopback", "system: {dirs: [var/lib/texmf]}", "clean absolute paths"},
 		{"invalid system platform", "network: loopback", "system: {platforms: {linux: {tools: [make]}}}", "invalid snapshot system platform"},
 		{"invalid platform input", "network: loopback", "system: {platforms: {linux-amd64: {files: [/etc/../etc/group]}}}", "clean absolute paths"},
@@ -168,6 +171,29 @@ func TestLoadSnapshotSidecarRejectsInvalidPolicy(t *testing.T) {
 			set := &Set{Checks: []Check{{Name: "full-gate", Stage: "handoff"}, {Name: "commit-gate", Stage: "commit"}, {Name: "inline-gate", Stage: "handoff", Snapshot: &Snapshot{}}}}
 			require.ErrorContains(t, loadSnapshotSidecar(root, "project", set), tc.reason)
 			require.Nil(t, set.Checks[0].WorktreeSnapshot)
+		})
+	}
+}
+
+func TestSnapshotSidecarIsolation(t *testing.T) {
+	for _, tc := range []struct{ field, want string }{
+		{"", "snapshot"},
+		{"    isolation: snapshot\n", "snapshot"},
+		{"    isolation: live-verified\n", "live-verified"},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "checks", "snapshots")
+			require.NoError(t, os.MkdirAll(dir, 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "project.yaml"), []byte(`checks:
+  full-gate:
+    profile: linux-worktree-v1
+    epoch: test
+    sources: {mode: worktree}
+`+tc.field), 0o600))
+			set := &Set{Checks: []Check{{Name: "full-gate", Stage: "handoff"}}}
+			require.NoError(t, loadSnapshotSidecar(root, "project", set))
+			require.Equal(t, tc.want, set.Checks[0].WorktreeSnapshot.Isolation)
 		})
 	}
 }

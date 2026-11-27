@@ -47,7 +47,7 @@ func worktreeSandboxEnvironment(profile *checkset.WorktreeSnapshot) ([]string, e
 	return linuxHandoffRoots().environment(profile, platform, worktreeSandboxPATH)
 }
 
-func prepareHandoffSystem(ctx context.Context, checkout string, profile *checkset.WorktreeSnapshot) (handoffSystemPlan, error) {
+func prepareHandoffSystem(ctx context.Context, checkout string, profile *checkset.WorktreeSnapshot, _ ...string) (handoffSystemPlan, error) {
 	var plan handoffSystemPlan
 	if profile == nil {
 		return plan, nil

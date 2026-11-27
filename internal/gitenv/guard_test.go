@@ -76,6 +76,8 @@ var allowedProcessUses = map[string][]string{
 	// Re-exec Ethos in Linux namespaces, then replace it with the isolated shell.
 	"internal/hook/handoff_sandbox_linux.go":  {"exec.CommandContext(self)", "(*exec.Cmd).Start", "exec.Cmd{}", "(*exec.Cmd).Run", "unix.Exec"},
 	"internal/hook/handoff_runtime_github.go": {`exec.CommandContext("gh")`, "(*exec.Cmd).Output"},
+	// Starts and reaps the Darwin sandbox wrapper and bounded system probes.
+	"internal/hook/handoff_process_darwin.go": {"exec.CommandContext(executable)", "(*exec.Cmd).Start"},
 
 	// Not git.
 	"cmd/ethos/ui.go":        {`exec.Command("open")`, `exec.Command("xdg-open")`, "(*exec.Cmd).Start", "(*exec.Cmd).Start"}, // opens the browser

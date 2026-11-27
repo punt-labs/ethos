@@ -9,6 +9,61 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestHandoffLinuxPlanInputsAllowOnlyDeclaredScratch(t *testing.T) {
+	snapshot := t.TempDir()
+	writeFile(t, filepath.Join(snapshot, "pkg", "gate"), "fixture\n")
+	require.True(t, linuxGatePlanInputsPresent(snapshot, []string{"/bin/sh", "/checkout/pkg/gate"}, nil))
+	require.False(t, linuxGatePlanInputsPresent(snapshot, []string{"/bin/sh", "/checkout/undeclared"}, nil))
+	prehydrate := &handoffSandboxWorktree{CheckoutScratch: []string{"build"}, Prehydrate: []string{"hydrate"}}
+	require.True(t, linuxGatePlanInputsPresent(snapshot, []string{"/bin/sh", "/checkout/build/gen.sh"}, prehydrate))
+	require.False(t, linuxGatePlanInputsPresent(snapshot, []string{"/bin/sh", "/checkout/build-other/gen.sh"}, prehydrate))
+	require.False(t, linuxGatePlanInputsPresent(snapshot, []string{"/bin/sh", "/checkout/build/../undeclared"}, prehydrate))
+	require.False(t, linuxGatePlanInputsPresent(snapshot, []string{"/bin/sh", "/checkout/../etc/os-release"}, prehydrate))
+	require.False(t, linuxGatePlanInputsPresent(snapshot, []string{"/bin/sh", "/checkout/../checkout/build/gen.sh"}, prehydrate))
+	scratch := &handoffSandboxWorktree{CheckoutScratch: []string{"build"}}
+	const missing = "/checkout/build/generated"
+	for _, argv := range [][]string{
+		{missing},
+		{"/bin/sh", "--", missing},
+		{"bash", "-eo", "pipefail", missing},
+		{"python3.12", "-IX", "dev", missing},
+	} {
+		require.False(t, linuxGatePlanInputsPresent(snapshot, argv, scratch), "%v", argv)
+	}
+	for _, argv := range [][]string{
+		{"touch", missing},
+		{"sh", "/checkout/pkg/gate", missing},
+		{"bash", "-ec", "true", "gate", missing},
+		{"python3", "-Im", "module", missing},
+	} {
+		require.True(t, linuxGatePlanInputsPresent(snapshot, argv, scratch), "%v", argv)
+	}
+}
+
+func TestHandoffLinuxPlanInputsClassifyInterpreterArguments(t *testing.T) {
+	snapshot := t.TempDir()
+	scratch := &handoffSandboxWorktree{CheckoutScratch: []string{"build"}}
+	const missing = "/checkout/build/generated"
+	for _, argv := range [][]string{
+		{"/bin/bash", "--init-file", "startup", "--norc", "-O", "extglob", missing},
+		{"/bin/bash", "--rcfile", "startup", "+O", "extglob", missing},
+		{"python3.12", "--check-hash-based-pycs", "default", "-Wignore", missing},
+		{"python3", "-W", "ignore", "-Xdev", missing},
+	} {
+		require.False(t, linuxGatePlanInputsPresent(snapshot, argv, scratch), "%v", argv)
+	}
+	for _, argv := range [][]string{
+		{"/bin/bash", "-s", "--", missing},
+		{"python3", "-", missing},
+		{"python3", "-c", "pass", missing},
+		{"python-tool", missing},
+		{"true"},
+	} {
+		require.True(t, linuxGatePlanInputsPresent(snapshot, argv, scratch), "%v", argv)
+	}
+	require.False(t, linuxGatePlanInputsPresent(filepath.Join(snapshot, "missing"), []string{"true"}, scratch))
+}
+
 func TestHandoffWorktreeCreatesCheckoutScratchOutputWithoutPrehydrate(t *testing.T) {
 	root, run := handoffMetadataFixture(t, `set -eu
 printf '%s\n' output > "$1"

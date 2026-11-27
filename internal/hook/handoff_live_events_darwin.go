@@ -1,0 +1,441 @@
+package hook
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+	"unsafe"
+
+	"github.com/ebitengine/purego"
+	"github.com/punt-labs/ethos/v4/internal/layout"
+	"golang.org/x/sys/unix"
+)
+
+type liveEventsAPI struct {
+	stringCreate                                func(uintptr, string, uint32) uintptr
+	arrayCreate                                 func(uintptr, *uintptr, int, uintptr) uintptr
+	release                                     func(uintptr)
+	streamCreate                                func(uintptr, uintptr, uintptr, uintptr, uint64, float64, uint32) uintptr
+	streamQueue                                 func(uintptr, uintptr)
+	streamStart                                 func(uintptr) bool
+	streamStop, streamInvalidate, streamRelease func(uintptr)
+	queueCreate                                 func(string, uintptr) uintptr
+	queueRelease                                func(uintptr)
+	queueSync                                   func(uintptr, uintptr, uintptr)
+	callback                                    uintptr
+	drain                                       uintptr
+}
+
+var liveEventStreams sync.Map
+
+var loadLiveEventsAPI = sync.OnceValues(func() (*liveEventsAPI, error) {
+	core, err := purego.Dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices", purego.RTLD_NOW|purego.RTLD_LOCAL)
+	if err != nil {
+		return nil, err
+	}
+	cf, err := purego.Dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", purego.RTLD_NOW|purego.RTLD_LOCAL)
+	if err != nil {
+		return nil, err
+	}
+	dispatch, err := purego.Dlopen("/usr/lib/system/libdispatch.dylib", purego.RTLD_NOW|purego.RTLD_LOCAL)
+	if err != nil {
+		return nil, err
+	}
+	a := new(liveEventsAPI)
+	for _, binding := range []struct {
+		lib  uintptr
+		name string
+		fn   any
+	}{
+		{cf, "CFStringCreateWithCString", &a.stringCreate},
+		{cf, "CFArrayCreate", &a.arrayCreate},
+		{cf, "CFRelease", &a.release},
+		{core, "FSEventStreamCreate", &a.streamCreate},
+		{core, "FSEventStreamSetDispatchQueue", &a.streamQueue},
+		{core, "FSEventStreamStart", &a.streamStart},
+		{core, "FSEventStreamStop", &a.streamStop},
+		{core, "FSEventStreamInvalidate", &a.streamInvalidate},
+		{core, "FSEventStreamRelease", &a.streamRelease},
+		{dispatch, "dispatch_queue_create", &a.queueCreate},
+		{dispatch, "dispatch_release", &a.queueRelease},
+		{dispatch, "dispatch_sync_f", &a.queueSync},
+	} {
+		symbol, err := purego.Dlsym(binding.lib, binding.name)
+		if err != nil {
+			return nil, err
+		}
+		purego.RegisterFunc(binding.fn, symbol)
+	}
+	a.callback = purego.NewCallback(receiveLiveEvents)
+	a.drain = purego.NewCallback(func(uintptr) {})
+	return a, nil
+})
+
+type darwinLiveEvents struct {
+	root, dir, marker string
+	git               darwinLiveGit
+	api               *liveEventsAPI
+	stream, queue     uintptr
+	started           bool
+	mu                sync.Mutex
+	last              uint64
+	cutoff            chan struct{}
+	seen              map[string]bool
+	paths             []string
+	err               error
+}
+
+type darwinLiveGit struct {
+	local, common string
+}
+
+func resolveDarwinLiveGit(ctx context.Context, root string) (darwinLiveGit, error) {
+	ctx, cancel := context.WithTimeout(ctx, gateInputTime)
+	defer cancel()
+	out, err := handoffGitOutput(ctx, root, "rev-parse", "--absolute-git-dir", "--git-common-dir")
+	if err != nil {
+		return darwinLiveGit{}, fmt.Errorf("cannot resolve Git metadata: %w", err)
+	}
+	local, common, found := strings.Cut(strings.TrimSuffix(string(out), "\n"), "\n")
+	if !found || !filepath.IsAbs(local) || common == "" || strings.Contains(common, "\n") {
+		return darwinLiveGit{}, errors.New("cannot resolve Git metadata paths")
+	}
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(root, common)
+	}
+	local, err = filepath.EvalSymlinks(local)
+	if err != nil {
+		return darwinLiveGit{}, err
+	}
+	common, err = filepath.EvalSymlinks(common)
+	if err != nil {
+		return darwinLiveGit{}, err
+	}
+	return darwinLiveGit{local: local, common: common}, nil
+}
+
+func darwinLiveContains(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && filepath.IsLocal(rel)
+}
+
+func armDarwinLiveEvents(root string, git darwinLiveGit) (*darwinLiveEvents, error) {
+	api, err := loadLiveEventsAPI()
+	if err != nil {
+		return nil, err
+	}
+	var checkout unix.Stat_t
+	if err := unix.Stat(root, &checkout); err != nil {
+		return nil, err
+	}
+	for _, dir := range []string{git.local, git.common} {
+		var stat unix.Stat_t
+		if err := unix.Stat(dir, &stat); err != nil {
+			return nil, err
+		}
+		if stat.Dev != checkout.Dev {
+			return nil, errors.New("cannot verify FSEvents cutoff across Git and checkout volumes")
+		}
+	}
+	sentinels := filepath.Join(git.local, "ethos-live")
+	if err := os.Mkdir(sentinels, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return nil, err
+	}
+	if info, err := os.Lstat(sentinels); err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
+		return nil, errors.New("live-verified sentinel directory is not private")
+	}
+	dir, err := os.MkdirTemp(sentinels, layout.ScratchDirPattern("run"))
+	if err != nil {
+		return nil, err
+	}
+	e := &darwinLiveEvents{root: root, git: git, dir: dir, api: api, marker: filepath.Join(dir, "opening"), cutoff: make(chan struct{}), seen: make(map[string]bool)}
+	if err := e.start(); err != nil {
+		e.close()
+		return nil, err
+	}
+	return e, nil
+}
+
+func (e *darwinLiveEvents) start() error {
+	a := e.api
+	roots := []string{e.root, e.git.common, e.git.local}
+	paths := make([]uintptr, 0, len(roots))
+	for i, root := range roots {
+		if slices.ContainsFunc(roots[:i], func(parent string) bool { return darwinLiveContains(parent, root) }) {
+			continue
+		}
+		path := a.stringCreate(0, root, 0x08000100)
+		if path == 0 {
+			return errors.New("cannot create FSEvents root")
+		}
+		defer a.release(path)
+		paths = append(paths, path)
+	}
+	watched := a.arrayCreate(0, &paths[0], len(paths), 0)
+	if watched == 0 {
+		return errors.New("cannot create FSEvents watch list")
+	}
+	defer a.release(watched)
+	e.queue = a.queueCreate("ethos.handoff.live-events", 0)
+	if e.queue == 0 {
+		return errors.New("cannot create FSEvents dispatch queue")
+	}
+	const fileEvents, watchRoot, noDefer = 0x10, 0x04, 0x02
+	e.stream = a.streamCreate(0, a.callback, 0, watched, ^uint64(0), 0, fileEvents|watchRoot|noDefer)
+	if e.stream == 0 {
+		return errors.New("cannot create FSEvents stream")
+	}
+	liveEventStreams.Store(e.stream, e)
+	a.streamQueue(e.stream, e.queue)
+	e.started = a.streamStart(e.stream)
+	if !e.started {
+		return errors.New("cannot start FSEvents stream")
+	}
+	return nil
+}
+
+func (e *darwinLiveEvents) close() {
+	if e.stream != 0 {
+		if e.started {
+			e.api.streamStop(e.stream)
+		}
+		e.api.streamInvalidate(e.stream)
+		e.api.queueSync(e.queue, 0, e.api.drain)
+		liveEventStreams.Delete(e.stream)
+		e.api.streamRelease(e.stream)
+	}
+	if e.queue != 0 {
+		e.api.queueRelease(e.queue)
+	}
+	_ = os.RemoveAll(e.dir)
+}
+
+func receiveLiveEvents(stream, _ uintptr, count uintptr, paths **byte, flags *uint32, ids *uint64) {
+	value, ok := liveEventStreams.Load(stream)
+	if !ok {
+		return
+	}
+	e := value.(*darwinLiveEvents)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.err != nil {
+		return
+	}
+	if count > 65536 || paths == nil || flags == nil || ids == nil {
+		e.err = fmt.Errorf("invalid FSEvents callback for %q", e.root)
+		return
+	}
+	flagList := unsafe.Slice(flags, int(count))
+	idList := unsafe.Slice(ids, int(count))
+	for i, p := range unsafe.Slice(paths, int(count)) {
+		if e.marker == "" {
+			break
+		}
+		path, err := darwinLiveEventPath(p)
+		if err != nil {
+			e.err = fmt.Errorf("FSEvents event %d for %q: %w", idList[i], e.root, err)
+			return
+		}
+		if loss := darwinFSEventsLossFlags(flagList[i]); loss != "" {
+			e.err = fmt.Errorf("FSEvents loss flag %s (%#x) at %q", loss, flagList[i], path)
+			return
+		}
+		if idList[i] < e.last {
+			e.err = fmt.Errorf("FSEvents non-monotonic ID %d after %d at %q", idList[i], e.last, path)
+			return
+		}
+		e.last = idList[i]
+		if path == e.marker {
+			close(e.cutoff)
+			if path == filepath.Join(e.dir, "opening") {
+				clear(e.seen)
+				e.paths = e.paths[:0]
+				e.marker = filepath.Join(e.dir, "closing")
+				e.cutoff = make(chan struct{})
+			} else {
+				e.marker = ""
+			}
+		} else if sentinels := filepath.Dir(e.dir); !e.seen[path] && !darwinLiveContains(sentinels, path) {
+			if len(e.paths) >= 8192 {
+				e.err = fmt.Errorf("FSEvents path budget exceeded at %q", path)
+				return
+			}
+			e.seen[path] = true
+			e.paths = append(e.paths, path)
+		}
+	}
+}
+
+func darwinLiveEventPath(p *byte) (string, error) {
+	if p == nil {
+		return "", errors.New("missing FSEvents path")
+	}
+	n := 0
+	for n < 4096 && *(*byte)(unsafe.Add(unsafe.Pointer(p), n)) != 0 {
+		n++
+	}
+	if n == 0 || n == 4096 {
+		return "", errors.New("unrecognized FSEvents path")
+	}
+	return string(unsafe.Slice(p, n)), nil
+}
+
+func darwinFSEventsLossFlags(flags uint32) string {
+	var names []string
+	for _, flag := range []struct {
+		bit  uint32
+		name string
+	}{
+		{0x01, "MustScanSubDirs"}, {0x02, "UserDropped"}, {0x04, "KernelDropped"},
+		{0x08, "EventIdsWrapped"}, {0x20, "RootChanged"},
+	} {
+		if flags&flag.bit != 0 {
+			names = append(names, flag.name)
+		}
+	}
+	return strings.Join(names, "|")
+}
+
+func (e *darwinLiveEvents) barrier(ctx context.Context, name string) error {
+	e.mu.Lock()
+	cutoff, err := e.cutoff, e.err
+	e.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(e.dir, name)
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		return fmt.Errorf("cannot write FSEvents %s sentinel at %q: %w", name, path, err)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	select {
+	case <-cutoff:
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		return e.err
+	case <-ctx.Done():
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if e.err != nil {
+			return e.err
+		}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("FSEvents %s sentinel timeout at %q", name, path)
+		}
+		return fmt.Errorf("FSEvents %s sentinel wait interrupted at %q: %w", name, path, ctx.Err())
+	}
+}
+
+func (e *darwinLiveEvents) finish(ctx context.Context, inputs []string) error {
+	if err := e.barrier(ctx, "closing"); err != nil {
+		return err
+	}
+	keyed := make(map[string]bool, len(inputs))
+	for _, input := range inputs {
+		keyed[filepath.Join(e.root, input)] = true
+	}
+	git := filepath.Join(e.root, ".git")
+	e.mu.Lock()
+	paths := slices.Clone(e.paths)
+	e.mu.Unlock()
+	var nonKeyed []string
+	var veto error
+	for _, path := range paths {
+		if keyed[path] || path == git || darwinLiveContains(e.git.local, path) || darwinLiveContains(e.git.common, path) {
+			veto = fmt.Errorf("FSEvents observed a change at %q", path)
+			break
+		}
+		rel, err := filepath.Rel(e.root, path)
+		if err != nil || !filepath.IsLocal(rel) || rel == "." {
+			veto = fmt.Errorf("FSEvents reported an unclassifiable checkout path %q", path)
+			break
+		}
+		nonKeyed = append(nonKeyed, rel)
+	}
+	if len(nonKeyed) == 0 {
+		return veto
+	}
+	ctx, cancel := context.WithTimeout(ctx, gateInputTime)
+	defer cancel()
+	var ignored bytes.Buffer
+	input := strings.NewReader(strings.Join(nonKeyed, "\x00") + "\x00")
+	err := runHandoffGit(ctx, e.root, input, &gateHashBudget{ctx: ctx, dst: &ignored, remaining: 8 << 20}, "check-ignore", "--no-index", "-z", "--stdin")
+	var exit *exec.ExitError
+	if err != nil && (!errors.As(err, &exit) || exit.ExitCode() != 1) {
+		return fmt.Errorf("FSEvents could not classify changes to unkeyed paths starting at %q", nonKeyed[0])
+	}
+	ignoredPaths := make(map[string]bool, len(nonKeyed))
+	for _, path := range strings.Split(ignored.String(), "\x00") {
+		ignoredPaths[path] = true
+	}
+	for _, path := range nonKeyed {
+		if !ignoredPaths[path] {
+			return fmt.Errorf("FSEvents observed a change at %q", path)
+		}
+	}
+	return veto
+}
+
+type darwinHandoffLive struct {
+	events *darwinLiveEvents
+	vnodes *darwinLiveVnodes
+}
+
+func armHandoffLiveGate(ctx context.Context, root string, inputs []string) (handoffLiveGuard, string) {
+	guard, err := armHandoffLive(ctx, root, inputs)
+	if err != nil {
+		return nil, err.Error()
+	}
+	return guard, ""
+}
+
+func armHandoffLive(ctx context.Context, root string, inputs []string) (handoffLiveGuard, error) {
+	git, err := resolveDarwinLiveGit(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	events, err := armDarwinLiveEvents(root, git)
+	if err != nil {
+		return nil, fmt.Errorf("live-verified FSEvents unavailable: %w", err)
+	}
+	if err := events.barrier(ctx, "opening"); err != nil {
+		events.close()
+		return nil, err
+	}
+	ignoredDirs, err := darwinLiveIgnoredDirs(ctx, root)
+	if err != nil {
+		events.close()
+		return nil, err
+	}
+	vnodes, err := armDarwinLiveVnodes(ctx, root, git, inputs, 4096, ignoredDirs...)
+	if err != nil {
+		events.close()
+		return nil, err
+	}
+	if current, err := resolveDarwinLiveGit(ctx, root); err != nil || current != git {
+		vnodes.close()
+		events.close()
+		return nil, errors.New("live-verified Git metadata paths changed or could not be revalidated")
+	}
+	return &darwinHandoffLive{events: events, vnodes: vnodes}, nil
+}
+
+func (g *darwinHandoffLive) close() {
+	g.vnodes.close()
+	g.events.close()
+}
+
+func (g *darwinHandoffLive) finish(ctx context.Context, inputs []string) error {
+	events := g.events.finish(ctx, inputs)
+	vnodes := g.vnodes.drain()
+	return errors.Join(events, vnodes)
+}

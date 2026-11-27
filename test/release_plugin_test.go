@@ -34,7 +34,7 @@ func newPluginReleaseRepo(t *testing.T, commands bool) *pluginReleaseRepo {
 			r.env = append(r.env, value)
 		}
 	}
-	r.env = append(r.env, "HOME="+r.root, "GIT_CONFIG_NOSYSTEM=1",
+	r.env = append(r.env, "HOME="+t.TempDir(), "GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL="+filepath.Join(r.root, "empty-gitconfig"), "GIT_TERMINAL_PROMPT=0")
 	r.write(t, "empty-gitconfig", "")
 	r.git(t, "init", "--template=", "-b", "main")

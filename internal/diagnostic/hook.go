@@ -114,10 +114,26 @@ func (h *HookInvocation) Attrs() []any {
 	return attrs
 }
 
+type HookCheckDetails struct {
+	Isolation            string
+	IsolationResidual    string
+	DeveloperFingerprint string
+}
+
 // LogHookCheck records a check's runtime without logging its arguments or output.
-func LogHookCheck(ctx context.Context, checkout, cwd, stage, name, outcome string, duration time.Duration) {
+func LogHookCheck(ctx context.Context, checkout, cwd, stage, name, outcome string, duration time.Duration, details ...HookCheckDetails) {
 	if h, ok := ctx.Value(hookKey{}).(*HookInvocation); ok {
 		attrs := append(h.Attrs(), "check_checkout", redact.Prose(filepath.Base(checkout)), "stage", stage, "check", redact.Prose(name), "outcome", outcome, "duration_ms", duration.Milliseconds())
+		if len(details) != 0 {
+			detail := details[0]
+			attrs = append(attrs, "isolation", detail.Isolation)
+			if detail.IsolationResidual != "" {
+				attrs = append(attrs, "isolation_residual", detail.IsolationResidual)
+			}
+			if detail.DeveloperFingerprint != "" {
+				attrs = append(attrs, "developer_fingerprint", detail.DeveloperFingerprint)
+			}
+		}
 		if cwd == "" {
 			cwd = checkout
 		}

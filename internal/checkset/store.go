@@ -1,6 +1,7 @@
 package checkset
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -34,21 +35,28 @@ func (s *LayeredStore) Load(slug string) (*Set, error) {
 }
 
 func (s *LayeredStore) LoadForHandoff(slug string) (*Set, error) {
-	set, root, err := s.load(slug)
+	var checks, sidecar [32]byte
+	set, root, err := s.load(slug, &checks)
 	if err != nil {
 		return nil, err
 	}
-	if err := loadSnapshotSidecar(root, slug, set); err != nil {
+	if err := loadSnapshotSidecar(root, slug, set, &sidecar); err != nil {
 		for i := range set.Checks {
 			if set.Checks[i].Stage == "handoff" {
 				set.Checks[i].InvalidSnapshotSidecar = true
 			}
 		}
+	} else {
+		revision := fmt.Sprintf("%x", sha256.Sum256(append(checks[:], sidecar[:]...)))
+		for i := range set.Checks {
+			set.Checks[i].HandoffPolicySlug = slug
+			set.Checks[i].HandoffPolicyRevision = revision
+		}
 	}
 	return set, nil
 }
 
-func (s *LayeredStore) load(slug string) (*Set, string, error) {
+func (s *LayeredStore) load(slug string, revision ...*[32]byte) (*Set, string, error) {
 	if err := attribute.ValidateSlug(slug); err != nil {
 		return nil, "", err
 	}
@@ -70,6 +78,9 @@ func (s *LayeredStore) load(slug string) (*Set, string, error) {
 		}
 		if set.Name != slug {
 			return nil, "", fmt.Errorf("check set %s: name %q must match filename", file, set.Name)
+		}
+		if len(revision) != 0 {
+			*revision[0] = sha256.Sum256(data)
 		}
 		return set, root, nil
 	}

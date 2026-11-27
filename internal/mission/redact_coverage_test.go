@@ -136,13 +136,17 @@ const (
 // writerRegistry is keyed "<dir>.<Func>" or "<dir>.<Type>.<Method>", dir
 // being slash-separated and relative to the repository root.
 var writerRegistry = map[string]writerEntry{
-	"internal/hook.copyGateInput":          exempt("copies declared input bytes to the sandbox's private tmpfs solely for verification and execution; never publishes a record"),
-	"internal/hook.pinHandoffStripe":       exempt("opens or creates an empty machine-local lock file for flock; writes no payload"),
-	"internal/hook.writeGateResult":        checkpoint("LeakRule"),
-	"internal/hook.handoffSystemMemo.save": checkpoint("LeakRule"),
-	"internal/hook.handoffRenames":         exempt("copies Git index bytes to a private temporary candidate; no record payload is authored or published, and redacting binary index bytes would corrupt them"),
-	"internal/hook.openEnvFile":            exempt("opens Claude Code's session-local CLAUDE_ENV_FILE solely to append the static export GIT_OPTIONAL_LOCKS=0 line; never publishes a repository record"),
-	"internal/layout.CreateLocalTemp":      exempt("creates an empty 0600 staging file beneath the canonical local root; takes no payload and writes no content; record-writing callers retain their redaction and final-guard obligations"),
+	"internal/hook.copyGateInput":             exempt("copies declared input bytes to the sandbox's private tmpfs solely for verification and execution; never publishes a record"),
+	"internal/hook.materializeGateSymlink":    exempt("recreates declared symlinks inside the private sandbox snapshot; never publishes a record"),
+	"internal/hook.cloneDarwinGateInput":      exempt("copies declared inputs inside the private sandbox snapshot; never publishes a record"),
+	"internal/hook.pinHandoffStripe":          exempt("opens or creates an empty machine-local lock file for flock; writes no payload"),
+	"internal/hook.probeDarwinHandoff":        exempt("writes fixed self-test fixture bytes in a private temporary directory; no record content"),
+	"internal/hook.writeDarwinHandoffProfile": exempt("writes a private per-run sandbox policy consumed as executable configuration, not as a persisted record"),
+	"internal/hook.writeGateResult":           checkpoint("LeakRule"),
+	"internal/hook.handoffSystemMemo.save":    checkpoint("LeakRule"),
+	"internal/hook.handoffRenames":            exempt("copies Git index bytes to a private temporary candidate; no record payload is authored or published, and redacting binary index bytes would corrupt them"),
+	"internal/layout.CreateLocalTemp":         exempt("creates an empty 0600 staging file beneath the canonical local root; takes no payload and writes no content; record-writing callers retain their redaction and final-guard obligations"),
+	"internal/hook.openEnvFile":               exempt("opens Claude Code's session-local CLAUDE_ENV_FILE solely to append the static export GIT_OPTIONAL_LOCKS=0 line; never publishes a repository record"),
 	// This callback-based installer preserves a user-authored Git message, not
 	// a captured mission/audit record. Pin its local staging boundary; the real
 	// installed-hook tests cover the callback rename and message bytes.
@@ -154,6 +158,8 @@ var writerRegistry = map[string]writerEntry{
 	"internal/hook.handoffRuntime.install":       exempt("installs the exact digest-pinned runtime archive in the machine-local store; it does not author a record"),
 	"internal/hook.handoffData.refresh":          exempt("streams public HTTPS data to the local data installer, not to a record"),
 	"internal/hook.handoffData.install":          exempt("installs exact public HTTPS data with freshness and digest metadata in local storage; redacting the payload would alter the mounted data"),
+	"internal/hook.liveApprovalPolicy.Approve":   exempt("stores a machine-local authorization with a Git directory identity, checkset slug, revision and grant ID; writes no policy content"),
+	"internal/hook.darwinLiveEvents.barrier":     exempt("writes an empty private FSEvents marker before removing its temporary directory; writes no record"),
 	"internal/hook.mountHandoffProcAndDev":       exempt("creates empty mount targets for device files inside the private sandbox"),
 	"internal/hook.mountHandoffSystem":           exempt("writes synthetic passwd and group files and creates empty bind targets inside the private sandbox; it does not write records"),
 	"internal/hook.writeHandoffLoopbackHosts":    exempt("writes constant resolver files inside the private sandbox; it does not write records"),

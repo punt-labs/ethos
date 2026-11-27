@@ -1,8 +1,11 @@
+//go:build linux || darwin
+
 package hook
 
 import (
 	"errors"
 	"maps"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -16,6 +19,34 @@ type handoffRoots struct {
 
 func (roots handoffRoots) home() string {
 	return filepath.Join(roots.scratch, "home")
+}
+
+const worktreeSandboxPATH = "/usr/local/bin:/usr/bin:/bin"
+
+func insideGatePath(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && filepath.IsLocal(rel)
+}
+
+func gatePlanInputsPresent(snapshot string, argv []string) bool {
+	checkout, err := os.OpenRoot(snapshot)
+	if err != nil {
+		return false
+	}
+	defer checkout.Close()
+	for _, arg := range argv {
+		if arg != gateRoot && !strings.HasPrefix(arg, gateRoot+"/") {
+			continue
+		}
+		rel := strings.TrimPrefix(arg, gateRoot+"/")
+		if arg == gateRoot {
+			rel = "."
+		}
+		if _, err := checkout.Lstat(rel); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (roots handoffRoots) replacer() *strings.Replacer {

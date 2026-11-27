@@ -78,8 +78,7 @@ func termProcessGroup(cmd *exec.Cmd) error {
 // called unconditionally after every Run(), and the common case is a group
 // that has already exited on its own with nothing left to reap (Copilot, PR
 // #515). Surfacing that as a sandbox error would read as a confusing
-// spurious failure on a perfectly healthy hook. Every other errno (EPERM, a
-// genuinely wedged process) is still returned.
+// spurious failure on a perfectly healthy hook.
 func reapProcessGroup(cmd *exec.Cmd, grace time.Duration) error {
 	if cmd.Process == nil {
 		return nil
@@ -90,8 +89,5 @@ func reapProcessGroup(cmd *exec.Cmd, grace time.Duration) error {
 			return nil // nothing left in the group
 		}
 	}
-	if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return err
-	}
-	return nil
+	return killRemainingProcessGroup(pgid)
 }

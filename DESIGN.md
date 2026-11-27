@@ -14502,5 +14502,12 @@ through the cutoff without a veto, subject to the documented residuals.
 A detected change or unresolved coverage visibly defers. This is not
 snapshot isolation and does not relax the Darwin snapshot sandbox.
 
+Only a machine-local operator pin grants live admission. The pin binds the
+repository, checkset slug, and SHA-256 revision of the resolved check YAML and
+snapshot sidecar. Revocation invalidates cached verdicts.
+Live mode keys the host's selected developer directory and rechecks it
+before publishing. Operator approval accepts that a live Xcode can reside
+under an admin-writable parent; the snapshot trust rule is unchanged.
+
 See the [Darwin amendment](docs/design-darwin-live-verified.md) for the
 sidecar contract, evidence, and residual limitations.

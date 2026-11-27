@@ -23,12 +23,29 @@ validation error. The resolved mode is part of the key, cache record,
 and verdict log. A Linux runner seeing `live-verified` visibly defers;
 it neither rejects the sidecar nor executes the gate in snapshot mode.
 
-As in DES-085, policy comes from the session's canonical policy store,
-not the edited checkout. Because live verification runs unsandboxed,
-only an operator-approved policy revision may opt in. A mutable sidecar
-in the worktree (including when it is also the canonical checkout) is
-not approval. If the runner cannot establish approval, visibly defer
-before launch.
+Because live verification runs unsandboxed, selecting a policy is not
+approval, even when the policy is in the canonical checkout. An operator
+runs `ethos handoff approve-live <slug>` from the checkout. The command
+shows the resolved policy and its revision and asks for confirmation on
+an interactive stdin TTY. It refuses known Claude Code and OpenCode
+environment markers. These checks are defense in depth, not proof of
+human presence: an agent with the same host credentials can obtain a
+PTY, remove environment markers, or modify the local approval store.
+
+The pin is stored under `~/.punt-labs/ethos/live-approvals/`, outside the
+checkout and the snapshot sandbox's write access. It binds the common
+physical Git directory, checkset slug, and SHA-256 revision derived from
+both resolved YAML files' bytes. Linked worktrees share the repository
+identity but do not share approval for differing policy revisions.
+Changes to either YAML file require new approval. A missing or
+mismatched pin visibly defers before launch with
+`live-verified not approved` and the approval command. For policies
+selected by an agent or its role, use
+`ethos handoff approve-live <slug> --agent <handle>` to resolve the same
+policy the hook selected.
+Run `ethos handoff revoke-live <slug>` to remove the pin. A grant ID is
+part of the result key; revocation and reapproval cannot reuse verdicts
+from an earlier grant.
 
 The runner's optional `requires` list declares `pty`, `posix_shm`,
 or `mach_lookup`; unknown entries are validation errors, and the
@@ -51,18 +68,35 @@ inability to arm or drain either guard visibly defers; never cache
 it as a terminal result. The verdict log uses
 `isolation: live-verified`, not snapshot isolation.
 
+This slice uses the same per-key cache-stripe lease as snapshot gates.
+It does not enforce the proposed host-wide heavy-gate limit in
+[Single-flight and bounded execution](design-safe-handoff-gates.md#3-single-flight-and-bounded-execution).
+Checks with different keys or checkouts may run concurrently.
+
 1. **FSEvents:** enable file-level events and watch keyed paths and Git
-   metadata through an event ID sampled after taking the closing key.
+   metadata through the event ID of a unique sentinel written after the
+   closing key. Create its private subdirectory in the worktree-local
+   Git directory before arming either guard. Watch the checkout and both
+   Git directories in one stream; defer if they span volumes. Exclude
+   only the sentinel subtree from the Git event watch,
+   and remove the run's directory after verification. Unkeyed ignored
+   paths are not themselves vetoes, and cannot explain away a vnode
+   event. A sentinel timeout is unresolved coverage.
    Delivery may be late or coalesced. Treat `MustScanSubDirs`,
    `UserDropped`, `KernelDropped`,
    and `RootChanged` as vetoes. If the stream cannot establish coverage
    through the cutoff, defer.
 2. **kqueue:** arm an independent `EVFILT_VNODE` guard for every keyed
-   file and Git metadata including `HEAD`, `index`, and refs.
+   file and Git metadata, including the worktree-local `HEAD` and
+   `index` and the common Git directory's refs and `packed-refs`.
    Also open `EVFILT_VNODE` on each directory containing a keyed path,
-   up to and including the checkout root and `.git`. Include existing
+   up to and including the checkout root, and on the containing
+   directories of Git metadata. Include existing
    directories where a newly created file could enter the keyed set,
-   even if they contain no keyed files yet.
+   even if they contain no keyed files yet. Git-ignored directory
+   subtrees and Ethos local state are not walked; a keyed path still
+   adds its ancestors even when they are Git-ignored. Git metadata is
+   walked separately.
    On every watched file and directory, register `NOTE_WRITE`,
    `NOTE_EXTEND`, `NOTE_LINK`, `NOTE_RENAME`, `NOTE_DELETE`,
    `NOTE_REVOKE`, and `NOTE_ATTRIB`. Each registered note vetoes
@@ -116,11 +150,26 @@ keys. The transient source nevertheless changed `make lint` (exit 2).
 Attribution based on FSEvents was rejected because it can miss an event
 without a loss flag.
 
-Under the strict live-verified rule, Quarry's clean gate always
-visibly defers, never passes: XcodeGen replaces the root `.xcodeproj`
-on every run. Directing XcodeGen output into a dedicated ignored
-subdirectory or using `xcodegen --use-cache` are possible remedies;
-the choice belongs to Quarry and is outside this slice.
+Under the strict live-verified rule, Quarry's original clean gate always
+visibly deferred: XcodeGen replaced the root `.xcodeproj` on every run.
+[Quarry's consumer change](https://github.com/punt-labs/quarry-menubar/pull/89)
+moved that output to the ignored `build/xcodegen/` directory. The primed
+clean gate passed 10/10 with no deferral; the transient root Swift probe
+deferred 20/20 on kqueue alone. The first run on a fresh checkout still
+deferred on a root write. Quarry rejected `xcodegen --use-cache` because
+it could preserve an independently edited `project.pbxproj`. These are
+consumer probe results. In subsequent real-hook runs at Ethos `772a20f`,
+the clean gate passed, SwiftFormat and XCTest breaks blocked, and a
+mid-run edit deferred (one launch each).
+
+Build output such as Xcode DerivedData must go outside the checkout,
+for example into runner scratch. With DerivedData inside the checkout,
+Quarry deferred on FSEvents ordering; an independent observer recorded
+131 descending event IDs, all under Git-ignored DerivedData
+`.xcresult` paths, with no loss flags. Ordering and loss checks apply
+before filtering any path, including ignored paths. A stream that loses
+coverage or reports a descending ID defers; the diagnostic names the
+failure and the first event path.
 
 Keep the index veto strict. In the
 [optional-lock and index burst probes](https://github.com/punt-labs/quarry-menubar/tree/5d94f8305a1c21362e2a06689e89692f08278dae/docs/ethos-live-evidence),
@@ -172,7 +221,7 @@ app and cleanup. It would not by itself solve app-hosted macOS XCTest.
 
 ## Darwin toolchain trust and residuals
 
-- For the system Make shim, select
+- In snapshot mode, for the system Make shim, select
   `DEVELOPER_DIR=/Library/Developer/CommandLineTools` only if the directory
   and all ancestors are root-owned and not group- or other-writable.
   Recheck trust before launch, key the toolchain identity, and allow
@@ -184,6 +233,15 @@ app and cleanup. It would not by itself solve app-hosted macOS XCTest.
   restored between keys is not covered by endpoint comparison alone.
 - Live-verified gates run unsandboxed: they can read unkeyed host files
   and ignored checkout inputs, such as DerivedData and local config.
+  They get the declared sidecar PATH, not the caller's PATH. Declared
+  system tools are resolved and fingerprinted on that PATH.
+  The developer directory comes from the declared `DEVELOPER_DIR` or
+  `xcode-select -p`. Key its resolved path and Xcode's `Info.plist`
+  and `version.plist` (or the CLT package receipt and SDK settings),
+  and recheck those inputs before publishing. Operator approval
+  accepts the residual of using a live Xcode under an admin-writable
+  `/Applications`: a replacement restored between samples can escape
+  this check. This does not relax snapshot trust.
   Writes to keyed paths veto rather than pass; active editing can
   cause deferrals. These limits must not be reported as snapshot
   isolation.
