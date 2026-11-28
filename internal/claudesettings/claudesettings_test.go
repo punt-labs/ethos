@@ -1,6 +1,7 @@
 package claudesettings
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,6 +10,21 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/layout"
 )
+
+func TestRegisterInsertsWithoutReorderingExistingRules(t *testing.T) {
+	root := t.TempDir()
+	path := writeSettings(t, root, `{"permissions":{"allow":["C","Z","A"]}}`)
+	if _, err := Register(root, map[string][]string{"allow": {"Y", "B"}}, policy(t, root)); err != nil {
+		t.Fatal(err)
+	}
+	var got struct{ Permissions struct{ Allow []string } }
+	if err := json.Unmarshal([]byte(readString(t, path)), &got); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"B", "C", "Y", "Z", "A"}; !slices.Equal(got.Permissions.Allow, want) {
+		t.Errorf("allow = %v, want %v", got.Permissions.Allow, want)
+	}
+}
 
 var rules = map[string][]string{
 	"allow": {"Bash(t:*)", "mcp__t__*"},

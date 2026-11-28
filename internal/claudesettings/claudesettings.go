@@ -51,14 +51,14 @@ func PreflightWithEnv(repoRoot string, rules map[string][]string, env map[string
 	return nil
 }
 
-// Register appends each rule to its permissions tier, creating the file when
+// Register inserts each rule into its permissions tier, creating the file when
 // absent, and returns the rules it added.
 func Register(repoRoot string, rules map[string][]string, p layout.Policy) ([]string, error) {
 	added, _, err := update(repoRoot, rules, nil, p, true)
 	return added, err
 }
 
-// RegisterWithEnv appends each rule to its permissions tier and sets each
+// RegisterWithEnv inserts each rule into its permissions tier and sets each
 // absent env default in one atomic write, creating the file when absent.
 // Existing env entries are preserved so user overrides are never clobbered.
 func RegisterWithEnv(repoRoot string, rules map[string][]string, env map[string]string, p layout.Policy) ([]string, []string, error) {
@@ -200,7 +200,13 @@ func apply(data []byte, rules map[string][]string, env map[string]string, grant 
 			}
 			changedRules = append(changedRules, tierChanged...)
 			if grant {
-				existing = append(existing, tierChanged...)
+				for _, rule := range slices.Sorted(slices.Values(tierChanged)) {
+					pos := slices.IndexFunc(existing, func(current string) bool { return current > rule })
+					if pos == -1 {
+						pos = len(existing)
+					}
+					existing = slices.Insert(existing, pos, rule)
+				}
 			} else {
 				existing = slices.DeleteFunc(existing, func(r string) bool {
 					return slices.Contains(owned, r)

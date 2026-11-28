@@ -54,10 +54,9 @@ func appendable(real string, data []byte) error {
 	return nil
 }
 
-// Register appends line to the CLAUDE.md at path when no top-level,
-// terminator-insensitive match is already present, and returns whether it
-// wrote. A missing file is created (mode 0644). Every byte outside the
-// appended line is preserved; the appended line uses the host's EOL.
+// Register inserts line among top-level tool imports in CLAUDE.md or appends
+// it if there are none. It keeps the first live match and removes duplicates.
+// A missing file is created (mode 0644). New lines use the host's EOL.
 // A repository directory-sync failure returns true and an
 // *layout.InstallDurabilityError: the edit applied, but durability is unconfirmed.
 // A matching-file retry also confirms directory durability; it returns false
@@ -76,20 +75,26 @@ func Register(path, line string, opts ...Option) (bool, error) {
 		if err != nil {
 			return err
 		}
-		if len(matchIndices(data, line)) > 0 {
+		var out []byte
+		matches := matchIndices(data, line)
+		switch len(matches) {
+		case 0:
+			if err := appendable(real, data); err != nil {
+				return err
+			}
+			out = insertImport(data, line)
+		case 1:
 			return confirmUnchangedHost(real, policies...)
+		default:
+			duplicates := matches[1:]
+			for i, raw := range textscan.SplitKeepEnds(data) {
+				if len(duplicates) != 0 && i == duplicates[0] {
+					duplicates = duplicates[1:]
+					continue
+				}
+				out = append(out, raw...)
+			}
 		}
-		if err := appendable(real, data); err != nil {
-			return err
-		}
-		eol := textscan.DetectEOL(data)
-		out := make([]byte, 0, len(data)+len(line)+2*len(eol))
-		out = append(out, data...)
-		if len(data) > 0 && !endsWithTerminator(data) {
-			out = append(out, eol...)
-		}
-		out = append(out, line...)
-		out = append(out, eol...)
 		if err := writeAtomic(real, path, out, mode, policies...); err != nil {
 			var applied *layout.InstallDurabilityError
 			wrote = errors.As(err, &applied)
@@ -99,6 +104,44 @@ func Register(path, line string, opts ...Option) (bool, error) {
 		return nil
 	}, policies...)
 	return wrote, err
+}
+
+func insertImport(data []byte, line string) []byte {
+	lines := textscan.SplitKeepEnds(data)
+	at := len(lines)
+	if toolImport(line) {
+		top, _ := scanTopLevel(lines)
+		for i, raw := range lines {
+			content := strings.TrimRight(textscan.StripTerminator(raw), " \t")
+			if !top[i] || !toolImport(content) {
+				continue
+			}
+			if content > line {
+				at = i
+				break
+			}
+			at = i + 1
+		}
+	}
+	eol := textscan.DetectEOL(data)
+	out := make([]byte, 0, len(data)+len(line)+2*len(eol))
+	out = append(out, strings.Join(lines[:at], "")...)
+	if len(out) > 0 && !endsWithTerminator(out) {
+		out = append(out, eol...)
+	}
+	out = append(out, line...)
+	out = append(out, eol...)
+	return append(out, strings.Join(lines[at:], "")...)
+}
+
+func toolImport(line string) bool {
+	rest, ok := strings.CutPrefix(line, "@.punt-labs/")
+	if !ok {
+		return false
+	}
+	rest = strings.TrimPrefix(rest, "local/")
+	tool, ok := strings.CutSuffix(rest, "/CLAUDE.md")
+	return ok && tool != "" && !strings.ContainsAny(tool, "/\\ \t")
 }
 
 // Deregister removes every top-level, terminator-insensitive match of line
