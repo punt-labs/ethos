@@ -69,6 +69,7 @@ func TestCLI_SetupSnapshot_LegacyOnlySelectionSurvives(t *testing.T) {
 	stdout, stderr, code := runCLI(t, se, "team", "active")
 	require.Equal(t, 0, code, stderr)
 	assert.Contains(t, stdout, "foundation (source: global")
+	markHookFixtureEnabled(t, se.repo)
 	stdout, stderr, code = runHookIn(t, se, se.repo, "session-start", `{"session_id":"legacy-next-request"}`)
 	require.Equal(t, 0, code, stderr)
 	assert.Contains(t, stdout, "## Team: foundation", "the next request must load the persisted team")

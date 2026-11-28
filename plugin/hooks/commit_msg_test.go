@@ -463,7 +463,7 @@ func enabledMessageRepo(t *testing.T, linked bool) (store, checkout, hooksDir st
 	}
 	env = append(hookEnv(home, bin, sessionID), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 	stageSession(t, home, sessionID, "m-2026-11-04-043", "d-2026-11-04-043")
-	cmd := exec.Command(filepath.Join(bin, "ethos"), "enable")
+	cmd := exec.Command(filepath.Join(bin, "ethos"), "enable", "--scope", "project")
 	cmd.Dir, cmd.Env = checkout, env
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "enable must really install the hooks: %s", out)

@@ -92,6 +92,10 @@ func firstWord(args []string) int {
 func main() {
 	hook.RunHandoffSandbox()
 	startLogging()
+	if dormantHook(os.Args[1:]) {
+		finishProcess(0, nil)
+		return
+	}
 	err := unknownGroupCommand(os.Args[1:])
 	if err == nil {
 		err = rootCmd.Execute()

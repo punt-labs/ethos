@@ -25,6 +25,7 @@ import (
 func TestCLI_HookSnapshotEntryPoints(t *testing.T) {
 	require.NotEmpty(t, ethosBinary, "the current CLI binary must build; this acceptance must not skip")
 	se := freshCLIEnv(t, "snapshot-human")
+	markHookFixtureEnabled(t, se.repo)
 	_, stderr, code := runCLI(t, se, "seed")
 	require.Equal(t, 0, code, stderr)
 	answers := writeAnswers(t, se.repo, "name: Snapshot Human\nhandle: snapshot-human\n")
@@ -102,6 +103,7 @@ func TestCLI_HookAuditSnapshotLinkedWorktree(t *testing.T) {
 			// development checkout. This fixture installs no Git hooks.
 			home, store := t.TempDir(), t.TempDir()
 			gitInitDir(t, store, home)
+			markHookFixtureEnabled(t, store)
 			env := []string{"HOME=" + home, "PATH=" + os.Getenv("PATH"), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null"}
 			checkout := filepath.Join(t.TempDir(), "feature")
 			for _, args := range [][]string{
@@ -113,6 +115,7 @@ func TestCLI_HookAuditSnapshotLinkedWorktree(t *testing.T) {
 				out, err := cmd.CombinedOutput()
 				require.NoError(t, err, string(out))
 			}
+			markHookFixtureEnabled(t, checkout)
 			require.NoError(t, os.MkdirAll(filepath.Join(store, ".punt-labs"), 0o755))
 			require.NoError(t, os.WriteFile(filepath.Join(store, ".punt-labs", "ethos.yaml"), []byte("record: "+mode+"\n"), 0o600))
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

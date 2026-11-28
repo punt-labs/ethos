@@ -37,6 +37,7 @@ func TestMissionExportFullRequiresActualHookCreatedPrompt(t *testing.T) {
 	init := exec.Command("git", "init", se.repo)
 	init.Env = se.env
 	out, err := init.CombinedOutput()
+	markHookFixtureEnabled(t, se.repo)
 	require.NoError(t, err, "%s", out)
 	require.NoError(t, os.WriteFile(filepath.Join(se.repo, "sentinel"), []byte("staged sentinel\n"), 0o600))
 	add := exec.Command("git", "-C", se.repo, "add", "sentinel")

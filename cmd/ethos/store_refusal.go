@@ -193,14 +193,15 @@ func establishRoots(cmd *cobra.Command, _ []string) error {
 	r := locateRoots()
 	r.Global = global
 	var scope string
-	if path == "ethos enable" || path == "ethos disable" {
+	isEnable := cmd == enableCmd
+	if isEnable || cmd == disableCmd {
 		var err error
 		scope, err = enableScope(cmd)
 		if err != nil {
 			return err
 		}
 	}
-	if path == "ethos enable" && r.Checkout != "" {
+	if isEnable && r.Checkout != "" {
 		clearOptOut, err := projectEnableFlag(cmd, scope, "clear-opt-out")
 		if err != nil {
 			return err

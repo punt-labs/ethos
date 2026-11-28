@@ -40,6 +40,38 @@ func TestHooksDormantRepositoryRunsNoProbe(t *testing.T) {
 	}
 }
 
+func TestHooksRespectOffOverridesBeforeGitProbe(t *testing.T) {
+	for _, script := range []string{"pre-commit.sh", "commit-msg.sh"} {
+		for _, override := range []string{".punt-labs/ethos/opt-out", ".punt-labs/local/ethos/disabled"} {
+			t.Run(script+"/"+override, func(t *testing.T) {
+				top := t.TempDir()
+				require.NoError(t, os.Mkdir(filepath.Join(top, ".git"), 0o755))
+				enabled := filepath.Join(top, ".punt-labs/ethos/enabled")
+				require.NoError(t, os.MkdirAll(filepath.Dir(enabled), 0o755))
+				require.NoError(t, os.WriteFile(enabled, nil, 0o644))
+				file := filepath.Join(top, override)
+				require.NoError(t, os.MkdirAll(filepath.Dir(file), 0o755))
+				require.NoError(t, os.WriteFile(file, nil, 0o644))
+				require.NoError(t, runHookAt(t, script, top, fakeGitDir(t, "exit 128\n")))
+			})
+		}
+	}
+}
+
+func TestPersonallyEnabledHooksDoNotTakeDormantFastPath(t *testing.T) {
+	for _, script := range []string{"pre-commit.sh", "commit-msg.sh"} {
+		t.Run(script, func(t *testing.T) {
+			top := t.TempDir()
+			require.NoError(t, os.Mkdir(filepath.Join(top, ".git"), 0o755))
+			marker := filepath.Join(top, ".punt-labs/local/ethos/enabled")
+			require.NoError(t, os.MkdirAll(filepath.Dir(marker), 0o755))
+			require.NoError(t, os.WriteFile(marker, nil, 0o644))
+			err := runHookAt(t, script, top, fakeGitDir(t, "exit 128\n"))
+			require.Error(t, err, "an active checkout must attempt Git resolution")
+		})
+	}
+}
+
 // Where the marker is there, or the hook is not at a top level, the full
 // resolution still decides: a failing git blocks, and an enabled repository
 // reached from a subdirectory still seals.

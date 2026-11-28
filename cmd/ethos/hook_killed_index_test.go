@@ -30,6 +30,7 @@ func TestKilledPreCommitPrintedRecovery(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			se := enableSubprocessRepo(t)
+			markHookFixtureEnabled(t, se.repo)
 			if tc.committed {
 				gitRunEnv(t, se.repo, se.env, "commit", "--allow-empty", "-qm", "initial")
 			}
@@ -147,6 +148,7 @@ func TestKilledPreCommitIndexSafety(t *testing.T) {
 				root = filepath.Join(t.TempDir(), "linked")
 				gitRunEnv(t, se.repo, se.env, "worktree", "add", "--detach", root)
 				se.repo = root
+				markHookFixtureEnabled(t, root)
 			}
 			local := ".punt-labs/local/ethos/private ' [data].txt"
 			path := filepath.Join(root, local)

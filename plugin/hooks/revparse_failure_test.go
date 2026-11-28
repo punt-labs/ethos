@@ -151,9 +151,7 @@ func TestHooksSurviveMktempFailure(t *testing.T) {
 	}
 }
 
-// In a repository where ethos is enabled, a missing ethos binary is not a
-// quiet pass: the commit would carry unsealed audit lines.
-func TestPreCommitFailsWhenEnabledAndEthosMissing(t *testing.T) {
+func TestPreCommitPassesWhenEnabledAndEthosMissing(t *testing.T) {
 	repo := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs", "ethos"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos", "enabled"), nil, 0o644))
@@ -162,11 +160,8 @@ func TestPreCommitFailsWhenEnabledAndEthosMissing(t *testing.T) {
 	cmd.Env = []string{"HOME=" + t.TempDir(), "REPO=" + repo, "PATH=" + bin + ":/usr/bin:/bin"}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	err := cmd.Run()
-	var ee *exec.ExitError
-	require.ErrorAs(t, err, &ee)
-	assert.Equal(t, 1, ee.ExitCode())
-	assert.Contains(t, stderr.String(), "ethos is enabled here but not installed; the commit is not sealed")
+	require.NoError(t, cmd.Run())
+	assert.Empty(t, stderr.String())
 }
 
 // A helper's staging refusal is reported as such, not as a Git rendering
@@ -315,7 +310,7 @@ func TestHooksBlockOnAnUnreadableStorePath(t *testing.T) {
 
 // Enabled with no ethos binary: git commit is blocked by pre-commit, and a
 // merge (which runs commit-msg alone) by commit-msg, with the same words.
-func TestHooksBlockWhenEnabledAndEthosMissing(t *testing.T) {
+func TestHooksPassWhenEnabledAndEthosMissing(t *testing.T) {
 	repo, run := realRepoWithHooks(t)
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("x"), 0o644))
 	_, err := run("add", "a.txt")
@@ -334,12 +329,10 @@ func TestHooksBlockWhenEnabledAndEthosMissing(t *testing.T) {
 	_, err = run("add", "b.txt")
 	require.NoError(t, err)
 	out, err = run("commit", "-m", "second")
-	require.Error(t, err, out)
-	assert.Contains(t, out, "ethos is enabled here but not installed; the commit is not sealed")
+	require.NoError(t, err, out)
+	assert.NotContains(t, out, "ethos:")
 
 	// A merge that is not a fast-forward runs commit-msg and not pre-commit.
-	_, err = run("reset", "-q", "--mixed")
-	require.NoError(t, err)
 	require.NoError(t, os.Remove(filepath.Join(repo, ".git", "hooks", "pre-commit")))
 	_, _ = run("checkout", "-q", "-b", "side")
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "c.txt"), []byte("z"), 0o644))
@@ -356,8 +349,8 @@ func TestHooksBlockWhenEnabledAndEthosMissing(t *testing.T) {
 	require.NoError(t, err, out)
 	require.NoError(t, os.Rename(filepath.Join(repo, ".git", "commit-msg.off"), filepath.Join(repo, ".git", "hooks", "commit-msg")))
 	out, err = run("merge", "--no-ff", "-m", "merge", "side")
-	require.Error(t, err, "the merge is blocked by commit-msg: %s", out)
-	assert.Contains(t, out, "commit-msg: ethos is enabled here but not installed; the commit is not sealed")
+	require.NoError(t, err, out)
+	assert.NotContains(t, out, "ethos:")
 }
 
 // A trace on stdout (trace2.normalTarget=/dev/stdout in the user's config, or

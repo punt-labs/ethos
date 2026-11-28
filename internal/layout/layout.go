@@ -119,6 +119,9 @@ var Table = []Entry{
 	{Pattern: ".punt-labs/local/ethos/**/*.lock", Class: Never},
 	// The repository layout stamp autorepair writes (DES-084).
 	{Pattern: ".punt-labs/local/ethos/layout.yaml", Class: Never},
+	{Pattern: ".punt-labs/local/ethos/CLAUDE.md", Class: Never},
+	{Pattern: ".punt-labs/local/ethos/enabled", Class: Never},
+	{Pattern: ".punt-labs/local/ethos/disabled", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/handoff-v1/*/*.json", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/handoff-v1/*.json.lock.pin", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/handoff-data-v1/*", Class: Never},
@@ -184,6 +187,7 @@ var Table = []Entry{
 	{Pattern: ".punt-labs/ethos/CLAUDE.md", Class: Source},
 	{Pattern: ".punt-labs/ethos/ETHOS-SETUP.md", Class: Source},
 	{Pattern: ".punt-labs/ethos/enabled", Class: Source},
+	{Pattern: ".punt-labs/ethos/opt-out", Class: Source},
 	{Pattern: ".punt-labs/ethos/identities/*.yaml", Class: Source},
 	{Pattern: ".punt-labs/ethos/identities/*.ext/*.yaml", Class: Source},
 	{Pattern: ".punt-labs/ethos/personalities/*.md", Class: Source},

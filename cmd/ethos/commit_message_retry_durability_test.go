@@ -31,6 +31,7 @@ func TestCLICommitMessageRetryDirectoryDurability(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			se := freshCLIEnv(t, "message-human")
+			markHookFixtureEnabled(t, se.repo)
 			const mission = "m-2026-11-04-043"
 			se.env = append(se.env, "MISSION_ID="+mission)
 			// A populated unrelated index must survive failures and retries.

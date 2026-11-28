@@ -166,7 +166,8 @@ func TestOnlyDoctorRepairsUnbounded(t *testing.T) {
 			_ = establishRoots(c, nil)
 			cmdRoots.Store(nil)
 			path := c.CommandPath()
-			if path == "ethos hook post-edit" || path == "ethos hook stdin-watchdog" || path == "ethos hook subagent-stop" ||
+			if c == enableCmd || c == disableCmd ||
+				path == "ethos hook post-edit" || path == "ethos hook stdin-watchdog" || path == "ethos hook subagent-stop" ||
 				path == "ethos handoff approve-live" || path == "ethos handoff revoke-live" {
 				assert.Equal(t, b0, *bounded, "%s must not run storage repair", path)
 				assert.Equal(t, u0, *unbounded, "%s must not run storage repair", path)

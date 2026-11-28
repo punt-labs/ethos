@@ -208,6 +208,7 @@ class Fixture:
         self.git("config", "core.hooksPath", str(self.repo / ".git/hooks"))
         write(self.repo / "source.txt", "base\n")
         self.seed()
+        write(self.repo / RECORD / "enabled", "")
         self.git("add", "source.txt", str(RECORD))
         self.git("commit", "-m", "fixture base")
 
@@ -325,7 +326,7 @@ def default_seal(f: Fixture) -> None:
     foreign = f.repo / ".git/hooks/pre-commit"
     write(foreign, "#!/bin/sh\nprintf 'foreign-hook-ran\\n' >> \"$HOME/foreign-hook\"\n")
     foreign.chmod(0o755)
-    f.cli("enable")
+    f.cli("enable", "--scope", "project")
     first = inventory(f.repo / RECORD)
     require(b"hook pre-commit" in foreign.read_bytes(), "enable did not install the pre-commit shim")
     write(f.repo / "source.txt", "staged-A\n")
@@ -363,13 +364,13 @@ def default_seal(f: Fixture) -> None:
     f.snapshot("after-commit")
     # Do the real source commit before the separate idempotence assertion so a
     # re-enable defect cannot conceal whether the installed hook actually ran.
-    f.cli("enable")
+    f.cli("enable", "--scope", "project")
     require(first == inventory(f.repo / RECORD), "enable is not idempotent")
 
 
 def modes(f: Fixture) -> None:
     f.mode("blame")
-    f.cli("enable")
+    f.cli("enable", "--scope", "project")
     f.audit("private-before-full")
     f.cli("audit", "seal")
     f.mode("full")
@@ -397,7 +398,7 @@ def modes(f: Fixture) -> None:
 
 def audit_recovery(f: Fixture) -> None:
     f.mode("blame")
-    f.cli("enable")
+    f.cli("enable", "--scope", "project")
     f.audit("recoverable-audit-marker")
     f.cli("audit", "seal")
     chunks = list((f.repo / LOCAL / "trace/sessions").rglob("audit-*.jsonl"))
@@ -565,7 +566,7 @@ def required_event_failure(f: Fixture) -> None:
 
 def worktree_retention(f: Fixture) -> None:
     f.mode("blame")
-    f.cli("enable")
+    f.cli("enable", "--scope", "project")
     f.git("add", ".gitignore", "CLAUDE.md", str(RECORD), ".punt-labs/ethos.yaml")
     f.git("commit", "-m", "enabled fixture")
     linked = f.root / "linked"
@@ -618,7 +619,7 @@ def full_export(f: Fixture) -> None:
 
 def publish_squash(f: Fixture) -> None:
     f.mode("blame")
-    f.cli("enable")
+    f.cli("enable", "--scope", "project")
     f.git("add", ".gitignore", "CLAUDE.md", str(RECORD), ".punt-labs/ethos.yaml")
     f.git("commit", "-m", "enabled fixture")
     base = f.git("rev-parse", "HEAD").decode().strip()

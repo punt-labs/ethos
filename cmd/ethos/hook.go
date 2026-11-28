@@ -143,6 +143,28 @@ func init() {
 	rootCmd.AddCommand(hookCmd)
 }
 
+func dormantHook(args []string) bool {
+	cmd, flags, err := rootCmd.Find(args)
+	if err != nil || cmd.Parent() != hookCmd {
+		return false
+	}
+	if hook.Killed() && (cmd.Name() == "subagent-stop" || cmd.Name() == "post-edit") {
+		return false
+	}
+	for _, flag := range flags {
+		switch flag {
+		case "-h", "--help", "--probe":
+			return false
+		}
+	}
+	checkout, err := resolve.ProcessCheckout()
+	if err != nil || checkout == "" {
+		return false
+	}
+	state, err := resolve.EffectiveEnablement(checkout)
+	return err == nil && !state.Enabled
+}
+
 // refreshGitHooks adapts enable.RefreshHooksTo to the SessionStart dependency.
 // The result is filled even when err is not nil, so a partial refresh is told.
 func refreshGitHooks(checkout, store string) (hook.HookRefresh, error) {

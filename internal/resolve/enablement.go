@@ -56,6 +56,15 @@ func ProjectOptedOut(checkout string) (bool, error) {
 	return checkoutMarker(checkout, ProjectOptOutFile)
 }
 
+// ProcessCheckout locates the invoking checkout without loading its store.
+func ProcessCheckout() (string, error) {
+	checkout, err := checkoutRootIfAny()
+	if err != nil {
+		return "", err
+	}
+	return physicalRoot(checkout, "checkout")
+}
+
 func checkoutMarker(checkout, relative string) (bool, error) {
 	parts := strings.Split(relative, "/")
 	parent, err := readableEthosPath(checkout, parts[:len(parts)-1]...)
