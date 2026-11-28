@@ -11,6 +11,43 @@ import (
 
 const canonical = "@.punt-labs/ethos/CLAUDE.md"
 
+func TestRegisterSortsAndDeduplicatesToolImports(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"sorted insertion", "@.punt-labs/biff/CLAUDE.md\r\nProse\r\n@.punt-labs/vox/CLAUDE.md\r\nTail", "@.punt-labs/biff/CLAUDE.md\r\nProse\r\n" + canonical + "\r\n@.punt-labs/vox/CLAUDE.md\r\nTail"},
+		{"after last import", "@.punt-labs/biff/CLAUDE.md\nTail", "@.punt-labs/biff/CLAUDE.md\n" + canonical + "\nTail"},
+		{"duplicate", canonical + "\nProse\n" + canonical + "\n", canonical + "\nProse\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := fixture(t, "CLAUDE.md", tc.in)
+			if changed, err := Register(path, canonical); err != nil || !changed {
+				t.Fatalf("Register = %t, %v", changed, err)
+			}
+			if got := read(t, path); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+			if changed, err := Register(path, canonical); err != nil || changed {
+				t.Errorf("second Register = %t, %v", changed, err)
+			}
+		})
+	}
+}
+
+func TestToolImportOrderConverges(t *testing.T) {
+	const other = "@.punt-labs/biff/CLAUDE.md"
+	for _, order := range [][]string{{canonical, other}, {other, canonical}} {
+		path := fixture(t, "CLAUDE.md", "Existing instructions.\n")
+		for _, line := range order {
+			if changed, err := Register(path, line); err != nil || !changed {
+				t.Fatalf("Register %q = %t, %v", line, changed, err)
+			}
+		}
+		want := "Existing instructions.\n" + other + "\n" + canonical + "\n"
+		if got := read(t, path); got != want {
+			t.Errorf("order %v produced %q, want %q", order, got, want)
+		}
+	}
+}
+
 // TestMain isolates HOME so the per-user lock dir (~/.punt-labs/ethos/locks)
 // lands in a temp dir, not the developer's real home.
 func TestMain(m *testing.M) {

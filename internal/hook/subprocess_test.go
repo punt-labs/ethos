@@ -78,6 +78,7 @@ func setupSubprocessEnv(t *testing.T) *subprocessEnv {
 	gitInit.Env = gitEnv
 	initOut, initErr := gitInit.CombinedOutput()
 	require.NoError(t, initErr, "git init failed: %s", initOut)
+	markSubprocessCheckoutEnabled(t, repo)
 
 	// Repo config.
 	cfgData, err := yaml.Marshal(map[string]string{"agent": "test-agent"})
@@ -93,6 +94,13 @@ func setupSubprocessEnv(t *testing.T) *subprocessEnv {
 	}
 
 	return &subprocessEnv{home: home, repo: repo, env: testhelpers.CoverEnv(env)}
+}
+
+func markSubprocessCheckoutEnabled(t *testing.T, root string) {
+	t.Helper()
+	marker := filepath.Join(root, resolve.ProjectEnabledFile)
+	require.NoError(t, os.MkdirAll(filepath.Dir(marker), 0o755))
+	require.NoError(t, os.WriteFile(marker, nil, 0o644))
 }
 
 // runHookSubprocess spawns the ethos binary with "hook <event>",

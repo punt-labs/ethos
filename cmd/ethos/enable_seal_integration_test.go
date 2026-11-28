@@ -74,7 +74,7 @@ func TestCLI_SealLifecycleAcrossEnableDisable(t *testing.T) {
 	sealedGlob := filepath.Join(se.repo, ".punt-labs", "local", "ethos", "trace", "sessions", "*", "audit-*.jsonl")
 
 	// --- Phase 1: enabled + commit → the two live lines seal. ---
-	if _, stderr, code := runCLI(t, se, "enable"); code != 0 {
+	if _, stderr, code := runCLI(t, se, "enable", "--scope", "project"); code != 0 {
 		t.Fatalf("enable exit = %d; stderr: %s", code, stderr)
 	}
 	commit(t, se.repo, commitEnv, "work.txt", "one", "first")
@@ -93,7 +93,7 @@ func TestCLI_SealLifecycleAcrossEnableDisable(t *testing.T) {
 	// Append a third live line while enabled-then-disabled: it is stranded past
 	// the sealed watermark.
 	appendFile(t, livePath, line(3, 3))
-	if _, stderr, code := runCLI(t, se, "disable"); code != 0 {
+	if _, stderr, code := runCLI(t, se, "disable", "--scope", "project"); code != 0 {
 		t.Fatalf("disable exit = %d; stderr: %s", code, stderr)
 	}
 	commit(t, se.repo, commitEnv, "work.txt", "two", "second")
@@ -105,7 +105,7 @@ func TestCLI_SealLifecycleAcrossEnableDisable(t *testing.T) {
 	}
 
 	// --- Phase 3: re-enabled + commit → the stranded line seals. ---
-	if _, stderr, code := runCLI(t, se, "enable"); code != 0 {
+	if _, stderr, code := runCLI(t, se, "enable", "--scope", "project"); code != 0 {
 		t.Fatalf("re-enable exit = %d; stderr: %s", code, stderr)
 	}
 	commit(t, se.repo, commitEnv, "work.txt", "three", "third")
@@ -114,6 +114,36 @@ func TestCLI_SealLifecycleAcrossEnableDisable(t *testing.T) {
 	}
 	if got := countGlob(t, sealedGlob); got <= afterSeal {
 		t.Errorf("sealed chunks after re-enable = %d, want > %d — the stranded line did not seal on re-enable", got, afterSeal)
+	}
+}
+
+func TestCLI_LegacySealLeavesAuditUnsealedAfterPersonalDisable(t *testing.T) {
+	se := enableSubprocessRepo(t)
+	for _, args := range [][]string{{"enable", "--scope", "project"}, {"disable"}} {
+		if _, stderr, code := runCLI(t, se, args...); code != 0 {
+			t.Fatalf("%v: exit %d: %s", args, code, stderr)
+		}
+	}
+	live := filepath.Join(se.repo, ".punt-labs/local/ethos/sessions/legacy.audit.jsonl")
+	if err := os.MkdirAll(filepath.Dir(live), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(live, []byte("{\"ts\":\"2026-07-22T00:00:01.000000001Z\",\"event\":\"test\",\"seq\":1}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if stdout, stderr, code := runCLI(t, se, "audit", "seal"); code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("disabled seal: exit %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+	glob := filepath.Join(se.repo, ".punt-labs/local/ethos/trace/sessions/*/audit-*.jsonl")
+	if got := countGlob(t, glob); got != 0 {
+		t.Fatalf("disabled seal wrote %d archive chunks", got)
+	}
+	stdout, stderr, code := runCLI(t, se, "audit", "seal", "--dry-run")
+	if code != 0 || !strings.Contains(stdout, "1 line(s) pending") {
+		t.Fatalf("disabled dry run: exit %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+	if got := countGlob(t, glob); got != 0 {
+		t.Fatalf("disabled dry run wrote %d archive chunks", got)
 	}
 }
 

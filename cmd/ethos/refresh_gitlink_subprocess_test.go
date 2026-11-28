@@ -27,7 +27,7 @@ func TestCLI_EnableRefreshPreservesAgentsWhenGitlinkConfigIsMissing(t *testing.T
 	original := agentmark.Add("---\nname: worker\n---\n")
 	require.NoError(t, os.MkdirAll(filepath.Dir(agent), 0o755))
 	require.NoError(t, os.WriteFile(agent, []byte(original), 0o644))
-	_, stderr, code := runCLI(t, se, "enable", "--refresh")
+	_, stderr, code := runCLI(t, se, "enable", "--scope", "project", "--refresh")
 	assert.Zero(t, code, stderr)
 	assert.Contains(t, stderr, "git submodule update --init")
 	assert.Contains(t, stderr, "agent definitions left unchanged")
@@ -46,7 +46,7 @@ func TestCLI_DoctorAcceptsRefreshedLegacyStub(t *testing.T) {
 	gitRunEnv(t, store, se.env, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "Add reviewer")
 	gitRunEnv(t, se.repo, se.env, "add", ".punt-labs/ethos")
 
-	out, stderr, code := runCLI(t, se, "enable", "--refresh")
+	out, stderr, code := runCLI(t, se, "enable", "--scope", "project", "--refresh")
 	require.Zero(t, code, stderr)
 	require.Contains(t, out, "refreshed Claude agent definitions")
 	stub := filepath.Join(se.repo, ".claude", "agents", "reviewer.md")

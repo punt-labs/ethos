@@ -163,10 +163,10 @@ func reportAgentPlanProblems(plan AgentPlan) {
 // ApplyAgentPlan reports skipped members and installs a plan made from a validated
 // request snapshot. Roots and configuration are never rediscovered here.
 func ApplyAgentPlan(p layout.Policy, plan AgentPlan) error {
-	return applyAgentPlan(p, plan, nil)
+	return applyAgentPlan(p, plan, nil, nil)
 }
 
-func applyAgentPlan(p layout.Policy, plan AgentPlan, onUnmarked func(string)) error {
+func applyAgentPlan(p layout.Policy, plan AgentPlan, onUnmarked func(string), beforeWrite func(string) error) error {
 	reportAgentPlanProblems(plan)
 	if p.CheckoutRecordRoot() == "" || p.LocalRoot() == "" {
 		return fmt.Errorf("agent plan requires a repository policy")
@@ -195,6 +195,11 @@ func applyAgentPlan(p layout.Policy, plan AgentPlan, onUnmarked func(string)) er
 		}
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
+		}
+		if beforeWrite != nil {
+			if err := beforeWrite(path); err != nil {
+				return err
+			}
 		}
 		if _, err := writeAgentFileWithPolicy(p, path, file.Content); err != nil {
 			return err

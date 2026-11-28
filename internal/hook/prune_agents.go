@@ -19,6 +19,10 @@ import (
 // error never stops the rest of the sweep. A missing agents directory is
 // not an error: there is nothing to prune.
 func PruneOrphanedGeneratedAgents(checkoutRoot string, keep map[string]bool) (deleted []string, err error) {
+	return pruneOrphanedGeneratedAgents(checkoutRoot, keep, nil)
+}
+
+func pruneOrphanedGeneratedAgents(checkoutRoot string, keep map[string]bool, beforeWrite func(string) error) (deleted []string, err error) {
 	// An empty checkoutRoot would make filepath.Join collapse to the relative
 	// ".claude/agents", globbing and deleting against the process CWD instead
 	// of a real checkout. Refuse it: the caller gates on a resolved checkout,
@@ -55,6 +59,12 @@ func PruneOrphanedGeneratedAgents(checkoutRoot string, keep map[string]bool) (de
 		}
 		if !agentmark.Has(string(content)) {
 			continue
+		}
+		if beforeWrite != nil {
+			if err := beforeWrite(path); err != nil {
+				errs = append(errs, err)
+				continue
+			}
 		}
 		if removeErr := os.Remove(path); removeErr != nil {
 			errs = append(errs, fmt.Errorf("removing agent file %s: %w", path, removeErr))

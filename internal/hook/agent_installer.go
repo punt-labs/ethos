@@ -18,7 +18,7 @@ func RefreshAgentStubs(loc resolve.Located, onUnmarked func(string)) (bool, erro
 	handles, err := installAgentDefsWithOwnership(loc, nil, func(path string) {
 		skipped++
 		onUnmarked(path)
-	})
+	}, nil)
 	return len(handles) > skipped, err
 }
 

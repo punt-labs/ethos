@@ -16,6 +16,27 @@ import (
 	"github.com/punt-labs/ethos/v4/plugin/hooks"
 )
 
+func TestRepairGitignoreKeepsRuleThatProtectsAnotherToolsLocalFiles(t *testing.T) {
+	root := gitRepo(t)
+	const rule, rel = ".punt-labs/**/*.local.*", ".punt-labs/vox/creds.local.json"
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte("fixture"), 0o600))
+	ignore := filepath.Join(root, ".gitignore")
+	require.NoError(t, os.WriteFile(ignore, []byte(legacyGitignoreMarker+"\n"+rule+"\n"), 0o644))
+	p, err := layout.NewRepository(root, root, layout.RecordBlame)
+	require.NoError(t, err)
+	changed, kept, err := RepairGitignore(root, p)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, []KeptRule{{Pattern: rule, Path: path}}, kept)
+	require.Contains(t, readFile(t, ignore), LocalIgnoreRule)
+	changed, kept, err = RepairGitignore(root, p)
+	require.NoError(t, err)
+	assert.False(t, changed)
+	assert.Empty(t, kept)
+}
+
 func TestEnableRefusesRetirementWithLegacyProtectedFiles(t *testing.T) {
 	for _, tt := range []struct {
 		name, pattern, rel string
@@ -211,16 +232,7 @@ func TestPhysicalTemporaryRootAliasForDirectStaging(t *testing.T) {
 	assert.False(t, strings.Contains(readFile(t, filepath.Join(root, ".gitignore")), ".local.*"))
 }
 
-// A refused legacy-ignore retirement must not strand a stale seal section in an
-// already-enabled repo: the hook refresh is the remedy for commits a stale
-// section blocks, so it survives the refusal.
-func TestEnableRefreshesStaleHookBeforeRetirementRefusal(t *testing.T) {
-	// The expected bytes: what a clean enable chains into pre-commit.
-	clean := gitRepo(t)
-	_, err := Enable(clean)
-	require.NoError(t, err)
-	want := readFile(t, filepath.Join(clean, ".git", "hooks", "pre-commit"))
-
+func TestEnableRetirementRefusalPreservesStaleHook(t *testing.T) {
 	root := gitRepo(t)
 	hooksDir := filepath.Join(root, ".git", "hooks")
 	require.NoError(t, os.MkdirAll(hooksDir, 0o755))
@@ -243,9 +255,7 @@ func TestEnableRefreshesStaleHookBeforeRetirementRefusal(t *testing.T) {
 
 	rep, err := Enable(root)
 	require.ErrorContains(t, err, "refusing to retire legacy ignore rules")
-	got := readFile(t, hookPath)
-	assert.NotContains(t, got, "ethos audit seal || exit 2", "stale section must be replaced")
-	assert.Equal(t, want, got, "hook must match a clean enable")
+	assert.Equal(t, stale, readFile(t, hookPath))
 	require.NotNil(t, rep)
 	var reported bool
 	for _, s := range rep.Steps {
@@ -253,7 +263,7 @@ func TestEnableRefreshesStaleHookBeforeRetirementRefusal(t *testing.T) {
 			reported = true
 		}
 	}
-	assert.True(t, reported, "hook step must be reported despite the refusal: %+v", rep.Steps)
+	assert.False(t, reported, "no hook step should be reported on preflight refusal: %+v", rep.Steps)
 }
 
 // A first-time enable that refuses retirement must leave the repo untouched:
@@ -273,15 +283,7 @@ func TestEnableRefusalWithoutMarkerInstallsNoHooks(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(root, markerRel))
 }
 
-// An explicit enable that refuses retirement still rewrites a stale hook inside
-// the work tree (core.hooksPath), as a successful enable would; only the
-// SessionStart refresh leaves a tracked hook alone.
-func TestEnableRefusalRewritesInTreeHook(t *testing.T) {
-	clean := gitRepo(t)
-	_, err := Enable(clean)
-	require.NoError(t, err)
-	want := readFile(t, filepath.Join(clean, ".git", "hooks", "pre-commit"))
-
+func TestEnableRetirementRefusalPreservesInTreeHook(t *testing.T) {
 	root := gitRepo(t)
 	gitRun(t, root, "config", "core.hooksPath", ".husky")
 	husky := filepath.Join(root, ".husky")
@@ -296,8 +298,7 @@ func TestEnableRefusalRewritesInTreeHook(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(private), 0o700))
 	require.NoError(t, os.WriteFile(private, []byte("private fixture\n"), 0o600))
 
-	rep, err := Enable(root)
+	_, err := Enable(root)
 	require.ErrorContains(t, err, "refusing to retire legacy ignore rules")
-	assert.Equal(t, want, readFile(t, hookPath), "the in-tree hook is current after the refusal")
-	assert.Contains(t, strings.Join(rep.Warnings, "\n"), "inside the work tree")
+	assert.Equal(t, staleSeal, readFile(t, hookPath))
 }

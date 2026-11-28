@@ -21,6 +21,7 @@ import (
 func repositoryAuditCLI(t *testing.T, mode string) (layout.Policy, audit.Stream) {
 	t.Helper()
 	home, root, _ := auditMigrateEnv(t)
+	markHookFixtureEnabled(t, root)
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs", "ethos"), 0o700))
 	if mode != "" {
 		require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte("record: "+mode+"\n"), 0o600))
@@ -244,6 +245,7 @@ func TestRepositoryAuditLinkedWorktreeWriteSurvivesRemoval(t *testing.T) {
 	gitRun("-c", "core.hooksPath=", "-c", "commit.gpgsign=false", "-c", "user.name=fixture", "commit", "--allow-empty", "-m", "worktree fixture")
 	sibling := filepath.Join(t.TempDir(), "linked")
 	gitRun("worktree", "add", "--detach", sibling)
+	markHookFixtureEnabled(t, sibling)
 	cmd := exec.Command(ethosBinary, "hook", "audit-log")
 	cmd.Dir = sibling
 	// Clear an ambient override so discovery captures this linked checkout and

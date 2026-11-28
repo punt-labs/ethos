@@ -14,8 +14,9 @@ on demand, close it when done.
    - **"No global content"**: run `ethos seed` first (below).
    - **"No identity resolved"**: run `ethos setup` (below).
 
-Re-run `ethos enable --refresh` to update pinned guides and Claude agent
-definitions. Plain `ethos enable` leaves existing guides unchanged.
+Run `ethos enable --refresh` to update the personal guide, or
+`ethos enable --scope project --refresh` for shared guides and Claude agent
+definitions. Plain enable leaves existing guides unchanged.
 Older storage layouts need no step here: ethos upgrades them itself.
 
 ## `ethos seed` — populate global starter content (once per machine)
@@ -34,21 +35,23 @@ versions may ship additional starter content.
 
 ## `ethos enable` — turn ethos on in the current repo
 
-Deposits the vendored agent guide and its manifest, writes the enabled
-marker, adds `@.punt-labs/ethos/CLAUDE.md` to the repo's top-level
-`CLAUDE.md` (so agent sessions in this repo auto-load daily-use ethos
-guidance), and chains the audit-seal and trailer git hooks.
+By default, deposits an ignored personal guide and marker, adds its
+import to `CLAUDE.local.md`, and grants Ethos permissions in
+`.claude/settings.local.json`. Use project scope to share enablement and
+chain the audit-seal and trailer Git hooks.
 
 ```bash
 ethos enable
+# Or, for shared integration:
+ethos enable --scope project
 ```
 
 After enable, restart Claude Code once so SessionStart fires with the new
-hook configuration. `ethos disable` reverses this: it removes the import
-line, deletes the marker, and unchains the git hooks. It is non-destructive:
-the guide, config and audit data stay on disk. It refuses while a sibling
-worktree is still enabled, because the git hooks are shared; `ethos disable
---force` unchains anyway.
+hook configuration. Disable with the same scope, or use plain
+`ethos disable` to turn Ethos off personally without changing a shared
+configuration. Guides, config, and audit data stay on disk. Project
+disable protects Git hooks used by another enabled worktree unless
+`--force` is supplied. Use `ethos status` to check the effective state.
 
 ## `ethos setup` — populate this repo's identities + team
 
@@ -171,8 +174,9 @@ DOES add the `@`-import so daily-use guidance auto-injects.
 
 ## Troubleshooting for the agent
 
-- **`ethos doctor` reports "hook missing"** → the storage upgrade
-  reinstalls the audit-seal and trailer git hooks on the next ethos run.
+- **`ethos doctor` reports "hook missing"** → run
+  `ethos enable --scope project` to install the shared audit-seal and
+  trailer hooks. Personal enablement does not install Git hooks.
 - **`ethos doctor` reports "stale binary version"** → the binary on PATH
   is older than the plugin. Ask the human to run `make install` from a
   shell (agent sessions cannot overwrite their own running binary on
@@ -188,5 +192,8 @@ DOES add the `@`-import so daily-use guidance auto-injects.
 - **Regen removes files** → it doesn't. Ethos generation adds/updates but
   never deletes. To remove a stale `.claude/agents/*.md`, first remove
   the identity from every team's roster, then `git rm` the file.
-- **Uninstall** → `ethos disable` in each repo, then `ethos uninstall`
-  (or `ethos uninstall --purge` to also remove `~/.punt-labs/ethos/`).
+- **Uninstall** → to remove shared Git hook sections, run
+  `ethos disable --scope project` in the affected repos before running
+  `ethos uninstall` (or `ethos uninstall --purge` to also remove
+  `~/.punt-labs/ethos/`). Updated hooks warn but do not block Git when
+  the Ethos binary is missing.

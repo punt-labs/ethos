@@ -4,6 +4,11 @@
 # `ethos hook pre-commit`. Passes through unless ethos is enabled here.
 _host_status=$?
 _hook=pre-commit
+_off() {
+  [ -e "$1/.punt-labs/ethos/opt-out" ] || [ -L "$1/.punt-labs/ethos/opt-out" ] ||
+    [ -e "$1/.punt-labs/local/ethos/disabled" ] || [ -L "$1/.punt-labs/local/ethos/disabled" ]
+}
+[ ! -e .git ] || ! _off . || exit "$_host_status"
 _git() {
   (
     for _v in $(env | sed -n 's/^\(GIT_TRACE[A-Za-z0-9_]*\)=.*/\1/p'); do
@@ -23,7 +28,8 @@ for _component in .punt-labs .punt-labs/ethos; do
     _ethos_dormant=""
   fi
 done
-if [ -e .punt-labs/ethos/enabled ] || [ -L .punt-labs/ethos/enabled ]; then
+if [ -e .punt-labs/ethos/enabled ] || [ -L .punt-labs/ethos/enabled ] ||
+  [ -e .punt-labs/local/ethos/enabled ] || [ -L .punt-labs/local/ethos/enabled ]; then
   _ethos_dormant=""
 fi
 if [ -n "$_ethos_dormant" ] && [ -e .git ]; then
@@ -52,12 +58,14 @@ if [ -n "${_revparse_bad:-}" ] || [ ! -d "$REPO_ROOT" ]; then
   exit 1
 fi
 _ethos_path="$REPO_ROOT/.punt-labs"
-for _component in "$_ethos_path" "$_ethos_path/ethos" "$_ethos_path/ethos/enabled"; do
+_off "$REPO_ROOT" && exit "$_host_status"
+for _component in "$_ethos_path" "$_ethos_path/ethos" "$_ethos_path/ethos/enabled" \
+  "$_ethos_path/local" "$_ethos_path/local/ethos" "$_ethos_path/local/ethos/enabled"; do
   if [ -L "$_component" ] && [ ! -e "$_component" ]; then
     printf 'ethos: %s: %s is a dangling link; the commit is refused\n' "$_hook" "$_component" >&2
     exit 1
   fi
-  [ -e "$_component" ] || break
+  [ -e "$_component" ] || continue
   case "$_component" in
   */enabled)
     if [ ! -f "$_component" ]; then
@@ -73,14 +81,14 @@ for _component in "$_ethos_path" "$_ethos_path/ethos" "$_ethos_path/ethos/enable
     ;;
   esac
 done
-[ -f "$REPO_ROOT/.punt-labs/ethos/enabled" ] || exit "$_host_status"
+[ -f "$_ethos_path/ethos/enabled" ] || [ -f "$_ethos_path/local/ethos/enabled" ] || exit "$_host_status"
 if command -v ethos >/dev/null 2>&1; then
   ethos_bin="ethos"
 elif [ -x "$HOME/.local/bin/ethos" ]; then
   ethos_bin="$HOME/.local/bin/ethos"
 else
-  printf 'ethos: %s: ethos is enabled here but not installed; the commit is not sealed\n' "$_hook" >&2
-  exit 1
+  printf 'ethos: %s: binary not found; audit was not sealed\n' "$_hook" >&2
+  exit "$_host_status"
 fi
 # The subcommand prints nothing on stdout. A binary before v4.9 does not know
 # it and answers with the hook group's help on stdout and exit 0, so output is

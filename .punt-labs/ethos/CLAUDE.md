@@ -6,7 +6,7 @@ into one identity that other tools read.
 
 New in this repo, or `ethos doctor` reports missing state? Setup guide is
 deposited alongside this file at `.punt-labs/ethos/ETHOS-SETUP.md` on
-`ethos enable`. Pre-enable, fetch from
+`ethos enable --scope project`. Pre-enable, fetch from
 <https://github.com/punt-labs/ethos/blob/main/docs/ETHOS-SETUP.md>.
 Either way it's a one-time task and is deliberately not `@`-imported here.
 
@@ -17,7 +17,7 @@ Either way it's a one-time task and is deliberately not `@`-imported here.
 - `ethos session iam <persona>` — declare a persona for the current session.
 
 Session hooks inject your persona into context at start and after
-compaction. After a team change, run `ethos enable --refresh` to regenerate
+compaction. After a team change, run `ethos enable --agents-only` to regenerate
 `.claude/agents/<handle>.md`, then restart Claude Code to load the definitions.
 
 ## Delegation (missions)
@@ -120,14 +120,16 @@ backstop: contracts and commands must not contain credentials.
 
 ### Automatic storage upgrade
 
-Ethos upgrades its own storage. Every CLI command, hook and MCP call first
-checks a stamp (`S/.punt-labs/local/ethos/layout.yaml` and
+Ethos upgrades its own storage. Storage operations first check a stamp
+(`S/.punt-labs/local/ethos/layout.yaml` and
 `~/.punt-labs/ethos/layout.yaml`); when a stamp is missing, ethos converts
 older layouts into the shared local zone and appends what it did to
 `~/.punt-labs/ethos/logs/ethos.log`. The only output is one line, and only
 when something changed:
 
 `ethos: upgraded storage (N items; see ~/.punt-labs/ethos/logs/ethos.log)`
+
+Hooks and ordinary MCP requests skip this work when the checkout is off.
 
 No command is needed, and none exists. A busy lock defers the upgrade to the
 next run. Losses are logged, never fatal.

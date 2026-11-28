@@ -26,6 +26,13 @@ type cliSubprocessEnv struct {
 	env  []string // child process environment
 }
 
+func markHookFixtureEnabled(t *testing.T, checkout string) {
+	t.Helper()
+	marker := filepath.Join(checkout, ".punt-labs", "ethos", "enabled")
+	require.NoError(t, os.MkdirAll(filepath.Dir(marker), 0o755))
+	require.NoError(t, os.WriteFile(marker, nil, 0o644))
+}
+
 // setupCLISubprocessEnv creates the minimal filesystem the ethos binary
 // needs: a global identity store, a repo with config, and a real git init
 // so CheckoutRootIfAny stops at the fake repo rather than the real one.
@@ -63,6 +70,7 @@ func setupCLISubprocessEnv(t *testing.T) *cliSubprocessEnv {
 	gitInit.Env = gitEnv
 	initOut, initErr := gitInit.CombinedOutput()
 	require.NoError(t, initErr, "git init failed: %s", initOut)
+	markHookFixtureEnabled(t, repo)
 
 	// Repo config pointing at test-agent.
 	cfgData, err := yaml.Marshal(map[string]string{"agent": "test-agent"})

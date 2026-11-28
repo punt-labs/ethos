@@ -31,7 +31,7 @@ func TestCLI_LocalIgnoreComposedRules(t *testing.T) {
 				var stderr string
 				var code int
 				if operation == "enable" {
-					_, stderr, code = runCLI(t, se, "enable")
+					_, stderr, code = runCLI(t, se, "enable", "--scope", "project")
 				} else {
 					stderr, code = runLinkedIgnoreCLI(t, se, operation)
 				}
@@ -93,7 +93,7 @@ func TestCLI_LocalIgnoreSameRuleGlobstar(t *testing.T) {
 					var stderr string
 					var code int
 					if operation == "enable" {
-						_, stderr, code = runCLI(t, se, "enable")
+						_, stderr, code = runCLI(t, se, "enable", "--scope", "project")
 					} else {
 						stderr, code = runLinkedIgnoreCLI(t, se, operation)
 					}
@@ -156,7 +156,7 @@ func TestCLI_LocalIgnoreCombinedExtensions(t *testing.T) {
 				var stderr string
 				var code int
 				if operation == "enable" {
-					_, stderr, code = runCLI(t, se, "enable")
+					_, stderr, code = runCLI(t, se, "enable", "--scope", "project")
 				} else {
 					stderr, code = runLinkedIgnoreCLI(t, se, operation)
 				}
@@ -213,12 +213,17 @@ func TestCLI_EnableNestedIgnoreNegation(t *testing.T) {
 				writeRepoFile(t, root, ".punt-labs/.gitignore", linkedNestedNegation)
 				var first string
 				for attempt := range 2 {
-					_, stderr, code := runCLI(t, se, "enable", "--json")
+					_, stderr, code := runCLI(t, se, "enable", "--scope", "project", "--json")
 					require.NotZero(t, code, "defeated rule must fail on first write and retry")
 					assert.Contains(t, stderr, root)
 					assert.Contains(t, stderr, "still stageable")
 					assert.NoFileExists(t, filepath.Join(se.repo, ".punt-labs/ethos/enabled"))
-					body := assertLinkedNestedNegation(t, root)
+					body := readGitignore(t, filepath.Join(root, ".gitignore"))
+					assert.Equal(t, linkedNestedNegation, readGitignore(t, filepath.Join(root, ".punt-labs", ".gitignore")))
+					covered, err := enable.LocalIgnored(root)
+					require.NoError(t, err)
+					assert.False(t, covered)
+					assert.Equal(t, initial, body)
 					if attempt == 0 {
 						first = body
 					} else {
@@ -226,7 +231,7 @@ func TestCLI_EnableNestedIgnoreNegation(t *testing.T) {
 					}
 				}
 				writeRepoFile(t, root, ".punt-labs/.gitignore", linkedNestedRepair)
-				_, stderr, code := runCLI(t, se, "enable", "--json")
+				_, stderr, code := runCLI(t, se, "enable", "--scope", "project", "--json")
 				require.Equal(t, 0, code, stderr)
 				assert.FileExists(t, filepath.Join(se.repo, ".punt-labs/ethos/enabled"))
 				for _, root := range []string{store, se.repo} {

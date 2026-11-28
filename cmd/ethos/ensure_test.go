@@ -5,6 +5,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -77,7 +79,7 @@ func TestEveryCommandPassesEnsure(t *testing.T) {
 	// stick, and later tests that read a command's stderr would see nothing.
 	rootCmd.SetErr(&bytes.Buffer{})
 	t.Cleanup(func() { rootCmd.SetErr(nil) })
-	exempt := map[string]bool{"version": true, "completion": true, "help": true, "uninstall": true}
+	exempt := map[string]bool{"version": true, "completion": true, "help": true, "uninstall": true, "status": true, "enable": true, "disable": true}
 	var walk func(c *cobra.Command)
 	walk = func(c *cobra.Command) {
 		if c != rootCmd {
@@ -100,6 +102,27 @@ func TestEveryCommandPassesEnsure(t *testing.T) {
 		}
 	}
 	walk(rootCmd)
+}
+
+func TestDisabledSealDoesNotRunStorageRepair(t *testing.T) {
+	dir := enableGitRepo(t)
+	t.Chdir(dir)
+	marker := filepath.Join(dir, resolve.ProjectOptOutFile)
+	require.NoError(t, os.MkdirAll(filepath.Dir(marker), 0o755))
+	require.NoError(t, os.WriteFile(marker, nil, 0o644))
+	n := fakeEnsure(t, autorepair.Result{})
+	t.Cleanup(func() {
+		auditSealDryRun = false
+		cmdRoots.Store(nil)
+	})
+	for _, dryRun := range []bool{false, true} {
+		auditSealDryRun = dryRun
+		require.NoError(t, establishRoots(auditSealCmd, nil))
+		if !dryRun {
+			require.NoError(t, auditSealCmd.RunE(auditSealCmd, nil))
+		}
+	}
+	assert.Zero(t, *n)
 }
 
 // assertRootHookIsNearest fails when a command between c and the root
@@ -144,7 +167,7 @@ func TestExecutedCommandReachesEnsureOnce(t *testing.T) {
 	n := fakeEnsure(t, autorepair.Result{})
 	// doctor exits non-zero when any check fails, which it does outside a
 	// set-up repository; the fixture makes every check pass.
-	setInProcessEnv(t, setupCLISubprocessEnv(t))
+	setInProcessEnv(t, doctorFixture(t))
 	_, _, err := execHandler(t, "doctor", "--json")
 	require.NoError(t, err)
 	assert.Equal(t, 1, *n, "doctor passed Ensure %d times", *n)
@@ -158,7 +181,7 @@ func TestOnlyDoctorRepairsUnbounded(t *testing.T) {
 	rootCmd.SetErr(&bytes.Buffer{})
 	t.Cleanup(func() { rootCmd.SetErr(nil) })
 	bounded, unbounded := fakeEnsureGates(t, autorepair.Result{})
-	exempt := map[string]bool{"version": true, "completion": true, "help": true, "uninstall": true}
+	exempt := map[string]bool{"version": true, "completion": true, "help": true, "uninstall": true, "status": true}
 	var walk func(c *cobra.Command)
 	walk = func(c *cobra.Command) {
 		if c != rootCmd && !exempt[topLevel(c)] {
@@ -166,7 +189,8 @@ func TestOnlyDoctorRepairsUnbounded(t *testing.T) {
 			_ = establishRoots(c, nil)
 			cmdRoots.Store(nil)
 			path := c.CommandPath()
-			if path == "ethos hook post-edit" || path == "ethos hook stdin-watchdog" || path == "ethos hook subagent-stop" ||
+			if c == enableCmd || c == disableCmd ||
+				path == "ethos hook post-edit" || path == "ethos hook stdin-watchdog" || path == "ethos hook subagent-stop" ||
 				path == "ethos handoff approve-live" || path == "ethos handoff revoke-live" {
 				assert.Equal(t, b0, *bounded, "%s must not run storage repair", path)
 				assert.Equal(t, u0, *unbounded, "%s must not run storage repair", path)

@@ -102,8 +102,15 @@ func TestRunVersion_JSON(t *testing.T) {
 
 // --- doctor ---
 
-func TestRunDoctor_AllPass(t *testing.T) {
+func doctorFixture(t *testing.T) *cliSubprocessEnv {
+	t.Helper()
 	se := setupCLISubprocessEnv(t)
+	require.NoError(t, os.Remove(filepath.Join(se.repo, ".punt-labs", "ethos", "enabled")))
+	return se
+}
+
+func TestRunDoctor_AllPass(t *testing.T) {
+	se := doctorFixture(t)
 	setInProcessEnv(t, se)
 
 	stdout, _, err := execHandler(t, "doctor")
@@ -123,7 +130,7 @@ func TestRunDoctor_AllPass(t *testing.T) {
 // %-24s, pushing its Status/Detail into the name column instead of the
 // aligned Status column every other row uses.
 func TestRunDoctor_TableColumnFitsLongestName(t *testing.T) {
-	se := setupCLISubprocessEnv(t)
+	se := doctorFixture(t)
 	setInProcessEnv(t, se)
 
 	stdout, _, err := execHandler(t, "doctor")
@@ -179,7 +186,7 @@ func TestRunDoctor_Failure(t *testing.T) {
 }
 
 func TestRunDoctor_JSON(t *testing.T) {
-	se := setupCLISubprocessEnv(t)
+	se := doctorFixture(t)
 	setInProcessEnv(t, se)
 
 	stdout, _, err := execHandler(t, "doctor", "--json")
@@ -188,7 +195,7 @@ func TestRunDoctor_JSON(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(stdout), &results))
 	// DES-079 adds physical placement and exact agent-file currency checks;
 	// DES-083 adds the hook binary check; DES-084 adds the Storage row.
-	require.Len(t, results, 20)
+	require.Len(t, results, 21)
 	names := make([]string, len(results))
 	for i, r := range results {
 		names[i] = r["name"]

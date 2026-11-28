@@ -91,6 +91,10 @@ Exit codes:
   2  invalid policy, archival failure outside that exception, or full publication failure`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		roots := currentRoots()
+		if !auditSealDryRun && roots.CheckoutErr == nil && explicitlyDormantSeal(roots.Checkout) {
+			return nil
+		}
 		return runAuditSeal(cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
@@ -201,6 +205,14 @@ func sameCheckout(a, b string) bool {
 		return false
 	}
 	return os.SameFile(ai, bi)
+}
+
+func explicitlyDormantSeal(checkout string) bool {
+	if checkout == "" {
+		return false
+	}
+	state, err := resolve.EffectiveEnablement(checkout)
+	return err == nil && !state.Enabled && state.DecidingFile != ""
 }
 
 // runAuditSeal is the audit-seal command implementation. It seals every

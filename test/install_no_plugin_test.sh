@@ -113,6 +113,8 @@ run ETHOS_NO_PLUGIN=1 --
 assert_rc       "ETHOS_NO_PLUGIN=1: exit 0" 0
 assert_contains "ETHOS_NO_PLUGIN=1: skip announced" "plugin install skipped by request"
 assert_contains "ETHOS_NO_PLUGIN=1: CLI-only message" "CLI-only mode"
+assert_contains "ETHOS_NO_PLUGIN=1: personal enablement next step" "ethos enable"
+assert_contains "ETHOS_NO_PLUGIN=1: shared enablement next step" "--scope project to share"
 assert_absent   "ETHOS_NO_PLUGIN=1: no plugin restart line" "Restart Claude Code"
 assert_contains "ETHOS_NO_PLUGIN=1: requested remediation" "Re-run the installer without --no-plugin"
 assert_contains "ETHOS_NO_PLUGIN=1: remediation names env var" "ETHOS_NO_PLUGIN"
@@ -157,6 +159,8 @@ run --
 assert_rc       "default: exit 0" 0
 assert_contains "default: claude detected" "claude CLI found"
 assert_contains "default: plugin path message" "is ready!"
+assert_contains "default: personal enablement next step" 'run "ethos enable"'
+assert_contains "default: shared enablement next step" "ethos enable --scope project"
 assert_contains "default: plugin restart line" "Restart Claude Code"
 assert_absent   "default: not CLI-only" "CLI-only mode"
 rm -rf "$SANDBOX"

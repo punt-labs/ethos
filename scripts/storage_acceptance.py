@@ -159,7 +159,7 @@ class Runner:
         return env if self.coverdir is None else env | {"GOCOVERDIR": str(self.coverdir)}
 
     def run(self, args: list[str], cwd: Path, env: dict[str, str],
-            data: str | None = None, ok: bool = True, timeout: int = 60) -> subprocess.CompletedProcess[bytes]:
+            data: str | None = None, ok: bool | None = True, timeout: int = 60) -> subprocess.CompletedProcess[bytes]:
         self.sequence += 1
         base = self.directory / f"{self.sequence:04d}"
         save_json(base.with_suffix(".command.json"), {"argv": args, "cwd": str(cwd), "stdin": data})
@@ -180,7 +180,7 @@ class Runner:
         write(base.with_suffix(".stderr"), result.stderr)
         save_json(base.with_suffix(".exit.json"), {"exit": result.returncode})
         require(result.returncode >= 0, f"command killed by signal {-result.returncode}: {args}; evidence {base}")
-        require((result.returncode == 0) == ok,
+        require(ok is None or (result.returncode == 0) == ok,
                 f"expected {'success' if ok else 'refusal'}, exit {result.returncode}: {args}; "
                 f"{result.stderr.decode(errors='replace')[-2000:]}; evidence {base}")
         return result
@@ -208,6 +208,7 @@ class Fixture:
         self.git("config", "core.hooksPath", str(self.repo / ".git/hooks"))
         write(self.repo / "source.txt", "base\n")
         self.seed()
+        write(self.repo / RECORD / "enabled", "")
         self.git("add", "source.txt", str(RECORD))
         self.git("commit", "-m", "fixture base")
 
@@ -325,7 +326,7 @@ def default_seal(f: Fixture) -> None:
     foreign = f.repo / ".git/hooks/pre-commit"
     write(foreign, "#!/bin/sh\nprintf 'foreign-hook-ran\\n' >> \"$HOME/foreign-hook\"\n")
     foreign.chmod(0o755)
-    f.cli("enable")
+    f.cli("enable", "--scope", "project")
     first = inventory(f.repo / RECORD)
     require(b"hook pre-commit" in foreign.read_bytes(), "enable did not install the pre-commit shim")
     write(f.repo / "source.txt", "staged-A\n")
@@ -363,13 +364,13 @@ def default_seal(f: Fixture) -> None:
     f.snapshot("after-commit")
     # Do the real source commit before the separate idempotence assertion so a
     # re-enable defect cannot conceal whether the installed hook actually ran.
-    f.cli("enable")
+    f.cli("enable", "--scope", "project")
     require(first == inventory(f.repo / RECORD), "enable is not idempotent")
 
 
 def modes(f: Fixture) -> None:
     f.mode("blame")
-    f.cli("enable")
+    f.cli("enable", "--scope", "project")
     f.audit("private-before-full")
     f.cli("audit", "seal")
     f.mode("full")
@@ -397,7 +398,7 @@ def modes(f: Fixture) -> None:
 
 def audit_recovery(f: Fixture) -> None:
     f.mode("blame")
-    f.cli("enable")
+    f.cli("enable", "--scope", "project")
     f.audit("recoverable-audit-marker")
     f.cli("audit", "seal")
     chunks = list((f.repo / LOCAL / "trace/sessions").rglob("audit-*.jsonl"))
@@ -565,7 +566,7 @@ def required_event_failure(f: Fixture) -> None:
 
 def worktree_retention(f: Fixture) -> None:
     f.mode("blame")
-    f.cli("enable")
+    f.cli("enable", "--scope", "project")
     f.git("add", ".gitignore", "CLAUDE.md", str(RECORD), ".punt-labs/ethos.yaml")
     f.git("commit", "-m", "enabled fixture")
     linked = f.root / "linked"
@@ -618,7 +619,7 @@ def full_export(f: Fixture) -> None:
 
 def publish_squash(f: Fixture) -> None:
     f.mode("blame")
-    f.cli("enable")
+    f.cli("enable", "--scope", "project")
     f.git("add", ".gitignore", "CLAUDE.md", str(RECORD), ".punt-labs/ethos.yaml")
     f.git("commit", "-m", "enabled fixture")
     base = f.git("rev-parse", "HEAD").decode().strip()
@@ -950,8 +951,11 @@ def upgrade(f: Fixture) -> None:
             result = f.run.run(list(args), repo, env, data=data)
             return (result.stdout + result.stderr).decode(errors="replace")
 
+        status = json.loads(entry(str(f.binary), "status", "--json"))
         start = entry(str(f.binary), "hook", "session-start",
                       data=json.dumps({"session_id": "upgrade-" + label, "source": "startup", "cwd": str(repo)}))
+        if not status["enabled"]:
+            require(not start.strip(), f"{label}: dormant SessionStart printed output: {start!r}")
         write(repo / "upgrade-new-file.txt", "new work after upgrade\n")
         entry("git", "add", "upgrade-new-file.txt")
         commit = entry("git", "commit", "-m", "work after upgrade")
@@ -970,9 +974,15 @@ def upgrade(f: Fixture) -> None:
         # doctor refuses to run with the test-harness override set, so it gets the
         # environment a user's shell has.
         doctor_env = {k: v for k, v in env.items() if k != "ETHOS_TEST_NOT_UNDER_CLAUDE_CODE"}
-        doctor_env["ETHOS_SESSION"] = "upgrade-" + label
-        doctor = (f.run.run([str(f.binary), "doctor"], repo, doctor_env).stdout).decode(errors="replace")
-        require(re.search(r"^\s*Storage\b", doctor, re.MULTILINE), f"{label}: ethos doctor has no Storage row:\n{doctor}")
+        if status["enabled"]:
+            doctor_env["ETHOS_SESSION"] = "upgrade-" + label
+        doctor = f.run.run([str(f.binary), "doctor", "--json"], repo, doctor_env,
+                           ok=True if status["enabled"] else None)
+        require(doctor.returncode in (0, 1), f"{label}: unexpected doctor exit {doctor.returncode}")
+        checks = json.loads(doctor.stdout)
+        require(any(row["name"] == "Storage" for row in checks), f"{label}: ethos doctor has no Storage row")
+        failures = {row["name"] for row in checks if row["status"] == "FAIL"}
+        require(not failures - {"Human identity"}, f"{label}: ethos doctor failed checks: {sorted(failures)}")
         scan_for_leaks(scratch, home, repo, restored_head)
 
 

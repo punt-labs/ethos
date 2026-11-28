@@ -78,6 +78,7 @@ Paths in the first column are relative to S unless C is explicit.
 | Staging and quarantine | `.punt-labs/local/ethos/tmp/` (`Policy.TempDir`) and `.punt-labs/local/ethos/quarantine/`. Staging files carry the `.ethos-tmp` marker in their names (`internal/layout/temp.go`: `TmpPattern` gives `<base>-*<ext>.ethos-tmp`, `DotTmp` gives `.<name>.ethos-tmp`) | Never published |
 | Mission summary live logs | `.punt-labs/local/ethos/missions/*.jsonl` | Never published |
 | Repository extension overlay | `.punt-labs/local/ethos/identities/<handle>.ext/<ns>.local.yaml` | Local; base remains in the identity's source layer |
+| Personal enablement | C's `.punt-labs/local/ethos/{enabled,disabled,CLAUDE.md}`, `CLAUDE.local.md` import, and `.claude/settings.local.json` grants | Never published |
 | Other local state not listed above | `.punt-labs/local/ethos/` | Never published |
 | Team bundles in the repository | `.punt-labs/ethos-bundles/**` | Source |
 | Submodule registration | `.gitmodules` (written by `team add-bundle`) | Source |
@@ -86,7 +87,7 @@ Paths in the first column are relative to S unless C is explicit.
 | Git hook files | hook files under an in-tree `core.hooksPath` | Source |
 | Older layouts | record-tree locks (`missions/**/*.lock`, `missions.jsonl.lock`, `identities/*.yaml.lock`), `missions/*/log.jsonl`, `log-*.quarantine`, `*.corrupt*`, `sessions/*/audit.jsonl`, `.punt-labs/ethos/config.yaml`, singular `reflection-intent.yaml` | The automatic storage upgrade converts or deletes them (steps 1-15); nothing reads them afterward. `missions/*/artifacts/**` is agent-owned and never touched |
 | New worker artifacts | `.punt-labs/local/ethos/artifacts/missions/<id>/delegations/<d>/`, the value pre-tool-use exports as `MISSION_ARTIFACTS_DIR` (`internal/mission/delegation.go`, `internal/hook/pretooluse_dispatch.go`) | Agent-owned, not automatically exported or redacted |
-| Generated agents and enablement guides | C's `.claude/agents/*.md` (generated plus the three seeded review agents), the `CLAUDE.md` `@`-import, the `.gitignore` rule `.punt-labs/local/`, and `.punt-labs/ethos/{CLAUDE.md,ETHOS-SETUP.md,enabled,.vendored-manifest}` | Intended source; staging still local to S |
+| Generated agents and enablement guides | C's `.claude/agents/*.md` (generated plus the three seeded review agents), the `CLAUDE.md` `@`-import, the `.gitignore` rule `.punt-labs/local/`, and `.punt-labs/ethos/{CLAUDE.md,ETHOS-SETUP.md,enabled,opt-out,.vendored-manifest}` | Intended source; staging still local to S |
 
 The delegation prompt and its consent receipt are
 `.punt-labs/local/ethos/trace/missions/<id>/delegations/<d>/{prompt.md,prompt-consent.yaml}`.
@@ -440,7 +441,7 @@ with their associated trace), full-mode published copies, agent-written
 artifacts, user `.gitignore` lines outside the former managed block, foreign
 git hooks and git history. The upgrade does not stage or commit anything, and
 there is no backup. Reconnect long-lived MCP servers after installing a new
-binary. Re-running `enable` maintains the shared local-zone exclusion and
+binary. Re-running `ethos enable --scope project` maintains the shared local-zone exclusion and
 current hooks, not record-tree ignore exceptions.
 
 **Private overlays.** A repository sibling

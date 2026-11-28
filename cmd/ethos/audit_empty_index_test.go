@@ -101,7 +101,7 @@ func TestAuditEmptyIndexActualCLI(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				if !entry.IsDir() {
+				if !entry.IsDir() && path != filepath.Join(p.RecordRoot(), "enabled") {
 					records = append(records, path)
 				}
 				return nil

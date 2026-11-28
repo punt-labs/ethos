@@ -124,6 +124,7 @@ func setupMCPTestEnv(t *testing.T) *mcpTestEnv {
 	// Repo: git init so CheckoutRootIfAny stops here.
 	repoEthos := filepath.Join(repo, ".punt-labs", "ethos")
 	require.NoError(t, os.MkdirAll(filepath.Join(repoEthos, "identities"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repoEthos, "enabled"), nil, 0o644))
 
 	gitEnv := []string{
 		"HOME=" + home,
@@ -246,6 +247,24 @@ func TestMCP_ToolsList(t *testing.T) {
 	} {
 		assert.True(t, names[want], "tools/list should include %q", want)
 	}
+}
+
+func TestMCP_EnablementChangesRunningServer(t *testing.T) {
+	env := setupMCPTestEnv(t)
+	require.NoError(t, os.Remove(filepath.Join(env.repo, ".punt-labs/ethos/enabled")))
+	require.NoError(t, os.WriteFile(filepath.Join(env.repo, ".gitignore"),
+		[]byte(".punt-labs/local/\nCLAUDE.local.md\n.claude/settings.local.json\n"), 0o644))
+	c := startMCPClient(t, env)
+	identityArgs := map[string]interface{}{"method": "list"}
+	assert.True(t, callTool(t, c, "identity", identityArgs).IsError)
+	require.False(t, callTool(t, c, "enable", nil).IsError)
+	require.FileExists(t, filepath.Join(env.repo, ".punt-labs/local/ethos/enabled"))
+	assert.False(t, callTool(t, c, "identity", identityArgs).IsError)
+	require.False(t, callTool(t, c, "disable", map[string]interface{}{"scope": "project", "opt_out": true}).IsError)
+	assert.Contains(t, resultText(t, callTool(t, c, "status", nil)), ".punt-labs/ethos/opt-out")
+	assert.True(t, callTool(t, c, "identity", identityArgs).IsError)
+	require.False(t, callTool(t, c, "enable", map[string]interface{}{"scope": "project", "clear_opt_out": true}).IsError)
+	assert.False(t, callTool(t, c, "identity", identityArgs).IsError)
 }
 
 func TestMCP_Identity_Whoami(t *testing.T) {

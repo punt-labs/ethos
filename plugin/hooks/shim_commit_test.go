@@ -140,7 +140,7 @@ func newShimRepo(t *testing.T, enable bool) *shimRepo {
 		// enable, then one command that reads storage: the storage upgrade
 		// stamps the fresh repository current, so the commit under test runs
 		// no repair and prints no upgrade line (what an upgraded repo sees).
-		for _, args := range [][]string{{"enable"}, {"doctor"}} {
+		for _, args := range [][]string{{"enable", "--scope", "project"}, {"doctor"}} {
 			cmd := exec.Command(filepath.Join(ethosBinDir(t), "ethos"), args...)
 			cmd.Dir, cmd.Env = r.dir, r.env
 			out, err := cmd.CombinedOutput()
@@ -270,20 +270,19 @@ func TestShimEnabledGitTraceChangesNothing(t *testing.T) {
 	assert.Equal(t, want, r.lastMessage(t))
 }
 
-// Enabled with no binary on PATH or in $HOME/.local/bin: both hooks block and
-// say so.
-func TestShimEnabledNoBinaryBlocks(t *testing.T) {
+func TestShimEnabledNoBinaryPassesThrough(t *testing.T) {
 	r := newShimRepo(t, true)
 	r.removeBinaryFromEverywhere(t)
 	out, err := r.commit(t, r.withPath(), "no binary")
-	require.Error(t, err, out)
-	assert.Contains(t, out, "pre-commit: ethos is enabled here but not installed")
+	require.NoError(t, err, out)
+	assert.Contains(t, out, "audit was not sealed")
+	assert.Contains(t, out, "Ethos trailers were not added")
 
 	// commit-msg alone, as `git merge --no-ff` runs it.
 	require.NoError(t, os.Remove(filepath.Join(r.dir, ".git", "hooks", "pre-commit")))
 	out, err = r.commit(t, r.withPath(), "no binary again")
-	require.Error(t, err, out)
-	assert.Contains(t, out, "commit-msg: ethos is enabled here but not installed")
+	require.NoError(t, err, out)
+	assert.Contains(t, out, "Ethos trailers were not added")
 }
 
 // Enabled with a binary built before the subcommands existed: both hooks block
@@ -348,7 +347,7 @@ func TestShimOldCopiedSectionStillWorksAndRefreshRewritesIt(t *testing.T) {
 	require.NoError(t, err, out)
 	assert.Contains(t, r.lastMessage(t), "Mission: m-2026-11-04-043", "the old commit-msg section still adds trailers")
 
-	cmd := exec.Command(filepath.Join(ethosBinDir(t), "ethos"), "enable")
+	cmd := exec.Command(filepath.Join(ethosBinDir(t), "ethos"), "enable", "--scope", "project")
 	cmd.Dir, cmd.Env = r.dir, r.withPath(ethosBinDir(t))
 	enableOut, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(enableOut))

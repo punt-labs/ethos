@@ -501,8 +501,12 @@ func resolveFromSession(ss *session.Store) (sessionPersona, error) {
 // repository with no .punt-labs at all, or no .punt-labs/ethos in it, is the
 // ordinary "no store yet" (ENOENT of a component that is simply not there).
 func ethosRootOf(storeRoot string) (string, error) {
+	return readableEthosPath(storeRoot, ".punt-labs", "ethos")
+}
+
+func readableEthosPath(storeRoot string, names ...string) (string, error) {
 	dir := storeRoot
-	for _, name := range []string{".punt-labs", "ethos"} {
+	for _, name := range names {
 		dir = filepath.Join(dir, name)
 		li, err := os.Lstat(dir)
 		switch {
@@ -568,13 +572,17 @@ func EnabledMarker(root string) (bool, error) {
 	if ethos == "" {
 		return false, nil
 	}
-	marker := filepath.Join(ethos, "enabled")
+	return readEnablementMarker(filepath.Join(ethos, "enabled"))
+}
+
+func readEnablementMarker(marker string) (bool, error) {
+	kind := filepath.Base(marker)
 	li, err := os.Lstat(marker)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("examining the enabled marker %s: %w", marker, err)
+		return false, fmt.Errorf("examining the %s marker %s: %w", kind, marker, err)
 	}
 	if li.Mode().IsRegular() {
 		return true, nil
@@ -584,7 +592,7 @@ func EnabledMarker(root string) (bool, error) {
 			return true, nil
 		}
 	}
-	return false, fmt.Errorf("the enabled marker %s is not a regular file", marker)
+	return false, fmt.Errorf("the %s marker %s is not a regular file", kind, marker)
 }
 
 // EthosDirOf is .punt-labs/ethos under root, validated component by component

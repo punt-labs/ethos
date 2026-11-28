@@ -135,6 +135,11 @@ func TestSharedLoggingHookToolContext(t *testing.T) {
 			cmd := loggingProcess(t, home, subdir, "hook", tc.hook)
 			if tc.invalidStore {
 				cmd.Env = append(cmd.Env, "ETHOS_REPO_ROOT="+checkout)
+				marker := filepath.Join(checkout, ".punt-labs", "local", "ethos", "enabled")
+				require.NoError(t, os.MkdirAll(filepath.Dir(marker), 0o755))
+				require.NoError(t, os.WriteFile(marker, nil, 0o644))
+			} else {
+				markHookFixtureEnabled(t, checkout)
 			}
 			cmd.Env = append(cmd.Env, "ETHOS_SESSION=outer-session", "ETHOS_AGENT_ID=outer-agent")
 			cmd.Stdin = strings.NewReader(`{"session_id":"fixture","agent_id":"worker-01","agent_type":"implementer","tool_name":"Bash","tool_input":{"command":"do-not-log-payload-arguments"}}`)
@@ -228,6 +233,7 @@ func TestSharedLoggingKilledHooks(t *testing.T) {
 	repo := filepath.Join(t.TempDir(), "logging-project")
 	require.NoError(t, os.Mkdir(repo, 0o700))
 	runGit(t, repo, "init", "-q")
+	markHookFixtureEnabled(t, repo)
 	for _, tc := range []struct{ hook, project string }{
 		{"pre-commit", "logging-project"},
 		{"subagent-stop", "logging-project"},
@@ -250,6 +256,7 @@ func TestSharedLoggingKilledHooks(t *testing.T) {
 func TestSubagentStopLeavesCheckoutUnchanged(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init", "-q")
+	markHookFixtureEnabled(t, repo)
 	dir := filepath.Join(repo, ".punt-labs", "ethos", "checks")
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".punt-labs/ethos/sessions/\n.punt-labs/local/\n"), 0o600))
@@ -258,7 +265,7 @@ func TestSubagentStopLeavesCheckoutUnchanged(t *testing.T) {
 checks:
   - {name: probe, stage: handoff, files: all, run: [sh, -c, 'exit 0']}
 `), 0o600))
-	runGit(t, repo, "add", "--", ".gitignore", ".punt-labs/ethos.yaml", ".punt-labs/ethos/checks/project.yaml")
+	runGit(t, repo, "add", "--", ".gitignore", ".punt-labs/ethos.yaml", ".punt-labs/ethos/checks/project.yaml", ".punt-labs/ethos/enabled")
 	runGit(t, repo, "commit", "-qm", "legacy checkout")
 	status := func() string {
 		t.Helper()
@@ -279,6 +286,7 @@ checks:
 func TestSubagentStopSalvagesDamagedAuditReadOnly(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init", "-q")
+	markHookFixtureEnabled(t, repo)
 	checks := filepath.Join(repo, ".punt-labs", "ethos", "checks")
 	sealed := filepath.Join(audit.SealedSessionsBase(repo), "2026-11-26-fixture")
 	require.NoError(t, os.MkdirAll(checks, 0o700))
@@ -337,6 +345,7 @@ func TestSubagentStopSelectsRedactedOverlap(t *testing.T) {
 	repo, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 	runGit(t, repo, "init", "-q")
+	markHookFixtureEnabled(t, repo)
 	checks := filepath.Join(repo, ".punt-labs", "ethos", "checks")
 	sealed := filepath.Join(audit.SealedSessionsBase(repo), "2026-11-26-fixture")
 	require.NoError(t, os.MkdirAll(checks, 0o700))
@@ -393,6 +402,7 @@ func TestSharedLoggingHookChecks(t *testing.T) {
 	dir := filepath.Join(repo, ".punt-labs", "ethos", "checks")
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	runGit(t, repo, "init", "-q")
+	markHookFixtureEnabled(t, repo)
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos.yaml"), []byte("checks: timing\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "sample.txt"), nil, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "timing.yaml"), []byte(`name: timing
@@ -460,6 +470,7 @@ func TestSharedLoggingCheckWorkingDirectory(t *testing.T) {
 	checksDir := filepath.Join(repo, ".punt-labs", "ethos", "checks")
 	require.NoError(t, os.MkdirAll(checksDir, 0o700))
 	runGit(t, repo, "init", "-q")
+	markHookFixtureEnabled(t, repo)
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos.yaml"), []byte("checks: timing\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(checksDir, "timing.yaml"), []byte(`name: timing
 checks:

@@ -43,6 +43,8 @@ func TestMCPMissionCorrectCapturedPolicy(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(storeRoot, ".punt-labs", "ethos.yaml"), []byte("record: full\nagent: test-agent\n"), 0o600))
 			require.NoError(t, os.MkdirAll(filepath.Join(checkout, ".punt-labs"), 0o700))
 			require.NoError(t, os.WriteFile(filepath.Join(checkout, ".punt-labs", "ethos.yaml"), []byte("record: blame\nagent: conflicting-agent\n"), 0o600))
+			require.NoError(t, os.MkdirAll(filepath.Join(checkout, ".punt-labs", "ethos"), 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(checkout, ".punt-labs", "ethos", "enabled"), nil, 0o600))
 			p, err := layout.NewRepository(storeRoot, checkout, layout.RecordFull)
 			require.NoError(t, err)
 			s := mission.NewRepositoryStore(p, filepath.Join(env.home, ".punt-labs", "ethos")).WithSessionID("mcp-terminal-policy")

@@ -33,7 +33,7 @@ func execHookSessionStart(t *testing.T, se *cliSubprocessEnv) (stdout, stderr st
 
 func TestCLI_SessionStartLeavesTrackedAgentsUnchanged(t *testing.T) {
 	se := freshCLIEnv(t, "refresh-human")
-	_, stderr, code := runCLI(t, se, "enable")
+	_, stderr, code := runCLI(t, se, "enable", "--scope", "project")
 	require.Zero(t, code, stderr)
 	stale := filepath.Join(se.repo, ".claude", "agents", "retired.md")
 	require.NoError(t, os.MkdirAll(filepath.Dir(stale), 0o755))
@@ -61,30 +61,130 @@ func TestCLI_SessionStartLeavesTrackedAgentsUnchanged(t *testing.T) {
 	assert.NoFileExists(t, generated, "startup must not generate agent definitions")
 	assert.NoFileExists(t, installed, "startup must not install legacy stubs")
 	require.Empty(t, git("status", "--porcelain"), "startup must not rewrite or prune tracked agents")
-	_, stderr, code = runCLI(t, se, "enable", "--refresh")
+	_, stderr, code = runCLI(t, se, "enable", "--scope", "project", "--refresh")
 	require.Zero(t, code, stderr)
 	require.NoFileExists(t, stale, "explicit refresh must still prune retired agents")
 	assert.FileExists(t, generated, "explicit refresh must generate the configured worker")
 	assert.FileExists(t, installed, "explicit refresh must install the legacy stub")
 }
 
+func TestCLI_OffHooksSkipRepositoryWork(t *testing.T) {
+	for _, deciding := range []string{"", ".punt-labs/local/ethos/disabled", ".punt-labs/ethos/opt-out"} {
+		t.Run(deciding, func(t *testing.T) {
+			se := freshCLIEnv(t, "refresh-human")
+			if deciding != "" {
+				_, stderr, code := runCLI(t, se, "enable", "--scope", "project")
+				require.Zero(t, code, stderr)
+				path := filepath.Join(se.repo, deciding)
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+				require.NoError(t, os.WriteFile(path, nil, 0o644))
+			}
+			stdout, stderr := execHookSessionStart(t, se)
+			require.Empty(t, stdout)
+			require.Empty(t, stderr)
+
+			cmd := exec.Command(ethosBinary, "hook", "audit-log")
+			cmd.Dir, cmd.Env = se.repo, se.env
+			cmd.Stdin = strings.NewReader(`{"session_id":"refresh-cli-session","tool_name":"Bash","tool_input":{"command":"true"}}`)
+			output, err := cmd.CombinedOutput()
+			require.NoError(t, err, "%s", output)
+			require.Empty(t, output)
+			for _, dir := range []string{".punt-labs/local/ethos", ".punt-labs/ethos"} {
+				files, err := filepath.Glob(filepath.Join(se.repo, dir, "**", "*refresh-cli-session*"))
+				require.NoError(t, err)
+				assert.Empty(t, files)
+			}
+		})
+	}
+}
+
+func TestCLI_EnablementTogglesLeaveCleanCheckout(t *testing.T) {
+	se := enableSubprocessRepo(t)
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir, cmd.Env = se.repo, se.env
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s: %s", args, output)
+		return string(output)
+	}
+	ethos := func(args ...string) {
+		t.Helper()
+		_, stderr, code := runCLI(t, se, args...)
+		require.Zero(t, code, "%v: %s", args, stderr)
+	}
+	gitignore := filepath.Join(se.repo, ".gitignore")
+	require.NoError(t, os.WriteFile(gitignore, []byte(".punt-labs/local/\nCLAUDE.local.md\n.claude/settings.local.json\n.*.punt-import.lock\n"), 0o644))
+	ethos("enable", "--scope", "project")
+	ethos("disable", "--scope", "project")
+	git("add", "--all")
+	git("commit", "-qm", "Shared integration disabled")
+	for range 2 {
+		ethos("enable")
+		assert.Empty(t, git("status", "--porcelain"), "personal enable must not change tracked files")
+		ethos("disable")
+		assert.Empty(t, git("status", "--porcelain"), "personal disable must not change tracked files")
+		ethos("enable", "--scope", "project")
+		assert.NotEmpty(t, git("status", "--porcelain"), "shared enablement is a commit-visible change")
+		ethos("disable", "--scope", "project")
+		assert.Empty(t, git("status", "--porcelain"), "project toggle must restore the committed off state")
+	}
+	ethos("enable", "--scope", "project")
+	git("add", "--all")
+	git("-c", "core.hooksPath=/dev/null", "commit", "-qm", "Shared integration enabled")
+	ethos("enable", "--scope", "project")
+	require.Empty(t, git("status", "--porcelain"), "repeated project enablement must not rewrite tracked files")
+	ethos("disable")
+	require.FileExists(t, filepath.Join(se.repo, ".punt-labs/local/ethos/disabled"))
+	assert.Empty(t, git("status", "--porcelain"), "personal off must not remove tracked integration")
+	ethos("enable")
+	require.NoFileExists(t, filepath.Join(se.repo, ".punt-labs/local/ethos/disabled"))
+	assert.Empty(t, git("status", "--porcelain"))
+}
+
+func TestDormantCheckoutKeepsPostEditDeadline(t *testing.T) {
+	se := enableSubprocessRepo(t)
+	t.Setenv("HOME", se.home)
+	t.Chdir(se.repo)
+	assert.True(t, dormantHook([]string{"hook", "post-edit"}))
+	assert.False(t, dormantHook([]string{"hook", "stdin-watchdog", "123"}))
+}
+
 func TestCLI_EnablePinsDepositedGuideUntilRefresh(t *testing.T) {
 	se := freshCLIEnv(t, "refresh-human")
-	_, stderr, code := runCLI(t, se, "enable")
+	_, stderr, code := runCLI(t, se, "enable", "--scope", "project")
 	require.Zero(t, code, stderr)
 	guide := filepath.Join(se.repo, ".punt-labs", "ethos", "CLAUDE.md")
 	pinned := []byte("guide deposited by another version\n")
 	require.NoError(t, os.WriteFile(guide, pinned, 0o644))
-	_, stderr, code = runCLI(t, se, "enable")
+	_, stderr, code = runCLI(t, se, "enable", "--scope", "project")
 	require.Zero(t, code, stderr)
 	after, err := os.ReadFile(guide)
 	require.NoError(t, err)
 	require.Equal(t, pinned, after)
-	_, stderr, code = runCLI(t, se, "enable", "--refresh")
+	_, stderr, code = runCLI(t, se, "enable", "--scope", "project", "--refresh")
 	require.Zero(t, code, stderr)
 	after, err = os.ReadFile(guide)
 	require.NoError(t, err)
 	require.NotEqual(t, pinned, after)
+}
+
+func TestCLI_ProjectRefreshRollsBackWhenAgentInstallationFails(t *testing.T) {
+	se := freshCLIEnv(t, "refresh-human")
+	store := filepath.Join(se.repo, ".punt-labs", "ethos")
+	writeRefreshTeam(t, se.repo, store)
+	agents := filepath.Join(se.repo, ".claude", "agents")
+	require.NoError(t, os.MkdirAll(agents, 0o755))
+	require.NoError(t, os.Mkdir(filepath.Join(agents, "worker.md"), 0o755))
+	stubs := filepath.Join(store, "agents")
+	require.NoError(t, os.MkdirAll(stubs, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stubs, "helper.md"), []byte("---\nname: helper\n---\n"), 0o644))
+	_, stderr, code := runCLI(t, se, "enable", "--scope", "project", "--refresh")
+	require.NotZero(t, code, stderr)
+	assert.NoFileExists(t, filepath.Join(store, "enabled"))
+	assert.NoFileExists(t, filepath.Join(store, "CLAUDE.md"))
+	assert.NoFileExists(t, filepath.Join(agents, "helper.md"), "an earlier stub installation must also roll back")
+	assert.DirExists(t, filepath.Join(agents, "worker.md"))
 }
 
 func TestCLI_EnableAgentsOnlyLeavesDisabledRepoDisabled(t *testing.T) {
@@ -119,7 +219,7 @@ func TestCLI_EnableRefreshGeneratesAgentsFromLegacyGitlink(t *testing.T) {
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "%s", output)
 
-	stdout, stderr, code := runCLI(t, se, "enable", "--refresh")
+	stdout, stderr, code := runCLI(t, se, "enable", "--scope", "project", "--refresh")
 	require.Zero(t, code, stderr)
 	assert.Contains(t, stdout, "refreshed Claude agent definitions")
 	assert.Contains(t, stderr, "convert it to an inline directory")
@@ -162,7 +262,7 @@ func TestCLI_SessionStartRefreshesStaleHook(t *testing.T) {
 
 	t.Run("enabled repo", func(t *testing.T) {
 		se := freshCLIEnv(t, "refresh-human")
-		_, stderr, code := runCLI(t, se, "enable")
+		_, stderr, code := runCLI(t, se, "enable", "--scope", "project")
 		require.Equal(t, 0, code, stderr)
 		hookPath := filepath.Join(se.repo, ".git", "hooks", "pre-commit")
 		current, err := os.ReadFile(hookPath)

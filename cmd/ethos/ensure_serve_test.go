@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -15,7 +16,41 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/autorepair"
 	"github.com/punt-labs/ethos/v4/internal/mcp"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
+
+func TestServeStartupSkipsRepairInDormantCheckout(t *testing.T) {
+	for _, marker := range []string{"", resolve.LocalDisabledFile, resolve.ProjectOptOutFile} {
+		t.Run(marker, func(t *testing.T) {
+			se := enableSubprocessRepo(t)
+			t.Setenv("HOME", se.home)
+			t.Chdir(se.repo)
+			if marker != "" {
+				path := filepath.Join(se.repo, marker)
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+				require.NoError(t, os.WriteFile(path, nil, 0o644))
+			}
+			n := fakeEnsure(t, autorepair.Result{})
+			t.Cleanup(func() { cmdRoots.Store(nil) })
+			require.NoError(t, establishRoots(serveCmd, nil))
+			assert.Zero(t, *n)
+		})
+	}
+}
+
+func TestPersonalMCPDoesNotRewriteSharedGitignore(t *testing.T) {
+	se := enableSubprocessRepo(t)
+	t.Setenv("HOME", se.home)
+	t.Chdir(se.repo)
+	exclude := filepath.Join(se.repo, ".git", "info", "exclude")
+	require.NoError(t, os.WriteFile(exclude, []byte(".punt-labs/local/\nCLAUDE.local.md\n.claude/settings.local.json\n"), 0o644))
+	_, stderr, code := runCLI(t, se, "enable")
+	require.Zero(t, code, stderr)
+	t.Cleanup(func() { cmdRoots.Store(nil) })
+	require.NoError(t, establishRoots(serveCmd, nil))
+	_ = ensureForServe(t.Context(), locateServeStore())
+	require.NoFileExists(t, filepath.Join(se.repo, ".gitignore"))
+}
 
 // The MCP stdio server answers tool calls on several goroutines, and every
 // call passes the real repair gate. Run under -race: the gate must only read

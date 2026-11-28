@@ -12,6 +12,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/diagnostic"
 	"github.com/punt-labs/ethos/v4/internal/mcp"
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/seed"
 )
 
@@ -46,7 +47,7 @@ func takeRepairNotice() (string, int) {
 
 // noEnsure are the commands, by top-level name, that never read storage.
 // cobra's own completion requests are completion.
-var noEnsure = []string{"version", "completion", "help", "uninstall",
+var noEnsure = []string{"version", "completion", "help", "uninstall", "status",
 	cobra.ShellCompRequestCmd, cobra.ShellCompNoDescRequestCmd}
 
 func exemptFromEnsure(cmd *cobra.Command) bool {
@@ -67,8 +68,19 @@ func exemptFromEnsure(cmd *cobra.Command) bool {
 // tool call already located (one locate per call) and returns the line a
 // repair earned.
 func ensureForServe(ctx context.Context, loc mcp.StoreLocation) string {
+	if !serveRepairsCheckout(loc.Checkout) {
+		return ""
+	}
 	res, _ := ensureStorage(diagnostic.WithLogger(ctx, processLogger), locatedFrom(loc), defaultGlobalRoot())
 	return res.Line()
+}
+
+func serveRepairsCheckout(checkout string) bool {
+	if checkout == "" {
+		return true
+	}
+	state, err := resolve.EffectiveEnablement(checkout)
+	return err == nil && state.DecidingFile == resolve.ProjectEnabledFile
 }
 
 // ensureForCommand runs the repair gate for cmd against r and returns the

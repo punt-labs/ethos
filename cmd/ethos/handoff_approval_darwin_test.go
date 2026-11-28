@@ -28,6 +28,7 @@ func testHandoffApprovalTTY(t *testing.T, agentOverride bool) {
 	root, home := t.TempDir(), t.TempDir()
 	runGit(t, root, "init", "-q")
 	files := map[string]string{
+		".punt-labs/ethos/enabled":                       "",
 		".gitignore":                                     ".punt-labs/ethos/sessions/\n.punt-labs/local/\n",
 		".punt-labs/ethos.yaml":                          "checks: project\n",
 		".punt-labs/ethos/checks/project.yaml":           "name: project\nchecks:\n  - {name: live, stage: handoff, files: all, run: [/usr/bin/true]}\n",

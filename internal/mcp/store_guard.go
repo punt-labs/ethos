@@ -28,7 +28,16 @@ var strictTools = map[string]bool{"identity": true, "adr": true}
 // unguardedTools never touch the repository store: session keeps a global-only
 // store, and doctor reports on the store's state. The matching CLI
 // commands are exempt from the store refusal too.
-var unguardedTools = map[string]bool{"session": true, "doctor": true}
+var unguardedTools = map[string]bool{"session": true, "doctor": true, "enable": true, "disable": true, "status": true}
+
+func runsWhileOff(tool string) bool {
+	switch tool {
+	case "enable", "disable", "status", "doctor":
+		return true
+	default:
+		return false
+	}
+}
 
 // storeReads lists, per guarded tool, the methods that only read. They are the
 // only methods that run when the store cannot be located: anything not listed
@@ -138,6 +147,12 @@ func errText(err error) string {
 
 // addTool registers every tool. A tool not declared unguarded is guarded.
 func (h *Handler) addTool(s *mcpserver.MCPServer, tool mcplib.Tool, fn toolMethod) {
+	h.addLocatedTool(s, tool, func(cur *Handler, ctx context.Context, req mcplib.CallToolRequest, _ StoreLocation) (*mcplib.CallToolResult, error) {
+		return fn(cur, ctx, req)
+	})
+}
+
+func (h *Handler) addLocatedTool(s *mcpserver.MCPServer, tool mcplib.Tool, fn func(*Handler, context.Context, mcplib.CallToolRequest, StoreLocation) (*mcplib.CallToolResult, error)) {
 	s.AddTool(tool, func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		// One locate per call: the handler for the store's location now, and
 		// the repair gate for that same location, which runs before the tool
@@ -149,9 +164,21 @@ func (h *Handler) addTool(s *mcpserver.MCPServer, tool mcplib.Tool, fn toolMetho
 		// store data, and a rebuilt handler would be rebuilt from the same
 		// location.
 		cur, loc := h.current()
-		line := h.ensureLine(ctx, loc)
+		var line string
+		if !runsWhileOff(tool.Name) {
+			if loc.Checkout != "" {
+				state, err := resolve.EffectiveEnablement(loc.Checkout)
+				if err != nil {
+					return mcplib.NewToolResultError(err.Error()), nil
+				}
+				if !state.Enabled {
+					return mcplib.NewToolResultError(state.String()), nil
+				}
+			}
+			line = h.ensureLine(ctx, loc)
+		}
 		call := func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-			return fn(cur, ctx, req)
+			return fn(cur, ctx, req, loc)
 		}
 		var result *mcplib.CallToolResult
 		var err error

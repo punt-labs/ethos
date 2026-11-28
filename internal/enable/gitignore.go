@@ -509,11 +509,18 @@ func gitExcludes(repoRoot string, probes []string) (bool, error) {
 // gitIgnoreMatches returns Git's winning rules for the requested paths. A missing
 // Git is an error, not permission to trust a literal line despite overrides.
 func gitIgnoreMatches(repoRoot string, paths []string) (map[string]gitIgnoreMatch, error) {
+	return gitIgnoreMatchesInScope(repoRoot, paths, false)
+}
+
+func gitIgnoreMatchesInScope(repoRoot string, paths []string, includeLocal bool) (map[string]gitIgnoreMatch, error) {
 	var stdout, stderr bytes.Buffer
+	args := []string{"check-ignore", "-v", "-z", "--no-index", "--stdin"}
+	if !includeLocal {
+		args = append([]string{"-c", "core.excludesFile=" + os.DevNull}, args...)
+	}
 	_, err := gitenv.Run(gitenv.Spec{
 		Git: "git", Dir: repoRoot,
-		Args: []string{"-c", "core.excludesFile=" + os.DevNull,
-			"check-ignore", "-v", "-z", "--no-index", "--stdin"},
+		Args: args,
 		// The caller's environment, in the C locale: the "not a git
 		// repository" message below is matched in English.
 		Env:    gitenv.Parsed(),

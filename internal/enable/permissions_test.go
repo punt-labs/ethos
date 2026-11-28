@@ -53,6 +53,9 @@ func TestPermissionRulesCoverCLIMCPAndEveryShippedCommand(t *testing.T) {
 		if name == e.Name() || strings.HasSuffix(name, "-dev") {
 			continue
 		}
+		if name == "enable" || name == "disable" {
+			continue
+		}
 		wantAsk = append(wantAsk, "Skill(ethos:"+name+")")
 	}
 	skills, err := os.ReadDir(filepath.Join("..", "..", "plugin", "skills"))
@@ -116,7 +119,7 @@ func TestEnableDisableRoundTripsPermissionRules(t *testing.T) {
 	}) {
 		t.Errorf("enable report should list allows without asks: %+v", enabled.Steps)
 	}
-	if got, want := permissionList(t, settings, "allow"), append([]string{"Read"}, PermissionRules["allow"]...); !slices.Equal(got, want) {
+	if got, want := permissionList(t, settings, "allow"), []string{"Bash(ethos:*)", "Read", "Skill(ethos:*)", "mcp__plugin_ethos_self__*"}; !slices.Equal(got, want) {
 		t.Errorf("after enable allow = %v, want %v", got, want)
 	}
 	if got := permissionList(t, settings, "ask"); !slices.Equal(got, PermissionRules["ask"]) {

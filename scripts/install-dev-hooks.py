@@ -63,7 +63,7 @@ def edit(path, gate):
     if not SHELL.fullmatch(first):
         raise ValueError(f"{path}: expected a shell hook; chain the gate manually")
     if path.name == "pre-commit" and is_legacy_seal(body):
-        raise ValueError(f"{path}: legacy standalone audit seal; run ethos enable before opting in")
+        raise ValueError(f"{path}: legacy standalone audit seal; run ethos enable --scope project before opting in")
     if rest.startswith(gate):
         return None
     if BEGIN in rest or END in rest:

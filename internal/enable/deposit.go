@@ -38,6 +38,10 @@ func deposit(repoRoot string, guide, setup []byte, policies ...layout.Policy) ([
 }
 
 func depositVendored(repoRoot string, guide, setup []byte, refresh bool, policies ...layout.Policy) ([]string, error) {
+	return depositVendoredTo(repoRoot, guide, setup, refresh, nil, policies...)
+}
+
+func depositVendoredTo(repoRoot string, guide, setup []byte, refresh bool, tx *fileTransaction, policies ...layout.Policy) ([]string, error) {
 	p, err := layout.NewRepository(repoRoot, repoRoot, layout.RecordBlame)
 	if len(policies) > 0 {
 		p = policies[0]
@@ -123,6 +127,11 @@ func depositVendored(repoRoot string, guide, setup []byte, refresh bool, policie
 			}
 		case err != nil && !os.IsNotExist(err):
 			return nil, err
+		}
+		if tx != nil {
+			if err := tx.snapshot(path); err != nil {
+				return nil, err
+			}
 		}
 		if err := writeVendored(path, want[rel], p); err != nil {
 			return nil, err

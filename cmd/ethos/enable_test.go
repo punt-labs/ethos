@@ -30,8 +30,13 @@ func runEnableCmd(t *testing.T, args ...string) (string, string, error) {
 		rootCmd.SetArgs(nil)
 		jsonOutput = false
 		disableForce = false
-		for _, name := range []string{"refresh", "agents-only"} {
+		for _, name := range []string{"scope", "refresh", "agents-only", "clear-opt-out"} {
 			flag := enableCmd.Flags().Lookup(name)
+			assert.NoError(t, flag.Value.Set(flag.DefValue))
+			flag.Changed = false
+		}
+		for _, name := range []string{"scope", "opt-out", "force"} {
+			flag := disableCmd.Flags().Lookup(name)
 			assert.NoError(t, flag.Value.Set(flag.DefValue))
 			flag.Changed = false
 		}
@@ -59,7 +64,7 @@ func TestEnableDisableCommandRoundTrip(t *testing.T) {
 	dir := enableGitRepo(t)
 	t.Chdir(dir)
 
-	out, _, err := runEnableCmd(t, "enable")
+	out, _, err := runEnableCmd(t, "enable", "--scope", "project")
 	if err != nil {
 		t.Fatalf("enable: %v", err)
 	}
@@ -70,7 +75,7 @@ func TestEnableDisableCommandRoundTrip(t *testing.T) {
 		t.Error("marker not written by enable command")
 	}
 
-	out, _, err = runEnableCmd(t, "disable")
+	out, _, err = runEnableCmd(t, "disable", "--scope", "project")
 	if err != nil {
 		t.Fatalf("disable: %v", err)
 	}
@@ -82,11 +87,78 @@ func TestEnableDisableCommandRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPersonalCommandsAndDormantDispatch(t *testing.T) {
+	dir := enableGitRepo(t)
+	t.Chdir(dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(".punt-labs/local/\nCLAUDE.local.md\n.claude/settings.local.json\n"), 0o644))
+	assert.False(t, dormantHook([]string{"status"}))
+	assert.False(t, dormantHook([]string{"hook", "session-start", "--help"}))
+	assert.True(t, dormantHook([]string{"hook", "session-start"}))
+	_, _, err := runEnableCmd(t, "enable", "--scope", "team")
+	require.ErrorContains(t, err, "unknown scope")
+	_, _, err = runEnableCmd(t, "enable", "--clear-opt-out")
+	require.ErrorContains(t, err, "requires --scope project")
+	_, _, err = runEnableCmd(t, "disable", "--opt-out")
+	require.ErrorContains(t, err, "requires --scope project")
+	_, _, err = runEnableCmd(t, "enable")
+	require.NoError(t, err)
+	assert.False(t, dormantHook([]string{"hook", "session-start"}))
+	_, _, err = runEnableCmd(t, "disable", "--scope", "project", "--opt-out")
+	require.NoError(t, err)
+	assert.True(t, dormantHook([]string{"hook", "session-start"}))
+	_, _, err = runEnableCmd(t, "enable")
+	require.ErrorContains(t, err, ".punt-labs/ethos/opt-out")
+	_, _, err = runEnableCmd(t, "enable", "--scope", "project", "--clear-opt-out")
+	require.NoError(t, err)
+	_, _, err = runEnableCmd(t, "disable")
+	require.NoError(t, err)
+	assert.True(t, dormantHook([]string{"hook", "session-start"}))
+}
+
+func TestDisableForceHonorsExplicitScope(t *testing.T) {
+	dir := enableGitRepo(t)
+	t.Chdir(dir)
+	_, _, err := runEnableCmd(t, "enable", "--scope", "project")
+	require.NoError(t, err)
+	_, _, err = runEnableCmd(t, "disable", "--scope", "local", "--force")
+	require.NoError(t, err)
+	marker := filepath.Join(dir, resolve.ProjectEnabledFile)
+	require.FileExists(t, marker)
+	_, _, err = runEnableCmd(t, "disable", "--force")
+	require.NoError(t, err)
+	require.NoFileExists(t, marker)
+}
+
+func TestProjectOptOutRequiresInliningLegacyGitlink(t *testing.T) {
+	dir := enableGitRepo(t)
+	t.Chdir(dir)
+	team := filepath.Join(dir, ".punt-labs", "ethos")
+	require.NoError(t, os.MkdirAll(team, 0o755))
+	cmd := testhelpers.GitCommand("-C", dir, "update-index", "--add", "--cacheinfo",
+		"160000,0000000000000000000000000000000000000001,.punt-labs/ethos")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	marker := filepath.Join(dir, resolve.ProjectEnabledFile)
+	require.NoError(t, os.WriteFile(marker, nil, 0o644))
+
+	stdout, stderr, err := runEnableCmd(t, "disable", "--scope", "project", "--opt-out")
+	require.ErrorContains(t, err, "git rm --cached -- .punt-labs/ethos")
+	assert.NotContains(t, err.Error(), "\n")
+	assert.Empty(t, stdout)
+	assert.Empty(t, stderr)
+	require.FileExists(t, marker)
+	require.NoFileExists(t, filepath.Join(dir, resolve.ProjectOptOutFile))
+
+	_, _, err = runEnableCmd(t, "disable", "--scope", "project")
+	require.NoError(t, err)
+	require.NoFileExists(t, marker)
+}
+
 func TestEnableCommandJSON(t *testing.T) {
 	dir := enableGitRepo(t)
 	t.Chdir(dir)
 
-	out, _, err := runEnableCmd(t, "enable", "--json")
+	out, _, err := runEnableCmd(t, "enable", "--scope", "project", "--json")
 	if err != nil {
 		t.Fatalf("enable --json: %v", err)
 	}
@@ -125,7 +197,7 @@ func TestEnableAgentRefreshReports(t *testing.T) {
 		require.NoError(t, err, "%s", gitOutput)
 		for _, flag := range []string{"--refresh", "--agents-only"} {
 			t.Run(flag, func(t *testing.T) {
-				out, stderr, err := runEnableCmd(t, "enable", flag)
+				out, stderr, err := runEnableCmd(t, "enable", "--scope", "project", flag)
 				require.NoError(t, err, stderr)
 				assert.Contains(t, out, "left Claude agent definitions unchanged")
 				assert.Contains(t, stderr, "git submodule update --init")
@@ -168,7 +240,7 @@ func TestEnableAgentRefreshReports(t *testing.T) {
 						assert.NoError(t, os.Remove(stub))
 					}
 				})
-				out, stderr, err := runEnableCmd(t, "enable", flag)
+				out, stderr, err := runEnableCmd(t, "enable", "--scope", "project", flag)
 				require.NoError(t, err, stderr)
 				assert.Contains(t, out, "refreshed Claude agent definitions")
 				assert.NotContains(t, stderr, "git submodule update --init")
@@ -186,7 +258,7 @@ func TestEnableAgentRefreshReports(t *testing.T) {
 				assert.NoFileExists(t, filepath.Join(store, "enabled"))
 
 				require.NoError(t, os.WriteFile(reviewerSource, []byte("# Updated reviewer\n"), 0o644))
-				out, stderr, err = runEnableCmd(t, "enable", flag)
+				out, stderr, err = runEnableCmd(t, "enable", "--scope", "project", flag)
 				require.NoError(t, err, stderr)
 				assert.Contains(t, out, "refreshed Claude agent definitions")
 				assert.NotContains(t, stderr, "reviewer.md")
@@ -224,7 +296,7 @@ func TestEnableSurfacesWarningsOnErrorPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(dir)
-	_, errOut, err := runEnableCmd(t, "enable", "--refresh")
+	_, errOut, err := runEnableCmd(t, "enable", "--scope", "project", "--refresh")
 	if err == nil {
 		t.Fatal("expected enable to fail on the non-directory .git/hooks")
 	}
@@ -356,7 +428,7 @@ func TestEnableOverrideNamingFreshRepo(t *testing.T) {
 	dir := enableGitRepo(t)
 	t.Setenv("ETHOS_REPO_ROOT", dir)
 
-	out, errOut, err := runEnableCmd(t, "enable")
+	out, errOut, err := runEnableCmd(t, "enable", "--scope", "project")
 	if err != nil {
 		t.Fatalf("enable: %v", err)
 	}
@@ -377,7 +449,7 @@ func TestEnableProceedsWithMalformedConfig(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".punt-labs", "ethos.yaml"), []byte("agent: [unclosed\n"), 0o644))
 	t.Chdir(dir)
 
-	out, errOut, err := runEnableCmd(t, "enable")
+	out, errOut, err := runEnableCmd(t, "enable", "--scope", "project")
 	require.NoError(t, err, errOut)
 	assert.Contains(t, out, "ethos enabled in")
 	assert.FileExists(t, filepath.Join(dir, ".punt-labs", "ethos", "enabled"))

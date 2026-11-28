@@ -7,15 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Enable or disable Ethos for one checkout (the default) or share enablement
+  with the project using `--scope project`. CLI and MCP report the effective
+  state; project opt-out also applies to hooks and MCP tools.
+
 ### Changed
 
 - Claude SessionStart no longer generates, installs, or prunes tracked
-  agent definitions. Run `ethos enable --refresh` to reconcile them and
+  agent definitions. Run `ethos enable --scope project --refresh` to reconcile them and
   update the repository's pinned guides.
 - Ignore Claude's personal instructions and import/settings lock files.
 - `ethos enable` allows the Ethos CLI, MCP tools, and skills without adding
   approval prompts. Enable and disable remove old Ethos ask rules without
   changing other tools' permissions or any deny rules.
+- Enable restores integration files if a step fails and writes the enabled
+  marker last. The installer no longer enables or seeds the invoking repo;
+  updated Git shims pass through when the binary is absent.
 
 ## [5.3.2] - 2026-11-27
 

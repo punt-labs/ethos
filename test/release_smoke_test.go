@@ -210,7 +210,7 @@ func TestReleaseCandidateSmokeExercisesPluginMCPAndHooks(t *testing.T) {
 				trace := string(traceBytes)
 				assert.Contains(t, trace, "claude plugin validate ")
 				assert.Contains(t, trace, "serve\n")
-				assert.Contains(t, trace, "enable\n")
+				assert.Contains(t, trace, "enable --scope project\n")
 				assert.Contains(t, trace, "hook session-start\n")
 				assert.Contains(t, trace, "hook pre-tool-use\n")
 				assert.Contains(t, trace, "hook audit-log\n")

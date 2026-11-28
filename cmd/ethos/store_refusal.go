@@ -80,7 +80,7 @@ var storeUses = map[string]storeUse{
 	"ethos session leave": storeGlobalOnly, "ethos session iam": storeGlobalOnly,
 
 	"ethos doctor": storeHandlesError, "ethos enable": storeHandlesError, // msgguard: allow command-name key of the store-policy table, never printed
-	"ethos disable": storeHandlesError, "ethos setup": storeHandlesError,
+	"ethos disable": storeHandlesError, "ethos setup": storeHandlesError, "ethos status": storeHandlesError,
 	"ethos seed": storeHandlesError, "ethos serve": storeHandlesError, // msgguard: allow command-name key of the store-policy table, never printed
 	"ethos audit seal": storeHandlesError, "ethos audit show": storeHandlesError,
 	"ethos hook": storeHandlesError, "ethos hook audit-log": storeHandlesError,
@@ -192,9 +192,40 @@ func establishRoots(cmd *cobra.Command, _ []string) error {
 	global := exemptFromStoreRefusal(cmd)
 	r := locateRoots()
 	r.Global = global
+	var scope string
+	isEnable := cmd == enableCmd
+	if isEnable || cmd == disableCmd {
+		var err error
+		scope, err = enableScope(cmd)
+		if err != nil {
+			return err
+		}
+	}
+	if isEnable && r.Checkout != "" {
+		clearOptOut, err := projectEnableFlag(cmd, scope, "clear-opt-out")
+		if err != nil {
+			return err
+		}
+		optedOut, err := resolve.ProjectOptedOut(r.Checkout)
+		if err != nil {
+			return err
+		}
+		if optedOut && !clearOptOut {
+			return fmt.Errorf("ethos is opted out by %s", resolve.ProjectOptOutFile)
+		}
+	}
 	// Repair before anything reads storage, so a refusal below is judged on the
 	// converted layout (DES-084 Wiring).
-	r = ensureForCommand(cmd, r)
+	repair := scope == ""
+	if cmd == auditSealCmd && (auditSealDryRun || explicitlyDormantSeal(r.Checkout)) {
+		repair = false
+	}
+	if path == "ethos serve" {
+		repair = serveRepairsCheckout(r.Checkout)
+	}
+	if repair {
+		r = ensureForCommand(cmd, r)
+	}
 	if ctx := cmd.Context(); ctx != nil && (r.Store != "" || r.Checkout != "" || r.err() == nil) {
 		diagnostic.SetHookProject(ctx, r.Store, r.Checkout)
 	}

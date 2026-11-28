@@ -13,7 +13,7 @@ import (
 
 func TestCLI_EnableRefreshSkipsGlobalBundleInRepoOnlyMode(t *testing.T) {
 	se := freshCLIEnv(t, "refresh-human")
-	_, stderr, code := runCLI(t, se, "enable")
+	_, stderr, code := runCLI(t, se, "enable", "--scope", "project")
 	require.Zero(t, code, stderr)
 	config := filepath.Join(se.repo, ".punt-labs", "ethos.yaml")
 	bundle := filepath.Join(se.home, ".punt-labs", "ethos", "bundles", "foreign")
@@ -27,7 +27,7 @@ func TestCLI_EnableRefreshSkipsGlobalBundleInRepoOnlyMode(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 		require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
 	}
-	_, stderr, code = runCLI(t, se, "enable", "--refresh")
+	_, stderr, code = runCLI(t, se, "enable", "--scope", "project", "--refresh")
 	assert.Zero(t, code, stderr)
 	assert.Contains(t, stderr, "repo-only cannot use the global bundle")
 	assert.Contains(t, stderr, "agent definitions left unchanged")

@@ -474,11 +474,11 @@ func TestEnableLegacyRetirementRefusesDefeatedProtection(t *testing.T) {
 		assert.Contains(t, step.Detail, "still stageable")
 		assert.NoFileExists(t, filepath.Join(root, markerRel))
 		body := readFile(t, path)
-		assert.Equal(t, LocalIgnoreRule+"\n!.punt-labs/local/\n"+gitignoreMarker+"\n", body)
+		assert.Equal(t, initial, body)
 		if attempt == 0 {
 			first = body
 		} else {
-			assert.Equal(t, first, body, "failed retry cannot append a duplicate or undo the prior retirement")
+			assert.Equal(t, first, body, "failed retry must preserve the original rules")
 		}
 	}
 }
@@ -536,8 +536,7 @@ func TestEnableRejectsNestedNegationAtEitherRoot(t *testing.T) {
 					assert.Contains(t, err.Error(), "still stageable")
 					assert.NoFileExists(t, filepath.Join(checkout, markerRel))
 					body := readFile(t, filepath.Join(root, ".gitignore"))
-					assert.True(t, strings.HasPrefix(body, initial))
-					assert.Equal(t, 1, strings.Count(body, LocalIgnoreRule))
+					assert.Equal(t, initial, body)
 					assert.Equal(t, nested, readFile(t, nestedPath))
 					if attempt == 0 {
 						first = body

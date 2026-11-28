@@ -35,9 +35,9 @@ Create your identity and team:
 The installer places the `ethos` binary in `~/.local/bin`, adds that
 directory to `PATH` in your shell profile, copies starter roles, talents and
 skills into `~/.punt-labs/ethos/`, and, when `claude`
-and `git` are available, installs the Claude Code plugin. When you run it
-inside a Git repository it also runs `ethos enable` there, and it finishes
-with `ethos doctor`. `ethos setup` is an interactive wizard that creates an
+and `git` are available, installs the Claude Code plugin. It checks the
+machine installation without enabling or modifying the current repository.
+`ethos setup` is an interactive wizard that creates an
 identity for you, an agent identity named `claude`, and a team of specialist
 agents. After you open a new terminal (or `source` your shell profile), the
 bare `ethos` command works. Full walkthrough: [Onboarding](docs/onboarding.md).
@@ -59,8 +59,8 @@ curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/ecc5fea/install.sh 
 ```
 
 `--no-plugin` skips only the marketplace registration and plugin install. The
-binary, `PATH` setup, starter content, `ethos enable` in the current
-repository, and the health check still run. Run the installer again without
+binary, `PATH` setup, starter content, and the machine health check still run.
+Run the installer again without
 the flag to add the plugin later.
 </details>
 
@@ -266,17 +266,19 @@ Layout](docs/storage-layout.md).
 
 ### Enable / Disable
 
-The installer works at machine scope. `ethos enable` turns ethos on in one
-repository: it adds the ethos agent guide and its `@.punt-labs/ethos/CLAUDE.md`
-import to the repository's `CLAUDE.md`, adds ethos steps to the `pre-commit`
-and `commit-msg` Git hooks, and allows the ethos CLI, MCP server and skills in
-`.claude/settings.json`, with `ask` rules that prompt before state-changing
-operations. `ethos disable` removes these and leaves your identities, missions
-and audit data in place. Both commands are safe to run again. Use
-`ethos enable --refresh` to update the pinned guides and reconcile the
-checkout's Claude agent definitions after changing its team. SessionStart
-does not rewrite agent files. Details:
-[Enable / Disable](docs/enable-disable.md).
+`ethos enable` turns Ethos on for you in the current checkout. It uses an
+ignored guide, `CLAUDE.local.md`, and `.claude/settings.local.json`.
+Use `ethos enable --scope project` to share the guide, import, and grants
+with the project and chain its Git hooks. Both scopes allow Ethos's CLI,
+MCP tools, and skills without approval prompts.
+
+`ethos disable` turns Ethos off for you; `ethos disable --scope project`
+removes the shared integration. Add `--opt-out` to project disable to keep
+the checkout off until the project clears the opt-out. Use `ethos status`
+to see which marker decided the state. Identities, missions, and audit data
+stay on disk. Use `ethos enable --scope project --refresh` to refresh shared
+guides and regenerate Claude agent definitions explicitly. SessionStart
+does not rewrite agent files. Details: [Enable / Disable](docs/enable-disable.md).
 
 ## How This Is Different
 

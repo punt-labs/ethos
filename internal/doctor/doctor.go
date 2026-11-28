@@ -139,6 +139,10 @@ func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 		store = func(r Result) Result { return gateStore(r, "", policy) }
 	}
 
+	if repoRoot != "" {
+		results = append(results, checkout(checkEffectiveEnablement(repoRoot)))
+	}
+
 	if unlocated(storeRoot, storeErr) {
 		detail := "not located: " + storeErr.Error()
 		if what, _, _ := resolve.Describe(storeErr); what != "the repository store could not be located" {
@@ -225,6 +229,15 @@ func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 		results = append(results, store(CheckPhysicalPlacement(storeRoot)))
 	}
 	return results
+}
+
+func checkEffectiveEnablement(checkout string) Result {
+	const name = "Effective enablement"
+	state, err := resolve.EffectiveEnablement(checkout)
+	if err != nil {
+		return Result{Name: name, Status: "FAIL", Detail: err.Error()}
+	}
+	return Result{Name: name, Status: "PASS", Detail: state.String()}
 }
 
 // unlocated reports whether a tree was not located for a reason other than

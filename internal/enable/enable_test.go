@@ -125,6 +125,63 @@ func TestEnableDepositsFourArtifacts(t *testing.T) {
 	}
 }
 
+func TestEnableLeavesNewMarkerAbsentWhenImportFails(t *testing.T) {
+	dir := gitRepo(t)
+	pre := filepath.Join(dir, ".git", "hooks", "pre-commit")
+	const original = "#!/bin/sh\necho original\n"
+	if err := os.WriteFile(pre, []byte(original), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	io := defaultGitignoreIO()
+	rename := io.rename
+	io.rename = func(src, dst string) error {
+		if err := rename(src, dst); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("```\n"), 0o644)
+	}
+	if _, err := enableTo(dir, dir, io); err == nil {
+		t.Fatal("enable unexpectedly accepted an unclosed fence")
+	}
+	if exists(filepath.Join(dir, markerRel)) {
+		t.Error("enable wrote a marker before completing the import")
+	}
+	for _, rel := range []string{guideRel, setupRel, manifestRel, ".gitignore", ".git/hooks/commit-msg", ".claude/settings.json"} {
+		if exists(filepath.Join(dir, rel)) {
+			t.Errorf("failed enable left %s behind", rel)
+		}
+	}
+	if got := readFile(t, pre); got != original {
+		t.Errorf("hook was not restored: %q", got)
+	}
+	info, err := os.Stat(pre)
+	if err != nil || info.Mode().Perm() != 0o700 {
+		t.Errorf("hook mode was not restored: %v, %v", info, err)
+	}
+	if got := readFile(t, filepath.Join(dir, "CLAUDE.md")); got != "```\n" {
+		t.Errorf("untouched import host changed: %q", got)
+	}
+}
+
+func TestEnableRefusesProjectOptOutBeforeWriting(t *testing.T) {
+	dir := gitRepo(t)
+	optOut := filepath.Join(dir, ".punt-labs", "ethos", "opt-out")
+	if err := os.MkdirAll(filepath.Dir(optOut), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(optOut, []byte("keep off\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Enable(dir); err == nil || !strings.Contains(err.Error(), ".punt-labs/ethos/opt-out") {
+		t.Errorf("Enable error = %v, want refusal naming opt-out", err)
+	}
+	for _, path := range []string{guideRel, markerRel, "CLAUDE.md", ".gitignore", ".claude/settings.json", ".git/hooks/pre-commit"} {
+		if exists(filepath.Join(dir, path)) {
+			t.Errorf("refused enable wrote %s", path)
+		}
+	}
+}
+
 // TestEnableProducesGuideAndSetupContent pins DES-071 tier C: Enable deposits
 // both embedded files verbatim, not just their presence.
 func TestEnableProducesGuideAndSetupContent(t *testing.T) {
@@ -329,6 +386,40 @@ func TestDisableStrandsUnsealedLines(t *testing.T) {
 	}
 }
 
+func TestDisablePreservesLiveAuditWhenArchiveCannotBeRead(t *testing.T) {
+	dir := gitRepo(t)
+	if _, err := Enable(dir); err != nil {
+		t.Fatal(err)
+	}
+	live := filepath.Join(dir, ".punt-labs/local/ethos/sessions")
+	if err := os.MkdirAll(live, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// An invalid archive does not justify dropping the live event count.
+	archive := filepath.Join(dir, ".punt-labs/ethos/sessions")
+	if err := os.WriteFile(archive, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	body := "{\"ts\":\"2026-07-22T00:00:01.000000001Z\",\"seq\":1}\n\n"
+	log := filepath.Join(live, "2026-07-22-sid.audit.jsonl")
+	if err := os.WriteFile(log, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := DisableTo(dir, dir, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, log); got != body {
+		t.Errorf("project opt-out changed the live audit: %q", got)
+	}
+	for _, step := range rep.Steps {
+		if step.Step == "audit" && strings.Contains(step.Detail, "1 unsealed audit lines") {
+			return
+		}
+	}
+	t.Fatalf("project opt-out did not count the stranded live event: %+v", rep.Steps)
+}
+
 func TestDisableRefusesEnabledSiblingWorktree(t *testing.T) {
 	dir := gitRepo(t)
 	// A commit is needed before adding a worktree.
@@ -352,6 +443,146 @@ func TestDisableRefusesEnabledSiblingWorktree(t *testing.T) {
 	// --force overrides.
 	if _, err := Disable(dir, true); err != nil {
 		t.Fatalf("Disable --force: %v", err)
+	}
+}
+
+func TestDisablePreservesHooksForPersonallyEnabledSibling(t *testing.T) {
+	dir := gitRepo(t)
+	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "init")
+	wt := filepath.Join(physicalTempDir(t), "wt")
+	gitRun(t, dir, "worktree", "add", "-q", wt)
+	if _, err := Enable(dir); err != nil {
+		t.Fatal(err)
+	}
+	ignores := ".punt-labs/local/\nCLAUDE.local.md\n.claude/settings.local.json\n"
+	if err := os.WriteFile(filepath.Join(wt, ".gitignore"), []byte(ignores), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnableLocal(wt, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Disable(dir, false); err == nil || !strings.Contains(err.Error(), wt) {
+		t.Fatalf("disable got %v; want refusal naming enabled sibling %s", err, wt)
+	}
+}
+
+func TestDisableOptOutRollsBackIntegrationOnMarkerFailure(t *testing.T) {
+	dir := gitRepo(t)
+	if _, err := Enable(dir); err != nil {
+		t.Fatal(err)
+	}
+	before := make(map[string]string)
+	for _, path := range []string{"CLAUDE.md", ".claude/settings.json", markerRel, ".git/hooks/pre-commit", ".git/hooks/commit-msg"} {
+		before[path] = readFile(t, filepath.Join(dir, path))
+	}
+	if err := os.Mkdir(filepath.Join(dir, ".punt-labs/ethos/opt-out"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DisableTo(dir, dir, false, true); err == nil {
+		t.Fatal("expected malformed opt-out to fail")
+	}
+	for path, want := range before {
+		if got := readFile(t, filepath.Join(dir, path)); got != want {
+			t.Errorf("%s changed after failed opt-out", path)
+		}
+	}
+}
+
+func TestDisableOptOutRestoresHookAndMarkerOnUnchainFailure(t *testing.T) {
+	dir := gitRepo(t)
+	hooksDir := filepath.Join(dir, ".git", "hooks")
+	first, second := filepath.Join(hooksDir, "pre-commit"), filepath.Join(hooksDir, "commit-msg")
+	if _, err := Enable(dir); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(hooksDir, "user-pre-commit")
+	original := readFile(t, first)
+	if err := os.Rename(first, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Base(target), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte("#!/bin/sh\ncat <<'END'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DisableTo(dir, dir, false, true); err == nil || !strings.Contains(err.Error(), "here-document") {
+		t.Fatalf("got %v, want refusal on malformed commit-msg", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, markerRel)); err != nil {
+		t.Errorf("project marker was not restored: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".punt-labs/ethos/opt-out")); !os.IsNotExist(err) {
+		t.Errorf("failed disable left opt-out behind: %v", err)
+	}
+	if got := readFile(t, target); got != original {
+		t.Error("pre-commit target was not restored")
+	}
+	if got, err := os.Readlink(first); err != nil || got != filepath.Base(target) {
+		t.Errorf("pre-commit symlink changed: %q, %v", got, err)
+	}
+}
+
+func TestProjectRefreshRestoresGuideLinkAndAgentOnFailure(t *testing.T) {
+	dir := gitRepo(t)
+	if _, err := Enable(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DisableTo(dir, dir, false, true); err != nil {
+		t.Fatal(err)
+	}
+	guide := filepath.Join(dir, guideRel)
+	target := filepath.Join(dir, "custom-guide.md")
+	if err := os.Rename(guide, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, guide); err != nil {
+		t.Fatal(err)
+	}
+	agent := filepath.Join(dir, ".claude", "agents", "worker.md")
+	failure := errors.New("refresh failed")
+	_, err := EnableTo(dir, dir, Options{
+		Refresh: true, ClearOptOut: true,
+		BeforeMarker: func(_ *Report, snapshot func(string) error) error {
+			if exists(filepath.Join(dir, markerRel)) {
+				t.Error("enablement marker was written before agent refresh")
+			}
+			if err := snapshot(agent); err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(agent), 0o755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(agent, []byte("new agent"), 0o644); err != nil {
+				return err
+			}
+			return failure
+		},
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("got %v, want refresh failure", err)
+	}
+	if got, err := os.Readlink(guide); err != nil || got != target {
+		t.Errorf("guide symlink was not restored: %q, %v", got, err)
+	}
+	if exists(agent) || exists(filepath.Join(dir, markerRel)) || !exists(filepath.Join(dir, ".punt-labs/ethos/opt-out")) {
+		t.Error("failed refresh did not preserve the opted-out checkout")
+	}
+}
+
+func TestProjectEnableRollsBackDepositsOnInvalidHook(t *testing.T) {
+	dir := gitRepo(t)
+	hook := filepath.Join(dir, ".git", "hooks", "commit-msg")
+	if err := os.Mkdir(hook, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Enable(dir); err == nil || !strings.Contains(err.Error(), hook) {
+		t.Fatalf("got %v, want invalid hook error", err)
+	}
+	for _, path := range []string{guideRel, setupRel, manifestRel, markerRel} {
+		if exists(filepath.Join(dir, path)) {
+			t.Errorf("failed enable left behind %s", path)
+		}
 	}
 }
 

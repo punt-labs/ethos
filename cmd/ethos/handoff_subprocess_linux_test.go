@@ -12,6 +12,7 @@ import (
 func TestSubagentStopWorktreeBashProcessSubstitution(t *testing.T) {
 	repo, home := t.TempDir(), t.TempDir()
 	runGit(t, repo, "init", "-q")
+	markHookFixtureEnabled(t, repo)
 	dir := filepath.Join(repo, ".punt-labs", "ethos", "checks")
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "snapshots"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos.yaml"), []byte("checks: project\n"), 0o600))

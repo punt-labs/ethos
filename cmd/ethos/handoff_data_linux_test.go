@@ -33,6 +33,7 @@ func TestSubagentStopRefreshDataRecovery(t *testing.T) {
 				runGit(t, bare, "worktree", "add", "--detach", checkout)
 				store = checkout
 			}
+			markHookFixtureEnabled(t, checkout)
 			for path, contents := range map[string]string{
 				".punt-labs/ethos.yaml": "checks: project\n",
 				".punt-labs/ethos/checks/project.yaml": "name: project\nchecks:\n" +

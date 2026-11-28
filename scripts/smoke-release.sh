@@ -321,7 +321,7 @@ if [ -n "$plugin_dir" ]; then
     clean git init -q || fail "git init failed"
     clean git config user.name "Release Smoke" || fail "git config user.name failed"
     clean git config user.email "release-smoke@example.invalid" || fail "git config user.email failed"
-    clean "$ethos" enable >/dev/null || fail "ethos enable failed"
+    clean "$ethos" enable --scope project >/dev/null || fail "ethos enable failed"
 
     hook_err_log="$sandbox/home/.punt-labs/ethos/hook-errors.log"
     rm -f "$hook_err_log"

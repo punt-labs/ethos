@@ -169,8 +169,7 @@ func TestLegacyIgnoreRetirementDoesNotHideDefeatedCoverage(t *testing.T) {
 		assert.False(t, covered)
 		assert.NoFileExists(t, filepath.Join(root, markerRel), "defeated protection must not create an enabled marker")
 		body := readFile(t, path)
-		assert.Equal(t, LocalIgnoreRule+"\n!.punt-labs/local/\n"+gitignoreMarker+"\n", body,
-			"retire only the recognized managed rule, preserving the user rule and negation byte-for-byte")
+		assert.Equal(t, initial, body, "failed enable preserves the ignore file byte-for-byte")
 		assert.Equal(t, 1, strings.Count("\n"+body, "\n"+LocalIgnoreRule+"\n"), "never append a duplicate canonical rule")
 		if attempt == 0 {
 			first = body
