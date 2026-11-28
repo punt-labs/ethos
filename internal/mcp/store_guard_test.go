@@ -20,6 +20,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/punt-labs/ethos/v4/internal/vendor"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
@@ -63,6 +64,69 @@ func guardedServer(t *testing.T) *server.MCPServer {
 	t.Helper()
 	srv, _ := fullServer(t, WithStoreError(errNoStore))
 	return srv
+}
+
+func TestRegisteredToolsUseCheckoutEnablementBeforeRepair(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	parent, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	root, checkout := filepath.Join(parent, "main"), filepath.Join(parent, "linked")
+	git := func(args ...string) {
+		t.Helper()
+		cmd := testhelpers.GitCommand(append([]string{"-c", "user.email=test@example.com", "-c", "user.name=test", "-c", "commit.gpgsign=false"}, args...)...)
+		cmd.Env = append(cmd.Env, "GIT_CONFIG_COUNT=0")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s: %s", args, out)
+	}
+	git("init", "-q", root)
+	ignores := []byte(".punt-labs/local/\nCLAUDE.local.md\n.claude/settings.local.json\n")
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".gitignore"), ignores, 0o644))
+	git("-C", root, "add", ".gitignore")
+	git("-C", root, "commit", "-qm", "initial")
+	git("-C", root, "worktree", "add", "-q", checkout)
+	h := testHandler(t)
+	loc := StoreLocation{}
+	repairs := 0
+	WithEnsure(func(_ context.Context, got StoreLocation) string {
+		assert.Equal(t, loc.Checkout, got.Checkout)
+		repairs++
+		return ""
+	})(h)
+	h.RelocateStore(loc, func() StoreLocation { return loc }, func(StoreLocation) *Handler { return h })
+	srv := server.NewMCPServer("test", "0.0.0", server.WithToolCapabilities(true))
+	h.RegisterTools(srv)
+	call := func(name, expected string, isError bool, args map[string]any) {
+		t.Helper()
+		req := callTool(args)
+		req.Params.Name = name
+		result, err := srv.GetTool(name).Handler(t.Context(), req)
+		require.NoError(t, err)
+		require.Equal(t, isError, result.IsError, resultText(t, result))
+		assert.Contains(t, resultText(t, result), expected)
+	}
+	call("enable", "not in a git checkout", true, nil)
+	loc = StoreLocation{Root: root, Checkout: checkout}
+	list := map[string]any{"method": "list"}
+	call("identity", "no enablement marker", true, list)
+	call("status", "no enablement marker", false, nil)
+	call("enable", "scope", true, map[string]any{"scope": true})
+	call("enable", "scope must be project or local", true, map[string]any{"scope": "bogus"})
+	call("disable", "require project scope", true, map[string]any{"opt_out": true})
+	call("enable", resolve.LocalEnabledFile, false, nil)
+	call("disable", "no enablement marker", false, nil)
+	call("enable", resolve.ProjectEnabledFile, false, map[string]any{"scope": "project"})
+	call("disable", resolve.ProjectOptOutFile, false, map[string]any{"scope": "project", "opt_out": true})
+	call("identity", resolve.ProjectOptOutFile, true, list)
+	call("enable", resolve.ProjectOptOutFile, true, nil)
+	call("enable", resolve.ProjectEnabledFile, false, map[string]any{"scope": "project", "clear_opt_out": true})
+	assert.Zero(t, repairs)
+	call("identity", "[", false, list)
+	assert.Equal(t, 1, repairs)
+	require.NoFileExists(t, filepath.Join(root, resolve.ProjectEnabledFile))
+	require.NoError(t, os.Mkdir(filepath.Join(checkout, resolve.ProjectOptOutFile), 0o755))
+	call("status", resolve.ProjectOptOutFile, true, nil)
+	call("identity", resolve.ProjectOptOutFile, true, list)
+	assert.Equal(t, 1, repairs)
 }
 
 func callRegistered(t *testing.T, srv *server.MCPServer, tool, method string) *mcplib.CallToolResult {

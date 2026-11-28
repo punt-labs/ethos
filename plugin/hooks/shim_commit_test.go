@@ -275,13 +275,14 @@ func TestShimEnabledNoBinaryPassesThrough(t *testing.T) {
 	r.removeBinaryFromEverywhere(t)
 	out, err := r.commit(t, r.withPath(), "no binary")
 	require.NoError(t, err, out)
-	assert.NotContains(t, out, "ethos:")
+	assert.Contains(t, out, "audit was not sealed")
+	assert.Contains(t, out, "Ethos trailers were not added")
 
 	// commit-msg alone, as `git merge --no-ff` runs it.
 	require.NoError(t, os.Remove(filepath.Join(r.dir, ".git", "hooks", "pre-commit")))
 	out, err = r.commit(t, r.withPath(), "no binary again")
 	require.NoError(t, err, out)
-	assert.NotContains(t, out, "ethos:")
+	assert.Contains(t, out, "Ethos trailers were not added")
 }
 
 // Enabled with a binary built before the subcommands existed: both hooks block
