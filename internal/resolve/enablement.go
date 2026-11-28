@@ -40,15 +40,7 @@ func EffectiveEnablement(checkout string) (EnablementState, error) {
 		{Enabled: true, DecidingFile: ProjectEnabledFile},
 		{Enabled: true, DecidingFile: LocalEnabledFile},
 	} {
-		parts := strings.Split(candidate.DecidingFile, "/")
-		parent, err := readableEthosPath(checkout, parts[:len(parts)-1]...)
-		if err != nil {
-			return EnablementState{}, err
-		}
-		if parent == "" {
-			continue
-		}
-		present, err := readEnablementMarker(filepath.Join(parent, parts[len(parts)-1]))
+		present, err := checkoutMarker(checkout, candidate.DecidingFile)
 		if err != nil {
 			return EnablementState{}, err
 		}
@@ -57,4 +49,18 @@ func EffectiveEnablement(checkout string) (EnablementState, error) {
 		}
 	}
 	return EnablementState{}, nil
+}
+
+// ProjectOptedOut checks the committed opt-out independently of other markers.
+func ProjectOptedOut(checkout string) (bool, error) {
+	return checkoutMarker(checkout, ProjectOptOutFile)
+}
+
+func checkoutMarker(checkout, relative string) (bool, error) {
+	parts := strings.Split(relative, "/")
+	parent, err := readableEthosPath(checkout, parts[:len(parts)-1]...)
+	if err != nil || parent == "" {
+		return false, err
+	}
+	return readEnablementMarker(filepath.Join(parent, parts[len(parts)-1]))
 }

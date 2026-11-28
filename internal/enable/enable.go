@@ -135,6 +135,13 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO, options ...Options) (*
 	if gitlink {
 		return rep, ErrGitlinkMount
 	}
+	optedOut, err := resolve.ProjectOptedOut(repoRoot)
+	if err != nil {
+		return rep, err
+	}
+	if optedOut {
+		return rep, fmt.Errorf("ethos is opted out by %s", resolve.ProjectOptOutFile)
+	}
 
 	// A marker that exists but is not a regular file (a directory, a FIFO, a
 	// link to nothing) is refused before anything is written: writing through
@@ -235,11 +242,6 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO, options ...Options) (*
 			return rep, err
 		}
 	}
-	if err := writeMarker(repoRoot); err != nil {
-		return rep, err
-	}
-	rep.step("marker", "done", markerRel)
-
 	added, err := claudemd.Register(filepath.Join(repoRoot, "CLAUDE.md"), CanonicalImport, claudemd.WithRepository(p))
 	if err != nil {
 		return rep, fmt.Errorf("adding import line: %w", err)
@@ -259,6 +261,11 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO, options ...Options) (*
 	}
 	permissionStep(rep, granted, "added ", "all rules already present")
 	envStep(rep, envAdded, "set ", "all env defaults already present")
+
+	if err := writeMarker(repoRoot); err != nil {
+		return rep, err
+	}
+	rep.step("marker", "done", markerRel)
 
 	hint, warning := configStatus(storeRoot)
 	if warning != "" {

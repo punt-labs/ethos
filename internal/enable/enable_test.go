@@ -125,6 +125,43 @@ func TestEnableDepositsFourArtifacts(t *testing.T) {
 	}
 }
 
+func TestEnableLeavesNewMarkerAbsentWhenImportFails(t *testing.T) {
+	dir := gitRepo(t)
+	io := defaultGitignoreIO()
+	rename := io.rename
+	io.rename = func(src, dst string) error {
+		if err := rename(src, dst); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("```\n"), 0o644)
+	}
+	if _, err := enableTo(dir, dir, io); err == nil {
+		t.Fatal("enable unexpectedly accepted an unclosed fence")
+	}
+	if exists(filepath.Join(dir, markerRel)) {
+		t.Error("enable wrote a marker before completing the import")
+	}
+}
+
+func TestEnableRefusesProjectOptOutBeforeWriting(t *testing.T) {
+	dir := gitRepo(t)
+	optOut := filepath.Join(dir, ".punt-labs", "ethos", "opt-out")
+	if err := os.MkdirAll(filepath.Dir(optOut), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(optOut, []byte("keep off\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Enable(dir); err == nil || !strings.Contains(err.Error(), ".punt-labs/ethos/opt-out") {
+		t.Errorf("Enable error = %v, want refusal naming opt-out", err)
+	}
+	for _, path := range []string{guideRel, markerRel, "CLAUDE.md", ".gitignore", ".claude/settings.json", ".git/hooks/pre-commit"} {
+		if exists(filepath.Join(dir, path)) {
+			t.Errorf("refused enable wrote %s", path)
+		}
+	}
+}
+
 // TestEnableProducesGuideAndSetupContent pins DES-071 tier C: Enable deposits
 // both embedded files verbatim, not just their presence.
 func TestEnableProducesGuideAndSetupContent(t *testing.T) {

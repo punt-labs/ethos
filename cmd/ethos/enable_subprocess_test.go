@@ -103,6 +103,25 @@ func TestCLI_EnableSuccess(t *testing.T) {
 	}
 }
 
+func TestCLI_EnableRefusesOptOutBeforeRefreshingAgents(t *testing.T) {
+	se := enableSubprocessRepo(t)
+	const marker = ".punt-labs/ethos/opt-out"
+	path := filepath.Join(se.repo, marker)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, code := runCLI(t, se, "enable", "--agents-only")
+	if code == 0 || !strings.Contains(stderr, marker) {
+		t.Fatalf("enable --agents-only exit = %d; stderr = %q; want refusal naming %s", code, stderr, marker)
+	}
+	if _, err := os.Stat(filepath.Join(se.repo, ".punt-labs", "local")); !os.IsNotExist(err) {
+		t.Fatalf("refused enable changed the runtime zone: %v", err)
+	}
+}
+
 func TestCLI_EnableJSONShape(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
