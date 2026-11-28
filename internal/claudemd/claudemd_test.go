@@ -32,6 +32,22 @@ func TestRegisterSortsAndDeduplicatesToolImports(t *testing.T) {
 	}
 }
 
+func TestToolImportOrderConverges(t *testing.T) {
+	const other = "@.punt-labs/biff/CLAUDE.md"
+	for _, order := range [][]string{{canonical, other}, {other, canonical}} {
+		path := fixture(t, "CLAUDE.md", "Existing instructions.\n")
+		for _, line := range order {
+			if changed, err := Register(path, line); err != nil || !changed {
+				t.Fatalf("Register %q = %t, %v", line, changed, err)
+			}
+		}
+		want := "Existing instructions.\n" + other + "\n" + canonical + "\n"
+		if got := read(t, path); got != want {
+			t.Errorf("order %v produced %q, want %q", order, got, want)
+		}
+	}
+}
+
 // TestMain isolates HOME so the per-user lock dir (~/.punt-labs/ethos/locks)
 // lands in a temp dir, not the developer's real home.
 func TestMain(m *testing.M) {

@@ -58,7 +58,7 @@ a worker flag where the ruling meets a code invariant — see
 - **R2** — remove `setup`'s ref-integrity bypass once R1 makes the refs
   resolve; `setup` validates what it writes, hard.
 - **R3** — `setup` generates the agent file for the default agent + human
-  at setup time, using the same generator `ethos enable --refresh` uses.
+  at setup time, using the same generator as `ethos enable --agents-only`.
   Setup writes the initial definitions directly; SessionStart does not
   regenerate them.
 - **R4** — scope guard: no redesign of the bundle system. This is a
@@ -227,7 +227,7 @@ a silently-written dangling ref. That is R2-correct — fail visibly.
 
 **Ordering contract.** `Save` now fails hard if the referenced attributes
 are absent — i.e. if `setup` runs before `seed`. The normal install path
-seeds first (`install.sh:241`, before per-repo enablement), so this only
+seeds machine content without enabling any repository, so this only
 bites a manual `ethos setup` on an unseeded machine. `setup` surfaces an
 actionable error naming the missing attribute:
 

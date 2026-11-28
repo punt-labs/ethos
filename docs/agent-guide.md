@@ -154,7 +154,7 @@ make or inspect its recipe database.
 
 ## Prerequisites: Agent Definitions
 
-`ethos enable --refresh` generates `.claude/agents/<handle>.md` files
+`ethos enable --agents-only` generates `.claude/agents/<handle>.md` files
 from team data resolved in this order: repo-local `.punt-labs/ethos/`,
 active bundle, global `~/.punt-labs/ethos/`.
 
@@ -219,18 +219,20 @@ Tools integrate with ethos at whatever coupling level fits:
 
 ## Repo Enablement
 
-`install.sh` is machine scope only (binary, plugin, seed). Turning ethos on
-in a specific repo is `ethos enable`; `install.sh` delegates to it
-automatically when run inside a work tree.
+`install.sh` is machine scope only (binary, plugin, seed). It never enables
+the invoking checkout.
 
 ```bash
-ethos enable            # deposit guide + marker + import line; chain the hooks
-ethos enable --json     # per-step report
-ethos disable           # remove import line + marker; unchain hooks (non-destructive)
-ethos disable --force   # unchain even when a sibling worktree is still enabled
+ethos enable                                # enable for this checkout only
+ethos disable                               # disable for this checkout only
+ethos enable --scope project                # add shared guide, grants, and Git hooks
+ethos disable --scope project               # remove shared integration
+ethos disable --scope project --opt-out     # opt the project out, including personal enablement
+ethos enable --scope project --clear-opt-out
+ethos status                                # show effective state and deciding marker
 ```
 
-`enable` does four things and is idempotent (re-running is the upgrade path):
+`enable --scope project` is idempotent and wires up the shared integration:
 
 1. deposits the vendored agent guide `.punt-labs/ethos/CLAUDE.md` and its
    `.vendored-manifest` (the vendored zone — never touches identities, teams,
@@ -244,7 +246,7 @@ ethos disable --force   # unchain even when a sibling worktree is still enabled
 `enable` and `setup` stay separate — neither calls the other. `enable` prints
 a "run `ethos setup`" hint when the repo has no identity config.
 
-`disable` removes the import line, deletes the marker, and unchains the hooks,
+`disable --scope project` removes the import, deletes the marker, and unchains the hooks,
 but leaves the vendored guide and all config and audit data dormant on disk.
 It runs no final seal; unsealed audit lines stay in the gitignored local zone
 and seal on a later re-enable.

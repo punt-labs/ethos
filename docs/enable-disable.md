@@ -137,10 +137,27 @@ own repo is unaffected; the hazard is fleet-wide.
 
 ## Verb specifications
 
-### `ethos enable`
+### Personal scope (default)
+
+`ethos enable` and `ethos disable` default to `--scope local`. For a
+personal-only checkout, enable writes the guide and marker under
+`.punt-labs/local/ethos/`, the import in `CLAUDE.local.md`, and grants in
+`.claude/settings.local.json`. Local integration paths must be ignored and
+untracked. If the project is already enabled, personal disable adds an
+ignored `disabled` marker and personal enable removes it. Neither command
+changes the shared guide, settings, or Git hooks.
+
+`ethos status` and `ethos doctor` report effective enablement and the
+deciding marker. In order of precedence: project opt-out, personal disabled,
+project enabled, personal enabled. With no marker, the checkout is off.
+While off, runtime MCP tools and hooks skip repository work; enable,
+disable, status, and doctor are still available. The plugin enable/disable
+commands and MCP tools use the same default and scopes.
+
+### `ethos enable --scope project`
 
 Run from inside a repo. Re-running leaves deposited guides pinned. Use
-`ethos enable --refresh` to update them and reconcile Claude agent definitions.
+`ethos enable --scope project --refresh` to update them and reconcile Claude agent definitions.
 Use `ethos enable --agents-only` to reconcile those definitions without
 changing the guides, hooks, grants, or enablement marker.
 Steps, in order:
@@ -315,13 +332,16 @@ the normative gate as their first executable step, immediately after the
 ```sh
 _host_status=$?
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit "$_host_status"
-[ -f "$REPO_ROOT/.punt-labs/ethos/enabled" ] || exit "$_host_status"
+P="$REPO_ROOT/.punt-labs"
+[ -f "$P/ethos/opt-out" ] && exit "$_host_status"
+[ -f "$P/local/ethos/disabled" ] && exit "$_host_status"
+[ -f "$P/ethos/enabled" ] || [ -f "$P/local/ethos/enabled" ] || exit "$_host_status"
 ```
 
 `REPO_ROOT` is resolved **inside the hook** via `git rev-parse
 --show-toplevel` (worktree-safe: a worktree resolves to its own work-tree
 root, and the marker lives in that root's `.punt-labs/ethos/`), not
-baked in at install time. Gate absent-marker → exit with the captured host
+baked in at install time. When off → exit with the captured host
 status (`$?`), never a bare `exit 0`, so chaining after a host hook that
 signals failure by fall-through is preserved even when ethos is dormant.
 The gate sits before the `ethos` binary is ever resolved or invoked, so a
@@ -332,9 +352,15 @@ chained but no marker); the migration section resolves it — those repos are
 converged by hand at rollout, and doctor's gated-but-unenabled WARN flags
 any straggler until it is.
 
-### `ethos disable`
+### `ethos disable --scope project`
 
 Run from inside a repo. Non-destructive (§2.9). Steps:
+
+Add `--opt-out` to write the shared `.punt-labs/ethos/opt-out` marker and
+remove shared enablement. This overrides even existing personal enablement.
+Use `ethos enable --scope project --clear-opt-out` to clear the opt-out and
+enable in the same transaction. Commit changes to shared markers to share
+them with other checkouts.
 
 1. **Refuse if a sibling worktree is still enabled (rop REC-3).** Before
    unchaining, enumerate sibling worktrees (`git worktree list`). The git
@@ -429,10 +455,9 @@ and sourcing.
 
 ## Three-state model and what doctor reports
 
-Per §2.7, the marker `.punt-labs/ethos/enabled` is the enabled signal —
-directory presence is not. The embedded hook scripts gate on the marker
-(`[ -f "$REPO_ROOT/.punt-labs/ethos/enabled" ] || exit "$_host_status"`,
-see "The §2.7 marker gate" above).
+The following describes doctor checks for the shared Git integration.
+Effective enablement is reported separately and accounts for personal
+markers and project opt-out, as described above.
 
 | State | `enabled` marker | Hook chained | Import line | `doctor` seal check |
 |-------|------------------|--------------|-------------|---------------------|
@@ -474,26 +499,12 @@ landed; those seal on the next commit after the repo is enabled (the seal
 unions the live tail past the watermark, DES-058), and are also covered by
 the SessionEnd courtesy flush (DES-058).
 
-## `install.sh` delegation
+## Machine installation
 
-`install.sh` reverts to **machine scope only** (§2.13,
-distribution.md § Installation Scope): download/build the binary, register
-the marketplace plugin, seed global starter content, run `doctor`. The
-per-repo hook install (`install.sh:421–471`) and its helpers
-(`install_hook`, `resolve_hooks_dir`, `is_shell_hook`, `emit_section`,
-`write_marker_form`, lines 18–190) are **deleted**. When `install.sh` runs
-inside a work tree it calls `"$INSTALL_DIR/ethos" enable` for the cwd — the
-binary already exists by that point (Step 2 installs it before the hook
-steps run today), so the delegation is safe.
-
-**Recommendation: delete the shell functions; do not keep them for
-curl-bootstrap parity.** The drift risk is the deciding factor: two
-implementations of marker-section chaining (shell in `install.sh`, Go in
-`internal/githook`) will diverge — the v4.1.1 seal-chain fix (`ethos-2ol1`,
-commit `01a90ec`) is precisely a bug that lived in the shell copy. One
-implementation in Go, called by both `install.sh` and `ethos enable`,
-removes the drift surface entirely. Curl-bootstrap still works: the binary
-is on disk before `enable` is invoked.
+`install.sh` installs the binary and plugin and seeds machine starter
+content. It does not enable the invoking checkout or chain Git hooks.
+Run `ethos enable` yourself to opt in. Updated project Git shims preserve
+the host hook status even after the Ethos binary is removed.
 
 ## `enable` versus `init` and `setup`
 
