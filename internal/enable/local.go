@@ -57,6 +57,9 @@ func EnableLocal(root string, refresh bool) (_ *Report, resultErr error) {
 	}
 	tx := fileTransaction{p: p}
 	defer tx.finish(&resultErr)
+	if err := ensurePersonalLockExcludes(root, &tx, false); err != nil {
+		return rep, err
+	}
 	guide := filepath.Join(root, localGuide)
 	if err := tx.snapshot(guide); err != nil {
 		return rep, err
@@ -123,14 +126,19 @@ func DisableLocal(root string) (_ *Report, resultErr error) {
 	if err := tx.snapshot(host, filepath.Join(root, localSettings), on, off); err != nil {
 		return rep, err
 	}
+	if err := ensurePersonalLockExcludes(root, &tx, true); err != nil {
+		return rep, err
+	}
 	revoked, envRemoved, err := claudesettings.DeregisterWithEnv(root, disableRules, EnvDefaults, p, claudesettings.Local)
 	if err != nil {
 		return rep, err
 	}
 	permissionStep(rep, revoked, "removed ", "no ethos rules present")
 	envStep(rep, envRemoved, "removed ", "no ethos env defaults present")
-	if _, err := claudemd.Deregister(host, localImport, claudemd.WithRepository(p)); err != nil {
-		return rep, err
+	if _, err := os.Lstat(host); !os.IsNotExist(err) {
+		if _, err := claudemd.Deregister(host, localImport, claudemd.WithRepository(p)); err != nil {
+			return rep, err
+		}
 	}
 	if err := removeLocalFile(on); err != nil {
 		return rep, err
@@ -168,6 +176,84 @@ func checkExistingLocalTargets(root string, targets ...string) error {
 		}
 	}
 	return checkLocalTargets(root, existing...)
+}
+
+func ensurePersonalLockExcludes(root string, tx *fileTransaction, existingOnly bool) error {
+	var targets []string
+	for _, lock := range []struct{ domain, target string }{
+		{"claudemd", localHost},
+		{"claudesettings", localSettings},
+	} {
+		host := filepath.Join(root, lock.target)
+		if existingOnly {
+			if _, err := os.Lstat(host); os.IsNotExist(err) {
+				continue
+			}
+		}
+		path, err := tx.p.LockPath(lock.domain, host)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		targets = append(targets, filepath.ToSlash(rel))
+	}
+	return ensureLocalExcludes(root, tx, targets...)
+}
+
+func ensureLocalExcludes(root string, tx *fileTransaction, targets ...string) error {
+	if len(targets) == 0 {
+		return nil
+	}
+	matches, err := gitIgnoreMatchesInScope(root, targets, true)
+	if err != nil {
+		return err
+	}
+	var rules []string
+	for _, target := range targets {
+		if pattern := matches[target].pattern; pattern == "" || strings.HasPrefix(pattern, "!") {
+			rules = append(rules, "/"+target)
+		}
+	}
+	if len(rules) > 0 {
+		out, err := gitenv.Run(gitenv.Spec{
+			Git: "git", Dir: root, Env: gitenv.Parsed(),
+			Args: []string{"rev-parse", "--path-format=absolute", "--git-path", "info/exclude"},
+		})
+		if err != nil {
+			return fmt.Errorf("locating Git's local exclude file: %w", err)
+		}
+		path, err := gitenv.IndexPathOutput(out)
+		if err != nil {
+			return err
+		}
+		if err := tx.snapshot(path); err != nil {
+			return err
+		}
+		next := tx.files[len(tx.files)-1]
+		if !next.exists {
+			next.mode = 0o644
+		} else if !next.mode.IsRegular() {
+			return fmt.Errorf("Git's local exclude file %s is not a regular file", path)
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		next.data = bytes.Clone(next.data)
+		if len(next.data) > 0 && next.data[len(next.data)-1] != '\n' {
+			next.data = append(next.data, '\n')
+		}
+		next.data = append(next.data, strings.Join(rules, "\n")+"\n"...)
+		if err := next.replace(tx.p); err != nil {
+			return err
+		}
+		if err := layout.SyncRepositoryDestination(tx.p, path); err != nil {
+			return err
+		}
+	}
+	return checkLocalTargets(root, targets...)
 }
 
 func checkLocalTargets(root string, targets ...string) error {

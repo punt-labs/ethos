@@ -81,6 +81,20 @@ func TestPersonalEnableHonorsCloneLocalIgnoreRules(t *testing.T) {
 	}
 }
 
+func TestPersonalEnableKeepsLocksIgnoredWithFileSpecificRules(t *testing.T) {
+	root := gitRepo(t)
+	ignore := "/.punt-labs/local/ethos/CLAUDE.md\n/.punt-labs/local/ethos/enabled\n/.punt-labs/local/ethos/disabled\n/CLAUDE.local.md\n/.claude/settings.local.json\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".gitignore"), []byte(ignore), 0o644))
+	gitRun(t, root, "add", ".gitignore")
+	_, err := EnableLocal(root, false)
+	require.NoError(t, err)
+	cmd := exec.Command("git", "-C", root, "ls-files", "--others", "--exclude-standard")
+	out, err := cmd.Output()
+	require.NoError(t, err)
+	assert.Empty(t, string(out))
+	assert.Equal(t, ignore, readFile(t, filepath.Join(root, ".gitignore")))
+}
+
 func TestPersonalEnablementRejectsUnignoredAndTrackedTargets(t *testing.T) {
 	root := gitRepo(t)
 	_, err := EnableLocal(root, false)
