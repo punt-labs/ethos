@@ -16,6 +16,27 @@ import (
 	"github.com/punt-labs/ethos/v4/plugin/hooks"
 )
 
+func TestRepairGitignoreKeepsRuleThatProtectsAnotherToolsLocalFiles(t *testing.T) {
+	root := gitRepo(t)
+	const rule, rel = ".punt-labs/**/*.local.*", ".punt-labs/vox/creds.local.json"
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte("fixture"), 0o600))
+	ignore := filepath.Join(root, ".gitignore")
+	require.NoError(t, os.WriteFile(ignore, []byte(legacyGitignoreMarker+"\n"+rule+"\n"), 0o644))
+	p, err := layout.NewRepository(root, root, layout.RecordBlame)
+	require.NoError(t, err)
+	changed, kept, err := RepairGitignore(root, p)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, []KeptRule{{Pattern: rule, Path: path}}, kept)
+	require.Contains(t, readFile(t, ignore), LocalIgnoreRule)
+	changed, kept, err = RepairGitignore(root, p)
+	require.NoError(t, err)
+	assert.False(t, changed)
+	assert.Empty(t, kept)
+}
+
 func TestEnableRefusesRetirementWithLegacyProtectedFiles(t *testing.T) {
 	for _, tt := range []struct {
 		name, pattern, rel string
