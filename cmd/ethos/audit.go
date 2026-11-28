@@ -203,6 +203,24 @@ func sameCheckout(a, b string) bool {
 	return os.SameFile(ai, bi)
 }
 
+func dormantLegacySeal(args []string) bool {
+	cmd, flags, err := rootCmd.Find(args)
+	if err != nil || cmd != auditSealCmd {
+		return false
+	}
+	for _, flag := range flags {
+		if flag == "-h" || flag == "--help" {
+			return false
+		}
+	}
+	checkout, err := resolve.ProcessCheckout()
+	if err != nil || checkout == "" {
+		return false
+	}
+	state, err := resolve.EffectiveEnablement(checkout)
+	return err == nil && !state.Enabled && state.DecidingFile != ""
+}
+
 // runAuditSeal is the audit-seal command implementation. It seals every
 // repository stream locally. Full mode adds eligible publication copies. Manual
 // failures exit 2; only blame commit-context archival errors may warn/proceed.

@@ -117,6 +117,29 @@ func TestCLI_SealLifecycleAcrossEnableDisable(t *testing.T) {
 	}
 }
 
+func TestCLI_LegacySealLeavesAuditUnsealedAfterPersonalDisable(t *testing.T) {
+	se := enableSubprocessRepo(t)
+	for _, args := range [][]string{{"enable", "--scope", "project"}, {"disable"}} {
+		if _, stderr, code := runCLI(t, se, args...); code != 0 {
+			t.Fatalf("%v: exit %d: %s", args, code, stderr)
+		}
+	}
+	live := filepath.Join(se.repo, ".punt-labs/local/ethos/sessions/legacy.audit.jsonl")
+	if err := os.MkdirAll(filepath.Dir(live), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(live, []byte("{\"ts\":\"2026-07-22T00:00:01.000000001Z\",\"event\":\"test\",\"seq\":1}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if stdout, stderr, code := runCLI(t, se, "audit", "seal"); code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("disabled seal: exit %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+	glob := filepath.Join(se.repo, ".punt-labs/local/ethos/trace/sessions/*/audit-*.jsonl")
+	if got := countGlob(t, glob); got != 0 {
+		t.Fatalf("disabled seal wrote %d archive chunks", got)
+	}
+}
+
 // commit stages fileName with content and commits, requiring exit 0. The
 // pre-commit hook archives locally before Git snapshots the index.
 func commit(t *testing.T, repo string, env []string, fileName, content, msg string) {
