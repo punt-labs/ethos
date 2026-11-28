@@ -38,6 +38,20 @@ func TestServeStartupSkipsRepairInDormantCheckout(t *testing.T) {
 	}
 }
 
+func TestPersonalMCPDoesNotRewriteSharedGitignore(t *testing.T) {
+	se := enableSubprocessRepo(t)
+	t.Setenv("HOME", se.home)
+	t.Chdir(se.repo)
+	exclude := filepath.Join(se.repo, ".git", "info", "exclude")
+	require.NoError(t, os.WriteFile(exclude, []byte(".punt-labs/local/\nCLAUDE.local.md\n.claude/settings.local.json\n"), 0o644))
+	_, stderr, code := runCLI(t, se, "enable")
+	require.Zero(t, code, stderr)
+	t.Cleanup(func() { cmdRoots.Store(nil) })
+	require.NoError(t, establishRoots(serveCmd, nil))
+	_ = ensureForServe(t.Context(), locateServeStore())
+	require.NoFileExists(t, filepath.Join(se.repo, ".gitignore"))
+}
+
 // The MCP stdio server answers tool calls on several goroutines, and every
 // call passes the real repair gate. Run under -race: the gate must only read
 // the binary version it records, never write it per call. HOME is isolated;

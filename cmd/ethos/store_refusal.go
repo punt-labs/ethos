@@ -220,9 +220,8 @@ func establishRoots(cmd *cobra.Command, _ []string) error {
 	if cmd == auditSealCmd && (auditSealDryRun || explicitlyDormantSeal(r.Checkout)) {
 		repair = false
 	}
-	if path == "ethos serve" && r.Checkout != "" {
-		state, err := resolve.EffectiveEnablement(r.Checkout)
-		repair = err == nil && state.Enabled
+	if path == "ethos serve" {
+		repair = serveRepairsCheckout(r.Checkout)
 	}
 	if repair {
 		r = ensureForCommand(cmd, r)
