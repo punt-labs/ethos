@@ -412,6 +412,48 @@ func TestDisableRefusesEnabledSiblingWorktree(t *testing.T) {
 	}
 }
 
+func TestDisablePreservesHooksForPersonallyEnabledSibling(t *testing.T) {
+	dir := gitRepo(t)
+	gitRun(t, dir, "commit", "-q", "--allow-empty", "-m", "init")
+	wt := filepath.Join(physicalTempDir(t), "wt")
+	gitRun(t, dir, "worktree", "add", "-q", wt)
+	if _, err := Enable(dir); err != nil {
+		t.Fatal(err)
+	}
+	ignores := ".punt-labs/local/\nCLAUDE.local.md\n.claude/settings.local.json\n"
+	if err := os.WriteFile(filepath.Join(wt, ".gitignore"), []byte(ignores), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnableLocal(wt, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Disable(dir, false); err == nil || !strings.Contains(err.Error(), wt) {
+		t.Fatalf("disable got %v; want refusal naming enabled sibling %s", err, wt)
+	}
+}
+
+func TestDisableOptOutRollsBackIntegrationOnMarkerFailure(t *testing.T) {
+	dir := gitRepo(t)
+	if _, err := Enable(dir); err != nil {
+		t.Fatal(err)
+	}
+	before := make(map[string]string)
+	for _, path := range []string{"CLAUDE.md", ".claude/settings.json", markerRel, ".git/hooks/pre-commit", ".git/hooks/commit-msg"} {
+		before[path] = readFile(t, filepath.Join(dir, path))
+	}
+	if err := os.Mkdir(filepath.Join(dir, ".punt-labs/ethos/opt-out"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DisableTo(dir, dir, false, true); err == nil {
+		t.Fatal("expected malformed opt-out to fail")
+	}
+	for path, want := range before {
+		if got := readFile(t, filepath.Join(dir, path)); got != want {
+			t.Errorf("%s changed after failed opt-out", path)
+		}
+	}
+}
+
 func TestDisableRefusesWhenWorktreeProbeFails(t *testing.T) {
 	// A directory that is not a git repo (TestMain fences ancestor discovery)
 	// makes git fail; disable must refuse (fail closed), not silently degrade

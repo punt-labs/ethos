@@ -109,6 +109,22 @@ func (s fileSnapshot) replace(p layout.Policy) error {
 	return os.Rename(name, s.path)
 }
 
+func (t *fileTransaction) snapshotHooks(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	for _, name := range layout.HookNames() {
+		target, err := hookSnapshotTarget(filepath.Join(dir, name))
+		if err != nil {
+			return err
+		}
+		if err := t.snapshot(target); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func hookSnapshotTarget(path string) (string, error) {
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) || err == nil && info.Mode()&os.ModeSymlink == 0 {

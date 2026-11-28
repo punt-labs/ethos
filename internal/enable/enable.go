@@ -188,14 +188,8 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO, options ...Options) (_
 	// unwritable or unprotectable ignore file). The sections are stateless
 	// templates, so chaining them first does not create an enabled-but-
 	// unprotected state: the marker below is still written last.
-	for _, name := range layout.HookNames() {
-		target, err := hookSnapshotTarget(filepath.Join(hooksDir, name))
-		if err != nil {
-			return rep, err
-		}
-		if err := tx.snapshot(target); err != nil {
-			return rep, err
-		}
+	if err := tx.snapshotHooks(hooksDir); err != nil {
+		return rep, err
 	}
 	if err := chainHooks(lk, hooksDir, rep, p); err != nil {
 		return rep, err
@@ -365,6 +359,20 @@ func DisableTo(repoRoot, storeRoot string, force bool, optOut ...bool) (_ *Repor
 		}
 	}
 
+	recordOptOut := len(optOut) > 0 && optOut[0]
+	host := filepath.Join(repoRoot, "CLAUDE.md")
+	tx := fileTransaction{p: p}
+	if recordOptOut {
+		defer tx.finish(&resultErr)
+		target, err := gitignoreTarget(host)
+		if err != nil {
+			return rep, err
+		}
+		if err := tx.snapshot(target, filepath.Join(repoRoot, ".claude", "settings.json")); err != nil {
+			return rep, err
+		}
+	}
+
 	// Settings first: a refusal aborts before anything else changes.
 	revoked, envRemoved, err := claudesettings.DeregisterWithEnv(repoRoot, disableRules, EnvDefaults, p)
 	if err != nil {
@@ -373,7 +381,7 @@ func DisableTo(repoRoot, storeRoot string, force bool, optOut ...bool) (_ *Repor
 	permissionStep(rep, revoked, "removed ", "no ethos rules present")
 	envStep(rep, envRemoved, "removed ", "no ethos env defaults present")
 
-	removed, err := claudemd.Deregister(filepath.Join(repoRoot, "CLAUDE.md"), CanonicalImport, claudemd.WithRepository(p))
+	removed, err := claudemd.Deregister(host, CanonicalImport, claudemd.WithRepository(p))
 	if err != nil {
 		return rep, fmt.Errorf("removing import line: %w", err)
 	}
@@ -383,10 +391,8 @@ func DisableTo(repoRoot, storeRoot string, force bool, optOut ...bool) (_ *Repor
 		rep.step("import", "already", "no import line present")
 	}
 
-	if len(optOut) > 0 && optOut[0] {
+	if recordOptOut {
 		path := filepath.Join(repoRoot, resolve.ProjectOptOutFile)
-		tx := fileTransaction{p: p}
-		defer tx.finish(&resultErr)
 		if err := tx.snapshot(path, filepath.Join(repoRoot, markerRel)); err != nil {
 			return rep, err
 		}
@@ -405,6 +411,11 @@ func DisableTo(repoRoot, storeRoot string, force bool, optOut ...bool) (_ *Repor
 		rep.step("marker", "already", "no marker present")
 	}
 
+	if recordOptOut {
+		if err := tx.snapshotHooks(hooksDir); err != nil {
+			return rep, err
+		}
+	}
 	if err := unchainHooks(lk, hooksDir, rep, p); err != nil {
 		return rep, err
 	}
@@ -608,7 +619,7 @@ func configStatus(storeRoot string) (hint, warning string) {
 }
 
 // enabledSiblingWorktrees returns the other worktrees of this repo that still
-// carry the enabled marker (resolve.EnabledMarker). git runs in the parsed
+// are effectively enabled. git runs in the parsed
 // environment, so an inherited GIT_DIR (a hook's) cannot redirect it. The git
 // hooks dir is shared across all worktrees,
 // so unchaining here disables the seal for every one of them. It fails closed:
@@ -639,11 +650,11 @@ func enabledSiblingWorktrees(repoRoot string) ([]string, error) {
 		// The same rule as doctor and the hooks: a store path that cannot be read,
 		// or a marker that is not a regular file, is counted as enabled with the
 		// cause named, never silently as disabled.
-		present, markErr := resolve.EnabledMarker(path)
+		state, markErr := resolve.EffectiveEnablement(path)
 		switch {
 		case markErr != nil:
 			enabled = append(enabled, fmt.Sprintf("%s (cannot tell: %v)", path, markErr))
-		case present:
+		case state.Enabled:
 			enabled = append(enabled, path)
 		}
 	}
