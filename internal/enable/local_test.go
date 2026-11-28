@@ -111,6 +111,23 @@ func TestPersonalEnablementRejectsTrackedTargets(t *testing.T) {
 	assert.Equal(t, original, got)
 }
 
+func TestFreshPersonalEnableUsesCloneExcludesWithoutTrackedChurn(t *testing.T) {
+	root := gitRepo(t)
+	_, err := EnableLocal(root, false)
+	require.NoError(t, err)
+	require.FileExists(t, filepath.Join(root, resolve.LocalEnabledFile))
+	require.NoFileExists(t, filepath.Join(root, ".gitignore"))
+	exclude := filepath.Join(root, ".git", "info", "exclude")
+	before := readFile(t, exclude)
+	_, err = EnableLocal(root, false)
+	require.NoError(t, err)
+	assert.Equal(t, before, readFile(t, exclude))
+	cmd := exec.Command("git", "-C", root, "status", "--porcelain")
+	out, err := cmd.Output()
+	require.NoError(t, err)
+	assert.Empty(t, string(out))
+}
+
 func TestPersonalEnableRollsBackWhenMarkerIsInvalid(t *testing.T) {
 	root := gitRepo(t)
 	path := func(rel string) string { return filepath.Join(root, rel) }

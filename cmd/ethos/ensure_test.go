@@ -5,6 +5,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -100,6 +102,27 @@ func TestEveryCommandPassesEnsure(t *testing.T) {
 		}
 	}
 	walk(rootCmd)
+}
+
+func TestDisabledSealDoesNotRunStorageRepair(t *testing.T) {
+	dir := enableGitRepo(t)
+	t.Chdir(dir)
+	marker := filepath.Join(dir, resolve.ProjectOptOutFile)
+	require.NoError(t, os.MkdirAll(filepath.Dir(marker), 0o755))
+	require.NoError(t, os.WriteFile(marker, nil, 0o644))
+	n := fakeEnsure(t, autorepair.Result{})
+	t.Cleanup(func() {
+		auditSealDryRun = false
+		cmdRoots.Store(nil)
+	})
+	for _, dryRun := range []bool{false, true} {
+		auditSealDryRun = dryRun
+		require.NoError(t, establishRoots(auditSealCmd, nil))
+		if !dryRun {
+			require.NoError(t, auditSealCmd.RunE(auditSealCmd, nil))
+		}
+	}
+	assert.Zero(t, *n)
 }
 
 // assertRootHookIsNearest fails when a command between c and the root

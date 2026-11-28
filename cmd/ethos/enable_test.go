@@ -35,7 +35,7 @@ func runEnableCmd(t *testing.T, args ...string) (string, string, error) {
 			assert.NoError(t, flag.Value.Set(flag.DefValue))
 			flag.Changed = false
 		}
-		for _, name := range []string{"scope", "opt-out"} {
+		for _, name := range []string{"scope", "opt-out", "force"} {
 			flag := disableCmd.Flags().Lookup(name)
 			assert.NoError(t, flag.Value.Set(flag.DefValue))
 			flag.Changed = false
@@ -113,6 +113,20 @@ func TestPersonalCommandsAndDormantDispatch(t *testing.T) {
 	_, _, err = runEnableCmd(t, "disable")
 	require.NoError(t, err)
 	assert.True(t, dormantHook([]string{"hook", "session-start"}))
+}
+
+func TestDisableForceHonorsExplicitScope(t *testing.T) {
+	dir := enableGitRepo(t)
+	t.Chdir(dir)
+	_, _, err := runEnableCmd(t, "enable", "--scope", "project")
+	require.NoError(t, err)
+	_, _, err = runEnableCmd(t, "disable", "--scope", "local", "--force")
+	require.NoError(t, err)
+	marker := filepath.Join(dir, resolve.ProjectEnabledFile)
+	require.FileExists(t, marker)
+	_, _, err = runEnableCmd(t, "disable", "--force")
+	require.NoError(t, err)
+	require.NoFileExists(t, marker)
 }
 
 func TestEnableCommandJSON(t *testing.T) {
