@@ -30,14 +30,16 @@ func runEnableCmd(t *testing.T, args ...string) (string, string, error) {
 		rootCmd.SetArgs(nil)
 		jsonOutput = false
 		disableForce = false
-		for _, name := range []string{"scope", "refresh", "agents-only"} {
+		for _, name := range []string{"scope", "refresh", "agents-only", "clear-opt-out"} {
 			flag := enableCmd.Flags().Lookup(name)
 			assert.NoError(t, flag.Value.Set(flag.DefValue))
 			flag.Changed = false
 		}
-		flag := disableCmd.Flags().Lookup("scope")
-		assert.NoError(t, flag.Value.Set(flag.DefValue))
-		flag.Changed = false
+		for _, name := range []string{"scope", "opt-out"} {
+			flag := disableCmd.Flags().Lookup(name)
+			assert.NoError(t, flag.Value.Set(flag.DefValue))
+			flag.Changed = false
+		}
 	}()
 	err := rootCmd.Execute()
 	return outBuf.String(), errBuf.String(), err
@@ -83,6 +85,34 @@ func TestEnableDisableCommandRoundTrip(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(dir, ".punt-labs", "ethos", "enabled")); !os.IsNotExist(statErr) {
 		t.Error("marker not deleted by disable command")
 	}
+}
+
+func TestPersonalCommandsAndDormantDispatch(t *testing.T) {
+	dir := enableGitRepo(t)
+	t.Chdir(dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(".punt-labs/local/\nCLAUDE.local.md\n.claude/settings.local.json\n"), 0o644))
+	assert.False(t, dormantHook([]string{"status"}))
+	assert.False(t, dormantHook([]string{"hook", "session-start", "--help"}))
+	assert.True(t, dormantHook([]string{"hook", "session-start"}))
+	_, _, err := runEnableCmd(t, "enable", "--scope", "team")
+	require.ErrorContains(t, err, "unknown scope")
+	_, _, err = runEnableCmd(t, "enable", "--clear-opt-out")
+	require.ErrorContains(t, err, "requires --scope project")
+	_, _, err = runEnableCmd(t, "disable", "--opt-out")
+	require.ErrorContains(t, err, "requires --scope project")
+	_, _, err = runEnableCmd(t, "enable")
+	require.NoError(t, err)
+	assert.False(t, dormantHook([]string{"hook", "session-start"}))
+	_, _, err = runEnableCmd(t, "disable", "--scope", "project", "--opt-out")
+	require.NoError(t, err)
+	assert.True(t, dormantHook([]string{"hook", "session-start"}))
+	_, _, err = runEnableCmd(t, "enable")
+	require.ErrorContains(t, err, ".punt-labs/ethos/opt-out")
+	_, _, err = runEnableCmd(t, "enable", "--scope", "project", "--clear-opt-out")
+	require.NoError(t, err)
+	_, _, err = runEnableCmd(t, "disable")
+	require.NoError(t, err)
+	assert.True(t, dormantHook([]string{"hook", "session-start"}))
 }
 
 func TestEnableCommandJSON(t *testing.T) {
