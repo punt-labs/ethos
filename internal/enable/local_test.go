@@ -2,6 +2,7 @@ package enable
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -59,6 +60,25 @@ func TestPersonalEnablementPreservesSharedIntegration(t *testing.T) {
 	require.NoError(t, err)
 	require.NoFileExists(t, path(resolve.ProjectOptOutFile))
 	require.FileExists(t, path(resolve.ProjectEnabledFile))
+}
+
+func TestPersonalEnableHonorsCloneLocalIgnoreRules(t *testing.T) {
+	for _, source := range []string{".git/info/exclude", "core.excludesFile"} {
+		t.Run(source, func(t *testing.T) {
+			root := gitRepo(t)
+			path := filepath.Join(root, ".git", "info", "exclude")
+			if source == "core.excludesFile" {
+				path = filepath.Join(t.TempDir(), "exclude")
+				cmd := exec.Command("git", "-C", root, "config", source, path)
+				require.NoError(t, cmd.Run())
+			}
+			require.NoError(t, os.WriteFile(path, []byte(".punt-labs/local/\nCLAUDE.local.md\n.claude/settings.local.json\n"), 0o644))
+			_, err := EnableLocal(root, false)
+			require.NoError(t, err)
+			require.FileExists(t, filepath.Join(root, resolve.LocalEnabledFile))
+			require.NoFileExists(t, filepath.Join(root, ".gitignore"))
+		})
+	}
 }
 
 func TestPersonalEnablementRejectsUnignoredAndTrackedTargets(t *testing.T) {

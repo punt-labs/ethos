@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/claudemd"
 	"github.com/punt-labs/ethos/v4/internal/claudesettings"
@@ -176,12 +177,12 @@ func checkLocalTargets(root string, targets ...string) error {
 	if !filepath.IsAbs(root) || root != filepath.Clean(root) {
 		return fmt.Errorf("invalid checkout root %q", root)
 	}
-	matches, err := gitIgnoreMatches(root, targets)
+	matches, err := gitIgnoreMatchesInScope(root, targets, true)
 	if err != nil {
 		return err
 	}
 	for _, target := range targets {
-		if !matches[target].excludes() {
+		if pattern := matches[target].pattern; pattern == "" || strings.HasPrefix(pattern, "!") {
 			return fmt.Errorf("personal scope requires %s to be ignored by git", target)
 		}
 		for path := filepath.Join(root, target); path != root; path = filepath.Dir(path) {
