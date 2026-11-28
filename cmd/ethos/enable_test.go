@@ -129,6 +129,31 @@ func TestDisableForceHonorsExplicitScope(t *testing.T) {
 	require.NoFileExists(t, marker)
 }
 
+func TestProjectOptOutRequiresInliningLegacyGitlink(t *testing.T) {
+	dir := enableGitRepo(t)
+	t.Chdir(dir)
+	team := filepath.Join(dir, ".punt-labs", "ethos")
+	require.NoError(t, os.MkdirAll(team, 0o755))
+	cmd := testhelpers.GitCommand("-C", dir, "update-index", "--add", "--cacheinfo",
+		"160000,0000000000000000000000000000000000000001,.punt-labs/ethos")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	marker := filepath.Join(dir, resolve.ProjectEnabledFile)
+	require.NoError(t, os.WriteFile(marker, nil, 0o644))
+
+	stdout, stderr, err := runEnableCmd(t, "disable", "--scope", "project", "--opt-out")
+	require.ErrorContains(t, err, "git rm --cached -- .punt-labs/ethos")
+	assert.NotContains(t, err.Error(), "\n")
+	assert.Empty(t, stdout)
+	assert.Empty(t, stderr)
+	require.FileExists(t, marker)
+	require.NoFileExists(t, filepath.Join(dir, resolve.ProjectOptOutFile))
+
+	_, _, err = runEnableCmd(t, "disable", "--scope", "project")
+	require.NoError(t, err)
+	require.NoFileExists(t, marker)
+}
+
 func TestEnableCommandJSON(t *testing.T) {
 	dir := enableGitRepo(t)
 	t.Chdir(dir)

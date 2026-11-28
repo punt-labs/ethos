@@ -343,6 +343,16 @@ func Disable(repoRoot string, force bool) (*Report, error) {
 // Linked-worktree callers must use this form so host locks match EnableTo.
 func DisableTo(repoRoot, storeRoot string, force bool, optOut ...bool) (_ *Report, resultErr error) {
 	rep := &Report{RepoRoot: repoRoot}
+	recordOptOut := len(optOut) > 0 && optOut[0]
+	if recordOptOut {
+		gitlink, err := audit.IsGitlinkMount(repoRoot)
+		if err != nil {
+			return rep, fmt.Errorf("checking for a gitlink mount: %w", err)
+		}
+		if gitlink {
+			return rep, errors.New("project opt-out requires an inline .punt-labs/ethos directory; start the migration with `git rm --cached -- .punt-labs/ethos` (docs/enable-disable.md)") // msgguard: allow explicit gitlink migration requested by the operator
+		}
+	}
 	p, err := layout.NewRepository(storeRoot, repoRoot, layout.RecordBlame)
 	if err != nil {
 		return rep, fmt.Errorf("disable layout: %w", err)
@@ -372,7 +382,6 @@ func DisableTo(repoRoot, storeRoot string, force bool, optOut ...bool) (_ *Repor
 		}
 	}
 
-	recordOptOut := len(optOut) > 0 && optOut[0]
 	host := filepath.Join(repoRoot, "CLAUDE.md")
 	tx := fileTransaction{p: p}
 	if recordOptOut {

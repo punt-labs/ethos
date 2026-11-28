@@ -364,6 +364,15 @@ Use `ethos enable --scope project --clear-opt-out` to clear the opt-out and
 enable in the same transaction. Commit changes to shared markers to share
 them with other checkouts.
 
+If `.punt-labs/ethos` is a legacy submodule, the parent repository cannot
+commit a marker inside it. Project disable with `--opt-out` exits without
+changing the checkout. To inline an initialized submodule, start with
+`git rm --cached -- .punt-labs/ethos`, which removes the gitlink from the
+index without deleting the working files. Preserve the nested `.git`
+metadata outside the checkout, remove the corresponding `.gitmodules`
+entry, and stage the team files as ordinary files in the parent repository.
+Then retry project disable with `--opt-out`. Ordinary disable is unchanged.
+
 1. **Refuse if a sibling worktree is still enabled (rop REC-3).** Before
    unchaining, enumerate sibling worktrees (`git worktree list`). The git
    hooks directory is shared across all worktrees of a repo (§2.4 resolver:
