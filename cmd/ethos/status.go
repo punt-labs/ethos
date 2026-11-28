@@ -30,12 +30,6 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 	if jsonOutput {
 		return writeJSON(cmd.OutOrStdout(), state)
 	}
-	if state.DecidingFile == "" {
-		fmt.Fprintln(cmd.OutOrStdout(), "ethos is off: no enablement marker")
-	} else if state.Enabled {
-		fmt.Fprintf(cmd.OutOrStdout(), "ethos is on: %s\n", state.DecidingFile)
-	} else {
-		fmt.Fprintf(cmd.OutOrStdout(), "ethos is off: %s\n", state.DecidingFile)
-	}
+	fmt.Fprintln(cmd.OutOrStdout(), state)
 	return nil
 }

@@ -19,6 +19,16 @@ type EnablementState struct {
 	DecidingFile string `json:"deciding_file,omitempty"`
 }
 
+func (s EnablementState) String() string {
+	if s.DecidingFile == "" {
+		return "ethos is off: no enablement marker"
+	}
+	if s.Enabled {
+		return "ethos is on: " + s.DecidingFile
+	}
+	return "ethos is off: " + s.DecidingFile
+}
+
 // EffectiveEnablement checks the invoking checkout, not the shared store.
 func EffectiveEnablement(checkout string) (EnablementState, error) {
 	if checkout == "" {

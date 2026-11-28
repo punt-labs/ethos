@@ -47,6 +47,19 @@ func TestCLI_StatusNamesDecidingEnablementMarker(t *testing.T) {
 			require.NoError(t, json.Unmarshal([]byte(stdout), &result), stdout)
 			assert.Equal(t, tc.enabled, result.Enabled)
 			assert.Equal(t, tc.deciding, result.DecidingFile)
+
+			stdout, _, _ = runCLI(t, se, "doctor", "--json")
+			var checks []struct{ Name, Status, Detail string }
+			require.NoError(t, json.Unmarshal([]byte(stdout), &checks), stdout)
+			detail := "ethos is off: no enablement marker"
+			if tc.deciding != "" {
+				state := "off"
+				if tc.enabled {
+					state = "on"
+				}
+				detail = "ethos is " + state + ": " + tc.deciding
+			}
+			assert.Contains(t, checks, struct{ Name, Status, Detail string }{"Effective enablement", "PASS", detail})
 		})
 	}
 }
