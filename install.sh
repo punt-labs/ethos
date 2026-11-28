@@ -348,6 +348,7 @@ if machine_ethos doctor; then
     printf 'The CLI is fully functional — via the command line, MCP ("ethos serve"),\n'
     printf 'and the filesystem. To get started:\n\n'
     printf '  ethos setup                                        # create your identity + repo config\n'
+    printf '  ethos enable                                       # enable this checkout (or use --scope project to share)\n'
     # shellcheck disable=SC2016 # literal instruction text; must not expand
     printf '  eval "$(ethos session start --persona <handle>)"   # open a session (any harness)\n'
     printf '  ethos whoami                                        # confirm your identity\n\n'
@@ -374,6 +375,7 @@ if machine_ethos doctor; then
   else
     printf '\n%b%b%s is ready!%b\n\n' "$GREEN" "$BOLD" "$BINARY" "$NC"
     printf 'Run "ethos setup" in your project directory to get started.\n'
+    printf 'Then run "ethos enable" for this checkout, or "ethos enable --scope project" to share enablement.\n'
     printf 'Restart Claude Code twice to activate the plugin.\n\n'
   fi
 else
