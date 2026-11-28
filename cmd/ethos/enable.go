@@ -63,7 +63,7 @@ func runEnable(cmd *cobra.Command) error {
 	}
 	if agentsOnly {
 		rep := &enable.Report{RepoRoot: repoRoot}
-		skipped, err := refreshClaudeAgents(rep, false, true)
+		skipped, err := refreshClaudeAgents(rep, false, true, nil)
 		if err != nil {
 			return err
 		}
@@ -93,7 +93,14 @@ func runEnable(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	rep, err := enable.EnableTo(repoRoot, storeRoot, enable.Options{Refresh: refresh, ClearOptOut: clearOptOut})
+	opts := enable.Options{Refresh: refresh, ClearOptOut: clearOptOut}
+	if refresh {
+		opts.BeforeMarker = func(rep *enable.Report, snapshot func(string) error) error {
+			_, err := refreshClaudeAgents(rep, false, false, snapshot)
+			return err
+		}
+	}
+	rep, err := enable.EnableTo(repoRoot, storeRoot, opts)
 	action := "enabled"
 	gitlinkRefresh := refresh && errors.Is(err, enable.ErrGitlinkMount)
 	if gitlinkRefresh {
@@ -102,15 +109,13 @@ func runEnable(cmd *cobra.Command) error {
 		emitPartialReport(cmd, rep)
 		return err
 	}
-	if refresh {
-		skipped, err := refreshClaudeAgents(rep, gitlinkRefresh, false)
+	if gitlinkRefresh {
+		skipped, err := refreshClaudeAgents(rep, true, false, nil)
 		if err != nil {
 			emitPartialReport(cmd, rep)
 			return err
 		}
-		if gitlinkRefresh {
-			action = agentRefreshAction(skipped)
-		}
+		action = agentRefreshAction(skipped)
 	}
 	return finishEnable(cmd, rep, action)
 }
@@ -141,7 +146,7 @@ func agentRefreshAction(skipped bool) string {
 	return "refreshed Claude agent definitions"
 }
 
-func refreshClaudeAgents(rep *enable.Report, gitlink, checkGitlink bool) (skipped bool, err error) {
+func refreshClaudeAgents(rep *enable.Report, gitlink, checkGitlink bool, beforeWrite func(string) error) (skipped bool, err error) {
 	r := currentRoots()
 	if err := r.configIssue(); err != nil {
 		rep.Warnings = append(rep.Warnings, fmt.Sprintf("agent definitions left unchanged: %v", err))
@@ -171,7 +176,7 @@ func refreshClaudeAgents(rep *enable.Report, gitlink, checkGitlink bool) (skippe
 		}
 	}
 	identities := identityStore()
-	if err := hook.RefreshAgentDefinitions(r.Located, identities, layeredTeamStore(identities), layeredRoleStore(identities)); err != nil {
+	if err := hook.RefreshAgentDefinitions(r.Located, identities, layeredTeamStore(identities), layeredRoleStore(identities), beforeWrite); err != nil {
 		return false, fmt.Errorf("refreshing Claude agent definitions: %w", err)
 	}
 	return false, nil

@@ -161,6 +161,24 @@ func TestCLI_EnablePinsDepositedGuideUntilRefresh(t *testing.T) {
 	require.NotEqual(t, pinned, after)
 }
 
+func TestCLI_ProjectRefreshRollsBackWhenAgentInstallationFails(t *testing.T) {
+	se := freshCLIEnv(t, "refresh-human")
+	store := filepath.Join(se.repo, ".punt-labs", "ethos")
+	writeRefreshTeam(t, se.repo, store)
+	agents := filepath.Join(se.repo, ".claude", "agents")
+	require.NoError(t, os.MkdirAll(agents, 0o755))
+	require.NoError(t, os.Mkdir(filepath.Join(agents, "worker.md"), 0o755))
+	stubs := filepath.Join(store, "agents")
+	require.NoError(t, os.MkdirAll(stubs, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stubs, "helper.md"), []byte("---\nname: helper\n---\n"), 0o644))
+	_, stderr, code := runCLI(t, se, "enable", "--scope", "project", "--refresh")
+	require.NotZero(t, code, stderr)
+	assert.NoFileExists(t, filepath.Join(store, "enabled"))
+	assert.NoFileExists(t, filepath.Join(store, "CLAUDE.md"))
+	assert.NoFileExists(t, filepath.Join(agents, "helper.md"), "an earlier stub installation must also roll back")
+	assert.DirExists(t, filepath.Join(agents, "worker.md"))
+}
+
 func TestCLI_EnableAgentsOnlyLeavesDisabledRepoDisabled(t *testing.T) {
 	se := freshCLIEnv(t, "refresh-human")
 	store := filepath.Join(se.repo, ".punt-labs", "ethos")

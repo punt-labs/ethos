@@ -250,7 +250,11 @@ func HandleSessionStartContext(ctx context.Context, r io.Reader, deps SessionSta
 
 // RefreshAgentDefinitions reconciles the invoking checkout's Claude agents
 // using the shared store's team and identity data.
-func RefreshAgentDefinitions(loc resolve.Located, store identity.IdentityStore, teams *team.LayeredStore, roles *role.LayeredStore) error {
+func RefreshAgentDefinitions(loc resolve.Located, store identity.IdentityStore, teams *team.LayeredStore, roles *role.LayeredStore, beforeWrite ...func(string) error) error {
+	var snapshot func(string) error
+	if len(beforeWrite) != 0 {
+		snapshot = beforeWrite[0]
+	}
 	if loc.CheckoutErr != nil {
 		return fmt.Errorf("locating the checkout for agent generation: %w", loc.CheckoutErr)
 	}
@@ -274,14 +278,14 @@ func RefreshAgentDefinitions(loc resolve.Located, store identity.IdentityStore, 
 	if teamsWithoutRoles {
 		fmt.Fprintln(os.Stderr, "ethos: agent refresh: Roles store missing; installing no stubs because generator ownership is unavailable")
 	} else if planErr == nil {
-		installed, installErr = installAgentDefsFor(loc, plan.Owned)
+		installed, installErr = installAgentDefsWithOwnership(loc, plan.Owned, nil, snapshot)
 	}
 	if repoRoot != "" && checkoutRoot != "" && teams != nil && roles != nil {
 		policy, err := loc.Layout()
 		if err != nil {
 			return fmt.Errorf("constructing agent storage: %w", err)
 		}
-		if genErr := errors.Join(planErr, ApplyAgentPlan(policy, plan)); genErr != nil {
+		if genErr := errors.Join(planErr, applyAgentPlan(policy, plan, nil, snapshot)); genErr != nil {
 			return fmt.Errorf("generating agents: %w", errors.Join(installErr, genErr))
 		}
 	}
@@ -299,7 +303,7 @@ func RefreshAgentDefinitions(loc resolve.Located, store identity.IdentityStore, 
 	// process CWD's .claude/agents instead of the checkout, so it is guarded
 	// here too, matching the generation/install block above.
 	if repoRoot != "" && checkoutRoot != "" && planErr == nil && !teamsWithoutRoles {
-		pruneStaleAgents(checkoutRoot, plan.Owned, installed)
+		pruneStaleAgents(checkoutRoot, plan.Owned, installed, snapshot)
 	}
 	return nil
 }
@@ -388,7 +392,7 @@ func hasEnvAssignment(content, key string) bool {
 // which carry no team membership and so appear in neither of the first two
 // sets. A prune error is logged, never fatal — the next explicit refresh tries
 // again.
-func pruneStaleAgents(checkoutRoot string, owned map[string]bool, installed []string) {
+func pruneStaleAgents(checkoutRoot string, owned map[string]bool, installed []string, beforeWrite func(string) error) {
 	keep := make(map[string]bool, len(owned)+len(installed))
 	for h := range owned {
 		keep[h] = true
@@ -404,7 +408,7 @@ func pruneStaleAgents(checkoutRoot string, owned map[string]bool, installed []st
 	for h := range checklist {
 		keep[h] = true
 	}
-	deleted, err := PruneOrphanedGeneratedAgents(checkoutRoot, keep)
+	deleted, err := pruneOrphanedGeneratedAgents(checkoutRoot, keep, beforeWrite)
 	for _, h := range deleted {
 		fmt.Fprintf(os.Stderr, "ethos: agent refresh: pruned stale agent %s.md\n", h)
 	}
@@ -754,10 +758,10 @@ func installAgentDefs(ethosRoot string, generated map[string]bool) {
 // pruneStaleAgents needs, so a stub this run installs is never the same run's
 // prune target — whether or not that stub's content actually changed on disk.
 func installAgentDefsFor(loc resolve.Located, generated map[string]bool) ([]string, error) {
-	return installAgentDefsWithOwnership(loc, generated, nil)
+	return installAgentDefsWithOwnership(loc, generated, nil, nil)
 }
 
-func installAgentDefsWithOwnership(loc resolve.Located, generated map[string]bool, onUnmarked func(string)) ([]string, error) {
+func installAgentDefsWithOwnership(loc resolve.Located, generated map[string]bool, onUnmarked func(string), beforeWrite func(string) error) ([]string, error) {
 	if err := loc.Err(); err != nil {
 		return nil, fmt.Errorf("locating agent installation paths: %w", err)
 	}
@@ -779,7 +783,7 @@ func installAgentDefsWithOwnership(loc resolve.Located, generated map[string]boo
 	if err != nil {
 		return handles, err
 	}
-	return handles, applyAgentPlan(policy, AgentPlan{Files: files}, onUnmarked)
+	return handles, applyAgentPlan(policy, AgentPlan{Files: files}, onUnmarked, beforeWrite)
 }
 
 // emitAgentContext builds and emits the full agent persona block with

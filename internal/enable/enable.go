@@ -104,8 +104,9 @@ func EnableTo(repoRoot, storeRoot string, options ...Options) (*Report, error) {
 
 // Options controls whether enable updates an existing vendored deposit.
 type Options struct {
-	Refresh     bool
-	ClearOptOut bool
+	Refresh      bool
+	ClearOptOut  bool
+	BeforeMarker func(*Report, func(string) error) error
 }
 
 // enableTo carries per-request ignore I/O so persistence failures can be tested
@@ -291,6 +292,11 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO, options ...Options) (_
 	permissionStep(rep, granted, "added ", "all rules already present")
 	envStep(rep, envAdded, "set ", "all env defaults already present")
 
+	if len(options) > 0 && options[0].BeforeMarker != nil {
+		if err := options[0].BeforeMarker(rep, func(path string) error { return tx.snapshot(path) }); err != nil {
+			return rep, err
+		}
+	}
 	if optedOut {
 		path := filepath.Join(repoRoot, resolve.ProjectOptOutFile)
 		if err := tx.snapshot(path); err != nil {
