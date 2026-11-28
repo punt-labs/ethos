@@ -243,7 +243,7 @@ func ensureLocalExcludes(root string, tx *fileTransaction, targets ...string) er
 		if !next.exists {
 			next.mode = 0o644
 		} else if !next.mode.IsRegular() {
-			return fmt.Errorf("Git's local exclude file %s is not a regular file", path)
+			return fmt.Errorf("local Git exclude file %s is not a regular file", path)
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
