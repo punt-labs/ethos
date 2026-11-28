@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -15,7 +16,27 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/autorepair"
 	"github.com/punt-labs/ethos/v4/internal/mcp"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
+
+func TestServeStartupSkipsRepairInDormantCheckout(t *testing.T) {
+	for _, marker := range []string{"", resolve.LocalDisabledFile, resolve.ProjectOptOutFile} {
+		t.Run(marker, func(t *testing.T) {
+			se := enableSubprocessRepo(t)
+			t.Setenv("HOME", se.home)
+			t.Chdir(se.repo)
+			if marker != "" {
+				path := filepath.Join(se.repo, marker)
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+				require.NoError(t, os.WriteFile(path, nil, 0o644))
+			}
+			n := fakeEnsure(t, autorepair.Result{})
+			t.Cleanup(func() { cmdRoots.Store(nil) })
+			require.NoError(t, establishRoots(serveCmd, nil))
+			assert.Zero(t, *n)
+		})
+	}
+}
 
 // The MCP stdio server answers tool calls on several goroutines, and every
 // call passes the real repair gate. Run under -race: the gate must only read
