@@ -17,7 +17,8 @@ import (
 var storageGOOS = runtime.GOOS
 
 // CheckStorage is the "Storage" row (DES-084): PASS when the global stamp, and
-// the full or personal stamp inside a repository, are current and every residual
+// the repository stamp (or a personal stamp in a personal-only checkout), are
+// current and every residual
 // is settled (a final state, nothing to do); WARN when a stamp is missing or
 // old, or a residual is actionable, naming the action. Every residual is
 // listed in Result.Lines for --verbose. Ensure runs before doctor, so a missing stamp means a repair that
@@ -45,8 +46,11 @@ func CheckStorage(loc resolve.Located, global string) Result {
 				Detail: "repository layout stamp not checked: " + perr.Error()}
 		}
 		rs, rerr := autorepair.ReadStamp(autorepair.RepositoryStampPath(p))
-		if errors.Is(rerr, fs.ErrNotExist) {
-			rs, rerr = autorepair.ReadStamp(autorepair.PersonalRepositoryStampPath(p))
+		if errors.Is(rerr, fs.ErrNotExist) && loc.CheckoutErr == nil {
+			state, err := resolve.EffectiveEnablement(loc.Checkout)
+			if err == nil && state.DecidingFile == resolve.LocalEnabledFile {
+				rs, rerr = autorepair.ReadStamp(autorepair.PersonalRepositoryStampPath(p))
+			}
 		}
 		if bad := stampProblem("repository", rs, rerr); bad != "" {
 			return Result{Name: name, Status: "WARN", Lines: residualLines(residuals), Detail: bad}

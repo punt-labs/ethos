@@ -61,7 +61,7 @@ func TestCheckStorage(t *testing.T) {
 		assert.Equal(t, "WARN", r.Status)
 		assert.Contains(t, r.Detail, "repository")
 	})
-	t.Run("personal stamp reports conditions until a full stamp exists", func(t *testing.T) {
+	t.Run("personal stamp only counts during personal enablement", func(t *testing.T) {
 		g := filepath.Join(phys(t), "g")
 		writeGlobalStamp(t, g, autorepair.Stamp{Version: autorepair.LayoutVersion, Items: 1})
 		store := phys(t)
@@ -73,6 +73,10 @@ func TestCheckStorage(t *testing.T) {
 		stamp := autorepair.Stamp{Version: autorepair.LayoutVersion, Items: 2}
 		require.NoError(t, autorepair.WriteStamp(path, stamp, ensureDir))
 		r := CheckStorage(loc, g)
+		assert.Equal(t, "WARN", r.Status)
+		assert.Contains(t, r.Detail, "no layout stamp for the repository store")
+		require.NoError(t, os.WriteFile(filepath.Join(store, resolve.LocalEnabledFile), nil, 0o600))
+		r = CheckStorage(loc, g)
 		assert.Equal(t, "PASS", r.Status)
 		assert.Contains(t, r.Detail, "3 items")
 
@@ -85,6 +89,14 @@ func TestCheckStorage(t *testing.T) {
 		assert.Equal(t, "WARN", r.Status)
 		assert.Contains(t, r.Detail, "1 condition(s) need action")
 		assert.Equal(t, []string{"action needed: overlays teammate/vox: overlay unreadable; check file permissions"}, r.Lines)
+
+		projectMarker := filepath.Join(store, resolve.ProjectEnabledFile)
+		require.NoError(t, ensureDir(filepath.Dir(projectMarker)))
+		require.NoError(t, os.WriteFile(projectMarker, nil, 0o600))
+		r = CheckStorage(loc, g)
+		assert.Equal(t, "WARN", r.Status)
+		assert.Contains(t, r.Detail, "no layout stamp for the repository store")
+		assert.Empty(t, r.Lines)
 
 		require.NoError(t, autorepair.WriteStamp(autorepair.RepositoryStampPath(p), autorepair.Stamp{
 			Version: autorepair.LayoutVersion, Items: 4,
