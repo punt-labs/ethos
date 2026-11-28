@@ -127,6 +127,11 @@ func TestEnableDepositsFourArtifacts(t *testing.T) {
 
 func TestEnableLeavesNewMarkerAbsentWhenImportFails(t *testing.T) {
 	dir := gitRepo(t)
+	pre := filepath.Join(dir, ".git", "hooks", "pre-commit")
+	const original = "#!/bin/sh\necho original\n"
+	if err := os.WriteFile(pre, []byte(original), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	io := defaultGitignoreIO()
 	rename := io.rename
 	io.rename = func(src, dst string) error {
@@ -140,6 +145,21 @@ func TestEnableLeavesNewMarkerAbsentWhenImportFails(t *testing.T) {
 	}
 	if exists(filepath.Join(dir, markerRel)) {
 		t.Error("enable wrote a marker before completing the import")
+	}
+	for _, rel := range []string{guideRel, setupRel, manifestRel, ".gitignore", ".git/hooks/commit-msg", ".claude/settings.json"} {
+		if exists(filepath.Join(dir, rel)) {
+			t.Errorf("failed enable left %s behind", rel)
+		}
+	}
+	if got := readFile(t, pre); got != original {
+		t.Errorf("hook was not restored: %q", got)
+	}
+	info, err := os.Stat(pre)
+	if err != nil || info.Mode().Perm() != 0o700 {
+		t.Errorf("hook mode was not restored: %v, %v", info, err)
+	}
+	if got := readFile(t, filepath.Join(dir, "CLAUDE.md")); got != "```\n" {
+		t.Errorf("untouched import host changed: %q", got)
 	}
 }
 

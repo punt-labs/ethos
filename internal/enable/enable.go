@@ -109,7 +109,7 @@ type Options struct {
 
 // enableTo carries per-request ignore I/O so persistence failures can be tested
 // through the orchestration boundary without replacing process-wide hooks.
-func enableTo(repoRoot, storeRoot string, io gitignoreIO, options ...Options) (*Report, error) {
+func enableTo(repoRoot, storeRoot string, io gitignoreIO, options ...Options) (_ *Report, resultErr error) {
 	rep := &Report{RepoRoot: repoRoot}
 	// Host staging does not depend on the recording mode. These roots are
 	// supplied by the caller's resolver, never independently rediscovered here.
@@ -162,26 +162,19 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO, options ...Options) (*
 	// may be the only protection for private overlays or another tool's data;
 	// enable is not permission to move or expose those files.
 	//
-	// A refusal here still refreshes the hook sections of an already-enabled
-	// repo before returning. A stale seal section can block every commit in the
-	// repo, so the refresh must never wait on an unrelated migration (legacy
-	// ignore retirement) that needs operator cleanup. A repo with no marker is
-	// left untouched.
 	if err := preflightLegacyIgnores(repoRoot); err != nil {
-		return rep, refreshHooksThen(err, repoRoot, storeRoot, rep)
+		return rep, err
 	}
 	if !textscan.SamePath(repoRoot, storeRoot) {
 		if err := preflightLegacyIgnores(storeRoot); err != nil {
-			return rep, refreshHooksThen(err, repoRoot, storeRoot, rep)
+			return rep, err
 		}
 	}
 
-	var depositWarns []string
-	if len(options) > 0 && options[0].Refresh {
-		depositWarns, err = deposit(repoRoot, Guide, Setup, p)
-	} else {
-		depositWarns, err = depositVendored(repoRoot, Guide, Setup, false, p)
-	}
+	tx := fileTransaction{p: p}
+	defer tx.finish(&resultErr)
+	refresh := len(options) > 0 && options[0].Refresh
+	depositWarns, err := depositVendoredTo(repoRoot, Guide, Setup, refresh, &tx, p)
 	if err != nil {
 		return rep, err
 	}
@@ -192,6 +185,15 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO, options ...Options) (*
 	// unwritable or unprotectable ignore file). The sections are stateless
 	// templates, so chaining them first does not create an enabled-but-
 	// unprotected state: the marker below is still written last.
+	for _, name := range layout.HookNames() {
+		target, err := hookSnapshotTarget(filepath.Join(hooksDir, name))
+		if err != nil {
+			return rep, err
+		}
+		if err := tx.snapshot(target); err != nil {
+			return rep, err
+		}
+	}
 	if err := chainHooks(lk, hooksDir, rep, p); err != nil {
 		return rep, err
 	}
@@ -199,6 +201,13 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO, options ...Options) (*
 	// Protect before marking enabled, so "enabled implies protected" holds: a
 	// rare .gitignore write error must not leave an enabled-but-unprotected
 	// checkout.
+	ignore, err := gitignoreTarget(filepath.Join(repoRoot, ".gitignore"))
+	if err != nil {
+		return rep, err
+	}
+	if err := tx.snapshot(ignore); err != nil {
+		return rep, err
+	}
 	action, detail, err := ensureGitignoreWithIO(repoRoot, p, io)
 	if action != "" {
 		rep.step("gitignore", action, detail)
@@ -210,6 +219,13 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO, options ...Options) (*
 		// The checkout's ignore file travels with its next commit, but it does
 		// not exclude runtime we just created in the canonical store checkout.
 		// Maintain that owner's shared-local exclusion as well.
+		ignore, err := gitignoreTarget(filepath.Join(storeRoot, ".gitignore"))
+		if err != nil {
+			return rep, err
+		}
+		if err := tx.snapshot(ignore); err != nil {
+			return rep, err
+		}
 		action, detail, err := ensureGitignoreWithIO(storeRoot, p, io)
 		if action != "" {
 			rep.step("gitignore:store", action, detail)
@@ -242,7 +258,15 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO, options ...Options) (*
 			return rep, err
 		}
 	}
-	added, err := claudemd.Register(filepath.Join(repoRoot, "CLAUDE.md"), CanonicalImport, claudemd.WithRepository(p))
+	host := filepath.Join(repoRoot, "CLAUDE.md")
+	target, err := gitignoreTarget(host)
+	if err != nil {
+		return rep, err
+	}
+	if err := tx.snapshot(target); err != nil {
+		return rep, err
+	}
+	added, err := claudemd.Register(host, CanonicalImport, claudemd.WithRepository(p))
 	if err != nil {
 		return rep, fmt.Errorf("adding import line: %w", err)
 	}
@@ -252,6 +276,9 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO, options ...Options) (*
 		rep.step("import", "already", CanonicalImport+" already present")
 	}
 
+	if err := tx.snapshot(filepath.Join(repoRoot, ".claude", "settings.json")); err != nil {
+		return rep, err
+	}
 	granted, envAdded, err := claudesettings.RegisterWithEnv(repoRoot, PermissionRules, EnvDefaults, p)
 	if err != nil {
 		return rep, fmt.Errorf("adding ethos settings to .claude/settings.json: %w", err)
@@ -262,6 +289,9 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO, options ...Options) (*
 	permissionStep(rep, granted, "added ", "all rules already present")
 	envStep(rep, envAdded, "set ", "all env defaults already present")
 
+	if err := tx.snapshot(filepath.Join(repoRoot, markerRel)); err != nil {
+		return rep, err
+	}
 	if err := writeMarker(repoRoot); err != nil {
 		return rep, err
 	}
@@ -442,29 +472,6 @@ func hooksTarget(repoRoot string) (githook.Lookup, string, error) {
 		return l, "", fmt.Errorf("cannot install hooks: %w", l.Refusal())
 	}
 	return l, dir, nil
-}
-
-// refreshHooksThen returns cause. When cause is a legacy-retirement refusal in
-// a repo that is already enabled, it first refreshes the hook sections, joining
-// any refresh failure so neither is lost. A first-time enable that refuses
-// leaves the repo untouched: chaining hooks with no marker is the "hook chained
-// but ethos not enabled here" state doctor tells the operator to clean up.
-// Every other refusal mutates nothing.
-func refreshHooksThen(cause error, repoRoot, storeRoot string, rep *Report) error {
-	if !errors.Is(cause, errRetirementRefused) {
-		return cause // other refusals (hazardous files, git failures) mutate nothing
-	}
-	present, err := resolve.EnabledMarker(repoRoot)
-	if err != nil {
-		return errors.Join(cause, fmt.Errorf("refreshing hooks: %w", err))
-	}
-	if !present {
-		return cause
-	}
-	if err := refreshHooks(repoRoot, storeRoot, rep, true); err != nil {
-		return errors.Join(cause, err)
-	}
-	return cause
 }
 
 // chainHooks chains the seal and trailer sections into pre-commit and

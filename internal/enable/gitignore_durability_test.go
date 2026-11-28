@@ -200,22 +200,14 @@ func TestEnableGitignoreUnconfirmedDurabilityBlocksNewMarker(t *testing.T) {
 				}
 				return layout.SyncRepositoryDestination(p, dest)
 			}
-			var first os.FileInfo
-			for attempt := range 2 {
+			for range 2 {
 				_, err := enableTo(checkout, store, io)
 				var applied *layout.InstallDurabilityError
 				require.ErrorAs(t, err, &applied)
 				assert.ErrorIs(t, err, injected)
 				assert.Equal(t, path, applied.Path)
 				assert.NoFileExists(t, filepath.Join(checkout, markerRel))
-				assert.Contains(t, readFile(t, path), LocalIgnoreRule, "never roll back installed protection")
-				current, err := os.Stat(path)
-				require.NoError(t, err)
-				if attempt == 0 {
-					first = current
-				} else {
-					assert.True(t, os.SameFile(first, current), "equal retry must confirm, not duplicate the rule")
-				}
+				assert.NoFileExists(t, path, "failed enable rolls back installed protection")
 			}
 			_, err := EnableTo(checkout, store)
 			require.NoError(t, err)
