@@ -119,6 +119,7 @@ var Table = []Entry{
 	{Pattern: ".punt-labs/local/ethos/**/*.lock", Class: Never},
 	// The repository layout stamp autorepair writes (DES-084).
 	{Pattern: ".punt-labs/local/ethos/layout.yaml", Class: Never},
+	{Pattern: ".punt-labs/local/ethos/layout-personal.yaml", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/CLAUDE.md", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/enabled", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/disabled", Class: Never},

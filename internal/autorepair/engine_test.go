@@ -134,6 +134,38 @@ func TestEnsureWritesStampsAndIsIdempotent(t *testing.T) {
 	assert.Equal(t, string(logBefore), string(logAfter), "no log line on the fast path")
 }
 
+func TestEnsurePersonalStampDoesNotSatisfyFullRepair(t *testing.T) {
+	r := newRig(t, true)
+	gitIn(t, r.store, "init", "-q", "-b", "main")
+	gitIn(t, r.store, "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "fixture")
+	policy, err := r.roots.Layout()
+	require.NoError(t, err)
+	personal := filepath.Join(policy.LocalRoot(), "layout-personal.yaml")
+	gitignore := filepath.Join(r.store, ".gitignore")
+	ctx := WithPersonalCheckout(t.Context())
+
+	_, err = Ensure(ctx, r.roots, r.global)
+	require.NoError(t, err)
+	s, err := ReadStamp(personal)
+	require.NoError(t, err)
+	require.True(t, s.Current())
+	require.NoFileExists(t, RepositoryStampPath(policy))
+	require.NoFileExists(t, gitignore)
+
+	_, err = Ensure(t.Context(), r.roots, r.global)
+	require.NoError(t, err)
+	s, err = r.repoStamp()
+	require.NoError(t, err)
+	require.True(t, s.Current())
+	require.FileExists(t, gitignore)
+
+	require.NoError(t, os.Remove(personal))
+	result, err := Ensure(ctx, r.roots, r.global)
+	require.NoError(t, err)
+	assert.Zero(t, result)
+	require.NoFileExists(t, personal)
+}
+
 // With no step registered nothing has been converted, so nothing may be
 // stamped current: a stamp written now would make Ensure take the fast path
 // forever once the real steps land. Nothing has run either, so there is

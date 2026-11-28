@@ -68,19 +68,26 @@ func exemptFromEnsure(cmd *cobra.Command) bool {
 // tool call already located (one locate per call) and returns the line a
 // repair earned.
 func ensureForServe(ctx context.Context, loc mcp.StoreLocation) string {
-	if !serveRepairsCheckout(loc.Checkout) {
+	ctx, active := serveRepairContext(ctx, loc.Checkout)
+	if !active {
 		return ""
 	}
 	res, _ := ensureStorage(diagnostic.WithLogger(ctx, processLogger), locatedFrom(loc), defaultGlobalRoot())
 	return res.Line()
 }
 
-func serveRepairsCheckout(checkout string) bool {
+func serveRepairContext(ctx context.Context, checkout string) (context.Context, bool) {
 	if checkout == "" {
-		return true
+		return ctx, true
 	}
 	state, err := resolve.EffectiveEnablement(checkout)
-	return err == nil && state.DecidingFile == resolve.ProjectEnabledFile
+	if err != nil || !state.Enabled {
+		return ctx, false
+	}
+	if state.DecidingFile == resolve.LocalEnabledFile {
+		ctx = autorepair.WithPersonalCheckout(ctx)
+	}
+	return ctx, true
 }
 
 // ensureForCommand runs the repair gate for cmd against r and returns the
@@ -95,6 +102,16 @@ func ensureForCommand(cmd *cobra.Command, r *repoRoots) *repoRoots {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if cmd == serveCmd {
+		if r.CheckoutErr != nil {
+			return r
+		}
+		var active bool
+		ctx, active = serveRepairContext(ctx, r.Checkout)
+		if !active {
+			return r
+		}
 	}
 	ensure := ensureStorage
 	if cmd.CommandPath() == "ethos doctor" {
