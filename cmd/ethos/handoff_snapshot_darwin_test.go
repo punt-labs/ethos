@@ -43,6 +43,7 @@ func TestHandoffSnapshotLaunchVerdicts(t *testing.T) {
 			root, home := t.TempDir(), t.TempDir()
 			runGit(t, root, "init", "-q")
 			for name, body := range map[string]string{
+				".punt-labs/ethos/enabled":                       "",
 				".gitignore":                                     ".punt-labs/ethos/sessions/\n.punt-labs/local/\n",
 				".punt-labs/ethos.yaml":                          "checks: project\n",
 				".punt-labs/ethos/checks/project.yaml":           "name: project\nchecks:\n  - {name: snapshot, stage: handoff, files: all, run: " + tc.run + "}\n",
