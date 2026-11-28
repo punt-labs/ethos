@@ -15,8 +15,10 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/repair"
 )
 
+const stepUntrackLocal = "untrack-local"
+
 func init() {
-	Register(Step{Name: "untrack-local", Scope: ScopeRepository, Run: untrackLocal})
+	Register(Step{Name: stepUntrackLocal, Scope: ScopeRepository, Run: untrackLocal})
 }
 
 const recordTree = ".punt-labs/ethos/"

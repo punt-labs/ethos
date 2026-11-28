@@ -137,7 +137,17 @@ func TestEnsureWritesStampsAndIsIdempotent(t *testing.T) {
 func TestEnsurePersonalStampDoesNotSatisfyFullRepair(t *testing.T) {
 	r := newRig(t, true)
 	gitIn(t, r.store, "init", "-q", "-b", "main")
-	gitIn(t, r.store, "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "fixture")
+	tracked := ".punt-labs/local/ethos/staged.txt"
+	trackedPath := filepath.Join(r.store, tracked)
+	require.NoError(t, os.MkdirAll(filepath.Dir(trackedPath), 0o755))
+	require.NoError(t, os.WriteFile(trackedPath, []byte("committed\n"), 0o600))
+	gitIn(t, r.store, "add", "-f", "--", tracked)
+	gitIn(t, r.store, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "fixture")
+	require.NoError(t, os.WriteFile(trackedPath, []byte("staged\n"), 0o600))
+	gitIn(t, r.store, "add", "--", tracked)
+	require.NoError(t, os.WriteFile(trackedPath, []byte("working\n"), 0o600))
+	index := gitIn(t, r.store, "ls-files", "--stage", "--", tracked)
+	require.NotEmpty(t, index)
 	policy, err := r.roots.Layout()
 	require.NoError(t, err)
 	personal := filepath.Join(policy.LocalRoot(), "layout-personal.yaml")
@@ -151,6 +161,7 @@ func TestEnsurePersonalStampDoesNotSatisfyFullRepair(t *testing.T) {
 	require.True(t, s.Current())
 	require.NoFileExists(t, RepositoryStampPath(policy))
 	require.NoFileExists(t, gitignore)
+	assert.Equal(t, index, gitIn(t, r.store, "ls-files", "--stage", "--", tracked))
 
 	_, err = Ensure(t.Context(), r.roots, r.global)
 	require.NoError(t, err)
@@ -158,6 +169,7 @@ func TestEnsurePersonalStampDoesNotSatisfyFullRepair(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, s.Current())
 	require.FileExists(t, gitignore)
+	assert.Empty(t, gitIn(t, r.store, "ls-files", "--stage", "--", tracked))
 
 	require.NoError(t, os.Remove(personal))
 	result, err := Ensure(ctx, r.roots, r.global)

@@ -74,7 +74,7 @@ func defaultOptions() options {
 
 type personalCheckoutKey struct{}
 
-// WithPersonalCheckout skips shared Git ignore repair without skipping storage upgrades.
+// WithPersonalCheckout skips shared Git ignore and index updates during storage repair.
 func WithPersonalCheckout(ctx context.Context) context.Context {
 	return context.WithValue(ctx, personalCheckoutKey{}, true)
 }
@@ -99,7 +99,9 @@ func Ensure(ctx context.Context, roots resolve.Located, global string) (Result, 
 	o.logger = diagnostic.FromContext(ctx)
 	o.personal, _ = ctx.Value(personalCheckoutKey{}).(bool)
 	if o.personal {
-		o.order = slices.DeleteFunc(slices.Clone(o.order), func(name string) bool { return name == stepGitignore })
+		o.order = slices.DeleteFunc(slices.Clone(o.order), func(name string) bool {
+			return name == stepGitignore || name == stepUntrackLocal
+		})
 	}
 	return ensure(ctx, roots, global, o)
 }
