@@ -33,6 +33,10 @@ func TestEveryToolPassesEnsure(t *testing.T) {
 			t.Run(name+" "+method, func(t *testing.T) {
 				before := calls
 				result := callRegistered(t, srv, name, method)
+				if runsWhileOff(name) {
+					assert.Equal(t, before, calls, "%s must not repair storage", name)
+					return
+				}
 				assert.Equal(t, before+1, calls, "%s %q did not pass Ensure exactly once", name, method)
 				require.NotNil(t, result)
 				require.GreaterOrEqual(t, len(result.Content), 2, "%s %q result lacks the repair block", name, method)

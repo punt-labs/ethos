@@ -70,7 +70,8 @@ func TestMCP_StoreCreatedTakesEffectWithoutRestart(t *testing.T) {
 
 	c := startMCPClient(t, env)
 	result := callTool(t, c, "identity", map[string]interface{}{"method": "list"})
-	require.False(t, result.IsError, allText(t, result))
+	require.True(t, result.IsError, allText(t, result))
+	require.Contains(t, allText(t, result), "no enablement marker")
 
 	require.NoError(t, os.Rename(saved, store)) // enable creates the store
 

@@ -137,6 +137,7 @@ func NewHandlerWithOptions(s identity.IdentityStore, talents, personalities, wri
 
 // RegisterTools adds all ethos MCP tools to the given server.
 func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
+	h.registerEnablementTools(s)
 	// Identity tool (consolidated)
 	h.addTool(s, h.identityTool(), (*Handler).handleIdentity)
 	// Extension tool (consolidated)
