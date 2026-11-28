@@ -142,6 +142,14 @@ func TestCLI_EnablementTogglesLeaveCleanCheckout(t *testing.T) {
 	assert.Empty(t, git("status", "--porcelain"))
 }
 
+func TestDormantCheckoutKeepsPostEditDeadline(t *testing.T) {
+	se := enableSubprocessRepo(t)
+	t.Setenv("HOME", se.home)
+	t.Chdir(se.repo)
+	assert.True(t, dormantHook([]string{"hook", "post-edit"}))
+	assert.False(t, dormantHook([]string{"hook", "stdin-watchdog", "123"}))
+}
+
 func TestCLI_EnablePinsDepositedGuideUntilRefresh(t *testing.T) {
 	se := freshCLIEnv(t, "refresh-human")
 	_, stderr, code := runCLI(t, se, "enable", "--scope", "project")

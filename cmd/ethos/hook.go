@@ -145,7 +145,7 @@ func init() {
 
 func dormantHook(args []string) bool {
 	cmd, flags, err := rootCmd.Find(args)
-	if err != nil || cmd.Parent() != hookCmd {
+	if err != nil || cmd.Parent() != hookCmd || cmd.Name() == "stdin-watchdog" {
 		return false
 	}
 	if hook.Killed() && (cmd.Name() == "subagent-stop" || cmd.Name() == "post-edit") {
