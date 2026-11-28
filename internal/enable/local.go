@@ -41,9 +41,6 @@ func EnableLocal(root string, refresh bool) (_ *Report, resultErr error) {
 		}
 		return rep, removeLocalFile(off)
 	}
-	if err := checkLocalTargets(root, localGuide, localHost, localSettings, resolve.LocalEnabledFile, resolve.LocalDisabledFile); err != nil {
-		return rep, err
-	}
 	p, err := layout.NewRepository(root, root, layout.RecordBlame)
 	if err != nil {
 		return rep, err
@@ -57,6 +54,9 @@ func EnableLocal(root string, refresh bool) (_ *Report, resultErr error) {
 	}
 	tx := fileTransaction{p: p}
 	defer tx.finish(&resultErr)
+	if err := ensureLocalExcludes(root, &tx, localGuide, localHost, localSettings, resolve.LocalEnabledFile, resolve.LocalDisabledFile); err != nil {
+		return rep, err
+	}
 	if err := ensurePersonalLockExcludes(root, &tx, false); err != nil {
 		return rep, err
 	}
@@ -214,7 +214,14 @@ func ensureLocalExcludes(root string, tx *fileTransaction, targets ...string) er
 	var rules []string
 	for _, target := range targets {
 		if pattern := matches[target].pattern; pattern == "" || strings.HasPrefix(pattern, "!") {
-			rules = append(rules, "/"+target)
+			rule := "/" + target
+			switch target {
+			case localGuide, resolve.LocalEnabledFile, resolve.LocalDisabledFile:
+				rule = "/.punt-labs/local/ethos/"
+			}
+			if !contains(rules, rule) {
+				rules = append(rules, rule)
+			}
 		}
 	}
 	if len(rules) > 0 {

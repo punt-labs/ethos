@@ -95,17 +95,14 @@ func TestPersonalEnableKeepsLocksIgnoredWithFileSpecificRules(t *testing.T) {
 	assert.Equal(t, ignore, readFile(t, filepath.Join(root, ".gitignore")))
 }
 
-func TestPersonalEnablementRejectsUnignoredAndTrackedTargets(t *testing.T) {
+func TestPersonalEnablementRejectsTrackedTargets(t *testing.T) {
 	root := gitRepo(t)
-	_, err := EnableLocal(root, false)
-	require.ErrorContains(t, err, "ignored by git")
-	require.NoFileExists(t, filepath.Join(root, localGuide))
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".punt-labs/local/\nCLAUDE.local.md\n.claude/settings.local.json\n"), 0o644))
 	file := filepath.Join(root, localHost)
 	original := []byte("tracked user instructions")
 	require.NoError(t, os.WriteFile(file, original, 0o644))
 	gitRun(t, root, "add", "-f", localHost)
-	_, err = EnableLocal(root, false)
+	_, err := EnableLocal(root, false)
 	require.ErrorContains(t, err, "tracked by git")
 	_, err = DisableLocal(root)
 	require.ErrorContains(t, err, "tracked by git")

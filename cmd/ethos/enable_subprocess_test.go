@@ -427,3 +427,24 @@ func TestCLI_DisableForceWithoutScopeRemovesSharedIntegration(t *testing.T) {
 	require.NoFileExists(t, marker)
 	require.NoFileExists(t, filepath.Join(se.repo, ".git", "hooks", "pre-commit"))
 }
+
+func TestCLI_FreshPersonalEnableUsesCloneExcludesWithoutChurn(t *testing.T) {
+	se := enableSubprocessRepo(t)
+	_, stderr, code := runCLI(t, se, "enable")
+	require.Zero(t, code, stderr)
+	require.FileExists(t, filepath.Join(se.repo, ".punt-labs", "local", "ethos", "enabled"))
+	require.NoFileExists(t, filepath.Join(se.repo, ".gitignore"))
+	exclude := filepath.Join(se.repo, ".git", "info", "exclude")
+	before, err := os.ReadFile(exclude)
+	require.NoError(t, err)
+	_, stderr, code = runCLI(t, se, "enable")
+	require.Zero(t, code, stderr)
+	after, err := os.ReadFile(exclude)
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+	cmd := testhelpers.GitCommand("-C", se.repo, "status", "--porcelain")
+	cmd.Env = se.env
+	out, err := cmd.Output()
+	require.NoError(t, err)
+	require.Empty(t, string(out))
+}

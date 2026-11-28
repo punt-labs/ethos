@@ -142,8 +142,10 @@ own repo is unaffected; the hazard is fleet-wide.
 `ethos enable` and `ethos disable` default to `--scope local`. For a
 personal-only checkout, enable writes the guide and marker under
 `.punt-labs/local/ethos/`, the import in `CLAUDE.local.md`, and grants in
-`.claude/settings.local.json`. Local integration paths must be ignored and
-untracked. If the project is already enabled, personal disable adds an
+`.claude/settings.local.json`. Personal enable adds missing ignore rules to
+Git's clone-local `info/exclude` instead of editing shared `.gitignore`.
+Local integration paths must be untracked. If the project is already enabled,
+personal disable adds an
 ignored `disabled` marker and personal enable removes it. Neither command
 changes the shared guide, settings, or Git hooks.
 
