@@ -15,14 +15,13 @@ import (
 var enableCmd = &cobra.Command{
 	Use:   "enable",
 	Short: "Enable ethos in the current repo, or refresh with --refresh or --agents-only",
-	Long: `Enable ethos in the current repo.
+	Long: `Enable ethos in the current repo for this checkout (the default).
 
-Deposits the vendored agent guide and its manifest, writes the enabled
-marker, adds the @.punt-labs/ethos/CLAUDE.md import line to the repo
-CLAUDE.md, and chains the audit-seal and trailer git hooks. Use --refresh
-to update vendored content and Claude agent definitions, or --agents-only
-to update definitions without changing enablement. Run 'ethos setup'
-separately to configure identities.`,
+Use --scope project to commit the integration and chain git hooks.
+Use --scope project --clear-opt-out to lift a committed opt-out.
+Use --refresh to update the scope's vendored guide, or --agents-only
+to update Claude agent definitions without changing enablement.
+Run 'ethos setup' separately to configure identities.`,
 	GroupID:      "admin",
 	Args:         cobra.NoArgs,
 	SilenceUsage: true,
@@ -32,9 +31,12 @@ separately to configure identities.`,
 }
 
 func init() {
+	enableCmd.Flags().String("scope", "local", "Enablement scope: project or local")
 	enableCmd.Flags().Bool("refresh", false, "Refresh vendored content and Claude agent definitions")
 	enableCmd.Flags().Bool("agents-only", false, "Refresh Claude agent definitions without changing enablement or guides")
+	enableCmd.Flags().Bool("clear-opt-out", false, "Remove the committed project opt-out and enable")
 	enableCmd.MarkFlagsMutuallyExclusive("refresh", "agents-only")
+	enableCmd.MarkFlagsMutuallyExclusive("clear-opt-out", "agents-only")
 	rootCmd.AddCommand(enableCmd)
 }
 
@@ -42,6 +44,14 @@ func runEnable(cmd *cobra.Command) error {
 	repoRoot := locateForCommand(cmd, "enable")
 	if repoRoot == "" {
 		return failClosed{}
+	}
+	scope, err := enableScope(cmd)
+	if err != nil {
+		return err
+	}
+	clearOptOut, err := projectEnableFlag(cmd, scope, "clear-opt-out")
+	if err != nil {
+		return err
 	}
 	refresh, err := cmd.Flags().GetBool("refresh")
 	if err != nil {
@@ -59,6 +69,14 @@ func runEnable(cmd *cobra.Command) error {
 		}
 		return finishEnable(cmd, rep, agentRefreshAction(skipped))
 	}
+	if scope == "local" {
+		rep, err := enable.EnableLocal(repoRoot, refresh)
+		if err != nil {
+			emitPartialReport(cmd, rep)
+			return err
+		}
+		return finishEnable(cmd, rep, "enabled")
+	}
 	// Deposit (guide/marker/import/hooks) is per-checkout (repoRoot); the
 	// "has setup been run?" config read resolves the shared store (#370).
 	// A fresh repo named by ETHOS_REPO_ROOT has no store yet, which the store
@@ -75,7 +93,7 @@ func runEnable(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	rep, err := enable.EnableTo(repoRoot, storeRoot, enable.Options{Refresh: refresh})
+	rep, err := enable.EnableTo(repoRoot, storeRoot, enable.Options{Refresh: refresh, ClearOptOut: clearOptOut})
 	action := "enabled"
 	gitlinkRefresh := refresh && errors.Is(err, enable.ErrGitlinkMount)
 	if gitlinkRefresh {
@@ -95,6 +113,25 @@ func runEnable(cmd *cobra.Command) error {
 		}
 	}
 	return finishEnable(cmd, rep, action)
+}
+
+func enableScope(cmd *cobra.Command) (string, error) {
+	scope, err := cmd.Flags().GetString("scope")
+	if err != nil {
+		return "", err
+	}
+	if scope != "local" && scope != "project" {
+		return "", fmt.Errorf("unknown scope %q: use project or local", scope)
+	}
+	return scope, nil
+}
+
+func projectEnableFlag(cmd *cobra.Command, scope, name string) (bool, error) {
+	set, err := cmd.Flags().GetBool(name)
+	if err == nil && set && scope != "project" {
+		return false, fmt.Errorf("--%s requires --scope project", name)
+	}
+	return set, err
 }
 
 func agentRefreshAction(skipped bool) string {

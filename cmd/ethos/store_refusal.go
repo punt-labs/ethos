@@ -192,18 +192,32 @@ func establishRoots(cmd *cobra.Command, _ []string) error {
 	global := exemptFromStoreRefusal(cmd)
 	r := locateRoots()
 	r.Global = global
+	var scope string
+	if path == "ethos enable" || path == "ethos disable" {
+		var err error
+		scope, err = enableScope(cmd)
+		if err != nil {
+			return err
+		}
+	}
 	if path == "ethos enable" && r.Checkout != "" {
+		clearOptOut, err := projectEnableFlag(cmd, scope, "clear-opt-out")
+		if err != nil {
+			return err
+		}
 		optedOut, err := resolve.ProjectOptedOut(r.Checkout)
 		if err != nil {
 			return err
 		}
-		if optedOut {
+		if optedOut && !clearOptOut {
 			return fmt.Errorf("ethos is opted out by %s", resolve.ProjectOptOutFile)
 		}
 	}
 	// Repair before anything reads storage, so a refusal below is judged on the
 	// converted layout (DES-084 Wiring).
-	r = ensureForCommand(cmd, r)
+	if scope == "" {
+		r = ensureForCommand(cmd, r)
+	}
 	if ctx := cmd.Context(); ctx != nil && (r.Store != "" || r.Checkout != "" || r.err() == nil) {
 		diagnostic.SetHookProject(ctx, r.Store, r.Checkout)
 	}

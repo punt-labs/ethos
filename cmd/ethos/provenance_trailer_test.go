@@ -44,7 +44,7 @@ func TestProvenanceCLIInstalledHookConfiguredTrailersSquashClone(t *testing.T) {
 					se.env[i] = "PATH=" + bin + string(os.PathListSeparator) + strings.TrimPrefix(entry, "PATH=")
 				}
 			}
-			_, stderr, exit := runCLI(t, se, "enable", "--json")
+			_, stderr, exit := runCLI(t, se, "enable", "--scope", "project", "--json")
 			require.Equal(t, 0, exit, stderr)
 			hook := publicationGitCLI(t, se, "rev-parse", "--path-format=absolute", "--git-path", "hooks/commit-msg")
 			data, err = os.ReadFile(hook)

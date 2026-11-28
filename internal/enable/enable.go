@@ -104,7 +104,8 @@ func EnableTo(repoRoot, storeRoot string, options ...Options) (*Report, error) {
 
 // Options controls whether enable updates an existing vendored deposit.
 type Options struct {
-	Refresh bool
+	Refresh     bool
+	ClearOptOut bool
 }
 
 // enableTo carries per-request ignore I/O so persistence failures can be tested
@@ -139,7 +140,8 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO, options ...Options) (_
 	if err != nil {
 		return rep, err
 	}
-	if optedOut {
+	clearOptOut := len(options) > 0 && options[0].ClearOptOut
+	if optedOut && !clearOptOut {
 		return rep, fmt.Errorf("ethos is opted out by %s", resolve.ProjectOptOutFile)
 	}
 
@@ -289,6 +291,16 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO, options ...Options) (_
 	permissionStep(rep, granted, "added ", "all rules already present")
 	envStep(rep, envAdded, "set ", "all env defaults already present")
 
+	if optedOut {
+		path := filepath.Join(repoRoot, resolve.ProjectOptOutFile)
+		if err := tx.snapshot(path); err != nil {
+			return rep, err
+		}
+		if err := os.Remove(path); err != nil {
+			return rep, fmt.Errorf("clearing opt-out: %w", err)
+		}
+		rep.step("opt-out", "done", "deleted "+resolve.ProjectOptOutFile)
+	}
 	if err := tx.snapshot(filepath.Join(repoRoot, markerRel)); err != nil {
 		return rep, err
 	}
@@ -316,7 +328,7 @@ func Disable(repoRoot string, force bool) (*Report, error) {
 
 // DisableTo is Disable with explicit checkout and canonical shared-store roots.
 // Linked-worktree callers must use this form so host locks match EnableTo.
-func DisableTo(repoRoot, storeRoot string, force bool) (*Report, error) {
+func DisableTo(repoRoot, storeRoot string, force bool, optOut ...bool) (_ *Report, resultErr error) {
 	rep := &Report{RepoRoot: repoRoot}
 	p, err := layout.NewRepository(storeRoot, repoRoot, layout.RecordBlame)
 	if err != nil {
@@ -365,6 +377,18 @@ func DisableTo(repoRoot, storeRoot string, force bool) (*Report, error) {
 		rep.step("import", "already", "no import line present")
 	}
 
+	if len(optOut) > 0 && optOut[0] {
+		path := filepath.Join(repoRoot, resolve.ProjectOptOutFile)
+		tx := fileTransaction{p: p}
+		defer tx.finish(&resultErr)
+		if err := tx.snapshot(path, filepath.Join(repoRoot, markerRel)); err != nil {
+			return rep, err
+		}
+		if err := ensureMarkerFile(path, p); err != nil {
+			return rep, fmt.Errorf("recording project opt-out: %w", err)
+		}
+		rep.step("opt-out", "done", resolve.ProjectOptOutFile)
+	}
 	markerRemoved, err := removeMarker(repoRoot)
 	if err != nil {
 		return rep, err

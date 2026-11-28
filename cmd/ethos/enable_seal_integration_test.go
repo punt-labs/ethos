@@ -74,7 +74,7 @@ func TestCLI_SealLifecycleAcrossEnableDisable(t *testing.T) {
 	sealedGlob := filepath.Join(se.repo, ".punt-labs", "local", "ethos", "trace", "sessions", "*", "audit-*.jsonl")
 
 	// --- Phase 1: enabled + commit → the two live lines seal. ---
-	if _, stderr, code := runCLI(t, se, "enable"); code != 0 {
+	if _, stderr, code := runCLI(t, se, "enable", "--scope", "project"); code != 0 {
 		t.Fatalf("enable exit = %d; stderr: %s", code, stderr)
 	}
 	commit(t, se.repo, commitEnv, "work.txt", "one", "first")
@@ -93,7 +93,7 @@ func TestCLI_SealLifecycleAcrossEnableDisable(t *testing.T) {
 	// Append a third live line while enabled-then-disabled: it is stranded past
 	// the sealed watermark.
 	appendFile(t, livePath, line(3, 3))
-	if _, stderr, code := runCLI(t, se, "disable"); code != 0 {
+	if _, stderr, code := runCLI(t, se, "disable", "--scope", "project"); code != 0 {
 		t.Fatalf("disable exit = %d; stderr: %s", code, stderr)
 	}
 	commit(t, se.repo, commitEnv, "work.txt", "two", "second")
@@ -105,7 +105,7 @@ func TestCLI_SealLifecycleAcrossEnableDisable(t *testing.T) {
 	}
 
 	// --- Phase 3: re-enabled + commit → the stranded line seals. ---
-	if _, stderr, code := runCLI(t, se, "enable"); code != 0 {
+	if _, stderr, code := runCLI(t, se, "enable", "--scope", "project"); code != 0 {
 		t.Fatalf("re-enable exit = %d; stderr: %s", code, stderr)
 	}
 	commit(t, se.repo, commitEnv, "work.txt", "three", "third")

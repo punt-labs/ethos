@@ -18,7 +18,7 @@ func enabledHookRepo(t *testing.T) *cliSubprocessEnv {
 	t.Helper()
 	require.NotEmpty(t, ethosBinary, "the current CLI must build")
 	se := enableSubprocessRepo(t)
-	_, stderr, code := runCLI(t, se, "enable")
+	_, stderr, code := runCLI(t, se, "enable", "--scope", "project")
 	require.Zero(t, code, stderr)
 	return se
 }

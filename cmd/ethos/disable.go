@@ -8,12 +8,13 @@ import (
 var disableCmd = &cobra.Command{
 	Use:   "disable",
 	Short: "Disable ethos in the current repo",
-	Long: `Disable ethos in the current repo.
+	Long: `Disable ethos in the current checkout (the default).
 
-Removes the import line, deletes the enabled marker, and unchains the git
-hooks. Non-destructive: the vendored guide and all config and audit data
-stay on disk, dormant. Refuses when a sibling worktree is still enabled
-(the git hooks are shared); pass --force to unchain anyway.`,
+Use --scope project to remove the shared integration and unchain git hooks.
+Add --opt-out to record that the project must stay off.
+The vendored guide, configuration, and audit data stay on disk.
+Project disable refuses to unchain hooks while sibling worktrees use them
+unless --force is specified.`,
 	GroupID:      "admin",
 	Args:         cobra.NoArgs,
 	SilenceUsage: true,
@@ -25,6 +26,8 @@ stay on disk, dormant. Refuses when a sibling worktree is still enabled
 var disableForce bool
 
 func init() {
+	disableCmd.Flags().String("scope", "local", "Enablement scope: project or local")
+	disableCmd.Flags().Bool("opt-out", false, "Record a committed project opt-out")
 	disableCmd.Flags().BoolVar(&disableForce, "force", false, "Unchain even when a sibling worktree is still enabled")
 	rootCmd.AddCommand(disableCmd)
 }
@@ -33,6 +36,22 @@ func runDisable(cmd *cobra.Command) error {
 	repoRoot := locateForCommand(cmd, "disable")
 	if repoRoot == "" {
 		return failClosed{}
+	}
+	scope, err := enableScope(cmd)
+	if err != nil {
+		return err
+	}
+	optOut, err := projectEnableFlag(cmd, scope, "opt-out")
+	if err != nil {
+		return err
+	}
+	if scope == "local" {
+		rep, err := enable.DisableLocal(repoRoot)
+		if err != nil {
+			emitPartialReport(cmd, rep)
+			return err
+		}
+		return finishEnable(cmd, rep, "disabled")
 	}
 	storeRoot, err := enableStoreRoot(repoRoot, func() (string, error) {
 		r := currentRoots()
@@ -44,7 +63,7 @@ func runDisable(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	rep, err := enable.DisableTo(repoRoot, storeRoot, disableForce)
+	rep, err := enable.DisableTo(repoRoot, storeRoot, disableForce, optOut)
 	if err != nil {
 		emitPartialReport(cmd, rep)
 		return err

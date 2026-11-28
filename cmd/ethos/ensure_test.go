@@ -77,7 +77,7 @@ func TestEveryCommandPassesEnsure(t *testing.T) {
 	// stick, and later tests that read a command's stderr would see nothing.
 	rootCmd.SetErr(&bytes.Buffer{})
 	t.Cleanup(func() { rootCmd.SetErr(nil) })
-	exempt := map[string]bool{"version": true, "completion": true, "help": true, "uninstall": true, "status": true}
+	exempt := map[string]bool{"version": true, "completion": true, "help": true, "uninstall": true, "status": true, "enable": true, "disable": true}
 	var walk func(c *cobra.Command)
 	walk = func(c *cobra.Command) {
 		if c != rootCmd {

@@ -80,7 +80,7 @@ func TestCLI_EnableSuccess(t *testing.T) {
 		t.Skip("ethos binary not built")
 	}
 	se := enableSubprocessRepo(t)
-	stdout, stderr, code := runCLI(t, se, "enable")
+	stdout, stderr, code := runCLI(t, se, "enable", "--scope", "project")
 	if code != 0 {
 		t.Fatalf("enable exit = %d, want 0; stderr: %s", code, stderr)
 	}
@@ -103,6 +103,35 @@ func TestCLI_EnableSuccess(t *testing.T) {
 	}
 }
 
+func TestCLI_EnableDefaultsToPersonalScope(t *testing.T) {
+	se := enableSubprocessRepo(t)
+	ignores := ".punt-labs/local/\nCLAUDE.local.md\n.claude/settings.local.json\n"
+	if err := os.WriteFile(filepath.Join(se.repo, ".gitignore"), []byte(ignores), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, code := runCLI(t, se, "enable")
+	if code != 0 {
+		t.Fatalf("enable failed: %s", stderr)
+	}
+	for _, rel := range []string{".punt-labs/local/ethos/enabled", ".punt-labs/local/ethos/CLAUDE.md", "CLAUDE.local.md", ".claude/settings.local.json"} {
+		if _, err := os.Stat(filepath.Join(se.repo, rel)); err != nil {
+			t.Errorf("personal enable is missing %s: %v", rel, err)
+		}
+	}
+	for _, rel := range []string{".punt-labs/ethos/enabled", "CLAUDE.md", ".claude/settings.json", ".git/hooks/pre-commit"} {
+		if _, err := os.Lstat(filepath.Join(se.repo, rel)); !os.IsNotExist(err) {
+			t.Errorf("personal enable touched %s: %v", rel, err)
+		}
+	}
+	_, stderr, code = runCLI(t, se, "disable")
+	if code != 0 {
+		t.Fatalf("disable failed: %s", stderr)
+	}
+	if _, err := os.Lstat(filepath.Join(se.repo, ".punt-labs/local/ethos/enabled")); !os.IsNotExist(err) {
+		t.Errorf("personal disable left its marker: %v", err)
+	}
+}
+
 func TestCLI_EnableRefusesOptOutBeforeRefreshingAgents(t *testing.T) {
 	se := enableSubprocessRepo(t)
 	const marker = ".punt-labs/ethos/opt-out"
@@ -122,12 +151,47 @@ func TestCLI_EnableRefusesOptOutBeforeRefreshingAgents(t *testing.T) {
 	}
 }
 
+func TestCLI_ProjectOptOutRoundTrip(t *testing.T) {
+	se := enableSubprocessRepo(t)
+	_, stderr, code := runCLI(t, se, "enable", "--scope", "project")
+	if code != 0 {
+		t.Fatalf("project enable: %s", stderr)
+	}
+	_, stderr, code = runCLI(t, se, "disable", "--scope", "project", "--opt-out")
+	if code != 0 {
+		t.Fatalf("project opt-out: %s", stderr)
+	}
+	optOut := filepath.Join(se.repo, ".punt-labs", "ethos", "opt-out")
+	if _, err := os.Stat(optOut); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(se.repo, "CLAUDE.md"), []byte("```\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, stderr, code = runCLI(t, se, "enable", "--scope", "project", "--clear-opt-out"); code == 0 {
+		t.Fatalf("clear and enable accepted a broken import host: %s", stderr)
+	}
+	if _, err := os.Stat(optOut); err != nil {
+		t.Fatalf("failed enable lost opt-out: %v", err)
+	}
+	if err := os.Remove(filepath.Join(se.repo, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, code = runCLI(t, se, "enable", "--scope", "project", "--clear-opt-out")
+	if code != 0 {
+		t.Fatalf("clear opt-out: %s", stderr)
+	}
+	if _, err := os.Lstat(optOut); !os.IsNotExist(err) {
+		t.Fatalf("opt-out remained after successful clear: %v", err)
+	}
+}
+
 func TestCLI_EnableJSONShape(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
 	}
 	se := enableSubprocessRepo(t)
-	stdout, stderr, code := runCLI(t, se, "enable", "--json")
+	stdout, stderr, code := runCLI(t, se, "enable", "--scope", "project", "--json")
 	if code != 0 {
 		t.Fatalf("enable --json exit = %d, want 0; stderr: %s", code, stderr)
 	}
@@ -164,10 +228,10 @@ func TestCLI_EnableIdempotent(t *testing.T) {
 		t.Skip("ethos binary not built")
 	}
 	se := enableSubprocessRepo(t)
-	if _, stderr, code := runCLI(t, se, "enable"); code != 0 {
+	if _, stderr, code := runCLI(t, se, "enable", "--scope", "project"); code != 0 {
 		t.Fatalf("first enable exit = %d; stderr: %s", code, stderr)
 	}
-	if _, stderr, code := runCLI(t, se, "enable"); code != 0 {
+	if _, stderr, code := runCLI(t, se, "enable", "--scope", "project"); code != 0 {
 		t.Fatalf("second enable exit = %d; stderr: %s", code, stderr)
 	}
 	claude, err := os.ReadFile(filepath.Join(se.repo, "CLAUDE.md"))
@@ -187,10 +251,10 @@ func TestCLI_DisableRoundTrip(t *testing.T) {
 		t.Skip("ethos binary not built")
 	}
 	se := enableSubprocessRepo(t)
-	if _, stderr, code := runCLI(t, se, "enable"); code != 0 {
+	if _, stderr, code := runCLI(t, se, "enable", "--scope", "project"); code != 0 {
 		t.Fatalf("enable exit = %d; stderr: %s", code, stderr)
 	}
-	stdout, stderr, code := runCLI(t, se, "disable")
+	stdout, stderr, code := runCLI(t, se, "disable", "--scope", "project")
 	if code != 0 {
 		t.Fatalf("disable exit = %d, want 0; stderr: %s", code, stderr)
 	}
@@ -255,7 +319,7 @@ func TestCLI_EnableGitlinkGuardExit1(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Skipf("cannot stage a gitlink in this git: %v: %s", err, out)
 	}
-	_, stderr, code := runCLI(t, se, "enable")
+	_, stderr, code := runCLI(t, se, "enable", "--scope", "project")
 	if code != 1 {
 		t.Fatalf("enable on a gitlink exit = %d, want 1; stderr: %s", code, stderr)
 	}
@@ -273,7 +337,7 @@ func TestCLI_EnableOpenFenceHostExit1(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(se.repo, "CLAUDE.md"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, stderr, code := runCLI(t, se, "enable")
+	_, stderr, code := runCLI(t, se, "enable", "--scope", "project")
 	if code != 1 {
 		t.Fatalf("enable on an open-fence host exit = %d, want 1; stderr: %s", code, stderr)
 	}
@@ -308,22 +372,22 @@ func TestCLI_DisableWorktreeRefusal(t *testing.T) {
 	wt := filepath.Join(wtParent, "wt")
 	gitRunEnv(t, se.repo, se.env, "worktree", "add", "-q", wt)
 
-	if _, stderr, code := runCLI(t, se, "enable"); code != 0 {
+	if _, stderr, code := runCLI(t, se, "enable", "--scope", "project"); code != 0 {
 		t.Fatalf("enable main exit = %d; stderr: %s", code, stderr)
 	}
 	wtEnv := &cliSubprocessEnv{home: se.home, repo: wt, env: se.env}
-	if _, stderr, code := runCLI(t, wtEnv, "enable"); code != 0 {
+	if _, stderr, code := runCLI(t, wtEnv, "enable", "--scope", "project"); code != 0 {
 		t.Fatalf("enable worktree exit = %d; stderr: %s", code, stderr)
 	}
 
 	// Disabling the main checkout must refuse: the sibling worktree is enabled
 	// and the git hooks are shared across worktrees.
-	_, stderr, code := runCLI(t, se, "disable")
+	_, stderr, code := runCLI(t, se, "disable", "--scope", "project")
 	if code != 1 {
 		t.Fatalf("disable with an enabled sibling exit = %d, want 1; stderr: %s", code, stderr)
 	}
 	// --force overrides the refusal.
-	if _, stderr, code := runCLI(t, se, "disable", "--force"); code != 0 {
+	if _, stderr, code := runCLI(t, se, "disable", "--scope", "project", "--force"); code != 0 {
 		t.Fatalf("disable --force exit = %d, want 0; stderr: %s", code, stderr)
 	}
 }

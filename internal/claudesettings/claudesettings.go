@@ -36,11 +36,11 @@ func Preflight(repoRoot string, rules map[string][]string) error {
 
 // PreflightWithEnv verifies that the settings target can accept rules and env
 // defaults without writing it.
-func PreflightWithEnv(repoRoot string, rules map[string][]string, env map[string]string) error {
-	if err := refuseUnsafe(repoRoot); err != nil {
+func PreflightWithEnv(repoRoot string, rules map[string][]string, env map[string]string, targets ...Target) error {
+	path := settingsPath(repoRoot, targets...)
+	if err := refuseUnsafe(repoRoot, path); err != nil {
 		return err
 	}
-	path := settingsPath(repoRoot)
 	data, _, err := read(path)
 	if err != nil {
 		return err
@@ -61,8 +61,8 @@ func Register(repoRoot string, rules map[string][]string, p layout.Policy) ([]st
 // RegisterWithEnv inserts each rule into its permissions tier and sets each
 // absent env default in one atomic write, creating the file when absent.
 // Existing env entries are preserved so user overrides are never clobbered.
-func RegisterWithEnv(repoRoot string, rules map[string][]string, env map[string]string, p layout.Policy) ([]string, []string, error) {
-	return update(repoRoot, rules, env, p, true)
+func RegisterWithEnv(repoRoot string, rules map[string][]string, env map[string]string, p layout.Policy, targets ...Target) ([]string, []string, error) {
+	return update(repoRoot, rules, env, p, true, targets...)
 }
 
 // Deregister removes every rule from its permissions tier and returns the rules
@@ -80,22 +80,29 @@ func Deregister(repoRoot string, rules map[string][]string, p layout.Policy) ([]
 // sidecar provenance file: DeregisterWithEnv removes an owned key whenever its
 // value equals the owned default, even if the repository already had that exact
 // value before RegisterWithEnv ran. Any non-default value (e.g. "1") is kept.
-func DeregisterWithEnv(repoRoot string, rules map[string][]string, env map[string]string, p layout.Policy) ([]string, []string, error) {
-	if _, err := os.Lstat(settingsPath(repoRoot)); errors.Is(err, fs.ErrNotExist) {
+func DeregisterWithEnv(repoRoot string, rules map[string][]string, env map[string]string, p layout.Policy, targets ...Target) ([]string, []string, error) {
+	if _, err := os.Lstat(settingsPath(repoRoot, targets...)); errors.Is(err, fs.ErrNotExist) {
 		return nil, nil, nil
 	}
-	return update(repoRoot, rules, env, p, false)
+	return update(repoRoot, rules, env, p, false, targets...)
 }
 
-func settingsPath(repoRoot string) string {
+type Target int
+
+const Local Target = 1
+
+func settingsPath(repoRoot string, targets ...Target) string {
+	if len(targets) > 0 && targets[0] == Local {
+		return filepath.Join(repoRoot, ".claude", "settings.local.json")
+	}
 	return filepath.Join(repoRoot, ".claude", "settings.json")
 }
 
-func update(repoRoot string, rules map[string][]string, env map[string]string, p layout.Policy, grant bool) ([]string, []string, error) {
-	if err := refuseUnsafe(repoRoot); err != nil {
+func update(repoRoot string, rules map[string][]string, env map[string]string, p layout.Policy, grant bool, targets ...Target) ([]string, []string, error) {
+	path := settingsPath(repoRoot, targets...)
+	if err := refuseUnsafe(repoRoot, path); err != nil {
 		return nil, nil, err
 	}
-	path := settingsPath(repoRoot)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, nil, fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
 	}
@@ -125,7 +132,7 @@ func update(repoRoot string, rules map[string][]string, env map[string]string, p
 	return changedRules, changedEnv, err
 }
 
-func refuseUnsafe(repoRoot string) error {
+func refuseUnsafe(repoRoot, path string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("resolving home dir: %w", err)
@@ -133,7 +140,7 @@ func refuseUnsafe(repoRoot string) error {
 	if sameDir(repoRoot, home) {
 		return fmt.Errorf("%w: the repository is your home directory", ErrRefused)
 	}
-	for _, p := range []string{filepath.Dir(settingsPath(repoRoot)), settingsPath(repoRoot)} {
+	for _, p := range []string{filepath.Dir(path), path} {
 		if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("%w: %s is a symlink", ErrRefused, p)
 		}

@@ -33,7 +33,7 @@ func execHookSessionStart(t *testing.T, se *cliSubprocessEnv) (stdout, stderr st
 
 func TestCLI_SessionStartLeavesTrackedAgentsUnchanged(t *testing.T) {
 	se := freshCLIEnv(t, "refresh-human")
-	_, stderr, code := runCLI(t, se, "enable")
+	_, stderr, code := runCLI(t, se, "enable", "--scope", "project")
 	require.Zero(t, code, stderr)
 	stale := filepath.Join(se.repo, ".claude", "agents", "retired.md")
 	require.NoError(t, os.MkdirAll(filepath.Dir(stale), 0o755))
@@ -61,7 +61,7 @@ func TestCLI_SessionStartLeavesTrackedAgentsUnchanged(t *testing.T) {
 	assert.NoFileExists(t, generated, "startup must not generate agent definitions")
 	assert.NoFileExists(t, installed, "startup must not install legacy stubs")
 	require.Empty(t, git("status", "--porcelain"), "startup must not rewrite or prune tracked agents")
-	_, stderr, code = runCLI(t, se, "enable", "--refresh")
+	_, stderr, code = runCLI(t, se, "enable", "--scope", "project", "--refresh")
 	require.Zero(t, code, stderr)
 	require.NoFileExists(t, stale, "explicit refresh must still prune retired agents")
 	assert.FileExists(t, generated, "explicit refresh must generate the configured worker")
@@ -70,17 +70,17 @@ func TestCLI_SessionStartLeavesTrackedAgentsUnchanged(t *testing.T) {
 
 func TestCLI_EnablePinsDepositedGuideUntilRefresh(t *testing.T) {
 	se := freshCLIEnv(t, "refresh-human")
-	_, stderr, code := runCLI(t, se, "enable")
+	_, stderr, code := runCLI(t, se, "enable", "--scope", "project")
 	require.Zero(t, code, stderr)
 	guide := filepath.Join(se.repo, ".punt-labs", "ethos", "CLAUDE.md")
 	pinned := []byte("guide deposited by another version\n")
 	require.NoError(t, os.WriteFile(guide, pinned, 0o644))
-	_, stderr, code = runCLI(t, se, "enable")
+	_, stderr, code = runCLI(t, se, "enable", "--scope", "project")
 	require.Zero(t, code, stderr)
 	after, err := os.ReadFile(guide)
 	require.NoError(t, err)
 	require.Equal(t, pinned, after)
-	_, stderr, code = runCLI(t, se, "enable", "--refresh")
+	_, stderr, code = runCLI(t, se, "enable", "--scope", "project", "--refresh")
 	require.Zero(t, code, stderr)
 	after, err = os.ReadFile(guide)
 	require.NoError(t, err)
@@ -119,7 +119,7 @@ func TestCLI_EnableRefreshGeneratesAgentsFromLegacyGitlink(t *testing.T) {
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "%s", output)
 
-	stdout, stderr, code := runCLI(t, se, "enable", "--refresh")
+	stdout, stderr, code := runCLI(t, se, "enable", "--scope", "project", "--refresh")
 	require.Zero(t, code, stderr)
 	assert.Contains(t, stdout, "refreshed Claude agent definitions")
 	assert.Contains(t, stderr, "convert it to an inline directory")
@@ -162,7 +162,7 @@ func TestCLI_SessionStartRefreshesStaleHook(t *testing.T) {
 
 	t.Run("enabled repo", func(t *testing.T) {
 		se := freshCLIEnv(t, "refresh-human")
-		_, stderr, code := runCLI(t, se, "enable")
+		_, stderr, code := runCLI(t, se, "enable", "--scope", "project")
 		require.Equal(t, 0, code, stderr)
 		hookPath := filepath.Join(se.repo, ".git", "hooks", "pre-commit")
 		current, err := os.ReadFile(hookPath)

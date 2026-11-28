@@ -30,11 +30,14 @@ func runEnableCmd(t *testing.T, args ...string) (string, string, error) {
 		rootCmd.SetArgs(nil)
 		jsonOutput = false
 		disableForce = false
-		for _, name := range []string{"refresh", "agents-only"} {
+		for _, name := range []string{"scope", "refresh", "agents-only"} {
 			flag := enableCmd.Flags().Lookup(name)
 			assert.NoError(t, flag.Value.Set(flag.DefValue))
 			flag.Changed = false
 		}
+		flag := disableCmd.Flags().Lookup("scope")
+		assert.NoError(t, flag.Value.Set(flag.DefValue))
+		flag.Changed = false
 	}()
 	err := rootCmd.Execute()
 	return outBuf.String(), errBuf.String(), err
@@ -59,7 +62,7 @@ func TestEnableDisableCommandRoundTrip(t *testing.T) {
 	dir := enableGitRepo(t)
 	t.Chdir(dir)
 
-	out, _, err := runEnableCmd(t, "enable")
+	out, _, err := runEnableCmd(t, "enable", "--scope", "project")
 	if err != nil {
 		t.Fatalf("enable: %v", err)
 	}
@@ -70,7 +73,7 @@ func TestEnableDisableCommandRoundTrip(t *testing.T) {
 		t.Error("marker not written by enable command")
 	}
 
-	out, _, err = runEnableCmd(t, "disable")
+	out, _, err = runEnableCmd(t, "disable", "--scope", "project")
 	if err != nil {
 		t.Fatalf("disable: %v", err)
 	}
@@ -86,7 +89,7 @@ func TestEnableCommandJSON(t *testing.T) {
 	dir := enableGitRepo(t)
 	t.Chdir(dir)
 
-	out, _, err := runEnableCmd(t, "enable", "--json")
+	out, _, err := runEnableCmd(t, "enable", "--scope", "project", "--json")
 	if err != nil {
 		t.Fatalf("enable --json: %v", err)
 	}
@@ -125,7 +128,7 @@ func TestEnableAgentRefreshReports(t *testing.T) {
 		require.NoError(t, err, "%s", gitOutput)
 		for _, flag := range []string{"--refresh", "--agents-only"} {
 			t.Run(flag, func(t *testing.T) {
-				out, stderr, err := runEnableCmd(t, "enable", flag)
+				out, stderr, err := runEnableCmd(t, "enable", "--scope", "project", flag)
 				require.NoError(t, err, stderr)
 				assert.Contains(t, out, "left Claude agent definitions unchanged")
 				assert.Contains(t, stderr, "git submodule update --init")
@@ -168,7 +171,7 @@ func TestEnableAgentRefreshReports(t *testing.T) {
 						assert.NoError(t, os.Remove(stub))
 					}
 				})
-				out, stderr, err := runEnableCmd(t, "enable", flag)
+				out, stderr, err := runEnableCmd(t, "enable", "--scope", "project", flag)
 				require.NoError(t, err, stderr)
 				assert.Contains(t, out, "refreshed Claude agent definitions")
 				assert.NotContains(t, stderr, "git submodule update --init")
@@ -186,7 +189,7 @@ func TestEnableAgentRefreshReports(t *testing.T) {
 				assert.NoFileExists(t, filepath.Join(store, "enabled"))
 
 				require.NoError(t, os.WriteFile(reviewerSource, []byte("# Updated reviewer\n"), 0o644))
-				out, stderr, err = runEnableCmd(t, "enable", flag)
+				out, stderr, err = runEnableCmd(t, "enable", "--scope", "project", flag)
 				require.NoError(t, err, stderr)
 				assert.Contains(t, out, "refreshed Claude agent definitions")
 				assert.NotContains(t, stderr, "reviewer.md")
@@ -224,7 +227,7 @@ func TestEnableSurfacesWarningsOnErrorPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(dir)
-	_, errOut, err := runEnableCmd(t, "enable", "--refresh")
+	_, errOut, err := runEnableCmd(t, "enable", "--scope", "project", "--refresh")
 	if err == nil {
 		t.Fatal("expected enable to fail on the non-directory .git/hooks")
 	}
@@ -356,7 +359,7 @@ func TestEnableOverrideNamingFreshRepo(t *testing.T) {
 	dir := enableGitRepo(t)
 	t.Setenv("ETHOS_REPO_ROOT", dir)
 
-	out, errOut, err := runEnableCmd(t, "enable")
+	out, errOut, err := runEnableCmd(t, "enable", "--scope", "project")
 	if err != nil {
 		t.Fatalf("enable: %v", err)
 	}
@@ -377,7 +380,7 @@ func TestEnableProceedsWithMalformedConfig(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".punt-labs", "ethos.yaml"), []byte("agent: [unclosed\n"), 0o644))
 	t.Chdir(dir)
 
-	out, errOut, err := runEnableCmd(t, "enable")
+	out, errOut, err := runEnableCmd(t, "enable", "--scope", "project")
 	require.NoError(t, err, errOut)
 	assert.Contains(t, out, "ethos enabled in")
 	assert.FileExists(t, filepath.Join(dir, ".punt-labs", "ethos", "enabled"))
