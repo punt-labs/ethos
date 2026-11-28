@@ -245,7 +245,7 @@ var StepOrder = []string{
 	"live-tails",        // 6
 	"corrupt-chunks",    // 7
 	"overlays",          // 8
-	"untrack-local",     // 9
+	stepUntrackLocal,    // 9
 	"gitignore",         // 10
 	"config-file",       // 11
 	"repo-adrs",         // 12

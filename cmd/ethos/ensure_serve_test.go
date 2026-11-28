@@ -50,6 +50,52 @@ func TestPersonalMCPDoesNotRewriteSharedGitignore(t *testing.T) {
 	require.NoError(t, establishRoots(serveCmd, nil))
 	_ = ensureForServe(t.Context(), locateServeStore())
 	require.NoFileExists(t, filepath.Join(se.repo, ".gitignore"))
+
+	_, stderr, code = runCLI(t, se, "doctor")
+	require.FileExists(t, filepath.Join(se.repo, ".gitignore"), "doctor exit %d: %s", code, stderr)
+}
+
+func TestPersonalMCPExtReadReconcilesLegacyOverlay(t *testing.T) {
+	se := enableSubprocessRepo(t)
+	t.Setenv("HOME", se.home)
+	t.Chdir(se.repo)
+	_, stderr, code := runCLI(t, se, "enable")
+	require.Zero(t, code, stderr)
+	write := func(rel, data string) string {
+		path := filepath.Join(se.repo, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(data), 0o600))
+		return path
+	}
+	write(".punt-labs/ethos.yaml", "agent: teammate\nresolution: repo-only\n")
+	write(".punt-labs/ethos/identities/teammate.yaml", "name: Teammate\nhandle: teammate\nkind: human\n")
+	legacy := write(".punt-labs/ethos/identities/teammate.ext/vox.local.yaml", "voice: old-value\n")
+	local := write(".punt-labs/local/ethos/identities/teammate.ext/vox.local.yaml", "voice: local-value\n")
+	const original = "# team Git ignore rules\n*.build\n"
+	ignore := write(".gitignore", original)
+	gitRunEnv(t, se.repo, se.env, "add", ".gitignore")
+	t.Cleanup(func() { cmdRoots.Store(nil) })
+	srv := server.NewMCPServer("test", "0", server.WithToolCapabilities(true))
+	build := func(loc mcp.StoreLocation) *mcp.Handler { return buildServeHandler(defaultGlobalRoot(), loc) }
+	loc := locateServeStore()
+	h := build(loc)
+	h.RelocateStore(loc, locateServeStore, build)
+	h.RegisterTools(srv)
+	tool := srv.GetTool("ext")
+	require.NotNil(t, tool)
+	var req mcplib.CallToolRequest
+	req.Params.Name = "ext"
+	req.Params.Arguments = map[string]any{"method": "get", "handle": "teammate", "namespace": "vox", "key": "voice"}
+	res, err := tool.Handler(t.Context(), req)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	require.False(t, res.IsError, "%+v", res.Content)
+	assert.Contains(t, res.Content[0].(mcplib.TextContent).Text, "local-value")
+	require.NoFileExists(t, legacy)
+	require.FileExists(t, local)
+	got, err := os.ReadFile(ignore)
+	require.NoError(t, err)
+	assert.Equal(t, original, string(got))
 }
 
 // The MCP stdio server answers tool calls on several goroutines, and every

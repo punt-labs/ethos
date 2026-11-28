@@ -53,8 +53,9 @@ type options struct {
 	order        []string
 	// recheck makes a pass over current stamps re-run the steps that own a
 	// residual a person can act on, so the residual clears once they have.
-	recheck bool
-	logger  *slog.Logger
+	recheck  bool
+	logger   *slog.Logger
+	personal bool
 }
 
 func (options) globalLockPath(global string) string { return globalLockPath(global) }
@@ -69,6 +70,13 @@ func defaultOptions() options {
 		steps:        Steps,
 		order:        StepOrder,
 	}
+}
+
+type personalCheckoutKey struct{}
+
+// WithPersonalCheckout skips shared Git ignore and index updates during storage repair.
+func WithPersonalCheckout(ctx context.Context) context.Context {
+	return context.WithValue(ctx, personalCheckoutKey{}, true)
 }
 
 // Ensure brings the global store and, in a repository that has used ethos,
@@ -89,6 +97,12 @@ func defaultOptions() options {
 func Ensure(ctx context.Context, roots resolve.Located, global string) (Result, error) {
 	o := defaultOptions()
 	o.logger = diagnostic.FromContext(ctx)
+	o.personal, _ = ctx.Value(personalCheckoutKey{}).(bool)
+	if o.personal {
+		o.order = slices.DeleteFunc(slices.Clone(o.order), func(name string) bool {
+			return name == stepGitignore || name == stepUntrackLocal
+		})
+	}
 	return ensure(ctx, roots, global, o)
 }
 
@@ -163,6 +177,7 @@ func hookEnv(roots resolve.Located, global string, o options) (Env, error) {
 // and what this run learns.
 type target struct {
 	path     string
+	fullPath string // only set when a personal pass can reuse a full stamp
 	ensure   func(dir string) error
 	needed   bool
 	blocked  bool // a step errored, deferred, was abandoned or is not registered
@@ -176,6 +191,12 @@ type target struct {
 
 // refresh reads the stamp: a stat first, the file only when it is present.
 func (t *target) refresh() {
+	if t.fullPath != "" {
+		if s, err := ReadStamp(t.fullPath); err == nil && s.Current() {
+			t.needed = false
+			return
+		}
+	}
 	if _, err := os.Lstat(t.path); err != nil {
 		t.needed = true
 		return
@@ -221,6 +242,9 @@ func ensure(ctx context.Context, roots resolve.Located, global string, o options
 	r, policy := repositoryTarget(roots)
 	targets := []*target{g}
 	if r != nil {
+		if o.personal {
+			r.fullPath, r.path = r.path, PersonalRepositoryStampPath(policy)
+		}
 		targets = append(targets, r)
 	}
 	for _, t := range targets {
