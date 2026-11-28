@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
@@ -412,4 +414,16 @@ func TestCLI_DisableWorktreeRefusal(t *testing.T) {
 	if _, stderr, code := runCLI(t, se, "disable", "--scope", "project", "--force"); code != 0 {
 		t.Fatalf("disable --force exit = %d, want 0; stderr: %s", code, stderr)
 	}
+}
+
+func TestCLI_DisableForceWithoutScopeRemovesSharedIntegration(t *testing.T) {
+	se := enableSubprocessRepo(t)
+	_, stderr, code := runCLI(t, se, "enable", "--scope", "project")
+	require.Zero(t, code, stderr)
+	marker := filepath.Join(se.repo, ".punt-labs", "ethos", "enabled")
+	require.FileExists(t, marker)
+	_, stderr, code = runCLI(t, se, "disable", "--force")
+	require.Zero(t, code, stderr)
+	require.NoFileExists(t, marker)
+	require.NoFileExists(t, filepath.Join(se.repo, ".git", "hooks", "pre-commit"))
 }

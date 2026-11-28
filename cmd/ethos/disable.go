@@ -14,7 +14,8 @@ Use --scope project to remove the shared integration and unchain git hooks.
 Add --opt-out to record that the project must stay off.
 The vendored guide, configuration, and audit data stay on disk.
 Project disable refuses to unchain hooks while sibling worktrees use them
-unless --force is specified.`,
+unless --force is specified. Without an explicit --scope, --force uses
+project scope.`,
 	GroupID:      "admin",
 	Args:         cobra.NoArgs,
 	SilenceUsage: true,
@@ -40,6 +41,9 @@ func runDisable(cmd *cobra.Command) error {
 	scope, err := enableScope(cmd)
 	if err != nil {
 		return err
+	}
+	if disableForce && !cmd.Flags().Changed("scope") {
+		scope = "project"
 	}
 	optOut, err := projectEnableFlag(cmd, scope, "opt-out")
 	if err != nil {
