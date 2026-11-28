@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -50,4 +51,29 @@ func TestIs(t *testing.T) {
 	assert.False(t, Is("my-skill"), "a user skill is not an ethos-plugin skill")
 	assert.False(t, Is("lux:scene"), "an already-namespaced foreign skill is not an ethos-plugin skill")
 	assert.False(t, Is(""), "the empty slug is not a skill")
+}
+
+func TestOptimizeTeamUsesAgentOnlyRefresh(t *testing.T) {
+	skill, err := os.ReadFile(filepath.Join("..", "..", "plugin", "skills", "optimize-team", "SKILL.md"))
+	require.NoError(t, err)
+	flow := strings.SplitN(string(skill), "## The propose-then-ratify-then-write flow", 2)
+	require.Len(t, flow, 2)
+	assert.Contains(t, flow[1], "Keep the existing enablement state")
+	assert.Contains(t, flow[1], "Run `ethos enable --agents-only`")
+}
+
+func TestOptimizeTeamRefreshesBeforeLiveDoctor(t *testing.T) {
+	skill, err := os.ReadFile(filepath.Join("..", "..", "plugin", "skills", "optimize-team", "SKILL.md"))
+	require.NoError(t, err)
+	_, step7, found := strings.Cut(string(skill), "7. **")
+	require.True(t, found)
+	cutover, _, found := strings.Cut(step7, "8. **")
+	require.True(t, found)
+	refresh := strings.Index(cutover, "Run `ethos enable --agents-only`")
+	doctor := strings.Index(cutover, "run `ethos doctor`")
+	require.GreaterOrEqual(t, refresh, 0, "refresh must be in the cutover step")
+	require.GreaterOrEqual(t, doctor, 0, "doctor must validate the live cutover")
+	assert.Less(t, refresh, doctor, "doctor would reject the stale intermediate state")
+	assert.Contains(t, cutover, "restore the team closure and agent files")
+	assert.NotContains(t, cutover, "ask for consent", "use the existing ratification, not another prompt")
 }

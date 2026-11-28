@@ -17,8 +17,8 @@ Either way it's a one-time task and is deliberately not `@`-imported here.
 - `ethos session iam <persona>` — declare a persona for the current session.
 
 Session hooks inject your persona into context at start and after
-compaction. Ethos generates `.claude/agents/<handle>.md` from team data at
-SessionStart; restart Claude Code to regenerate them after a team change.
+compaction. After a team change, run `ethos enable --refresh` to regenerate
+`.claude/agents/<handle>.md`, then restart Claude Code to load the definitions.
 
 ## Delegation (missions)
 

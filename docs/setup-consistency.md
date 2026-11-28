@@ -58,7 +58,9 @@ a worker flag where the ruling meets a code invariant — see
 - **R2** — remove `setup`'s ref-integrity bypass once R1 makes the refs
   resolve; `setup` validates what it writes, hard.
 - **R3** — `setup` generates the agent file for the default agent + human
-  at setup time, using the same generator SessionStart uses.
+  at setup time, using the same generator `ethos enable --refresh` uses.
+  Setup writes the initial definitions directly; SessionStart does not
+  regenerate them.
 - **R4** — scope guard: no redesign of the bundle system. This is a
   conformance + seed-content fix. The validation gate (ethos-hnxz) and
   content fixes (ethos-bljl) are separate beads. Exception: if embedding

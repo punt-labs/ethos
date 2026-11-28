@@ -10,6 +10,18 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
+// RefreshAgentStubs installs stubs without generating or pruning agents and
+// reports unmarked destinations instead of replacing them. Use it when no
+// roster is configured, not when roster lookup fails.
+func RefreshAgentStubs(loc resolve.Located, onUnmarked func(string)) (bool, error) {
+	skipped := 0
+	handles, err := installAgentDefsWithOwnership(loc, nil, func(path string) {
+		skipped++
+		onUnmarked(path)
+	})
+	return len(handles) > skipped, err
+}
+
 // InstallAgentDefinitions copies agent .md files from the ethos agents
 // directory to .claude/agents/. Only copies files that are missing or
 // have different content. Returns the list of deployed filenames.

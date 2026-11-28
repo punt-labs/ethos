@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/agentmark"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
@@ -29,6 +30,11 @@ func runEnableCmd(t *testing.T, args ...string) (string, string, error) {
 		rootCmd.SetArgs(nil)
 		jsonOutput = false
 		disableForce = false
+		for _, name := range []string{"refresh", "agents-only"} {
+			flag := enableCmd.Flags().Lookup(name)
+			assert.NoError(t, flag.Value.Set(flag.DefValue))
+			flag.Changed = false
+		}
 	}()
 	err := rootCmd.Execute()
 	return outBuf.String(), errBuf.String(), err
@@ -99,6 +105,104 @@ func TestEnableCommandJSON(t *testing.T) {
 	}
 }
 
+func TestEnableAgentRefreshReports(t *testing.T) {
+	t.Run("inline agent-only refresh", func(t *testing.T) {
+		dir := enableGitRepo(t)
+		t.Chdir(dir)
+		out, stderr, err := runEnableCmd(t, "enable", "--agents-only")
+		require.NoError(t, err, stderr)
+		assert.Contains(t, out, "refreshed Claude agent definitions")
+		assert.NoFileExists(t, filepath.Join(dir, ".punt-labs", "ethos", "enabled"))
+	})
+
+	t.Run("uninitialized gitlink", func(t *testing.T) {
+		dir := enableGitRepo(t)
+		t.Chdir(dir)
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".punt-labs", "ethos"), 0o755))
+		cmd := testhelpers.GitCommand("update-index", "--add", "--cacheinfo",
+			"160000,0000000000000000000000000000000000000001,.punt-labs/ethos")
+		gitOutput, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", gitOutput)
+		for _, flag := range []string{"--refresh", "--agents-only"} {
+			t.Run(flag, func(t *testing.T) {
+				out, stderr, err := runEnableCmd(t, "enable", flag)
+				require.NoError(t, err, stderr)
+				assert.Contains(t, out, "left Claude agent definitions unchanged")
+				assert.Contains(t, stderr, "git submodule update --init")
+			})
+		}
+	})
+
+	t.Run("initialized gitlink with stubs only", func(t *testing.T) {
+		dir := enableGitRepo(t)
+		t.Chdir(dir)
+		store := filepath.Join(dir, ".punt-labs", "ethos")
+		require.NoError(t, os.MkdirAll(filepath.Join(store, "agents"), 0o755))
+		reviewerSource := filepath.Join(store, "agents", "reviewer.md")
+		require.NoError(t, os.WriteFile(reviewerSource, []byte("# Legacy reviewer\n"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(store, "agents", "writer.md"), []byte("---\nname: writer\n---\n# Legacy writer\n"), 0o644))
+		for _, args := range [][]string{
+			{"-C", store, "init", "-q"},
+			{"-C", store, "add", "agents/reviewer.md", "agents/writer.md"},
+			{"-C", store, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "Add reviewer"},
+			{"add", ".punt-labs/ethos"},
+		} {
+			gitOutput, err := testhelpers.GitCommand(args...).CombinedOutput()
+			require.NoError(t, err, "%s", gitOutput)
+		}
+		dst := filepath.Join(dir, ".claude", "agents")
+		require.NoError(t, os.MkdirAll(dst, 0o755))
+		prior := filepath.Join(dst, "worker.md")
+		priorAgent := agentmark.Add("---\nname: worker\n---\n# Existing worker\n")
+		require.True(t, agentmark.Has(priorAgent), "fixture must be eligible for pruning")
+		require.NoError(t, os.WriteFile(prior, []byte(priorAgent), 0o644))
+		for _, flag := range []string{"--refresh", "--agents-only"} {
+			t.Run(flag, func(t *testing.T) {
+				require.NoError(t, os.WriteFile(reviewerSource, []byte("# Legacy reviewer\n"), 0o644))
+				handAuthored := filepath.Join(dst, "writer.md")
+				const custom = "---\nname: writer\n---\n# Hand-authored writer\n"
+				require.NoError(t, os.WriteFile(handAuthored, []byte(custom), 0o644))
+				stub := filepath.Join(dst, "reviewer.md")
+				t.Cleanup(func() {
+					if _, err := os.Stat(stub); err == nil {
+						assert.NoError(t, os.Remove(stub))
+					}
+				})
+				out, stderr, err := runEnableCmd(t, "enable", flag)
+				require.NoError(t, err, stderr)
+				assert.Contains(t, out, "refreshed Claude agent definitions")
+				assert.NotContains(t, stderr, "git submodule update --init")
+				assert.Contains(t, stderr, "preserving existing agent without an ethos ownership marker")
+				assert.Contains(t, stderr, "writer.md")
+				customAfter, err := os.ReadFile(handAuthored)
+				require.NoError(t, err)
+				assert.Equal(t, custom, string(customAfter))
+				content, err := os.ReadFile(stub)
+				require.NoError(t, err, stderr)
+				assert.Contains(t, string(content), "# Legacy reviewer")
+				content, err = os.ReadFile(prior)
+				require.NoError(t, err)
+				assert.Equal(t, priorAgent, string(content))
+				assert.NoFileExists(t, filepath.Join(store, "enabled"))
+
+				require.NoError(t, os.WriteFile(reviewerSource, []byte("# Updated reviewer\n"), 0o644))
+				out, stderr, err = runEnableCmd(t, "enable", flag)
+				require.NoError(t, err, stderr)
+				assert.Contains(t, out, "refreshed Claude agent definitions")
+				assert.NotContains(t, stderr, "reviewer.md")
+				assert.Contains(t, stderr, "preserving existing agent without an ethos ownership marker")
+				assert.Contains(t, stderr, "writer.md")
+				content, err = os.ReadFile(stub)
+				require.NoError(t, err)
+				assert.Contains(t, string(content), "# Updated reviewer")
+				customAfter, err = os.ReadFile(handAuthored)
+				require.NoError(t, err)
+				assert.Equal(t, custom, string(customAfter))
+			})
+		}
+	})
+}
+
 func TestEnableSurfacesWarningsOnErrorPath(t *testing.T) {
 	// Repro: a hand-written guide (grandfather-overwritten with a warning) plus
 	// a regular file where .git/hooks belongs (so the hook-chaining step after
@@ -120,7 +224,7 @@ func TestEnableSurfacesWarningsOnErrorPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(dir)
-	_, errOut, err := runEnableCmd(t, "enable")
+	_, errOut, err := runEnableCmd(t, "enable", "--refresh")
 	if err == nil {
 		t.Fatal("expected enable to fail on the non-directory .git/hooks")
 	}

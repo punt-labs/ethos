@@ -59,6 +59,35 @@ func TestDepositBootstrapNoWarningWhenContentMatches(t *testing.T) {
 	}
 }
 
+func TestDepositBootstrapWarnsWhenKeepingExistingGuide(t *testing.T) {
+	dir := physicalTempDir(t)
+	path := filepath.Join(dir, guideRel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const custom = "custom guide\n"
+	if err := os.WriteFile(path, []byte(custom), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	warnings, err := depositVendored(dir, []byte("new guide\n"), []byte("new setup\n"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != custom {
+		t.Errorf("plain enable changed the guide: %q", got)
+	}
+	for _, warning := range warnings {
+		if strings.Contains(warning, guideRel) && strings.Contains(warning, "--refresh") {
+			return
+		}
+	}
+	t.Errorf("first contact should warn that a later --refresh can replace %s, got %v", guideRel, warnings)
+}
+
 func TestDepositCollisionOnUnlistedExistingPath(t *testing.T) {
 	dir := physicalTempDir(t)
 	if err := os.MkdirAll(filepath.Join(dir, ".punt-labs", "ethos"), 0o755); err != nil {

@@ -21,6 +21,29 @@ const (
 	stagingPat      = ".punt-labs/**/*.ethos-tmp*"
 )
 
+func TestCheckoutIgnoresPersonalIntegrationArtifacts(t *testing.T) {
+	root := filepath.Join("..", "..")
+	paths := []string{
+		".punt-labs/ethos/config.local.yaml",
+		".punt-labs/local/ethos/enabled",
+		"CLAUDE.local.md",
+		".claude/settings.local.json",
+		".CLAUDE.md.punt-import.lock",
+		".CLAUDE.local.md.punt-import.lock",
+		".claude/.settings.json.punt-import.lock",
+		".claude/.settings.local.json.punt-import.lock",
+	}
+	for _, path := range paths {
+		if out := gitOutput(t, root, "ls-files", "--", path); out != "" {
+			t.Errorf("%s is tracked", path)
+		}
+		cmd := exec.Command("git", "-C", root, "check-ignore", "-v", "--no-index", "--", path)
+		if out, err := cmd.CombinedOutput(); err != nil || !strings.HasPrefix(string(out), ".gitignore:") {
+			t.Errorf("%s must be ignored by the root .gitignore: %s (%v)", path, out, err)
+		}
+	}
+}
+
 func TestEnableAppendsGitignoreRuntimeZones(t *testing.T) {
 	dir := gitRepo(t)
 	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*.log\n"), 0o644); err != nil {

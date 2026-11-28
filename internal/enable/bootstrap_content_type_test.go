@@ -216,7 +216,7 @@ func TestBootstrapContentControls(t *testing.T) {
 					warnings, err = deposit(checkout, guide, setup)
 				} else {
 					var rep *Report
-					rep, err = EnableTo(checkout, store)
+					rep, err = EnableTo(checkout, store, Options{Refresh: true})
 					warnings = rep.Warnings
 				}
 				require.NoError(t, err)

@@ -60,7 +60,7 @@ func TestSessionStartSnapshot_BlockedInput(t *testing.T) {
 				assert.Contains(t, out, "Alpha Agent")
 				assert.Contains(t, out, "## Team: alpha-team")
 				assert.NotContains(t, out, "beta-team")
-				assert.FileExists(t, filepath.Join(loc.Checkout, ".claude", "agents", "gamma.md"))
+				assert.NoFileExists(t, filepath.Join(loc.Checkout, ".claude", "agents", "gamma.md"))
 				assert.NoFileExists(t, filepath.Join(loc.Checkout, ".claude", "agents", "delta.md"))
 				roster, err := ss.Load("snapshot-session")
 				require.NoError(t, err)
@@ -71,7 +71,7 @@ func TestSessionStartSnapshot_BlockedInput(t *testing.T) {
 	}
 }
 
-func TestSessionStartSnapshot_StubCheckoutDoesNotRediscover(t *testing.T) {
+func TestRefreshAgentDefinitions_StubCheckoutDoesNotRediscover(t *testing.T) {
 	loc, s, ss, ts, rs := snapshotHookStores(t)
 	stubDir := filepath.Join(loc.Ethos, "agents")
 	require.NoError(t, os.MkdirAll(stubDir, 0o755))
@@ -86,14 +86,15 @@ func TestSessionStartSnapshot_StubCheckoutDoesNotRediscover(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Contains(t, out, "Alpha Agent")
+	require.NoError(t, RefreshAgentDefinitions(loc, s, ts, rs))
 	assert.FileExists(t, filepath.Join(loc.Checkout, ".claude", "agents", "snapshot-stub.md"))
 	assert.NoFileExists(t, filepath.Join(otherCheckout, ".claude", "agents", "snapshot-stub.md"))
 	assert.FileExists(t, filepath.Join(loc.Checkout, ".claude", "agents", "gamma.md"))
 	assert.NoFileExists(t, filepath.Join(otherCheckout, ".claude", "agents", "gamma.md"))
 }
 
-func TestSessionStartSnapshot_StubFailureIsReturned(t *testing.T) {
-	loc, s, ss, ts, rs := snapshotHookStores(t)
+func TestRefreshAgentDefinitions_StubFailureIsReturned(t *testing.T) {
+	loc, s, _, ts, rs := snapshotHookStores(t)
 	stubDir := filepath.Join(loc.Ethos, "agents")
 	require.NoError(t, os.MkdirAll(stubDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(stubDir, "snapshot-stub.md"), []byte("# Snapshot Stub\n"), 0o644))
@@ -104,10 +105,7 @@ func TestSessionStartSnapshot_StubFailureIsReturned(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(destDir, "snapshot-stub.md")); err != nil {
 		t.Skipf("symlink not supported: %v", err)
 	}
-	deps := SessionStartDeps{Located: &loc, Store: s, Sessions: ss, Teams: ts, Roles: rs}
-	_, err := withSnapshotPipe(t, filepath.Join(loc.Store, ".punt-labs", "ethos.yaml"), "agent: beta\nteam: beta-team\n", func(r io.Reader) error {
-		return HandleSessionStart(r, deps)
-	})
+	err := RefreshAgentDefinitions(loc, s, ts, rs)
 	require.ErrorContains(t, err, "symlink")
 	data, err := os.ReadFile(outside)
 	require.NoError(t, err)

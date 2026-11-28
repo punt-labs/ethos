@@ -30,9 +30,11 @@ coverage.out
 .punt-labs/quarry/captures/
 
 # Claude local settings
+CLAUDE.local.md
 .claude/settings.local.json
 .claude/*.local.md
 .claude/scheduled_tasks.lock
+.*.punt-import.lock
 
 # direnv
 

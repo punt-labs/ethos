@@ -34,6 +34,10 @@ const (
 // grandfathered by punt-labs-dir PLD-9, but the overwrite is surfaced by naming
 // the path so the (git-tracked, recoverable) clobber is not silent (S2).
 func deposit(repoRoot string, guide, setup []byte, policies ...layout.Policy) ([]string, error) {
+	return depositVendored(repoRoot, guide, setup, true, policies...)
+}
+
+func depositVendored(repoRoot string, guide, setup []byte, refresh bool, policies ...layout.Policy) ([]string, error) {
 	p, err := layout.NewRepository(repoRoot, repoRoot, layout.RecordBlame)
 	if len(policies) > 0 {
 		p = policies[0]
@@ -63,17 +67,20 @@ func deposit(repoRoot string, guide, setup []byte, policies ...layout.Policy) ([
 	}
 
 	var warnings []string
+	updateManifest := bootstrap || refresh
 	for _, rel := range newSet {
 		if !isVendored(rel) {
 			return nil, fmt.Errorf("enable: manifest path %s is not in the vendored zone — refusing to deposit", rel)
 		}
 		if contains(prevSet, rel) {
-			// Grandfathered on first contact: warn when we are about to
-			// overwrite differing content, so the clobber is visible.
 			if bootstrap {
 				if existing, err := os.ReadFile(filepath.Join(repoRoot, rel)); err == nil && !bytes.Equal(existing, want[rel]) {
-					warnings = append(warnings, fmt.Sprintf(
-						"%s existed with different content and was overwritten by the vendored guide (punt-labs-dir PLD-9 first-enable grandfather; the prior file is recoverable from git)", rel))
+					if refresh {
+						warnings = append(warnings, fmt.Sprintf(
+							"%s existed with different content and was overwritten by the vendored guide (punt-labs-dir PLD-9 first-enable grandfather; the prior file is recoverable from git)", rel))
+					} else {
+						warnings = append(warnings, fmt.Sprintf("%s has different content and was preserved; a future enable with --refresh can overwrite it", rel))
+					}
 				}
 			}
 			continue
@@ -83,6 +90,7 @@ func deposit(repoRoot string, guide, setup []byte, policies ...layout.Policy) ([
 		} else if !os.IsNotExist(err) {
 			return nil, fmt.Errorf("enable: examining new vendored path %s: %w", rel, err)
 		}
+		updateManifest = true
 	}
 
 	// There are no supported retired paths to remove: DES-059's original
@@ -96,14 +104,29 @@ func deposit(repoRoot string, guide, setup []byte, policies ...layout.Policy) ([
 	// Writing content first would leave a retry unable to tell "our own
 	// interrupted deposit" from "someone else's file at that path," and
 	// hard-collide on the former.
-	if err := writeVendored(filepath.Join(repoRoot, manifestRel), want[manifestRel], p); err != nil {
-		return nil, err
-	}
-	if err := writeVendored(filepath.Join(repoRoot, guideRel), guide, p); err != nil {
-		return nil, err
-	}
-	if err := writeVendored(filepath.Join(repoRoot, setupRel), setup, p); err != nil {
-		return nil, err
+	for _, rel := range []string{manifestRel, guideRel, setupRel} {
+		path := filepath.Join(repoRoot, rel)
+		info, err := os.Lstat(path)
+		switch {
+		case err == nil && !info.Mode().IsRegular() && !refresh:
+			return nil, fmt.Errorf("enable: vendored file %s is not regular", path)
+		case err == nil && info.Mode().IsRegular():
+			if (rel == manifestRel && !updateManifest) || (rel != manifestRel && !refresh) {
+				continue
+			}
+			existing, err := os.ReadFile(path)
+			if err != nil {
+				return nil, err
+			}
+			if bytes.Equal(want[rel], existing) {
+				continue
+			}
+		case err != nil && !os.IsNotExist(err):
+			return nil, err
+		}
+		if err := writeVendored(path, want[rel], p); err != nil {
+			return nil, err
+		}
 	}
 	return warnings, nil
 }

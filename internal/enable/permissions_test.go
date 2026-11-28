@@ -68,17 +68,31 @@ func TestPermissionRulesCoverCLIMCPAndEveryShippedCommand(t *testing.T) {
 	if !slices.Equal(PermissionRules["allow"], wantAllow) {
 		t.Errorf("PermissionRules[allow] = %v, want %v", PermissionRules["allow"], wantAllow)
 	}
-	gotAsk := slices.Clone(PermissionRules["ask"])
+	if got := PermissionRules["ask"]; len(got) != 0 {
+		t.Errorf("new Ethos grants must not add ask rules: %v", got)
+	}
+	gotAsk := slices.Clone(legacyPermissionRules["ask"])
+	wantAsk = append(wantAsk, "Bash(ethos -*)")
 	slices.Sort(gotAsk)
 	slices.Sort(wantAsk)
 	if !slices.Equal(gotAsk, wantAsk) {
-		t.Errorf("PermissionRules[ask] = %v, want %v", gotAsk, wantAsk)
+		t.Errorf("legacyPermissionRules[ask] = %v, want %v", gotAsk, wantAsk)
 	}
 	for _, rules := range PermissionRules {
 		for _, rule := range rules {
 			if strings.Contains(rule, "-dev") {
 				t.Errorf("dev rule granted: %s", rule)
 			}
+		}
+	}
+}
+
+func TestProjectSettingsDoNotPromptForEthos(t *testing.T) {
+	settings := filepath.Join("..", "..", ".claude", "settings.json")
+	for _, rule := range permissionList(t, settings, "ask") {
+		if strings.HasPrefix(rule, "Bash(ethos ") || strings.HasPrefix(rule, "Skill(ethos:") ||
+			strings.HasPrefix(rule, "mcp__plugin_ethos_self__") {
+			t.Errorf("project settings still prompt for %s", rule)
 		}
 	}
 }
@@ -98,9 +112,9 @@ func TestEnableDisableRoundTripsPermissionRules(t *testing.T) {
 	}
 	if !slices.ContainsFunc(enabled.Steps, func(s StepResult) bool {
 		return s.Step == "permissions" && strings.Contains(s.Detail, "allow: Bash(ethos:*)") &&
-			strings.Contains(s.Detail, "; ask: Bash(ethos setup:*)")
+			!strings.Contains(s.Detail, "ask:")
 	}) {
-		t.Errorf("enable report does not separate allow and ask rules: %+v", enabled.Steps)
+		t.Errorf("enable report should list allows without asks: %+v", enabled.Steps)
 	}
 	if got, want := permissionList(t, settings, "allow"), append([]string{"Read"}, PermissionRules["allow"]...); !slices.Equal(got, want) {
 		t.Errorf("after enable allow = %v, want %v", got, want)
@@ -193,7 +207,7 @@ func TestEnableAndDisableStripTheRetiredFlagRule(t *testing.T) {
 			if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			seed := `{"permissions":{"ask":["Bash(ls:*)","Bash(ethos -*)"]}}`
+			seed := `{"permissions":{"ask":["Bash(ls:*)","Bash(ethos -*)","Bash(ethos setup:*)","mcp__plugin_ethos_self__mission","Skill(ethos:optimize-team)"],"deny":["Bash(git push --force:*)"]}}`
 			if err := os.WriteFile(settings, []byte(seed), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -207,11 +221,14 @@ func TestEnableAndDisableStripTheRetiredFlagRule(t *testing.T) {
 				t.Fatalf("%s: %v", verb, err)
 			}
 			ask := permissionList(t, settings, "ask")
-			if slices.Contains(ask, "Bash(ethos -*)") {
+			if !slices.Equal(ask, []string{"Bash(ls:*)"}) {
 				t.Errorf("after %s ask still holds the retired rule: %v", verb, ask)
 			}
 			if !slices.Contains(ask, "Bash(ls:*)") {
 				t.Errorf("after %s ask lost an unrelated rule: %v", verb, ask)
+			}
+			if deny := permissionList(t, settings, "deny"); !slices.Equal(deny, []string{"Bash(git push --force:*)"}) {
+				t.Errorf("after %s deny changed: %v", verb, deny)
 			}
 		})
 	}
@@ -224,7 +241,7 @@ func TestDisableRemovesCurrentAndRetiredRulesInOneSet(t *testing.T) {
 	if !slices.Equal(disableRules["allow"], PermissionRules["allow"]) {
 		t.Errorf("disable allow = %v, want %v", disableRules["allow"], PermissionRules["allow"])
 	}
-	for _, rule := range PermissionRules["ask"] {
+	for _, rule := range legacyPermissionRules["ask"] {
 		if !slices.Contains(disableRules["ask"], rule) {
 			t.Errorf("disable set lacks %s", rule)
 		}

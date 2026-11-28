@@ -56,6 +56,25 @@ func gitRunEnv(t *testing.T, dir string, env []string, args ...string) {
 	}
 }
 
+func TestCLI_EnableHelpListsRefreshModes(t *testing.T) {
+	se := enableSubprocessRepo(t)
+	stdout, stderr, code := runCLI(t, se, "--help")
+	if code != 0 {
+		t.Fatalf("help exited %d: %s", code, stderr)
+	}
+	for _, line := range strings.Split(stdout, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || fields[0] != "enable" {
+			continue
+		}
+		if !strings.Contains(line, "--refresh") || !strings.Contains(line, "--agents-only") {
+			t.Fatalf("enable summary omits a refresh mode: %s", line)
+		}
+		return
+	}
+	t.Fatalf("enable summary missing from help:\n%s", stdout)
+}
+
 func TestCLI_EnableSuccess(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")

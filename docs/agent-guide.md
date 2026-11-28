@@ -154,7 +154,7 @@ make or inspect its recipe database.
 
 ## Prerequisites: Agent Definitions
 
-Ethos auto-generates `.claude/agents/<handle>.md` files at **SessionStart**
+`ethos enable --refresh` generates `.claude/agents/<handle>.md` files
 from team data resolved in this order: repo-local `.punt-labs/ethos/`,
 active bundle, global `~/.punt-labs/ethos/`.
 
@@ -188,7 +188,9 @@ No conversion is needed: the resolver falls back to two-layer behavior
 (repo-local → global) when `active_bundle` is unset in
 `.punt-labs/ethos.yaml`, so a legacy submodule keeps working as-is.
 
-Then restart Claude Code to trigger the SessionStart hook. Verify with
+Run `ethos enable --refresh`, then restart Claude Code. For a legacy team
+submodule, this refreshes only the agent definitions in the checkout; it
+does not enable Ethos or rewrite the submodule's guides. Verify with
 `ls .claude/agents/` — you should see one `.md` file per agent identity
 in the resolved team.
 
@@ -199,9 +201,8 @@ in the resolved team.
    added after launch are not visible until restart.
 2. If the file is missing, check the team source: `ethos team active`
    (bundle layout) or `git submodule status` (legacy layout — a
-   leading `-` means uninitialized). Then restart Claude Code to
-   trigger the SessionStart hook, which generates agent files from
-   resolved team data.
+   leading `-` means uninitialized). Run `ethos enable --refresh` to
+   generate the definitions, then restart Claude Code.
 
 ## Concepts
 

@@ -110,9 +110,9 @@ never touch Config, Local, or seal-managed data.
 | `<repo>/CLAUDE.md` | host file | user | One import line added/removed (§2.4) |
 | git hooks dir `pre-commit`, `commit-msg` | outside subtree | shared | Marker section chained/unchained (§2.8, DES-058/DES-054) |
 
-`<repo>/.claude/settings.json` is a shared host file: `enable` appends ethos's
-rules to `permissions.allow` and `permissions.ask`; `disable` removes exactly
-those values (§2.8) — see "`.claude/settings.json` (§2.8)" below.
+`<repo>/.claude/settings.json` is a shared host file: `enable` adds ethos's
+rules to `permissions.allow` and removes obsolete Ethos prompts; `disable`
+removes the Ethos grants and obsolete prompts (§2.8).
 
 **The carve-out is enforced by the manifest, not by good intentions.** Per
 PLD-9, `enable` writes **exactly** the vendored-zone-manifest set
@@ -139,7 +139,10 @@ own repo is unaffected; the hazard is fleet-wide.
 
 ### `ethos enable`
 
-Run from inside a repo. Idempotent; re-running is the upgrade path (§2.3).
+Run from inside a repo. Re-running leaves deposited guides pinned. Use
+`ethos enable --refresh` to update them and reconcile Claude agent definitions.
+Use `ethos enable --agents-only` to reconcile those definitions without
+changing the guides, hooks, grants, or enablement marker.
 Steps, in order:
 
 1. **Resolve the repo root** (`resolve.FindRepoRoot`). Not in a work tree
@@ -542,12 +545,13 @@ From §2.11 (and punt-labs-dir PLD-11, keyed by the marker):
 Running `ethos enable` is the user's consent to use ethos in this repo
 (punt-kit `permissions.md` §6). It adds `Bash(ethos:*)`,
 `mcp__plugin_ethos_self__*`, and `Skill(ethos:*)` to `permissions.allow`.
-Exact rules in `permissions.ask` keep state-changing CLI groups, MCP tools, and
-skills prompt-gated even though the broad allow also matches. It also sets
+It does not add any `permissions.ask` rules. It removes the exact ask rules
+shipped by older Ethos versions, which overrode these allows, and leaves
+unrelated asks and all denies alone. It also sets
 `env.GIT_OPTIONAL_LOCKS` to `"0"` when absent so background `git status` and
 `git diff` calls in agent sessions do not take `.git/index.lock` (DES-086);
 an existing value set by the repository is preserved. `disable` removes
-exactly the current allow and ask values and removes `env.GIT_OPTIONAL_LOCKS`
+exactly the current allow and retired ask values and removes `env.GIT_OPTIONAL_LOCKS`
 only when its value is still `"0"` (dropping an empty `env` object); like the
 owned permission rules, this is stateless (no provenance sidecar), so a
 pre-existing `"0"` is also removed on `disable` while any non-default override
