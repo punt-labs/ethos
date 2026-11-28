@@ -5,7 +5,8 @@
 _host_status=$?
 _hook=pre-commit
 _off() {
-  [ -f "$1/.punt-labs/ethos/opt-out" ] || [ -f "$1/.punt-labs/local/ethos/disabled" ]
+  [ -e "$1/.punt-labs/ethos/opt-out" ] || [ -L "$1/.punt-labs/ethos/opt-out" ] ||
+    [ -e "$1/.punt-labs/local/ethos/disabled" ] || [ -L "$1/.punt-labs/local/ethos/disabled" ]
 }
 [ ! -e .git ] || ! _off . || exit "$_host_status"
 _git() {
@@ -86,6 +87,7 @@ if command -v ethos >/dev/null 2>&1; then
 elif [ -x "$HOME/.local/bin/ethos" ]; then
   ethos_bin="$HOME/.local/bin/ethos"
 else
+  printf 'ethos: %s: binary not found; audit was not sealed\n' "$_hook" >&2
   exit "$_host_status"
 fi
 # The subcommand prints nothing on stdout. A binary before v4.9 does not know

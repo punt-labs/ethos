@@ -72,6 +72,22 @@ func TestPersonallyEnabledHooksDoNotTakeDormantFastPath(t *testing.T) {
 	}
 }
 
+func TestHooksDoNotRunWithMalformedOffOverrides(t *testing.T) {
+	for _, script := range []string{"pre-commit.sh", "commit-msg.sh"} {
+		for _, override := range []string{".punt-labs/ethos/opt-out", ".punt-labs/local/ethos/disabled"} {
+			t.Run(script+"/"+override, func(t *testing.T) {
+				top := t.TempDir()
+				require.NoError(t, os.Mkdir(filepath.Join(top, ".git"), 0o755))
+				enabled := filepath.Join(top, ".punt-labs/ethos/enabled")
+				require.NoError(t, os.MkdirAll(filepath.Dir(enabled), 0o755))
+				require.NoError(t, os.WriteFile(enabled, nil, 0o644))
+				require.NoError(t, os.MkdirAll(filepath.Join(top, override), 0o755))
+				require.NoError(t, runHookAt(t, script, top, fakeGitDir(t, "exit 128\n")))
+			})
+		}
+	}
+}
+
 // Where the marker is there, or the hook is not at a top level, the full
 // resolution still decides: a failing git blocks, and an enabled repository
 // reached from a subdirectory still seals.

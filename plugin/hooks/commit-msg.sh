@@ -5,7 +5,8 @@
 _host_status=$?
 _hook=commit-msg
 _off() {
-  [ -f "$1/.punt-labs/ethos/opt-out" ] || [ -f "$1/.punt-labs/local/ethos/disabled" ]
+  [ -e "$1/.punt-labs/ethos/opt-out" ] || [ -L "$1/.punt-labs/ethos/opt-out" ] ||
+    [ -e "$1/.punt-labs/local/ethos/disabled" ] || [ -L "$1/.punt-labs/local/ethos/disabled" ]
 }
 [ ! -e .git ] || ! _off . || exit "$_host_status"
 _git() {
@@ -86,6 +87,8 @@ if command -v ethos >/dev/null 2>&1; then
 elif [ -x "$HOME/.local/bin/ethos" ]; then
   ethos_bin="$HOME/.local/bin/ethos"
 else
+  [ -z "$1" ] || [ ! -f "$1" ] ||
+    printf 'ethos: %s: binary not found; Ethos trailers were not added\n' "$_hook" >&2
   exit "$_host_status"
 fi
 [ -z "$1" ] && exit "$_host_status"
