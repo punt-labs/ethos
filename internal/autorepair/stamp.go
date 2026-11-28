@@ -43,6 +43,11 @@ func RepositoryStampPath(p layout.Policy) string {
 	return filepath.Join(p.LocalRoot(), StampName)
 }
 
+// PersonalRepositoryStampPath records repair that skipped shared Git steps.
+func PersonalRepositoryStampPath(p layout.Policy) string {
+	return filepath.Join(p.LocalRoot(), "layout-personal.yaml")
+}
+
 // ReadStamp reads the stamp at path. An absent file is an error wrapping
 // fs.ErrNotExist and a zero Stamp, which is not Current. A stamp that cannot
 // be parsed is an error and also a zero Stamp: the caller repairs.

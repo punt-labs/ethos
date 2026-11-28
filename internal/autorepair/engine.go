@@ -243,7 +243,7 @@ func ensure(ctx context.Context, roots resolve.Located, global string, o options
 	targets := []*target{g}
 	if r != nil {
 		if o.personal {
-			r.fullPath, r.path = r.path, filepath.Join(policy.LocalRoot(), "layout-personal.yaml")
+			r.fullPath, r.path = r.path, PersonalRepositoryStampPath(policy)
 		}
 		targets = append(targets, r)
 	}

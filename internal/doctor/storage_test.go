@@ -61,6 +61,38 @@ func TestCheckStorage(t *testing.T) {
 		assert.Equal(t, "WARN", r.Status)
 		assert.Contains(t, r.Detail, "repository")
 	})
+	t.Run("personal stamp reports conditions until a full stamp exists", func(t *testing.T) {
+		g := filepath.Join(phys(t), "g")
+		writeGlobalStamp(t, g, autorepair.Stamp{Version: autorepair.LayoutVersion, Items: 1})
+		store := phys(t)
+		loc := resolve.Located{Store: store, Checkout: store}
+		p, err := loc.Layout()
+		require.NoError(t, err)
+		ensureDir := func(d string) error { return os.MkdirAll(d, 0o700) }
+		path := autorepair.PersonalRepositoryStampPath(p)
+		stamp := autorepair.Stamp{Version: autorepair.LayoutVersion, Items: 2}
+		require.NoError(t, autorepair.WriteStamp(path, stamp, ensureDir))
+		r := CheckStorage(loc, g)
+		assert.Equal(t, "PASS", r.Status)
+		assert.Contains(t, r.Detail, "3 items")
+
+		stamp.Residual = []autorepair.Residual{{
+			Step: "overlays", ID: "teammate/vox", Class: autorepair.ClassActionable,
+			Reason: "overlay unreadable", Action: "check file permissions",
+		}}
+		require.NoError(t, autorepair.WriteStamp(path, stamp, ensureDir))
+		r = CheckStorage(loc, g)
+		assert.Equal(t, "WARN", r.Status)
+		assert.Contains(t, r.Detail, "1 condition(s) need action")
+		assert.Equal(t, []string{"action needed: overlays teammate/vox: overlay unreadable; check file permissions"}, r.Lines)
+
+		require.NoError(t, autorepair.WriteStamp(autorepair.RepositoryStampPath(p), autorepair.Stamp{
+			Version: autorepair.LayoutVersion, Items: 4,
+		}, ensureDir))
+		r = CheckStorage(loc, g)
+		assert.Equal(t, "PASS", r.Status)
+		assert.Contains(t, r.Detail, "5 items")
+	})
 	t.Run("repository residuals count", func(t *testing.T) {
 		g := filepath.Join(phys(t), "g")
 		writeGlobalStamp(t, g, autorepair.Stamp{Version: autorepair.LayoutVersion, Items: 1})

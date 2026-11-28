@@ -150,7 +150,7 @@ func TestEnsurePersonalStampDoesNotSatisfyFullRepair(t *testing.T) {
 	require.NotEmpty(t, index)
 	policy, err := r.roots.Layout()
 	require.NoError(t, err)
-	personal := filepath.Join(policy.LocalRoot(), "layout-personal.yaml")
+	personal := PersonalRepositoryStampPath(policy)
 	gitignore := filepath.Join(r.store, ".gitignore")
 	ctx := WithPersonalCheckout(t.Context())
 
