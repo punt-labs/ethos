@@ -42,7 +42,13 @@ func changeEnablement(_ *Handler, _ context.Context, req mcplib.CallToolRequest,
 	case scope != "project":
 		_, err = enable.DisableLocal(loc.Checkout)
 	case enabling:
-		_, err = enable.EnableTo(loc.Checkout, loc.Root, enable.Options{ClearOptOut: clear})
+		root := loc.Root
+		if root == "" {
+			root, err = enable.StoreRoot(loc.Checkout, root, loc.Err)
+		}
+		if err == nil {
+			_, err = enable.EnableTo(loc.Checkout, root, enable.Options{ClearOptOut: clear})
+		}
 	default:
 		_, err = enable.DisableTo(loc.Checkout, loc.Root, false, optOut)
 	}

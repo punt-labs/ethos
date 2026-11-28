@@ -105,6 +105,10 @@ func TestRegisteredToolsUseCheckoutEnablementBeforeRepair(t *testing.T) {
 		assert.Contains(t, resultText(t, result), expected)
 	}
 	call("enable", "not in a git checkout", true, nil)
+	loc = StoreLocation{Checkout: checkout, Err: resolve.ErrOverrideNoStore}
+	call("enable", resolve.ProjectEnabledFile, false, map[string]any{"scope": "project"})
+	loc = StoreLocation{Root: checkout, Checkout: checkout}
+	call("disable", "no enablement marker", false, map[string]any{"scope": "project"})
 	loc = StoreLocation{Root: root, Checkout: checkout}
 	list := map[string]any{"method": "list"}
 	call("identity", "no enablement marker", true, list)

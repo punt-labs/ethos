@@ -55,6 +55,19 @@ const markerRel = ".punt-labs/ethos/enabled"
 // ErrGitlinkMount indicates that enable cannot deposit into the team submodule.
 var ErrGitlinkMount = errors.New(".punt-labs/ethos is a git submodule (gitlink); the vendored guide cannot be written into a foreign git repo — convert it to an inline directory first (ethos-e29s)")
 
+// StoreRoot falls back to the checkout only when an explicit override names a
+// repository whose store has not been created yet.
+func StoreRoot(checkout, store string, err error) (string, error) {
+	switch {
+	case err == nil:
+		return store, nil
+	case errors.Is(err, resolve.ErrOverrideNoStore):
+		return checkout, nil
+	default:
+		return "", fmt.Errorf("enable: locating the store: %w", err)
+	}
+}
+
 // StepResult is one line of the per-step report.
 type StepResult struct {
 	Step   string `json:"step"`

@@ -8,7 +8,6 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/enable"
 	"github.com/punt-labs/ethos/v4/internal/hook"
-	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/spf13/cobra"
 )
 
@@ -197,13 +196,7 @@ func finishEnable(cmd *cobra.Command, rep *enable.Report, action string) error {
 // chose.
 func enableStoreRoot(repoRoot string, locate func() (string, error)) (string, error) {
 	root, err := locate()
-	switch {
-	case err == nil:
-		return root, nil
-	case errors.Is(err, resolve.ErrOverrideNoStore):
-		return repoRoot, nil
-	}
-	return "", fmt.Errorf("enable: locating the store: %w", err)
+	return enable.StoreRoot(repoRoot, root, err)
 }
 
 // locateForCommand returns the work tree root for verb, or "" after printing
