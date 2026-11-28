@@ -102,8 +102,15 @@ func TestRunVersion_JSON(t *testing.T) {
 
 // --- doctor ---
 
-func TestRunDoctor_AllPass(t *testing.T) {
+func doctorFixture(t *testing.T) *cliSubprocessEnv {
+	t.Helper()
 	se := setupCLISubprocessEnv(t)
+	require.NoError(t, os.Remove(filepath.Join(se.repo, ".punt-labs", "ethos", "enabled")))
+	return se
+}
+
+func TestRunDoctor_AllPass(t *testing.T) {
+	se := doctorFixture(t)
 	setInProcessEnv(t, se)
 
 	stdout, _, err := execHandler(t, "doctor")
@@ -123,7 +130,7 @@ func TestRunDoctor_AllPass(t *testing.T) {
 // %-24s, pushing its Status/Detail into the name column instead of the
 // aligned Status column every other row uses.
 func TestRunDoctor_TableColumnFitsLongestName(t *testing.T) {
-	se := setupCLISubprocessEnv(t)
+	se := doctorFixture(t)
 	setInProcessEnv(t, se)
 
 	stdout, _, err := execHandler(t, "doctor")
@@ -179,8 +186,7 @@ func TestRunDoctor_Failure(t *testing.T) {
 }
 
 func TestRunDoctor_JSON(t *testing.T) {
-	se := setupCLISubprocessEnv(t)
-	require.NoError(t, os.Remove(filepath.Join(se.repo, ".punt-labs", "ethos", "enabled")))
+	se := doctorFixture(t)
 	setInProcessEnv(t, se)
 
 	stdout, _, err := execHandler(t, "doctor", "--json")

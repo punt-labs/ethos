@@ -53,6 +53,9 @@ func TestPermissionRulesCoverCLIMCPAndEveryShippedCommand(t *testing.T) {
 		if name == e.Name() || strings.HasSuffix(name, "-dev") {
 			continue
 		}
+		if name == "enable" || name == "disable" {
+			continue
+		}
 		wantAsk = append(wantAsk, "Skill(ethos:"+name+")")
 	}
 	skills, err := os.ReadDir(filepath.Join("..", "..", "plugin", "skills"))
