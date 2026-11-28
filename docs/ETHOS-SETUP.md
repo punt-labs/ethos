@@ -174,8 +174,9 @@ DOES add the `@`-import so daily-use guidance auto-injects.
 
 ## Troubleshooting for the agent
 
-- **`ethos doctor` reports "hook missing"** → the storage upgrade
-  reinstalls the audit-seal and trailer git hooks on the next ethos run.
+- **`ethos doctor` reports "hook missing"** → run
+  `ethos enable --scope project` to install the shared audit-seal and
+  trailer hooks. Personal enablement does not install Git hooks.
 - **`ethos doctor` reports "stale binary version"** → the binary on PATH
   is older than the plugin. Ask the human to run `make install` from a
   shell (agent sessions cannot overwrite their own running binary on
@@ -191,5 +192,8 @@ DOES add the `@`-import so daily-use guidance auto-injects.
 - **Regen removes files** → it doesn't. Ethos generation adds/updates but
   never deletes. To remove a stale `.claude/agents/*.md`, first remove
   the identity from every team's roster, then `git rm` the file.
-- **Uninstall** → `ethos disable` in each repo, then `ethos uninstall`
-  (or `ethos uninstall --purge` to also remove `~/.punt-labs/ethos/`).
+- **Uninstall** → to remove shared Git hook sections, run
+  `ethos disable --scope project` in the affected repos before running
+  `ethos uninstall` (or `ethos uninstall --purge` to also remove
+  `~/.punt-labs/ethos/`). Updated hooks warn but do not block Git when
+  the Ethos binary is missing.

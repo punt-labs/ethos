@@ -504,7 +504,10 @@ the SessionEnd courtesy flush (DES-058).
 `install.sh` installs the binary and plugin and seeds machine starter
 content. It does not enable the invoking checkout or chain Git hooks.
 Run `ethos enable` yourself to opt in. Updated project Git shims preserve
-the host hook status even after the Ethos binary is removed.
+the host hook status even after the Ethos binary is removed, warning in
+enabled checkouts that the seal or trailers were skipped. Older shims may
+still block Git: refresh them with `ethos enable --scope project` before
+uninstalling, or remove them with `ethos disable --scope project`.
 
 ## `enable` versus `init` and `setup`
 
