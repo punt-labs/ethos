@@ -321,7 +321,12 @@ info "Seeding starter content..."
 # Plain `ethos seed` is manifest-aware: it deploys new files, updates shipped
 # content the release has revved, and leaves locally edited files untouched.
 # No --force here — that would clobber a user's edits on every re-install.
-if seed_out="$("$INSTALL_DIR/$BINARY" seed 2>&1)"; then
+machine_ethos() (
+  cd / || exit 1
+  unset ETHOS_REPO_ROOT
+  "$INSTALL_DIR/$BINARY" "$@"
+)
+if seed_out="$(machine_ethos seed 2>&1)"; then
   printf '%s\n' "$seed_out"
   ok "Starter content deployed (existing files updated where the release is newer)"
   if printf '%s\n' "$seed_out" | grep -q "skipped (local edit)"; then
@@ -333,34 +338,11 @@ else
   warn "Could not seed starter content — run 'ethos seed' manually"
 fi
 
-# --- Step 6c: Enable ethos in the current repo ---
-
-# install is machine scope only (binary, plugin, seed). Per-repo enablement —
-# the vendored guide, the enabled marker, the import line, and the chained
-# git hooks — is `ethos enable`, which owns that logic in one place (no shell
-# copy to drift). When run inside a git work tree, delegate to the binary just
-# installed; skipped silently when not in a work tree (curl|sh from $HOME).
-# An enable failure here is fatal (the old installer's hook install was too):
-# doctor cannot be the backstop because a repo where enable never ran has no
-# marker and CheckSealHook returns PASS "not enabled here" by design — so a
-# green doctor after a failed enable would print "ready!" over a repo with no
-# seal hook, the exact silent-absence state this feature exists to prevent.
-ENABLE_FAILED=0
-if command -v git >/dev/null 2>&1 && git rev-parse --show-toplevel >/dev/null 2>&1; then
-  info "Enabling ethos in this repo..."
-  if "$INSTALL_DIR/$BINARY" enable; then
-    ok "ethos enabled in this repo"
-  else
-    ENABLE_FAILED=1
-    warn "ethos enable failed in this repo (see the error above)"
-  fi
-fi
-
 # --- Step 7: Health check ---
 
 info "Verifying installation..."
 printf '\n'
-if "$INSTALL_DIR/$BINARY" doctor && [ "$ENABLE_FAILED" = "0" ]; then
+if machine_ethos doctor; then
   if [ "$SKIP_PLUGIN" = "1" ]; then
     printf '\n%b%b%s CLI installed (CLI-only mode — Claude Code plugin skipped)%b\n\n' "$GREEN" "$BOLD" "$BINARY" "$NC"
     printf 'The CLI is fully functional — via the command line, MCP ("ethos serve"),\n'
@@ -394,11 +376,6 @@ if "$INSTALL_DIR/$BINARY" doctor && [ "$ENABLE_FAILED" = "0" ]; then
     printf 'Run "ethos setup" in your project directory to get started.\n'
     printf 'Restart Claude Code twice to activate the plugin.\n\n'
   fi
-elif [ "$ENABLE_FAILED" = "1" ]; then
-  printf '\n'
-  warn "ethos enable failed — the seal hook and import line were not installed"
-  printf 'Resolve the error above, then run "ethos enable" from the repo root.\n\n'
-  exit 1
 else
   printf '\n'
   warn "ethos installed but doctor found issues (see above)"

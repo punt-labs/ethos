@@ -75,6 +75,28 @@ func TestCLI_EnableHelpListsRefreshModes(t *testing.T) {
 	t.Fatalf("enable summary missing from help:\n%s", stdout)
 }
 
+func TestInstallerLeavesInvokingRepositoryUntouched(t *testing.T) {
+	se := enableSubprocessRepo(t)
+	installer, err := filepath.Abs("../../install.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", installer, "--no-plugin")
+	cmd.Dir = se.repo
+	cmd.Env = append(se.env, "ETHOS_LOCAL_BINARY="+ethosBinary)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("install: %v\n%s", err, output)
+	}
+	git := exec.Command("git", "status", "--porcelain")
+	git.Dir, git.Env = se.repo, se.env
+	if output, err := git.CombinedOutput(); err != nil || len(output) != 0 {
+		t.Fatalf("install changed the invoking repository: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(se.repo, ".git", "hooks", "pre-commit")); !os.IsNotExist(err) {
+		t.Fatalf("install unexpectedly installed a repository hook: %v", err)
+	}
+}
+
 func TestCLI_EnableSuccess(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
