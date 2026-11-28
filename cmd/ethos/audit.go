@@ -91,6 +91,9 @@ Exit codes:
   2  invalid policy, archival failure outside that exception, or full publication failure`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if !auditSealDryRun && explicitlyDormantSeal(currentRoots().Checkout) {
+			return nil
+		}
 		return runAuditSeal(cmd.OutOrStdout(), cmd.ErrOrStderr())
 	},
 }
@@ -203,18 +206,8 @@ func sameCheckout(a, b string) bool {
 	return os.SameFile(ai, bi)
 }
 
-func dormantLegacySeal(args []string) bool {
-	cmd, flags, err := rootCmd.Find(args)
-	if err != nil || cmd != auditSealCmd {
-		return false
-	}
-	for _, flag := range flags {
-		if flag == "-h" || flag == "--help" {
-			return false
-		}
-	}
-	checkout, err := resolve.ProcessCheckout()
-	if err != nil || checkout == "" {
+func explicitlyDormantSeal(checkout string) bool {
+	if checkout == "" {
 		return false
 	}
 	state, err := resolve.EffectiveEnablement(checkout)

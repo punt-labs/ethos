@@ -92,7 +92,7 @@ func firstWord(args []string) int {
 func main() {
 	hook.RunHandoffSandbox()
 	startLogging()
-	if dormantHook(os.Args[1:]) || dormantLegacySeal(os.Args[1:]) {
+	if dormantHook(os.Args[1:]) {
 		finishProcess(0, nil)
 		return
 	}

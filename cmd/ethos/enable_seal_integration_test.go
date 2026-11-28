@@ -138,6 +138,13 @@ func TestCLI_LegacySealLeavesAuditUnsealedAfterPersonalDisable(t *testing.T) {
 	if got := countGlob(t, glob); got != 0 {
 		t.Fatalf("disabled seal wrote %d archive chunks", got)
 	}
+	stdout, stderr, code := runCLI(t, se, "audit", "seal", "--dry-run")
+	if code != 0 || !strings.Contains(stdout, "1 line(s) pending") {
+		t.Fatalf("disabled dry run: exit %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+	if got := countGlob(t, glob); got != 0 {
+		t.Fatalf("disabled dry run wrote %d archive chunks", got)
+	}
 }
 
 // commit stages fileName with content and commits, requiring exit 0. The

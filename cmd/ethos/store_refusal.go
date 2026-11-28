@@ -217,6 +217,9 @@ func establishRoots(cmd *cobra.Command, _ []string) error {
 	// Repair before anything reads storage, so a refusal below is judged on the
 	// converted layout (DES-084 Wiring).
 	repair := scope == ""
+	if cmd == auditSealCmd && (auditSealDryRun || explicitlyDormantSeal(r.Checkout)) {
+		repair = false
+	}
 	if path == "ethos serve" && r.Checkout != "" {
 		state, err := resolve.EffectiveEnablement(r.Checkout)
 		repair = err == nil && state.Enabled
